@@ -143,8 +143,32 @@ A feature of an agent session (such as in-band approvals or non-terminal interru
 _Avoid_: Feature flag, agent version (as a proxy)
 
 **Host request**:
-A request from an agent that needs an answer from outside the agent, such as a permission to act or a question to the user, with a typed set of allowed responses; answered by the user or, later, a decider.
+A request from an agent that needs an answer from outside the agent, such as a permission to act or a question to the user, with a typed set of allowed responses; answered by the user or, later, a decider. Every answer records who gave it.
 _Avoid_: Permission prompt (too narrow), approval (when a question is meant)
+
+**Decider**:
+A Role kind with no Stage that answers an agent's approval Host requests while work is happening, in the human's place; the agent doing the work never grants itself permission. A decider only authorises actions: it never creates Evidence, issues a Verdict, resolves a Gate or accepts a Candidate.
+_Avoid_: Approver, auto mode, policy engine
+
+**Escalation**:
+A decider passing a pending Host request on to the human, who then answers that same request. It is not a Gate.
+_Avoid_: Escalation gate
+
+**Challenger**:
+A Role kind whose Stage tries to get a wrong Candidate past the Oracle, so as to harden it. Its findings count only once reproduced as Oracle additions that a Check runs, or through an Exit to a Gate.
+_Avoid_: Red team, adversarial reviewer
+
+**Advisor**:
+A Role kind with no Stage that gives advice when consulted; the advice is always a Claim.
+_Avoid_: Consultant, expert, oracle
+
+**Consultation**:
+One request for an Advisor's advice, made by pipeline policy, the user or an agent, with or without a pending Host request. It cannot create Evidence, choose an accepting edge or resolve a Gate.
+_Avoid_: Advisor request, second opinion
+
+**Handoff**:
+Moving a Stage to a different agent within a Run: a new Attempt with a fresh Session and a Briefing Öge builds from the Run's record. It needs no transcript transfer.
+_Avoid_: Transfer, take-over, session import
 
 **Degraded**:
 Said of a session or its Evidence when an explicitly optional Capability was missing, with the exact lost guarantee stated; never the result of a missing required Capability.
