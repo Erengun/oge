@@ -7,15 +7,19 @@
 ### Trust and acceptance
 
 **Evidence**:
-A record of a command that Öge itself ran and its result, tied to a specific workspace revision.
+A record Öge made itself of something it ran or directly observed: a command execution, a Briefing manifest, a Preflight observation, a scope or revert observation, a Tamper event, or an environment or capability observation. A Verdict rests only on a Check's command-execution Evidence.
 _Avoid_: Proof, test results (when reported by an agent)
+
+**Check command**:
+A command that a Check runs on a Candidate. It is part of the Oracle, so it is versioned, protected and pinned into every Verdict. An agent may propose one, but only a human at a Gate adds it.
+_Avoid_: Test command (when an agent's own run is meant), verification script
 
 **Claim**:
 Anything an agent asserts about its own or another's work (e.g. "tests pass"); recorded, never treated as Evidence.
 _Avoid_: Self-assessment, report
 
 **Oracle**:
-The tests and test configuration that decide acceptance, protected from change by the roles being judged. It has an append-only history of versions: verify Attempts add to it, and only a human at a Gate removes from it.
+The tests, test configuration and Check commands that decide acceptance, protected from change by the roles being judged. It has an append-only history of versions: verify Attempts add to it, and only a human at a Gate removes from it.
 _Avoid_: Test suite (ambiguous), ground truth
 
 **Tamper event**:
