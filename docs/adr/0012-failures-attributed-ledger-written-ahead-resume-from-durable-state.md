@@ -1,5 +1,5 @@
 ---
-status: accepted (`verify = "before"` planner requirement amended in part by ADR-0015)
+status: accepted (`verify = "before"` planner requirement amended in part by ADR-0016)
 ---
 
 # Failures are attributed to their cause, the ledger is written ahead, and resume never trusts what it cannot prove
@@ -67,7 +67,7 @@ status: accepted (`verify = "before"` planner requirement amended in part by ADR
 - **Runs may run concurrently. Attempts within a Run do not, in the MVP.**
   - Codex start-up serialisation (ADR-0005) becomes an Öge lock shared between processes.
   - The blind verifier shape is supported *sequentially*. With `verify = "before"`, the verifier writes held-out tests from the Snapshot and the Approved plan before the implementer starts. With `verify = "after"`, it runs after the implementer.
-    - *Amended in part by [ADR-0015](0015-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md) ([#31](https://github.com/Erengun/oge/issues/31)):* no planner is required. `before` briefs the verifier from the Task, its Acceptance criteria and the Snapshot, plus the Approved plan where a planner exists.
+    - *Amended in part by [ADR-0016](0016-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md) ([#31](https://github.com/Erengun/oge/issues/31)):* no planner is required. `before` briefs the verifier from the Task, its Acceptance criteria and the Snapshot, plus the Approved plan where a planner exists.
   - True verifier ∥ implementer is post-MVP. This amends [ADR-0009](0009-briefings-built-by-oge-from-snapshot-and-evidence.md) in part.
 
 ## Consequences

@@ -1,5 +1,5 @@
 ---
-status: accepted (`verify = "before"` planner requirement amended in part by ADR-0015)
+status: accepted (`verify = "before"` planner requirement amended in part by ADR-0016)
 ---
 
 # Pipelines are constrained TOML compiled into the frozen graph, and a Candidate with failing own tests or unresolved Ambiguous files never reaches Accepted
@@ -27,7 +27,7 @@ status: accepted (`verify = "before"` planner requirement amended in part by ADR
 - **No graph authoring in the MVP.** An author chooses:
   - Stages, each with a free name and a mandatory built-in `role`;
   - `verify = "after" | "before"`, where `before` requires a planner and an Approved plan sufficient to brief the verifier (ADR-0012);
-    - *Amended in part by [ADR-0015](0015-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md) ([#31](https://github.com/Erengun/oge/issues/31)):* `before` needs no planner. The Task's Acceptance criteria brief the verifier, and missing criteria warn rather than refuse.
+    - *Amended in part by [ADR-0016](0016-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md) ([#31](https://github.com/Erengun/oge/issues/31)):* `before` needs no planner. The Task's Acceptance criteria brief the verifier, and missing criteria warn rather than refuse.
   - the optional Gates and the reviewer `issues_found` route (ADR-0008);
   - limits.
 
@@ -70,7 +70,7 @@ status: accepted (`verify = "before"` planner requirement amended in part by ADR
   - an unknown Role kind;
   - credential values or credential-store settings (ADR-0006). `pass_env` holds names only.
   - `verify = "before"` without a planner.
-    - *Amended by [ADR-0015](0015-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md) ([#31](https://github.com/Erengun/oge/issues/31)):* no longer an error. Missing Acceptance criteria give a warning.
+    - *Amended by [ADR-0016](0016-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md) ([#31](https://github.com/Erengun/oge/issues/31)):* no longer an error. Missing Acceptance criteria give a warning.
 - `--output <glob>` and `--tests <glob>` exist from day one, so incomplete globs can be fixed per Run.
 
 ## What would reverse this
