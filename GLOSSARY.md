@@ -72,6 +72,14 @@ _Avoid_: Retry (as a noun for the thing), iteration, new stage, restart
 An Attempt ending without a usable result for a reason attributed to the agent's side: its process crashed or vanished, its output could not be decoded, it gave no valid Exit, or it timed out. It uses the retry budget.
 _Avoid_: Crash (as the category), error, infrastructure failure
 
+**Ledger**:
+The append-only record of one Run's control events (Attempts, Gate decisions, statuses, Oracle versions, Tamper events, Deliveries), written before the effects it describes. The Run's state is rebuilt from it, and its history is never rewritten.
+_Avoid_: Log, journal, database, history (alone)
+
+**Delivery**:
+The user taking a Run's final Candidate into their own repository by applying it or making a branch from it. It is recorded in the Ledger; viewing a diff is not a Delivery.
+_Avoid_: Merge, export, apply (as the general term)
+
 **Checkpoint**:
 The state an interrupted Attempt left behind, recorded after the scope and tamper check passed, from which that Attempt's resume continues. It is never a Candidate and no Check judges it.
 _Avoid_: Snapshot, save point, partial Candidate
@@ -133,6 +141,10 @@ _Avoid_: Base, checkpoint
 **Run repository**:
 The Öge-owned private repository of one Run, holding its Snapshot and every Candidate. The user's own repository is only the source of the Snapshot and is never where agents work.
 _Avoid_: Shadow repo, worktree, the user's repo
+
+**Private state**:
+The part of a user's Öge state that no agent can read: every Run's Ledger, Run repository, Oracle versions and Check directories. It lies outside the user's repository, every Workspace and the temp directory.
+_Avoid_: Cache, .oge folder, hidden directory
 
 **Workspace**:
 An Öge-owned working copy derived from the Run repository that an agent of a Run works in: read-only from the Snapshot for the planner, one persistent copy for the implementer, and a fresh sanitised copy of the Candidate for every verifier or reviewer Attempt. The Oracle's protected and held-out parts are never in any of them.
