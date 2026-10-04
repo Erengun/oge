@@ -26,7 +26,7 @@ The Codex spike ([#13](https://github.com/Erengun/oge/issues/13); codex-cli 0.15
   - Öge interrupts only a turn it knows is running (accepted, not settled), and treats `turn/completed{interrupted}` as the acknowledgement. `turn/interrupt` on an already-ended turn never gets a response.
   - Every protocol request gets a client-side timeout.
 - **Approvals stay one-shot.** Öge sends only `accept`, `decline` or `cancel`, never `acceptForSession` or `acceptWithExecpolicyAmendment`, so there is no session-wide policy mutation.
-  - Codex never expires a pending approval: 690 s of silence was observed. Öge's own Host-request timeout (#24) is therefore mandatory.
+  - Codex never expires a pending approval: 690 s of silence was observed. So no Öge Host-request timeout is required; ADR-0008 stands: none by default, and an optional per-pipeline timeout may only deny or cancel. (The client-side timeout above covers Öge's own protocol requests, not the wait for a human answer.)
   - The fileChange request carries only `itemId`. The adapter joins it with the earlier `item/started` to get the paths.
   - The capability "deny reason reaches the model" is **false** for Codex, and Evidence records this.
 - **Envelope check.** The `thread/start` response does not prove everything.
