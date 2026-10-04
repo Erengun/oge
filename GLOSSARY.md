@@ -49,7 +49,7 @@ A Plan after a human approved or edited it at a Gate; authoritative run input, n
 _Avoid_: Final plan
 
 **Pipeline**:
-A named template of Stages, Checks and Gates joined by bounded edges, each edge labelled by a Verdict, an Exit or a Gate choice. Agent output can never add an edge or raise a bound.
+A named template of Stages, Checks and Gates joined by bounded edges, each edge labelled by a Verdict, an Exit or a Gate choice. Its author chooses Stages, verify shape, optional Gates and limits; Öge derives the edges and inserts the mandatory Gates. Agent output can never add an edge or raise a bound.
 _Avoid_: Workflow, flow, recipe
 
 **Run**:
@@ -91,6 +91,14 @@ _Avoid_: Approval, checkpoint
 **Result gate**:
 The optional Gate after a passing Check where the human takes the Candidate or refuses it. A pass does not oblige the human to take it.
 _Avoid_: Final approval, sign-off
+
+**Own-test-failure gate**:
+The mandatory Gate a Run reaches when Implementer-authored tests fail on a Candidate, whatever the Verdict. The human can send the work back, reject it, quit, or take it anyway as Overridden; it can never lead to Accepted.
+_Avoid_: Test failure gate (ambiguous with a failed Check), self-test gate
+
+**Ambiguous-file gate**:
+The mandatory Gate before final acceptance where a human promotes or drops each remaining Ambiguous file. Any resolution makes a new Candidate, which the final Check judges.
+_Avoid_: Cleanup gate, file review
 
 **Recheck**:
 Running the same Check again on the same Candidate and Oracle version, at a human's choice at a Gate. It is not an Attempt, keeps every Verdict, and is allowed once per Candidate and Oracle version; disagreeing Verdicts mark the Oracle as flaky for that pair.
@@ -143,7 +151,7 @@ The fresh folder Öge builds for one execution of a Check: the Candidate with th
 _Avoid_: Test workspace, CI dir
 
 **Implementer-authored test**:
-A test the implementer wrote into the Candidate. Passing it never produces or strengthens a pass Verdict, and it never becomes part of the Oracle; a known failure stops the Candidate from being Accepted.
+A test the implementer wrote into the Candidate. Passing it never produces or strengthens a pass Verdict, and it never becomes part of the Oracle; a known failure stops the Run at the Own-test-failure gate, and a Candidate taken anyway is Overridden, never Accepted.
 _Avoid_: Visible test (as the Oracle's), self-test
 
 **Promoted file**:
@@ -155,7 +163,7 @@ An agent's notes, configuration or instruction file that never reaches a verifie
 _Avoid_: Ignored file, junk
 
 **Ambiguous file**:
-Any other new file the implementer created. It may stay in a working Candidate but is withheld from verifiers and reviewers, and a human must promote or drop it at a Gate before the final Candidate.
+Any other new file the implementer created. It may stay in a working Candidate but is withheld from verifiers and reviewers, and a human must promote or drop it at a Gate before the final Candidate. Promoting a file the verifier never saw requires a fresh verifier Attempt before the final Check.
 _Avoid_: Unknown file, untracked file
 
 ### Verdicts and outcomes
@@ -177,7 +185,7 @@ The outcome of a Run where an agent's Exit claimed the Task cannot be done or co
 _Avoid_: Impossible, gave up
 
 **Overridden**:
-The outcome of a Run whose Candidate a human took without a passing Verdict. Never counted or reported as Accepted.
+The outcome of a Run whose Candidate a human took without a passing Verdict, or despite known failing Implementer-authored tests. Never counted or reported as Accepted.
 _Avoid_: Accepted anyway, force-accepted
 
 **Cancelled**:

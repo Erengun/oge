@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (mandatory Gate list amended in part by ADR-0013)
 ---
 
 # Gates never resolve themselves, decisions are pinned, and unattended runs park
@@ -13,6 +13,7 @@ Gates are where a human makes decisions in a Run ([#24](https://github.com/Ereng
     - bound exhaustion;
     - Oracle growth;
     - the plan Gate, wherever a planner Stage exists.
+    - *Amended in part by [ADR-0013](0013-constrained-toml-pipelines-compiled-into-the-frozen-graph.md) ([#27](https://github.com/Erengun/oge/issues/27)):* the Own-test-failure gate (failing Implementer-authored tests; taking the Candidate anyway is Overridden) and the Ambiguous-file gate (promotion of a withheld file forces a fresh verifier Attempt before the final Check) are mandatory too.
 - **Choices are closed sets made of existing terms.** `send back` is a send-back Attempt, `regenerate` is a *user request* Attempt, `override` gives Overridden, `reject` gives Rejected, `quit` gives Cancelled. The choices that weaken trust need a reason: override, reject, confirm infeasible, amend or remove Oracle tests, freeze, extend, dismiss. `freeze` (stop Oracle growth for the rest of the Run) is allowed only as one of these decisions, and it is flagged in every report and evaluation.
 - **A pass does not force taking the result.** A passing Verdict is necessary for Accepted but not sufficient when a result Gate exists. Applying the Candidate to the user's branch is a separate operation.
 - **Decisions are pinned.** Each decision records:
