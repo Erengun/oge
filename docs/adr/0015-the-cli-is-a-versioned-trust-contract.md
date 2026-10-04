@@ -61,7 +61,7 @@ status: accepted
 - #26: the Ledger gains a held-out-viewed observation. Delivery records note the outcome flag that allowed them.
 - #31: the harness reads outcomes from exit codes and `status --json`. Parked (10) and interrupted (130) Runs count separately from outcomes.
 - #32: the CLI layer owns the exit-code mapping, the JSON schemas, the TTY check and Gate entry. Each is tested as a contract.
-- The MVP cut line (#31) leaves out the plan Gate, the review Gate, Recheck, regenerate, `oge gc` and `oge doctor --live`. Their choices and flags follow the same rules when they arrive.
+- The MVP cut line ([ADR-0016](0016-mvp-cut-planner-free-verify-before-and-harness-gated-thesis.md), #31) leaves out the plan Gate, the review Gate, Recheck, regenerate, `oge gc` and `oge doctor --live`. Their choices and flags follow the same rules when they arrive.
 - The full command surface and the screens are recorded on #28 and in `docs/ux/oge-run-transcript.md`.
 
 ## What would reverse this
