@@ -69,11 +69,27 @@ A node of a Pipeline where Öge runs Oracle commands on a Candidate and derives 
 _Avoid_: Test stage, validation step
 
 **Gate**:
-A node of a Pipeline where the Run waits for a human decision from a typed set of choices.
+A node of a Pipeline where the Run waits for a human decision from a typed set of choices. A Gate never resolves itself and a decider never resolves one; a Pipeline may leave out an optional Gate, but a Gate that is present always needs a decision. Each decision is pinned to what the human was shown and is replayed only while all of it is unchanged.
 _Avoid_: Approval, checkpoint
 
+**Result gate**:
+The optional Gate after a passing Check where the human takes the Candidate or refuses it. A pass does not oblige the human to take it.
+_Avoid_: Final approval, sign-off
+
+**Recheck**:
+Running the same Check again on the same Candidate and Oracle version, at a human's choice at a Gate. It is not an Attempt, keeps every Verdict, and is allowed once per Candidate and Oracle version; disagreeing Verdicts mark the Oracle as flaky for that pair.
+_Avoid_: Retry (for a Check), re-run until green
+
+**Extension**:
+A human's one-off grant at a Gate of more room under exactly one named limit of a Run, with a reason. It holds for that Run only and is always reported.
+_Avoid_: Budget increase, override (for a limit)
+
+**Parked**:
+Said of an unattended Run waiting at a Gate that needs a human. Parking never decides the Gate and is never a rejection; a human can later resume the Run and decide.
+_Avoid_: Timed out, failed, rejected
+
 **Exit**:
-The closed-set result an agent declares at the end of an Attempt (for example "done", "infeasible", "issues found"). It is a Claim: it may route only along declared edges that never lead directly to acceptance.
+The result an agent declares at the end of an Attempt, from a small closed set fixed by its Role kind (for example "done", "infeasible", "issues found"). It is a Claim: it may route only along declared edges that never lead directly to acceptance.
 _Avoid_: Report, verdict, status
 
 **Briefing**:
@@ -105,7 +121,7 @@ _Avoid_: Patch, result, diff
 _Avoid_: Review result, approval, LGTM
 
 **Accepted**:
-The outcome of a Run whose final Candidate received a pass Verdict against the latest Oracle version.
+The outcome of a Run whose final Candidate received a pass Verdict against the latest Oracle version and, where a Result gate exists, the human took it.
 _Avoid_: Passed, done, merged
 
 **Rejected**:
