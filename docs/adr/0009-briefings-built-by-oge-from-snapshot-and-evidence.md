@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (Ambiguous-file rule amended in part by ADR-0010)
 ---
 
 # Öge builds every Briefing from the Snapshot, approved inputs and Evidence; judged roles never get Claims, authorship or withheld files
@@ -27,6 +27,8 @@ Each of these is a channel for the implementer's narrative or for held-out conte
 - **Send-back, retry and repair start a fresh Session.** Reuse is an explicit opt-in, never where a trust property needs fresh context. Resume after an Infrastructure stop may reuse the Session.
 - **Context the provider injects is trust-sensitive; installed tooling is not.** User-global instructions, memories and other auto-injected context are off by default. Planner and implementer may opt in, never verifier or reviewer. An unexpected instruction source makes a verifier or reviewer fail closed, and only warns for the other roles. Codex cannot suppress the global `~/.codex/AGENTS.md` without changing `CODEX_HOME`, which ADR-0006 forbids. So when `instructionSources` reports that file, a Codex verifier or reviewer refuses to start. Extra tools only warn, unless they break a declared isolation guarantee.
 - **By default the verifier and reviewer use the same provider and model as the implementer, each in a fresh Session.** They are distinct actors, such as "Claude implementer Session A" and "Claude verifier Session B", never "the same agent". Neither actor accepts work; the Check does. Cross-model verification is configuration, never described as stronger, because the evidence is weak either way.
+
+*Amended in part by [ADR-0010](0010-agents-work-in-disposable-clones-of-an-oge-owned-run-repository.md) ([#22](https://github.com/Erengun/oge/issues/22)):* an Ambiguous file may stay only in a working Candidate. Before final acceptance a human promotes or drops every Ambiguous file at a Gate, and the final Check runs on exactly that resolved Candidate, so Öge never tests one tree and delivers another.
 
 ## Consequences
 

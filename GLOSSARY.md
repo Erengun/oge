@@ -110,8 +110,12 @@ _Avoid_: Prompt log, context dump
 The revision a Run's Workspace starts from, including the user's uncommitted and untracked work.
 _Avoid_: Base, checkpoint
 
+**Run repository**:
+The Öge-owned private repository of one Run, holding its Snapshot and every Candidate. The user's own repository is only the source of the Snapshot and is never where agents work.
+_Avoid_: Shadow repo, worktree, the user's repo
+
 **Workspace**:
-The Öge-owned working copy a Run's agents work in. The Oracle's protected and held-out parts are never in it.
+An Öge-owned working copy derived from the Run repository that an agent of a Run works in: read-only from the Snapshot for the planner, one persistent copy for the implementer, and a fresh sanitised copy of the Candidate for every verifier or reviewer Attempt. The Oracle's protected and held-out parts are never in any of them.
 _Avoid_: Sandbox, worktree (as the domain term), checkout
 
 **Write scope**:
@@ -119,8 +123,16 @@ The paths a Role kind may change. Writes outside it are reverted after every Att
 _Avoid_: Permissions, allowed files
 
 **Candidate**:
-The Workspace revision that a Check judges.
+The Workspace revision that a Check judges. A working Candidate may still contain Ambiguous files; the final Candidate contains none, and only it can be Accepted and is exactly what the user receives.
 _Avoid_: Patch, result, diff
+
+**Check directory**:
+The fresh folder Öge builds for one execution of a Check: the Candidate with the Oracle version laid over its test paths. No agent ever works in it.
+_Avoid_: Test workspace, CI dir
+
+**Implementer-authored test**:
+A test the implementer wrote into the Candidate. Passing it never produces or strengthens a pass Verdict, and it never becomes part of the Oracle; a known failure stops the Candidate from being Accepted.
+_Avoid_: Visible test (as the Oracle's), self-test
 
 **Promoted file**:
 A file in the Candidate that verifiers and reviewers may see: a change to a file that already existed, or a new file matching the run's declared output or test patterns.
@@ -131,7 +143,7 @@ An agent's notes, configuration or instruction file that never reaches a verifie
 _Avoid_: Ignored file, junk
 
 **Ambiguous file**:
-Any other new file the implementer created. It stays in the Candidate but is withheld from verifiers and reviewers until a human promotes or drops it at a Gate.
+Any other new file the implementer created. It may stay in a working Candidate but is withheld from verifiers and reviewers, and a human must promote or drop it at a Gate before the final Candidate.
 _Avoid_: Unknown file, untracked file
 
 ### Verdicts and outcomes
