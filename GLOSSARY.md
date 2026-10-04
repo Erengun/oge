@@ -184,6 +184,10 @@ _Avoid_: Unknown file, untracked file
 Öge's pass or fail judgment of a Candidate against one Oracle version, derived only from Evidence. Agents never issue Verdicts.
 _Avoid_: Review result, approval, LGTM
 
+**Receipt**:
+The compact summary every Run ends with, derived only from the Ledger's Evidence: outcome, mode, what was checked and what was not covered. It shows what the agent claimed next to what Öge found only when the two disagree.
+_Avoid_: Öge Verdict (Verdict is one Check's pass/fail), certificate, report card, verification badge
+
 **Accepted**:
 The outcome of a Run whose final Candidate received a pass Verdict against the latest Oracle version and, where a Result gate exists, the human took it.
 _Avoid_: Passed, done, merged
