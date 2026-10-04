@@ -1,5 +1,5 @@
 ---
-status: accepted (Ambiguous-file rule amended in part by ADR-0010)
+status: accepted (Ambiguous-file rule amended in part by ADR-0010; parallel shape amended in part by ADR-0012)
 ---
 
 # Öge builds every Briefing from the Snapshot, approved inputs and Evidence; judged roles never get Claims, authorship or withheld files
@@ -34,6 +34,7 @@ Each of these is a channel for the implementer's narrative or for held-out conte
 
 - Each Attempt records a **Briefing manifest** as Evidence: provenance and hash of each item, the classes denied, the withheld files, the observed configuration envelope and whether the Session was fresh or reused. It stores no held-out or secret contents. This is what makes "the verifier never saw X" checkable.
 - The default verifier runs after implementation and is not implementation-blind. The parallel shape, where the planner is followed by the verifier writing tests alongside the implementer, is the one that is. Öge never claims blindness for the default.
+  - *Amended in part by [ADR-0012](0012-failures-attributed-ledger-written-ahead-resume-from-durable-state.md) ([#25](https://github.com/Erengun/oge/issues/25)):* in the MVP the blind shape runs sequentially, never in parallel: with `verify = "before"` the verifier writes held-out tests from the Snapshot and the Approved plan before the implementer starts. True verifier ∥ implementer is post-MVP.
 - Implementer-written tests are part of the Candidate and labelled implementer-authored in the ledger. They are never Held-out tests and cannot extend the protected Oracle.
 - Pipelines must resolve output and test globs. If they are incomplete, Ambiguous files reach Gates and "withheld file needed" reports appear. That is visible friction, never a silent leak.
 

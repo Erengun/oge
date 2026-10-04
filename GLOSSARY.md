@@ -65,8 +65,16 @@ A node of a Pipeline where an agent of a given Role kind does one piece of work,
 _Avoid_: Step, phase, task
 
 **Attempt**:
-One execution of a Stage within a Run, labelled by its cause: first, retry, send-back, resume or user request. Each cause is counted against its own budget, and a resume after an Infrastructure stop against none.
-_Avoid_: Retry (as a noun for the thing), iteration, new stage
+One execution of a Stage within a Run, labelled by its cause: first, retry, send-back, resume or user request. Each cause is counted against its own budget, and a resume after an Infrastructure stop against none. A retry follows an Attempt failure, a regenerate is a user-request Attempt chosen at a Gate, and a resume re-enters the Run from its record without re-running completed Attempts.
+_Avoid_: Retry (as a noun for the thing), iteration, new stage, restart
+
+**Attempt failure**:
+An Attempt ending without a usable result for a reason attributed to the agent's side: its process crashed or vanished, its output could not be decoded, it gave no valid Exit, or it timed out. It uses the retry budget.
+_Avoid_: Crash (as the category), error, infrastructure failure
+
+**Checkpoint**:
+The state an interrupted Attempt left behind, recorded after the scope and tamper check passed, from which that Attempt's resume continues. It is never a Candidate and no Check judges it.
+_Avoid_: Snapshot, save point, partial Candidate
 
 **Session**:
 One Öge-owned conversation with an agent. An Attempt uses exactly one Session; a Session belongs to one Stage and may continue into later Attempts of that Stage only where the Role kind or Stage explicitly allows reuse.
@@ -93,7 +101,7 @@ A human's one-off grant at a Gate of more room under exactly one named limit of 
 _Avoid_: Budget increase, override (for a limit)
 
 **Parked**:
-Said of an unattended Run waiting at a Gate that needs a human. Parking never decides the Gate and is never a rejection; a human can later resume the Run and decide.
+Said of an unattended Run waiting at a Gate that needs a human. Parking never decides the Gate and is never a rejection; a human can later resume the Run and decide. Parked is a status of the Run, never an outcome.
 _Avoid_: Timed out, failed, rejected
 
 **Exit**:
@@ -174,7 +182,7 @@ _Avoid_: Accepted anyway, force-accepted
 
 **Cancelled**:
 The outcome of a Run the user stopped before it finished.
-_Avoid_: Aborted, killed
+_Avoid_: Aborted, killed, interrupted
 
 ### Running agents
 
@@ -230,6 +238,14 @@ _Avoid_: Best effort, partial
 The readiness check a run makes, before any stage starts, on the agents its pipeline uses: installed, supported version, signed in, and usable where that can be verified without spending quota.
 _Avoid_: Health check, login check
 
+**Interrupted**:
+Said of a Run the user stopped mid-Attempt, or whose Öge process died, without cancelling it. It is a status, not an outcome, and the Run can be resumed from its last durable revision.
+_Avoid_: Cancelled, aborted, paused
+
+**Active-time limit**:
+A limit on the time a Run spends actually working. Time at Gates, parked, in an Infrastructure stop or waiting for a human's answer to a Host request does not count.
+_Avoid_: Run timeout, deadline
+
 **Infrastructure stop**:
-A run halting because of its environment, such as agent authentication or quota, not because of the work. It is not a failure, uses no retry budget, is never "infeasible", and the run can resume once the user repairs the cause.
+A run halting because of its environment, such as agent authentication, quota, a provider outage or a fault in Öge itself, not because of the work. It is not a failure, uses no retry budget, is never "infeasible", and the run can resume once the user repairs the cause.
 _Avoid_: Blocked, auth error (as an outcome), failure
