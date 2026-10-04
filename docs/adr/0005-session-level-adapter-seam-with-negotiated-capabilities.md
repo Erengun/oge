@@ -1,5 +1,5 @@
 ---
-status: accepted (Codex topology, envelope check and interrupt guard amended in part by ADR-0018)
+status: accepted (Codex topology, envelope check and interrupt guard amended in part by ADR-0018; Host-request policy (pre-authorise / auto-deny / ask) amended in part by ADR-0019)
 ---
 
 # Agents sit behind a session-level adapter seam with negotiated capabilities, typed host requests and fail-closed degradation

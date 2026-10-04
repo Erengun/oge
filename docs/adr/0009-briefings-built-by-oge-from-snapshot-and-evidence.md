@@ -1,5 +1,5 @@
 ---
-status: accepted (Ambiguous-file rule amended in part by ADR-0010; parallel shape amended in part by ADR-0012; Codex verifier/reviewer launch settings amended in part by ADR-0018)
+status: accepted (Ambiguous-file rule amended in part by ADR-0010; parallel shape amended in part by ADR-0012; Codex verifier/reviewer launch settings amended in part by ADR-0018; Briefing assumptions instruction amended in part by ADR-0019)
 ---
 
 # Öge builds every Briefing from the Snapshot, approved inputs and Evidence; judged roles never get Claims, authorship or withheld files

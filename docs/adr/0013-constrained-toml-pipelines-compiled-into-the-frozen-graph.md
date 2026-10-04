@@ -1,5 +1,5 @@
 ---
-status: accepted (`verify = "before"` planner requirement amended in part by ADR-0016)
+status: accepted (`verify = "before"` planner requirement amended in part by ADR-0016; Result gate default, own-test repair loop, first-run config proposal amended in part by ADR-0019)
 ---
 
 # Pipelines are constrained TOML compiled into the frozen graph, and a Candidate with failing own tests or unresolved Ambiguous files never reaches Accepted

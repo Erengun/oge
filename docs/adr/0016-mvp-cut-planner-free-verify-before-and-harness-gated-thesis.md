@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; modes (Fast/Standard/Blind) and speed/interruption gate criteria amended in part by ADR-0019
 ---
 
 # The MVP proves only independent verification: no planner or reviewer, `verify = "before"` briefed from the Task's Acceptance criteria, and a pre-registered fixture gate

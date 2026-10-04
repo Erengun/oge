@@ -1,5 +1,5 @@
 ---
-status: accepted (mandatory Gate list amended in part by ADR-0013)
+status: accepted (mandatory Gate list amended in part by ADR-0013; Result gate default and end-of-run review ordering amended in part by ADR-0019)
 ---
 
 # Gates never resolve themselves, decisions are pinned, and unattended runs park

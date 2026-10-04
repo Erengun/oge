@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--apply`/`--fast`/`--blind`/`--require`, `oge receipt` amended in part by ADR-0019
 ---
 
 # The CLI is a versioned trust contract: exit code 0 means Accepted and only Accepted
