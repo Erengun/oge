@@ -1,0 +1,39 @@
+# Builds only the product binary (ADR-0017). CI runs `check` and a snapshot
+# build; there is no release workflow, so nothing is published.
+version: 2
+
+project_name: oge
+
+builds:
+  - id: oge
+    main: ./cmd/oge
+    binary: oge
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: oge
+    ids: [oge]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot+{{ .ShortCommit }}"
+
+changelog:
+  disable: true
