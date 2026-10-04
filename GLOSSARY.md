@@ -32,6 +32,10 @@ _Avoid_: Hidden test, secret test
 The user's statement of what a run must change, with its acceptance criteria; the input of a run.
 _Avoid_: Spec, requirement, prompt
 
+**Acceptance criterion**:
+One testable statement of what the Task requires, with a stable id. The user writes it in the Task, or a planner proposes it and a human approves it at a Gate; held-out tests name the criteria they check.
+_Avoid_: Requirement, AC (alone), spec item
+
 **Plan**:
 A planner's proposal for carrying out a Task; a Claim until a human approves or edits it at a Gate.
 _Avoid_: Design doc, spec
@@ -96,6 +100,10 @@ _Avoid_: Report, verdict, status
 The context Öge assembles and gives an agent at the start of an Attempt, according to its Role kind.
 _Avoid_: Prompt, context (alone), handover
 
+**Briefing manifest**:
+The record of what one Attempt's Briefing contained and was denied: each item's provenance and hash, the files withheld, the agent configuration observed at startup, and whether the Session was fresh. It never copies held-out or secret contents.
+_Avoid_: Prompt log, context dump
+
 ### Workspace
 
 **Snapshot**:
@@ -113,6 +121,18 @@ _Avoid_: Permissions, allowed files
 **Candidate**:
 The Workspace revision that a Check judges.
 _Avoid_: Patch, result, diff
+
+**Promoted file**:
+A file in the Candidate that verifiers and reviewers may see: a change to a file that already existed, or a new file matching the run's declared output or test patterns.
+_Avoid_: Output, deliverable (when the classification is meant)
+
+**Excluded file**:
+An agent's notes, configuration or instruction file that never reaches a verifier or reviewer, from a fixed list Öge owns or the Attempt's scratch area outside the Candidate.
+_Avoid_: Ignored file, junk
+
+**Ambiguous file**:
+Any other new file the implementer created. It stays in the Candidate but is withheld from verifiers and reviewers until a human promotes or drops it at a Gate.
+_Avoid_: Unknown file, untracked file
 
 ### Verdicts and outcomes
 
