@@ -15,12 +15,114 @@ Anything an agent asserts about its own or another's work (e.g. "tests pass"); r
 _Avoid_: Self-assessment, report
 
 **Oracle**:
-The tests and test configuration that decide acceptance, protected from change by the roles being judged.
+The tests and test configuration that decide acceptance, protected from change by the roles being judged. It has an append-only history of versions: verify Attempts add to it, and only a human at a Gate removes from it.
 _Avoid_: Test suite (ambiguous), ground truth
+
+**Tamper event**:
+An observed change to the protected Oracle or test configuration by a role being judged, recorded with what changed, by which Attempt and what Öge reverted. It describes the change, not intent, and stays in the Run's record whatever happens next.
+_Avoid_: Cheating, hacking, test tampering (as an accusation)
 
 **Held-out test**:
 A part of the Oracle that the implementer never sees.
 _Avoid_: Hidden test, secret test
+
+### Runs and pipelines
+
+**Task**:
+The user's statement of what a run must change, with its acceptance criteria; the input of a run.
+_Avoid_: Spec, requirement, prompt
+
+**Plan**:
+A planner's proposal for carrying out a Task; a Claim until a human approves or edits it at a Gate.
+_Avoid_: Design doc, spec
+
+**Approved plan**:
+A Plan after a human approved or edited it at a Gate; authoritative run input, no longer a Claim.
+_Avoid_: Final plan
+
+**Pipeline**:
+A named template of Stages, Checks and Gates joined by bounded edges, each edge labelled by a Verdict, an Exit or a Gate choice. Agent output can never add an edge or raise a bound.
+_Avoid_: Workflow, flow, recipe
+
+**Run**:
+One execution of one Pipeline for one Task, against a copy of the Pipeline resolved and frozen when the run starts.
+_Avoid_: Job, session, task (for the execution)
+
+**Role kind**:
+One of the trust-bearing kinds of work that Öge itself defines (planner, implementer, verifier, reviewer; later challenger, decider, advisor). Write scope, Briefing rules, session reuse and the allowed Exits attach to the kind; a name chosen by a pipeline author never confers them.
+_Avoid_: Persona, agent type, custom role (as a trust boundary)
+
+**Stage**:
+A node of a Pipeline where an agent of a given Role kind does one piece of work, with its capability requirements and retry budget.
+_Avoid_: Step, phase, task
+
+**Attempt**:
+One execution of a Stage within a Run, labelled by its cause: first, retry, send-back, resume or user request. Each cause is counted against its own budget, and a resume after an Infrastructure stop against none.
+_Avoid_: Retry (as a noun for the thing), iteration, new stage
+
+**Session**:
+One Öge-owned conversation with an agent. An Attempt uses exactly one Session; a Session belongs to one Stage and may continue into later Attempts of that Stage only where the Role kind or Stage explicitly allows reuse.
+_Avoid_: Thread, conversation, agent session id (the agent's own id is mapped, not used)
+
+**Check**:
+A node of a Pipeline where Öge runs Oracle commands on a Candidate and derives a Verdict from the resulting Evidence.
+_Avoid_: Test stage, validation step
+
+**Gate**:
+A node of a Pipeline where the Run waits for a human decision from a typed set of choices.
+_Avoid_: Approval, checkpoint
+
+**Exit**:
+The closed-set result an agent declares at the end of an Attempt (for example "done", "infeasible", "issues found"). It is a Claim: it may route only along declared edges that never lead directly to acceptance.
+_Avoid_: Report, verdict, status
+
+**Briefing**:
+The context Öge assembles and gives an agent at the start of an Attempt, according to its Role kind.
+_Avoid_: Prompt, context (alone), handover
+
+### Workspace
+
+**Snapshot**:
+The revision a Run's Workspace starts from, including the user's uncommitted and untracked work.
+_Avoid_: Base, checkpoint
+
+**Workspace**:
+The Öge-owned working copy a Run's agents work in. The Oracle's protected and held-out parts are never in it.
+_Avoid_: Sandbox, worktree (as the domain term), checkout
+
+**Write scope**:
+The paths a Role kind may change. Writes outside it are reverted after every Attempt and recorded.
+_Avoid_: Permissions, allowed files
+
+**Candidate**:
+The Workspace revision that a Check judges.
+_Avoid_: Patch, result, diff
+
+### Verdicts and outcomes
+
+**Verdict**:
+Öge's pass or fail judgment of a Candidate against one Oracle version, derived only from Evidence. Agents never issue Verdicts.
+_Avoid_: Review result, approval, LGTM
+
+**Accepted**:
+The outcome of a Run whose final Candidate received a pass Verdict against the latest Oracle version.
+_Avoid_: Passed, done, merged
+
+**Rejected**:
+The outcome of a Run whose Candidate a human judged unacceptable. Running out of a retry or loop budget is not, by itself, a rejection.
+_Avoid_: Failed (ambiguous with Infrastructure stop)
+
+**Infeasible**:
+The outcome of a Run where an agent's Exit claimed the Task cannot be done or conflicts with the Oracle and a human confirmed it at a Gate. Unconfirmed, it is only a Claim.
+_Avoid_: Impossible, gave up
+
+**Overridden**:
+The outcome of a Run whose Candidate a human took without a passing Verdict. Never counted or reported as Accepted.
+_Avoid_: Accepted anyway, force-accepted
+
+**Cancelled**:
+The outcome of a Run the user stopped before it finished.
+_Avoid_: Aborted, killed
 
 ### Running agents
 
