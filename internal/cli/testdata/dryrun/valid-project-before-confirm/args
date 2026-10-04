@@ -1,0 +1,5 @@
+--dry-run
+--confirm
+--output
+docs/**
+add a --json flag

@@ -1,0 +1,6 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  check.commands: no Check command: a Run can't accept anything without one. Add [[check.commands]] to .oge/oge.toml or pass --check
+  project.test_globs: no test globs: the Oracle's tests must be named. Set project.test_globs in .oge/oge.toml or pass --tests

@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: give the Task as one quoted argument (got 2 arguments)

@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: .oge/oge.toml isn't valid
+  schema: 2 is newer than this oge understands (schema 1); upgrade oge

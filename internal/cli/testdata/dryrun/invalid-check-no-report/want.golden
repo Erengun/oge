@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  --check "make test": Standard mode collects held-out tests, so each Check needs a structured-report format (go-test-json or junit). Declare it in .oge/oge.toml

@@ -1,0 +1,11 @@
+--dry-run
+--fast
+--require
+held-out
+--require
+magic
+--verify
+claude
+--agent
+implement=gemini
+fix it

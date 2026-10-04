@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: .oge/oge.toml exists but git ignores it, so it isn't part of the Snapshot; stop ignoring it

@@ -1,0 +1,7 @@
+--fast
+--check
+make test
+--tests
+tests/**
+--dry-run
+fix the flaky test

@@ -1,0 +1,30 @@
+schema = 1
+colour = "blue"
+
+[project]
+test_globs = ["**/*_test.go"]
+pass_env   = ["ANTHROPIC_API_KEY=sk-ant-api03-SECRETSECRETSECRET"]
+
+[[check.commands]]
+run    = "GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 go test -json ./..."
+report = "go-test-json"
+timeout = "soon"
+
+[pipelines.default]
+verify = "sideways"
+gates  = { tamper = false, review = true }
+
+[pipelines.default.stages.implement]
+role = "wizard"
+api_key = "x"
+
+[pipelines.default.stages.verify]
+role    = "implementer"
+network = "on"
+session_reuse = true
+
+[pipelines.default.stages.review]
+role = "reviewer"
+
+[pipelines.other]
+verify = "after"

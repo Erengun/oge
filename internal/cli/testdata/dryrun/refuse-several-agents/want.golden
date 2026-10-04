@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  --agent: no agent bound and several installed (claude, codex); choose with --agent <agent> or set pipelines.default.stages.implement.agent

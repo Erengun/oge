@@ -1,0 +1,26 @@
+exit: 0
+--- stdout
+Dry run: nothing was started.
+
+Task       Rate-limit /api/login
+Criteria   AC-1  After 5 failed logins for one account within 15 minutes, further attempts get HTTP 429.
+           AC-2  A successful login clears that account's failure count.
+
+Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
+Config     .oge/oge.toml from the Snapshot, schema 1
+Pipeline   default (frozen, compiled graph 0d2f11d5a077)
+           implement ─▶ verify (after) ─▶ Check
+           mandatory Gates: tamper · infeasible · bound exhaustion · Oracle growth · own-test failure · Ambiguous file
+  implement  claude         network off   (installed)
+  verify     claude         network off   fresh Session every Attempt   (inherits implement)
+  Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)
+  tests      **/*_test.go  testdata/**
+  output     internal/**/*.go
+  setup      go mod download   network on
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+
+! Trust-weakening options in effect
+!   setup network = on       from .oge/oge.toml   (setup = "go mod download")
+
+Valid. A Run would start from here.
+--- stderr

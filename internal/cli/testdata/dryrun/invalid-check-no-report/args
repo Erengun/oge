@@ -1,0 +1,6 @@
+--dry-run
+--check
+make test
+--tests
+**/*_test.go
+fix it

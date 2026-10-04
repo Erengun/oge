@@ -1,0 +1,10 @@
+run
+fix the login bug
+--blind
+--require
+held-out
+--implement
+claude:sonnet
+--verify
+codex:gpt-5.5
+--dry-run

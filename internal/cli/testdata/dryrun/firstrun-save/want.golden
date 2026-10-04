@@ -1,0 +1,44 @@
+exit: 0
+--- stdout
+No .oge/oge.toml yet. Öge needs Check commands and test globs before it can accept work.
+Proposed from go.mod:
+
+  # Öge project config. Check commands and test globs are the Oracle: they
+  # decide acceptance, and no agent can change them during a Run.
+  schema = 1
+
+  [project]
+  test_globs   = ["**/*_test.go", "**/testdata/**"]
+  test_config  = ["go.mod", "go.sum"]
+  output_globs = ["cmd/**/*.go", "internal/**/*.go"]   # other new files are Ambiguous until you decide
+
+  [[check.commands]]
+  run     = "go test -json ./..."
+  report  = "go-test-json"
+  timeout = "10m"
+
+Save this as .oge/oge.toml? [yes/no] Save this as .oge/oge.toml? [yes/no] Save this as .oge/oge.toml? [yes/no] Saved .oge/oge.toml. Commit it so every clone uses the same Checks.
+
+Dry run: nothing was started.
+
+Task       fix the login bug
+Criteria   none
+
+Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
+Config     .oge/oge.toml from the Snapshot, schema 1
+Pipeline   default (frozen, compiled graph 0d2f11d5a077)
+           implement ─▶ verify (after) ─▶ Check
+           mandatory Gates: tamper · infeasible · bound exhaustion · Oracle growth · own-test failure · Ambiguous file
+  implement  claude         network off   (installed)
+  verify     claude         network off   fresh Session every Attempt   (inherits implement)
+  Check      go test -json ./...   go-test-json · timeout 10m · network off   (project)
+  tests      **/*_test.go  **/testdata/**
+  output     cmd/**/*.go  internal/**/*.go
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+
+! No acceptance criteria found in the Task.
+!   Held-out tests will be reported as unmapped, and send-back feedback can name no criteria.
+!   Add a "## Acceptance criteria" list to fix this.
+
+Valid. A Run would start from here.
+--- stderr

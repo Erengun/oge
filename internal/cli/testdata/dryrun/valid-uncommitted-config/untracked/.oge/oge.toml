@@ -1,0 +1,16 @@
+schema = 1
+
+[project]
+test_globs   = ["**/*_test.go", "testdata/**"]
+test_config  = ["go.mod", "go.sum"]
+output_globs = ["internal/**/*.go"]
+pass_env     = ["GOFLAGS"]
+
+[setup]
+run     = "go mod download"
+network = "on"
+
+[[check.commands]]
+run     = "go test -json ./..."
+report  = "go-test-json"
+timeout = "5m"

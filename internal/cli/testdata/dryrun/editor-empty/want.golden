@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: the Task is empty; nothing to do
