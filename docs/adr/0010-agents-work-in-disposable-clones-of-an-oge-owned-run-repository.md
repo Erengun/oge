@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (Codex write-glob and envelope assumptions amended in part by ADR-0018)
 ---
 
 # Agents work in disposable clones of an Öge-owned Run repository; Öge guarantees only what reaches the Candidate and the Oracle
@@ -47,6 +47,7 @@ Decisions:
 - Preflight refuses submodules, Git LFS, an unmerged index, and a merge, rebase, cherry-pick or bisect in progress. Ignored files reach Workspaces only through a project copy list or the setup command.
 - Network is off by default for verifier, reviewer, Checks and other judged roles. Planner and implementer get narrowly scoped access only through an explicit rule, or a per-call approval where the adapter can enforce it. Agent caches are private to the Run, and Check caches private to the Check. These cache settings count as Launch-profile isolation knobs under ADR-0006.
 - On Claude, writes to colocated tests, new top-level files, caches, and anything hooks or MCP servers do are revert-only. Windows is degraded and never satisfies protected verification.
+- *Amended in part by [ADR-0018](0018-codex-adapter-native-app-server-one-per-run.md) ([#13](https://github.com/Erengun/oge/issues/13)):* Codex 0.155.1 rejects glob *write* entries in permission profiles. On Codex, writes to test subtrees and to exact existing test files are native where proven. **New colocated tests are revert-only.** Evidence records the class for each path. Deny-read of the private area, read entries inside a writable root, `on-request` escalation and network-off-by-default were confirmed on macOS. Linux remains a requirement before claiming them there.
 - Copies per Attempt and setup runs cost time. Cleanup removes disposable directories, but never the data that delivery needs.
 
 ## What would reverse this

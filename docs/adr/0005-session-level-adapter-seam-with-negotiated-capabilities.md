@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (Codex topology, envelope check and interrupt guard amended in part by ADR-0018)
 ---
 
 # Agents sit behind a session-level adapter seam with negotiated capabilities, typed host requests and fail-closed degradation
@@ -7,6 +7,7 @@ status: accepted
 Öge drives every agent through one session-level interface ([#18](https://github.com/Erengun/oge/issues/18)). `Open(LaunchSpec, resumeID?)` returns a session, and a session has `Send(turn)`, an event stream, `Interrupt()` and `Close()`. Process topology stays inside each adapter. A reader may expect four other things: an adapter that also manages the agent process, a common "allow/deny" permission prompt, every native message kept in the ledger, and a best-effort fallback when an agent lacks a feature. None of these was chosen, for the reasons below.
 
 - **Session-level, not process + session.** Only Codex hosts many sessions per process, so two integrations do not justify a process level. The Codex adapter hides its topology completely, and no product or domain API may depend on it. It starts with one `codex app-server` per session and serialised start-up. This is provisional. Serialising start-up only mitigates refresh races at start-up, and the deferred Codex spike must test multi-thread/multi-worktree operation and later refreshes. If one process turns out to be safe, Öge moves to one app-server per run. If not, the remaining refresh-race risk is documented.
+  - *Amended in part by [ADR-0018](0018-codex-adapter-native-app-server-one-per-run.md) ([#13](https://github.com/Erengun/oge/issues/13)):* the spike settled the topology as one app-server per Run, owned entirely by the adapter. `Interrupt()` is sent only for a known-running turn, every request has a client-side timeout, and "deny reason reaches the model" is false for Codex.
 - **Capabilities are negotiated per session, not inferred from versions.** The effective set is what the adapter declares, intersected with what the agent reports (Claude `system/init.capabilities`) and what the Launch profile enables. Codex reports nothing, so a minimum-supported version is its only floor. An operation that proves unsupported at runtime turns that capability off for that session/adapter-version combination and is recorded. If the stage declared the capability required, the stage fails.
   - The MVP interface carries:
     - in-band host requests;
@@ -32,6 +33,7 @@ status: accepted
 ## Consequences
 
 - Every adapter's `Open` includes an envelope check against the Launch profile. For Claude the observed envelope is `system/init`. For Codex it is the `thread/start` response (`approvalPolicy`, `approvalsReviewer`, `sandbox`, `cwd`, `model`, `instructionSources`). `approvalsReviewer` is pinned to `user`.
+  - *Amended in part by [ADR-0018](0018-codex-adapter-native-app-server-one-per-run.md):* the Codex `thread/start` response does not show read/deny carve-outs. Those properties are proven instead by a no-model `codex sandbox -P` self-test, cached per Codex version, platform, launch-profile hash and sandbox policy.
 - The interface was checked on paper against ACP v1:
   - `initialize`/`session/new` map to `Open`;
   - `session/prompt` maps to `Send`/settled;
