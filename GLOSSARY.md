@@ -47,3 +47,11 @@ _Avoid_: Permission prompt (too narrow), approval (when a question is meant)
 **Degraded**:
 Said of a session or its Evidence when an explicitly optional Capability was missing, with the exact lost guarantee stated; never the result of a missing required Capability.
 _Avoid_: Best effort, partial
+
+**Preflight**:
+The readiness check a run makes, before any stage starts, on the agents its pipeline uses: installed, supported version, signed in, and usable where that can be verified without spending quota.
+_Avoid_: Health check, login check
+
+**Infrastructure stop**:
+A run halting because of its environment, such as agent authentication or quota, not because of the work. It is not a failure, uses no retry budget, is never "infeasible", and the run can resume once the user repairs the cause.
+_Avoid_: Blocked, auth error (as an outcome), failure

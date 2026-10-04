@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (child-environment rule superseded in part by ADR-0006)
 ---
 
 # Claude Code is driven over raw CLI stream-json, under an Öge-owned launch profile, with every permission decision routed to Öge
@@ -14,6 +14,7 @@ status: accepted
 
 - Sandbox paths passed via `--settings` must be absolute. Relative paths there don't resolve to cwd and fail silently, and `allowWrite` does not reopen a path inside `denyWrite`. Verifier write scope therefore uses an absolute deny-list computed at stage start. The post-stage diff stays authoritative, because a Bash result can report success for a blocked write.
 - Öge never parses Claude's transcript storage. It owns session ids, and it never asks for or handles an Anthropic API key. Authentication belongs to Claude.
+- *Superseded in part by [ADR-0006](0006-oge-never-handles-provider-credentials.md):* #14's child-env rule "strip `CLAUDECODE`/`CLAUDE_CODE_*`" is replaced by ADR-0006's explicit session-marker strip list. A prefix strip would remove the cloud, OAuth-token and mTLS variables that Claude's own auth uses.
 
 ## What would reverse this
 
