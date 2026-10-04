@@ -21,3 +21,9 @@ _Avoid_: Test suite (ambiguous), ground truth
 **Held-out test**:
 A part of the Oracle that the implementer never sees.
 _Avoid_: Hidden test, secret test
+
+### Running agents
+
+**Launch profile**:
+The Öge-owned, per-role flags, environment and policy used to start an agent, plus the configuration envelope the agent must report at startup. Anything outside the envelope is flagged, never silently accepted.
+_Avoid_: Agent config, user settings
