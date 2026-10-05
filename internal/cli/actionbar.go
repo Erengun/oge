@@ -32,7 +32,7 @@ func afterRun(env Env, f runFlags, v view, root string, res *run.Result) int {
 		// (the working tree changed in a conflicting way during the Run)
 		// exits 2, not 0: what was asked for didn't happen. The Run stays
 		// Accepted and oge apply delivers it later.
-		return applyCommand(env, r, root, "")
+		return applyCommand(env, r, root, delivery.Choice{})
 	}
 	// --unattended never prompts, even when the live view draws.
 	if _, live := v.(*tui); live && !f.unattended {
@@ -84,7 +84,7 @@ func newActionBar(env Env, r *delivery.Run, root string, receipt func()) *action
 		}
 	}
 	b.apply = func() string {
-		a, err := delivery.Apply(r, root, "")
+		a, err := delivery.Apply(r, root, delivery.Choice{})
 		var conflict *delivery.ConflictError
 		switch {
 		case errors.As(err, &conflict):
@@ -97,7 +97,7 @@ func newActionBar(env Env, r *delivery.Run, root string, receipt func()) *action
 			return "Not applied: " + clean(err.Error())
 		}
 		b.applied = true
-		return appliedLine(r, a.Plan)
+		return appliedLine(r, a)
 	}
 	b.diff = func() {
 		patch, err := delivery.Diff(r)

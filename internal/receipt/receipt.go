@@ -94,6 +94,12 @@ type Candidate struct {
 	Commit       string   `json:"commit"`
 	FilesChanged int      `json:"files_changed"`
 	Files        []string `json:"files"`
+	// HeldBack are its agent-config changes no output glob declares:
+	// oge apply and oge branch leave them out unless asked (#107).
+	HeldBack []string `json:"held_back_agent_config,omitempty"`
+	// Declared are its agent-config changes the Run declared as output,
+	// checked and delivered like any other file.
+	Declared []string `json:"declared_agent_config,omitempty"`
 }
 
 // Check is one Check and its Verdict.
@@ -241,6 +247,10 @@ type Delivery struct {
 	Flag   string `json:"flag,omitempty"`
 	Files  int    `json:"files,omitempty"`
 	Branch string `json:"branch,omitempty"`
+	// HeldBack is what the delivery left out; Included what it delivered
+	// on request that is held back by default (#105, #107).
+	HeldBack []delivery.Held `json:"held_back,omitempty"`
+	Included []delivery.Held `json:"included,omitempty"`
 }
 
 // Source is where a Receipt reads what the Ledger refers to: blobs and
@@ -366,6 +376,8 @@ type (
 	deliveryRec struct {
 		Kind, Flag, Branch string
 		Files              int
+		HeldBack           []delivery.Held `json:"held_back"`
+		Included           []delivery.Held
 	}
 )
 
@@ -631,7 +643,8 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		case delivery.RecDelivery:
 			var d deliveryRec
 			if get(rec.Data, &d) {
-				r.Deliveries = append(r.Deliveries, Delivery{Kind: clean(d.Kind), Flag: clean(d.Flag), Files: d.Files, Branch: clean(d.Branch)})
+				r.Deliveries = append(r.Deliveries, Delivery{Kind: clean(d.Kind), Flag: clean(d.Flag), Files: d.Files, Branch: clean(d.Branch),
+					HeldBack: cleanHeld(d.HeldBack), Included: cleanHeld(d.Included)})
 			}
 		}
 	}
@@ -691,6 +704,16 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 					c.Files = append(c.Files, clean(f))
 				}
 				c.FilesChanged = len(files)
+				var globs []string
+				if frozen != nil {
+					globs = frozen.Project.OutputGlobs
+				}
+				for _, h := range delivery.HeldBack(files, globs, nil) {
+					c.HeldBack = append(c.HeldBack, clean(h.Path))
+				}
+				for _, f := range delivery.Declared(files, globs) {
+					c.Declared = append(c.Declared, clean(f))
+				}
 			}
 		}
 		r.Candidate = c
@@ -1147,4 +1170,12 @@ func GateTitle(node string) string {
 		return "Ambiguous-file Gate"
 	}
 	return clean(strings.ReplaceAll(strings.TrimPrefix(node, "gate."), "_", "-")) + " Gate"
+}
+
+func cleanHeld(hs []delivery.Held) []delivery.Held {
+	var out []delivery.Held
+	for _, h := range hs {
+		out = append(out, delivery.Held{Path: clean(h.Path), Kind: clean(h.Kind)})
+	}
+	return out
 }

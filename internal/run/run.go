@@ -466,13 +466,21 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if ctx.Err() != nil {
 			return end(InfrastructureStop, interrupted)
 		}
-		if err := l.Append(RecCheckStarted, map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
+		checked, err := w.checkedTree(a.Candidate)
+		if err != nil {
+			return nil, err
+		}
+		started := map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}
+		if checked != a.Candidate {
+			started["checked_tree"] = checked // held-back agent config left out (#107)
+		}
+		if err := l.Append(RecCheckStarted, started); err != nil {
 			return nil, err
 		}
 		// With held-out tests, two executions: the visible Oracle in a build
 		// no held-out file enters, and the held-out tests on their own
 		// (#46); both must pass.
-		cr, err := runner.SplitCheck(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
+		cr, err := runner.SplitCheck(ctx, repo, m, checked, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
 		if err != nil {
 			return nil, err
 		}

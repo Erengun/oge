@@ -22,18 +22,34 @@ var runIDShape = regexp.MustCompile(`^\d{8}T\d{0,6}(-[0-9a-f]{0,6})?$`)
 
 type deliverFlags struct {
 	overridden, rejected bool
-	plain                bool
-	positional           []string
+	// withUnresolved and withoutUnresolved choose for the unresolved
+	// Ambiguous files (#105); withAgentConfig delivers the held-back
+	// agent-config changes (#107).
+	withUnresolved, withoutUnresolved, withAgentConfig bool
+	plain                                              bool
+	positional                                         []string
 }
 
-func (f deliverFlags) outcomeFlag() string {
+// choice is what the flags ask a delivery to do. Each flag is named after
+// what it delivers (ADR-0015).
+// TODO(#105-decision, #107-decision): the flag names --with-unresolved,
+// --without-unresolved and --with-agent-config.
+func (f deliverFlags) choice() delivery.Choice {
+	var c delivery.Choice
 	switch {
 	case f.overridden:
-		return delivery.FlagOverridden
+		c.Outcome = delivery.FlagOverridden
 	case f.rejected:
-		return delivery.FlagRejected
+		c.Outcome = delivery.FlagRejected
 	}
-	return ""
+	switch {
+	case f.withUnresolved:
+		c.Unresolved = delivery.Include
+	case f.withoutUnresolved:
+		c.Unresolved = delivery.Exclude
+	}
+	c.AgentConfig = f.withAgentConfig
+	return c
 }
 
 func parseDeliverFlags(cmd string, args []string) (deliverFlags, error) {
@@ -43,6 +59,9 @@ func parseDeliverFlags(cmd string, args []string) (deliverFlags, error) {
 	if cmd != "diff" {
 		fs.BoolVar(&f.overridden, "overridden", false, "")
 		fs.BoolVar(&f.rejected, "rejected", false, "")
+		fs.BoolVar(&f.withUnresolved, "with-unresolved", false, "")
+		fs.BoolVar(&f.withoutUnresolved, "without-unresolved", false, "")
+		fs.BoolVar(&f.withAgentConfig, "with-agent-config", false, "")
 	}
 	fs.BoolVar(&f.plain, "plain", false, "")
 	for {
@@ -63,6 +82,9 @@ func parseDeliverFlags(cmd string, args []string) (deliverFlags, error) {
 	if f.overridden && f.rejected {
 		return f, errors.New("give --overridden or --rejected, not both")
 	}
+	if f.withUnresolved && f.withoutUnresolved {
+		return f, errors.New("give --with-unresolved or --without-unresolved, not both")
+	}
 	return f, nil
 }
 
@@ -74,6 +96,13 @@ const deliverUsage = `Usage:
                                             make a local branch with it as a commit; never checked out
 <run> is a Run id, or its start from the date on (20261005T1204...); the default is
 this repository's latest Run. oge branch takes any other argument as the branch name.
+Held back from apply and branch, and marked in oge diff:
+  --with-unresolved | --without-unresolved
+                 deliver or leave out the Ambiguous files of a Run that isn't
+                 Accepted, never promoted or dropped; one is required
+  --with-agent-config
+                 deliver changes to agent configuration (CLAUDE.md, .claude/...)
+                 the Run didn't declare as output (--output)
 `
 
 // deliverCommand runs oge diff, oge apply or oge branch (#54).
@@ -105,9 +134,9 @@ func deliverCommand(env Env, cmd string, args []string) int {
 	case "diff":
 		return diffCommand(env, r, f)
 	case "apply":
-		return applyCommand(env, r, root, f.outcomeFlag())
+		return applyCommand(env, r, root, f.choice())
 	default:
-		return branchCommand(env, r, root, name, f.outcomeFlag())
+		return branchCommand(env, r, root, name, f.choice())
 	}
 }
 
@@ -311,11 +340,11 @@ func banner(w io.Writer, r *delivery.Run) {
 	}
 }
 
-func applyCommand(env Env, r *delivery.Run, root, flag string) int {
-	if code := authorize(env, r, flag); code != ExitOK {
+func applyCommand(env Env, r *delivery.Run, root string, c delivery.Choice) int {
+	if code := authorize(env, r, c); code != ExitOK {
 		return code
 	}
-	a, err := delivery.Apply(r, root, flag)
+	a, err := delivery.Apply(r, root, c)
 	var conflict *delivery.ConflictError
 	switch {
 	case errors.As(err, &conflict):
@@ -328,15 +357,18 @@ func applyCommand(env Env, r *delivery.Run, root, flag string) int {
 	case err != nil:
 		return deliveryFailed(env, err)
 	}
-	fmt.Fprintln(env.Stdout, appliedLine(r, a.Plan))
+	fmt.Fprintln(env.Stdout, appliedLine(r, a))
 	return ExitOK
 }
 
-// authorize refuses a delivery the Run's outcome doesn't allow. Either
-// way, a non-Accepted Candidate's outcome and why it isn't Accepted are
-// shown first.
-func authorize(env Env, r *delivery.Run, flag string) int {
-	err := delivery.Authorize(r, flag)
+// authorize refuses a delivery the Run's outcome doesn't allow, or one
+// that leaves a held-back choice unmade. Either way, a non-Accepted
+// Candidate's outcome and why it isn't Accepted are shown first.
+func authorize(env Env, r *delivery.Run, c delivery.Choice) int {
+	err := delivery.Authorize(r, c.Outcome)
+	if err == nil {
+		_, err = delivery.Hold(r, c)
+	}
 	nonAccepted := r.Outcome == run.Overridden || r.Outcome == run.Rejected
 	switch {
 	case err != nil && nonAccepted:
@@ -346,13 +378,33 @@ func authorize(env Env, r *delivery.Run, flag string) int {
 		return deliveryFailed(env, err)
 	case nonAccepted:
 		banner(env.Stdout, r)
-		fmt.Fprintf(env.Stdout, "%-10s delivering it anyway, as --%s asks\n", "", flag)
+		fmt.Fprintf(env.Stdout, "%-10s delivering it anyway, as --%s asks\n", "", c.Outcome)
 	}
 	return ExitOK
 }
 
-// appliedLine is apply's one confirmation line.
-func appliedLine(r *delivery.Run, p *delivery.Plan) string {
+// appliedLine is apply's one confirmation line, and what it held back.
+func appliedLine(r *delivery.Run, a *delivery.Applied) string {
+	line := appliedPlan(r, a.Plan)
+	if a.Plan.Writes() == 0 && a.Plan.Already == 0 && len(a.Held.Left) > 0 {
+		line = fmt.Sprintf("Nothing of Candidate %s of Run %s was applied: everything it changes is held back.", delivery.Short(r.Candidate), r.ID)
+	}
+	return line + heldLines(a.Held)
+}
+
+// heldLines say what a delivery held back, what it included on request
+// that the Check didn't judge, and a move the hold-back split.
+func heldLines(h *delivery.Holding) string {
+	var s string
+	for _, l := range append([]string{h.LeftLine(), h.IncludedLine()}, h.Renames...) {
+		if l != "" {
+			s += "\n" + l + "."
+		}
+	}
+	return s
+}
+
+func appliedPlan(r *delivery.Run, p *delivery.Plan) string {
 	if p.Writes() == 0 {
 		return fmt.Sprintf("Candidate %s of Run %s is already in your working tree; nothing to change.", delivery.Short(r.Candidate), r.ID)
 	}
@@ -370,11 +422,11 @@ func appliedLine(r *delivery.Run, p *delivery.Plan) string {
 		delivery.Short(r.Candidate), r.ID, strings.Join(parts, " · "))
 }
 
-func branchCommand(env Env, r *delivery.Run, root, name, flag string) int {
-	if code := authorize(env, r, flag); code != ExitOK {
+func branchCommand(env Env, r *delivery.Run, root, name string, c delivery.Choice) int {
+	if code := authorize(env, r, c); code != ExitOK {
 		return code
 	}
-	b, err := delivery.Branch(r, root, name, flag)
+	b, err := delivery.Branch(r, root, name, c)
 	if err != nil {
 		return deliveryFailed(env, err)
 	}
@@ -387,5 +439,8 @@ func branchCommand(env Env, r *delivery.Run, root, name, flag string) int {
 	}
 	fmt.Fprintf(env.Stdout, "Created branch %s from Run %s: Candidate %s as commit %s on %s. Not checked out; git switch %s to use it.\n",
 		b.Name, r.ID, delivery.Short(r.Candidate), delivery.Short(b.Commit), on, b.Name)
+	if l := heldLines(b.Held); l != "" {
+		fmt.Fprintln(env.Stdout, l[1:])
+	}
 	return ExitOK
 }

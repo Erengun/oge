@@ -41,7 +41,7 @@ func TestBranchRunsNoFilter(t *testing.T) {
 			if out, err := userGitOut(t, user, "config", "filter.evil."+key, "touch '"+marker+"'; cat"); err != nil {
 				t.Fatal(err, out)
 			}
-			b, err := Branch(r, user, "taken", "")
+			b, err := Branch(r, user, "taken", Choice{})
 			if _, serr := os.Stat(marker); serr == nil {
 				t.Error("oge branch ran the filter")
 			}
@@ -70,11 +70,11 @@ func TestBranchRefusesBadNamesLinksOutAndGitlinks(t *testing.T) {
 	})
 	branchable(t, r)
 	for _, name := range []string{"@", "refs/heads/x", "-x", "a..b"} {
-		if _, err := Branch(r, user, name, ""); !IsRefused(err) || !strings.Contains(err.Error(), "isn't a valid branch name") {
+		if _, err := Branch(r, user, name, Choice{}); !IsRefused(err) || !strings.Contains(err.Error(), "isn't a valid branch name") {
 			t.Errorf("%q: %v", name, err)
 		}
 	}
-	if _, err := Branch(r, user, "x", ""); !IsRefused(err) || !strings.Contains(err.Error(), "abs: a symlink to /etc, outside the repository") {
+	if _, err := Branch(r, user, "x", Choice{}); !IsRefused(err) || !strings.Contains(err.Error(), "abs: a symlink to /etc, outside the repository") {
 		t.Errorf("a link out: %v", err)
 	}
 	if out, _ := userGitOut(t, user, "branch", "--list"); out != "" {
@@ -118,7 +118,7 @@ func TestBranchRefusesWhenAUserCleanFilterApplies(t *testing.T) {
 				t.Fatal(err, out)
 			}
 			before := objectFiles(t, user)
-			b, err := Branch(r, user, "taken", "")
+			b, err := Branch(r, user, "taken", Choice{})
 			if _, serr := os.Stat(marker); serr == nil {
 				t.Error("oge branch ran the user's filter")
 			}
@@ -176,7 +176,7 @@ func TestBranchRefusesFiltersFromInfoAttributesAndAttributesFile(t *testing.T) {
 				os.WriteFile(af, []byte("*.txt filter=keep\n"), 0o644)
 				userGitOut(t, user, "config", "core.attributesFile", af)
 			}
-			if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "for a.txt without executing user-configured filters") {
+			if _, err := Branch(r, user, "taken", Choice{}); !IsRefused(err) || !strings.Contains(err.Error(), "for a.txt without executing user-configured filters") {
 				t.Fatalf("Branch: %v", err)
 			}
 		})
@@ -193,7 +193,7 @@ func TestBranchHonoursALocalAttributesFile(t *testing.T) {
 	af := filepath.Join(t.TempDir(), "attrs")
 	os.WriteFile(af, []byte("*.txt text\n"), 0o644)
 	userGitOut(t, user, "config", "core.attributesFile", af)
-	b, err := Branch(r, user, "taken", "")
+	b, err := Branch(r, user, "taken", Choice{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestBranchHonoursFileModeFalse(t *testing.T) {
 	branchable(t, r)
 	commitUser(t, user, r)
 	userGitOut(t, user, "config", "core.fileMode", "false")
-	b, err := Branch(r, user, "taken", "")
+	b, err := Branch(r, user, "taken", Choice{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestBranchFetchRunsNoHousekeeping(t *testing.T) {
 	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
 	os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n"), 0o755)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if _, err := Branch(r, user, "taken", ""); err != nil {
+	if _, err := Branch(r, user, "taken", Choice{}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(log)
@@ -255,7 +255,7 @@ func TestBranchRefusesSymlinksIntoGit(t *testing.T) {
 		os.Symlink(".git/config", filepath.Join(ws, "x"))
 	})
 	branchable(t, r)
-	if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "x: a symlink to .git/config, into .git") {
+	if _, err := Branch(r, user, "taken", Choice{}); !IsRefused(err) || !strings.Contains(err.Error(), "x: a symlink to .git/config, into .git") {
 		t.Errorf("Branch: %v", err)
 	}
 }
@@ -273,7 +273,7 @@ func TestBranchRefusesAFilterTheCandidatesAttributesName(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "filter-ran")
 	userGitOut(t, user, "config", "filter.keep.clean", "touch '"+marker+"'; cat")
 	before := objectFiles(t, user)
-	if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "for newsecret.txt without executing user-configured filters") {
+	if _, err := Branch(r, user, "taken", Choice{}); !IsRefused(err) || !strings.Contains(err.Error(), "for newsecret.txt without executing user-configured filters") {
 		t.Fatalf("Branch: %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
