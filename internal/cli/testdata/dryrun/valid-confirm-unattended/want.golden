@@ -19,5 +19,7 @@ Pipeline   default (frozen, compiled graph b756e8d8979d)
 ! No acceptance criteria found in the Task.
 !   Send-back feedback can name no criteria. Add a "## Acceptance criteria" list to fix this.
 
+! --confirm ignored: unattended Runs have no Result gate (ADR-0008)
+
 Valid. A Run would start from here.
 --- stderr

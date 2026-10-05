@@ -26,7 +26,7 @@ Criteria   none
 
 Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph b533080c8bdc)
+Pipeline   default (frozen, compiled graph 605090a522b3)
            implement ─▶ verify (after) ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)

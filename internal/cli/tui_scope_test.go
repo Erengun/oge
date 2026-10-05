@@ -16,7 +16,8 @@ func TestTUIParkedOnATamperEvent(t *testing.T) {
 	h.att.Reverted = []workspace.Revert{{Path: "add_test.go", Class: run.ClassOracleTest, Tamper: true, Change: "modified"}}
 	h.implemented("")
 	h.checked(true)
-	got := h.end(run.Parked, "1 Tamper event needs acknowledging before this Run can be Accepted, and that review isn't built yet")
+	h.res.Gate = "gate.tamper"
+	got := h.end(run.Parked, "Öge's Check passed, but an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged before the Run can be Accepted.")
 	golden(t, "parked", got)
 	if !strings.Contains(got, "scope 1 protected test change reverted: add_test.go") || strings.Contains(got, "ACCEPTED") {
 		t.Errorf("frame:\n%s", got)
