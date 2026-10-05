@@ -31,7 +31,7 @@ The spike's own redactor had already replaced `account`, `pid`, `messaging_socke
 - **Paths.** `~/dev/oge-scratch/proto-claude` became `/home/user/project`, the Claude config dir became `/home/user/.claude`, the encoded project dir became `-home-user-project`, and any other `~/` became `/home/user/`. The mapping is the same everywhere, so `tool_use.input.file_path` still equals `tool_use_result.filePath`.
 - **Installed-environment lists.** These are trimmed, but every key is kept so envelope checks still see the full shape:
   - `initialize` response: `commands` keeps `compact` and `init`, `agents` keeps `general-purpose`, and their descriptions became `[trimmed]`. `models` keeps the first two entries.
-  - `system/init`: `slash_commands` and `skills` keep `compact` and `init`, `agents` is `["general-purpose"]`, and `plugins` is one `example-plugin@builtin` entry in place of the org-managed plugins.
+  - `system/init`: `slash_commands` keeps `compact` and `init`, `skills` is `[]` (none of the kept names is a skill), `agents` is `["general-purpose"]`, and `plugins` is one `example-plugin@builtin` entry in place of the org-managed plugins.
 - **Model prose.** Assistant `text` blocks longer than 40 characters, and long `result.result` strings, became `[model prose trimmed]`. Empty `thinking` blocks, tool inputs, tool results and the host's prompts are unchanged.
 - No credentials, emails or held-out project data were found. `internal/fixturescan` checks this on every `go test ./...`.
 

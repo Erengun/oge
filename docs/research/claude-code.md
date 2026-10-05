@@ -184,7 +184,7 @@ The OS-enforced Bash sandbox (macOS, Linux, WSL2; Windows native runs unsandboxe
 - Storage: macOS Keychain (falling back to `~/.claude/.credentials.json` 0600), Linux `~/.claude/.credentials.json`. **"If you've set `CLAUDE_CONFIG_DIR` … keys the macOS Keychain entry to that directory too, so a session with a different `CLAUDE_CONFIG_DIR` reads a different entry"** (`authentication`). Consequence: Öge must launch with the user's own `CLAUDE_CONFIG_DIR` (or none). A private config dir per session would show as logged out.
 - `--bare` never reads OAuth or the keychain and ignores `CLAUDE_CODE_OAUTH_TOKEN`. It needs `ANTHROPIC_API_KEY` or `apiKeyHelper` (`headless`, `--help`). The docs say it "will become the default for `-p` in a future release".
 - **Detecting "authenticated" without reading credentials:**
-  - `claude auth status` (JSON by default, `--text` available) returns `loggedIn`, `authMethod` (e.g. `"claude.ai"`), `apiProvider` (`firstParty`), `subscriptionType` (e.g. `team`), `configDirectory`, `projectsDirectory`, plus `email/orgId/orgName`. Exit 0 when logged in. Öge should keep only the non-PII fields.
+  - `claude auth status` (JSON by default, `--text` available) returns `loggedIn`, `authMethod` (e.g. `"claude.ai"`), `apiProvider` (`firstParty`), `subscriptionType`, `configDirectory`, `projectsDirectory`, plus `email/orgId/orgName`. Exit 0 when logged in. Öge should keep only the non-PII fields.
   - At runtime: `system/init.apiKeySource`, the `initialize` response `account.subscriptionType/apiProvider`, `system/auth_status` messages, and `api_retry` with `error:"authentication_failed"` or `oauth_org_not_allowed`. An expired login fails each request with "Login expired · Please run /login".
   - Login itself has to happen in the user's terminal (`claude auth login` or `/login`). `/login` is unavailable in `-p`.
 
@@ -239,7 +239,7 @@ Consumer Terms (effective 2025-10-08), prohibited use:
 
 | | Default `-p` | `--setting-sources=` + `--strict-mcp-config` + `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
 | - | - | - |
-| Plugins | 13 (user-installed and org) | 4 (`cc-plugin-*`, apparently org-managed) |
+| Plugins | 13 (user-installed and org) | 4 (apparently organisation-managed) |
 | MCP servers | 9 (2 plugin servers + 7 claude.ai connectors, 6 `needs-auth`) | 0 |
 | Slash commands / skills | 134 / 99 | 54 / 19 |
 | SessionStart hook injecting context | yes | no |
@@ -279,6 +279,6 @@ What controls what (`agent-sdk/claude-code-features`, `cli-reference`, `env-vars
 - **ToS ambiguity (§7):** does Anthropic consider a local orchestrator driving the user's own `claude -p` on a subscription "ordinary, individual usage"? Only Anthropic can answer. This needs a map-level decision.
 - **`--bare` becoming the `-p` default:** when, and will there be an opt-out that keeps OAuth? If it ships as stated, subscription use of `-p` breaks, and Öge's Claude adapter would have to fall back to API key or `CLAUDE_CODE_OAUTH_TOKEN` (which `--bare` also ignores). Re-check the release notes before implementation.
 - Wire stability: the protocol is versioned only implicitly, through CLI releases and the `capabilities` list. How often do shapes change? Track the TS SDK CHANGELOG.
-- Are the `cc-plugin-*` plugins that survived `--setting-sources=` org-managed on this machine (Team plan)? On a personal Pro/Max machine the residue may be empty. Re-probe on a non-org account.
+- Organisation-managed plugins survived `--setting-sources=` on the probe machine. Does any residue remain on a personal account with no organisation? Re-probe on one.
 - `--permission-mode default` versus `manual`: the alias was accepted, but which spelling is canonical going forward?
 - Not probed: subagent and Task event streams, plan-mode `ExitPlanMode` round-trip, `hook_callback`, `--resume` / `--fork-session` within stream-json, `--permission-prompts none`, sandbox settings via `--settings`. All are documented, but a prototype ticket should exercise them.
