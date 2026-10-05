@@ -1,6 +1,6 @@
 # Claude Code stream-json fixtures
 
-Recorded wire transcripts for the Claude adapter's contract tests (#44). They come from the stream-json spike (#14, ADR-0004) and were re-redacted before landing on main (ADR-0017). Findings from the spike are in [docs/research/claude-stream-json.md](../../../../docs/research/claude-stream-json.md).
+Recorded wire transcripts for the Claude adapter's contract tests (#44). They come from the stream-json spike (#14, ADR-0004) and were re-redacted before landing on main (ADR-0017). Findings from the spike are in [docs/research/claude-stream-json-spike.md](../../../../docs/research/claude-stream-json-spike.md).
 
 - Source: `prototypes/claude-stream-json/logs/` at commit [`ab056605bbb3aecf8adee63fb9a46b0948a507f4`](https://github.com/Erengun/oge/tree/ab056605bbb3aecf8adee63fb9a46b0948a507f4/prototypes/claude-stream-json) (recordings added in `d8e2feced54178049766576013411aeae69ab9b2`).
 - CLI: `claude` 2.1.289 (`claude_code_version` in `system/init`), `--model haiku`, subscription auth (`apiKeySource: "none"`), macOS, recorded 2026-10-04.

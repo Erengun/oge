@@ -1,6 +1,6 @@
 # Codex app-server fixtures
 
-Recorded JSON-RPC wire transcripts for the Codex adapter's contract tests (#60). They come from the app-server spike (#13, ADR-0018) and were re-redacted before landing on main (ADR-0017). Findings from the spike are in [docs/research/codex-app-server.md](../../../../docs/research/codex-app-server.md).
+Recorded JSON-RPC wire transcripts for the Codex adapter's contract tests (#60). They come from the app-server spike (#13, ADR-0018) and were re-redacted before landing on main (ADR-0017). Findings from the spike are in [docs/research/codex-app-server-spike.md](../../../../docs/research/codex-app-server-spike.md).
 
 - Source: `prototypes/codex-app-server/golden/` at commit [`b23db14d3a1ce38db15787af25cff3b73a50f2ad`](https://github.com/Erengun/oge/tree/b23db14d3a1ce38db15787af25cff3b73a50f2ad/prototypes/codex-app-server) (wire transcripts added in `a00f28fef7d76e2251306ca521a8aca34eabd7a1`).
 - CLI: `codex-cli` 0.155.1 (`codex app-server` over stdio), model `gpt-5.6-sol` with `reasoningEffort: low`, ChatGPT-account auth, macOS.

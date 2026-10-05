@@ -4,7 +4,7 @@ status: accepted
 
 # Codex adapter: native app-server, one per Run; guarantees corrected by the spike
 
-The Codex spike ([#13](https://github.com/Erengun/oge/issues/13); codex-cli 0.155.1, macOS) drove real turns through `codex app-server`. Branch `prototype/codex-app-server` holds the spike code and the redacted golden transcripts. Several assumptions in ADR-0005, 0006, 0009 and 0010 that came from the schema turned out wrong on the wire. This ADR fixes the Codex adapter's shape and the guarantees Öge may claim for it. Where it conflicts with those ADRs on Codex specifics, it amends them in part. A reader may expect three things this ADR rejects:
+The Codex spike ([#13](https://github.com/Erengun/oge/issues/13); codex-cli 0.155.1, macOS) drove real turns through `codex app-server`. The spike code and redacted golden transcripts are at commit [`b23db14`](https://github.com/Erengun/oge/tree/b23db14d3a1ce38db15787af25cff3b73a50f2ad/prototypes/codex-app-server). The results are in [docs/research/codex-app-server-spike.md](../research/codex-app-server-spike.md), and the re-redacted fixtures are in `internal/agent/codex/testdata/`. Several assumptions in ADR-0005, 0006, 0009 and 0010 that came from the schema turned out wrong on the wire. This ADR fixes the Codex adapter's shape and the guarantees Öge may claim for it. Where it conflicts with those ADRs on Codex specifics, it amends them in part. A reader may expect three things this ADR rejects:
 
 - ACP or `codex exec --json` as the simpler path;
 - types generated from Codex's JSON Schema;
