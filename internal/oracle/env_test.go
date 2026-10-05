@@ -2,6 +2,7 @@ package oracle
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,9 @@ import (
 )
 
 func TestCheckEnvironmentIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Checks run through /bin/sh; Windows refuses Runs (ADR-0017)")
+	}
 	blobs, err := ledger.OpenBlobs(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
