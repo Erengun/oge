@@ -1,0 +1,2 @@
+# LF everywhere, so goldens and fixtures read the same on Windows.
+* text=auto eol=lf
