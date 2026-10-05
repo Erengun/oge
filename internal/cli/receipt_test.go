@@ -24,6 +24,7 @@ func receiptBlock(t *testing.T, out string) string {
 // The end screen is the Receipt, and oge receipt prints the same one from
 // the Ledger later, as Markdown and as schema-1 JSON too (#63).
 func TestReceiptEndScreenAndCommandAgree(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK {
@@ -80,6 +81,7 @@ func TestReceiptEndScreenAndCommandAgree(t *testing.T) {
 // An agent that says the tests pass when they don't gets its words shown
 // as a Claim, next to what Öge found.
 func TestReceiptShowsTheClaimOnlyWhenTheEvidenceDisagrees(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, "echo 'All tests pass.'\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -103,6 +105,7 @@ func TestReceiptShowsTheClaimOnlyWhenTheEvidenceDisagrees(t *testing.T) {
 }
 
 func TestReceiptCommandRefusals(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	for _, c := range []struct {
 		args []string
