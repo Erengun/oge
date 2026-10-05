@@ -32,6 +32,9 @@ func has(list []string, s string) bool {
 func TestDeliverUnresolvedAmbiguousNeedsAChoice(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
+	// oge branch commits, and CI has no git identity of its own.
+	gitIn(t, f.repo, "config", "user.name", "u")
+	gitIn(t, f.repo, "config", "user.email", "u@example.com")
 	f.attended("reject not mine\n")
 	code, out, errOut := f.run(t, strayScript, "fix Add", "--fast", "--agent", "fake", "--plain")
 	if code != ExitRejected {
