@@ -15,7 +15,9 @@ import (
 // HOME/XDG and a PATH holding only git and a stub `claude` that is never
 // executed. stdin is not a terminal.
 
-var binary string
+// binary is the release build; testBinary is built with -tags ogetest and
+// carries the scripted fake adapter.
+var binary, testBinary, goCache string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "oge-bin-")
@@ -26,8 +28,18 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		binary += ".exe"
 	}
+	testBinary = filepath.Join(dir, "oge-test")
+	if runtime.GOOS == "windows" {
+		testBinary += ".exe"
+	}
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		panic(string(out))
+	}
+	if out, err := exec.Command("go", "build", "-tags", "ogetest", "-o", testBinary, ".").CombinedOutput(); err != nil {
+		panic(string(out))
+	}
+	if out, err := exec.Command("go", "env", "GOCACHE").Output(); err == nil {
+		goCache = strings.TrimSpace(string(out))
 	}
 	code := m.Run()
 	os.RemoveAll(dir)
@@ -78,7 +90,12 @@ func fixtureRepo(t *testing.T, config string) (repo string, env []string) {
 
 func runBinary(t *testing.T, repo string, env []string, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
-	cmd := exec.Command(binary, args...)
+	return runExe(t, binary, repo, env, args...)
+}
+
+func runExe(t *testing.T, exe, repo string, env []string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	cmd := exec.Command(exe, args...)
 	cmd.Dir, cmd.Env = repo, env
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

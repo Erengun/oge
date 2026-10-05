@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -295,6 +296,10 @@ func knownAgent(a string) bool {
 	return false
 }
 
+// CheckPrivateEnv are the variables Öge fixes for every Check command and
+// setup run; project.pass_env can't name them.
+var CheckPrivateEnv = []string{"HOME", "TMPDIR", "GOCACHE", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN", "GOWORK", "XDG_CACHE_HOME"}
+
 // KnownReports are the structured-report formats Öge parses itself.
 var KnownReports = []string{"go-test-json", "junit"}
 
@@ -303,8 +308,11 @@ func (c *Config) validate() []Problem {
 	add := func(key, format string, a ...any) { probs = append(probs, Problem{key, fmt.Sprintf(format, a...)}) }
 
 	for i, name := range c.Project.PassEnv {
-		if !envName.MatchString(name) {
+		switch {
+		case !envName.MatchString(name):
 			add(fmt.Sprintf("project.pass_env[%d]", i), "must be a variable name, never a value (ADR-0006)")
+		case slices.Contains(CheckPrivateEnv, name):
+			add(fmt.Sprintf("project.pass_env[%d]", i), "%s is private to each Check (Öge sets its own home, temp dir and Go caches); pass_env can't override it", name)
 		}
 	}
 	for _, l := range []struct {

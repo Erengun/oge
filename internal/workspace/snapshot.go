@@ -79,7 +79,10 @@ func ReadSnapshotFile(root, rel string) (SnapshotFile, error) {
 }
 
 func git(dir string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	// Read-only against the user's repository: no optional index
+	// refresh, no fsmonitor daemon.
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.fsmonitor=false"}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
