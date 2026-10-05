@@ -94,6 +94,12 @@ type Candidate struct {
 	Commit       string   `json:"commit"`
 	FilesChanged int      `json:"files_changed"`
 	Files        []string `json:"files"`
+	// HeldBack are its agent-config changes no output glob declares:
+	// oge apply and oge branch leave them out unless asked (#107).
+	HeldBack []string `json:"held_back_agent_config,omitempty"`
+	// Declared are its agent-config changes the Run declared as output,
+	// checked and delivered like any other file.
+	Declared []string `json:"declared_agent_config,omitempty"`
 }
 
 // Check is one Check and its Verdict.
@@ -691,6 +697,16 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 					c.Files = append(c.Files, clean(f))
 				}
 				c.FilesChanged = len(files)
+				var globs []string
+				if frozen != nil {
+					globs = frozen.Project.OutputGlobs
+				}
+				for _, h := range delivery.HeldBack(files, globs, nil) {
+					c.HeldBack = append(c.HeldBack, clean(h.Path))
+				}
+				for _, f := range delivery.Declared(files, globs) {
+					c.Declared = append(c.Declared, clean(f))
+				}
 			}
 		}
 		r.Candidate = c

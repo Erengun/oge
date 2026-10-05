@@ -103,6 +103,9 @@ func (r *Receipt) Lines() []Line {
 	}
 	if c := r.Candidate; c != nil {
 		add("Candidate", fmt.Sprintf("%s · %s · Oracle v%d", short(c.Commit), plural(c.FilesChanged, "file changed", "files changed"), r.Oracle), Plain)
+		for _, l := range c.agentConfig() {
+			add("", l, Plain)
+		}
 	}
 	switch c, last := r.final(), r.last(); {
 	case c != nil:
@@ -415,6 +418,9 @@ func (r *Receipt) Markdown() string {
 	}
 	if c := r.Candidate; c != nil && len(c.Files) > 0 {
 		fmt.Fprintf(&b, "- Files changed: %s\n", mdText(vals(c.Files, ", "), false))
+		for _, l := range c.agentConfig() {
+			fmt.Fprintf(&b, "- %s\n", mdText(l, false))
+		}
 	}
 	fmt.Fprintf(&b, "- Ledger head %s (identifies this Receipt; not tamper-proof)\n", code(r.LedgerHead, false))
 	b.WriteString("\n</details>\n")
@@ -541,4 +547,18 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n-1]) + "…"
+}
+
+// agentConfig says which of the Candidate's agent-config changes were
+// declared as output, and which delivery holds back (#107).
+func (c *Candidate) agentConfig() []string {
+	var out []string
+	if n := len(c.Declared); n > 0 {
+		out = append(out, "declared agent-config output: "+list(c.Declared))
+	}
+	if n := len(c.HeldBack); n > 0 {
+		out = append(out, plural(n, "agent-config change", "agent-config changes")+" held back: "+list(c.HeldBack)+
+			" · not delivered unless oge apply or oge branch --with-agent-config")
+	}
+	return out
 }
