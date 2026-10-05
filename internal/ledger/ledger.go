@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -114,7 +115,12 @@ func hashHex(b []byte) string {
 }
 
 // syncDir fsyncs a directory so a new or renamed entry in it is durable.
+// Windows can't open a directory for syncing; NTFS makes the entry durable
+// with the file's own flush.
 func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
