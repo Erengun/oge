@@ -152,6 +152,9 @@ func (r *renderer) observe(ev run.Event) {
 		if c.Setup != nil && !c.Setup.Pass {
 			r.p("%-10s setup %q failed on the Candidate (%s)", "check", c.Setup.Run, c.Setup.Why)
 		}
+		if c.Why != "" {
+			r.p("%-10s fail (%s)", "check", c.Why)
+		}
 		for _, e := range c.Commands {
 			r.p("%-10s %s", "check", commandLine(e))
 		}

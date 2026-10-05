@@ -351,3 +351,21 @@ func TestRunRedactsAgentText(t *testing.T) {
 		})
 	}
 }
+
+func TestRunOverlayNeverWritesThroughASymlink(t *testing.T) {
+	f := newRunFixture(t)
+	writeFile(t, filepath.Join(f.repo, "sub", "x.go"), []byte("package sub\n"))
+	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n"))
+	outside := filepath.Join(filepath.Dir(f.repo), "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "rm -rf sub && ln -s '" + outside + "' sub\n" + fixScript
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if _, err := os.Lstat(filepath.Join(outside, "x_test.go")); err == nil {
+		t.Error("the overlay wrote an Oracle test outside the Check directory")
+	}
+	if code != ExitRejected || !strings.Contains(out, "Oracle path sub/x_test.go is blocked by a symlink in the Candidate") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}

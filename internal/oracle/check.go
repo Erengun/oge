@@ -183,7 +183,10 @@ func (c *capture) store(blobs *ledger.Blobs, outputCap int64) (Output, error) {
 
 // Result is a Check's outcome on one Candidate against one Oracle version.
 type Result struct {
-	Pass     bool        `json:"pass"`
+	Pass bool `json:"pass"`
+	// Why is set when the Check failed before any Check command ran, such
+	// as an Oracle path the Candidate blocked.
+	Why      string      `json:"why,omitempty"`
 	Setup    *Execution  `json:"setup,omitempty"`
 	Commands []Execution `json:"commands"`
 }
@@ -218,8 +221,11 @@ func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, s
 	// The overlay comes after setup, which runs Candidate code, so nothing
 	// the Candidate controls runs between laying the Oracle down and the
 	// Check commands.
-	if err := r.overlay(m, dir); err != nil {
+	if blocked, err := r.overlay(m, dir); err != nil {
 		return nil, err
+	} else if blocked != "" {
+		res.Pass, res.Why = false, blocked
+		return res, nil
 	}
 	for _, c := range m.Commands {
 		e, out, err := r.Exec(ctx, c.Run, dir, env, time.Duration(c.TimeoutSec)*time.Second, c.OutputCap)
@@ -270,8 +276,11 @@ func (r *Runner) Prepare(root string) (string, map[string]string, error) {
 
 // overlay lays the Oracle version over the Check directory's test paths:
 // files matching the test globs are the Oracle's, never the Candidate's.
-func (r *Runner) overlay(m *Manifest, dir string) error {
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+// It never writes outside dir: an Oracle path the Candidate blocks with a
+// symlink (or a non-directory) anywhere along it is returned as a reason
+// the Check fails, and nothing is written for it.
+func (r *Runner) overlay(m *Manifest, dir string) (blocked string, err error) {
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -282,22 +291,57 @@ func (r *Runner) overlay(m *Manifest, dir string) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, f := range m.Tests {
+		if why, err := blockedPath(dir, f.Path); err != nil || why != "" {
+			return why, err
+		}
 		b, err := r.Blobs.Get(f.Blob)
 		if err != nil {
-			return err
+			return "", err
 		}
 		dst := filepath.Join(dir, filepath.FromSlash(f.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			return err
+			return "", err
 		}
-		if err := os.WriteFile(dst, b, 0o644); err != nil {
-			return err
+		// O_EXCL: the removal pass cleared every test path, so anything
+		// here now is not ours to write through.
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			return "", err
+		}
+		_, err = out.Write(b)
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return "", err
 		}
 	}
-	return nil
+	return "", nil
+}
+
+// blockedPath Lstats every existing component of rel under dir and says
+// why the Oracle can't be written there, or "" when it can.
+func blockedPath(dir, rel string) (string, error) {
+	parts := strings.Split(rel, "/")
+	p := dir
+	for i, part := range parts {
+		p = filepath.Join(p, part)
+		fi, err := os.Lstat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return "", nil // the rest is created fresh
+		case err != nil:
+			return "", err
+		case fi.Mode()&os.ModeSymlink != 0:
+			return "Oracle path " + rel + " is blocked by a symlink in the Candidate", nil
+		case i < len(parts)-1 && !fi.IsDir(), i == len(parts)-1:
+			return "Oracle path " + rel + " is blocked by a file in the Candidate", nil
+		}
+	}
+	return "", nil
 }
 
 // RemoveAll removes a directory tree, first making read-only directories
