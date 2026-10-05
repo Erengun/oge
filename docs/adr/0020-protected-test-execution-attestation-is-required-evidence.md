@@ -38,13 +38,24 @@ A determined hostile program running in the same process can still inspect memor
   - writes to the attestation channel's descriptor.
 
   A tripwire is recorded as an Observation and shown in the Receipt. It never claims completeness or intent.
+- **Skips are baseline-relative** (decided on [#73](https://github.com/Erengun/oge/issues/73)). For each Oracle version, Öge runs the same protected tests against the immutable Snapshot control. It uses the same setup, environment policy and attestation as the Candidate Check, and compares test identity, not counts.
+
+  | Snapshot | Candidate | Result |
+  |---|---|---|
+  | runs | runs | normal judgement |
+  | runs | skips | cannot pass |
+  | skips | skips | allowed, listed prominently under "Not covered"; no positive Evidence |
+  | skips | runs | normal judgement |
+
+  - Rule: a skip is never a pass. Öge may accept with an environment-dependent coverage gap only when the same gap already existed in the Snapshot control, so the Candidate can't create a new one.
+  - An unreliable control run is an Infrastructure or Oracle-validity problem, not permission to ignore the test.
+  - With `verify = "after"`, the control runs after the verifier produced the tests, against the Snapshot, while the tests stay hidden from the implementer.
 - **Evaluation.** The forged-report exploit becomes an evaluation fixture now (#58), to measure whether real coding agents discover or use this path.
 
 ## Consequences
 
 - This amends ADR-0011's pass rule and adds attestation to the Check Evidence.
 - New ticket: protected-test execution attestation. It blocks the Receipt, because M1's `✓ Accepted` has to mean this.
-- **Open:** how Oracle tests that skip are treated under attestation (#72 comment).
 
 ## What would reverse this
 
