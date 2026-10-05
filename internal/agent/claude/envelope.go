@@ -106,9 +106,15 @@ func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal s
 	}
 	var skills []json.RawMessage
 	_ = json.Unmarshal(in.Skills, &skills)
-	if len(plugins) > 0 || len(skills) > 0 {
-		warnings = append(warnings, fmt.Sprintf("extra installed tooling: %d plugins (%s), %d skills",
-			len(plugins), strings.Join(plugins, ", "), len(skills)))
+	var tooling []string
+	if len(plugins) > 0 {
+		tooling = append(tooling, fmt.Sprintf("%d plugins (%s)", len(plugins), strings.Join(plugins, ", ")))
+	}
+	if len(skills) > 0 {
+		tooling = append(tooling, fmt.Sprintf("%d skills", len(skills)))
+	}
+	if len(tooling) > 0 {
+		warnings = append(warnings, "extra installed tooling: "+strings.Join(tooling, ", "))
 	}
 	return warnings, strings.Join(fatals, "; ")
 }

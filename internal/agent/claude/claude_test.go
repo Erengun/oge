@@ -615,7 +615,9 @@ func TestOneDecisionPerToolUse(t *testing.T) {
 
 func TestPolicy(t *testing.T) {
 	dir := t.TempDir()
-	ws, private := filepath.Join(dir, "ws"), filepath.Join(dir, "private")
+	// The default state dir on macOS has a space in it.
+	ws, private := filepath.Join(dir, "Application Support", "ws"), filepath.Join(dir, "private")
+	esc := strings.ReplaceAll(ws, " ", `\\ `)
 	os.MkdirAll(filepath.Join(ws, "pkg"), 0o755)
 	os.MkdirAll(private, 0o700)
 	os.Symlink("/etc", filepath.Join(ws, "escape"))
@@ -637,6 +639,10 @@ func TestPolicy(t *testing.T) {
 		{"Bash", `{"command":"go test -json ./... 2>&1 | tail -30"}`, "allow", rulePreAuthorised},
 		{"Bash", `{"command":"cd ` + ws + ` && go vet ./pkg"}`, "allow", rulePreAuthorised},
 		{"Bash", `{"command":"cd /tmp && go vet ./pkg"}`, "deny", ruleOutside},
+		{"Bash", `{"command":"cd ` + esc + ` && go test -json ./..."}`, "allow", rulePreAuthorised},
+		{"Bash", `{"command":"cd \"` + ws + `\" && go test ./pkg"}`, "allow", rulePreAuthorised},
+		{"Bash", `{"command":"ls ` + esc + `/pkg"}`, "allow", rulePreAuthorised},
+		{"Bash", `{"command":"find . -name '*.go'"}`, "deny", ruleNoInteractive},
 		{"Bash", `{"command":"gofmt -l ."}`, "allow", rulePreAuthorised},
 		{"Bash", `{"command":"make check"}`, "allow", rulePreAuthorised},
 		{"Bash", `{"command":"git diff"}`, "allow", rulePreAuthorised},
@@ -691,6 +697,10 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 	}
 	if got := target("Edit", map[string]any{"file_path": "/w/a/b.go", "old_string": "secret body"}, []string{ws}); got != "a/b.go" {
 		t.Errorf("Edit target = %q", got)
+	}
+	sp := "/Users/u/Application Support/w"
+	if got := target("Bash", map[string]any{"command": `cd /Users/u/Application\ Support/w && go test ./...`}, []string{sp}); got != "go test ./..." {
+		t.Errorf("cd target = %q", got)
 	}
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {

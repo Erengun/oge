@@ -238,7 +238,7 @@ func (p *policy) bash(cmd string) bashVerdict {
 		}
 	}
 	cmd = trimSuffixes(cmd)
-	if cmd == "" || strings.ContainsAny(cmd, ";&|<>`$\\\n\r(){}~!") {
+	if cmd == "" || strings.ContainsAny(cmd, ";&|<>`$\n\r(){}~!") {
 		return bashGrey
 	}
 	words, ok := split(cmd)
@@ -306,10 +306,15 @@ func trimSuffixes(cmd string) string {
 // for an unbalanced quote.
 func split(s string) (words []string, ok bool) {
 	var cur strings.Builder
-	inWord := false
+	inWord, escaped := false, false
 	var quote rune
 	for _, r := range s {
 		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\' && quote != '\'':
+			escaped, inWord = true, true
 		case quote != 0:
 			if r == quote {
 				quote = 0
@@ -329,7 +334,7 @@ func split(s string) (words []string, ok bool) {
 			inWord = true
 		}
 	}
-	if quote != 0 {
+	if quote != 0 || escaped {
 		return nil, false
 	}
 	if inWord {
@@ -373,7 +378,10 @@ func target(tool string, in map[string]any, ws []string) string {
 	case "Bash":
 		t, _, _ = strings.Cut(strings.TrimSpace(str("command")), "\n")
 		for _, w := range ws {
-			t = strings.ReplaceAll(t, w+string(os.PathSeparator), "")
+			for _, form := range []string{w, strings.ReplaceAll(w, " ", `\ `), `"` + w + `"`, "'" + w + "'"} {
+				t = strings.ReplaceAll(t, form+string(os.PathSeparator), "")
+				t = strings.ReplaceAll(t, "cd "+form+" && ", "")
+			}
 		}
 	case "AskUserQuestion":
 		t = "a question"
