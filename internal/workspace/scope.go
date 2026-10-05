@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -129,7 +130,7 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 		return nil, err
 	}
 	before[ledger.WorkspaceMarker] = &entry{mode: modeFile, oid: gitOID(nil)}
-	after, err := walkWorkspace(ws)
+	after, unreadable, err := walkWorkspace(ws)
 	if err != nil {
 		return nil, err
 	}
@@ -154,11 +155,7 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 		if class == "" {
 			continue
 		}
-		same, err := sameAsSnapshot(ws, p, before[p], after[p])
-		if err != nil {
-			return nil, err
-		}
-		if !same {
+		if unreadable[p] || !sameAsSnapshot(ws, p, before[p], after[p]) {
 			plan(p, class, true)
 		}
 	}
@@ -166,9 +163,7 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 		if mode != modeSymlink || planned[p] != nil {
 			continue
 		}
-		if same, err := sameAsSnapshot(ws, p, before[p], mode); err != nil {
-			return nil, err
-		} else if same {
+		if sameAsSnapshot(ws, p, before[p], mode) {
 			continue // the Snapshot's own link, which Preflight checked
 		}
 		if out, err := linkLeavesTree(ws, p); err != nil {
@@ -252,12 +247,14 @@ func (r *RunRepo) describe(ws string, rv *Revert, afterMode string, rules ScopeR
 		}
 		rv.Before, rv.BeforeSize = sha256Hex(beforeData), int64(len(beforeData))
 	}
+	unreadable := false
 	if afterMode != "" {
-		var err error
-		if afterData, err = readEntry(ws, rv.Path, afterMode); err != nil {
-			return err
+		h, err := hashEntry(ws, rv.Path, afterMode)
+		if err != nil {
+			unreadable = true // the revert removes it all the same
+		} else {
+			afterData, rv.After, rv.Size = h.head, h.sum, h.size
 		}
-		rv.After, rv.Size = sha256Hex(afterData), int64(len(afterData))
 	}
 	switch {
 	case rv.restore == nil:
@@ -272,10 +269,12 @@ func (r *RunRepo) describe(ws string, rv *Revert, afterMode string, rules ScopeR
 		rv.NoPatch = "symlink"
 	case afterMode == modeOther:
 		rv.NoPatch = "not a regular file"
+	case unreadable:
+		rv.NoPatch = "unreadable"
+	case rv.BeforeSize > patchInputLimit || rv.Size > patchInputLimit:
+		rv.NoPatch = "too large"
 	case !isText(beforeData) || !isText(afterData):
 		rv.NoPatch = "binary"
-	case len(beforeData) > patchInputLimit || len(afterData) > patchInputLimit:
-		rv.NoPatch = "too large"
 	case bytes.Equal(beforeData, afterData):
 		rv.NoPatch = "content unchanged" // a mode change
 	default:
@@ -309,7 +308,11 @@ func (s *Scope) Apply() error {
 		if !rv.present {
 			continue
 		}
-		if err := os.Remove(filepath.Join(s.ws, filepath.FromSlash(rv.Path))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		full := filepath.Join(s.ws, filepath.FromSlash(rv.Path))
+		if err := ownerAccess(filepath.Dir(full), 0o700); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := os.Remove(full); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -340,6 +343,10 @@ func (s *Scope) restore(rel string, e *entry) error {
 			return err
 		case !fi.IsDir():
 			return fmt.Errorf("%s is not a directory", dir)
+		default:
+			if err := ownerAccess(dir, 0o700); err != nil {
+				return err
+			}
 		}
 	}
 	if fi, err := os.Lstat(full); err == nil {
@@ -427,10 +434,16 @@ func (r *RunRepo) content(e *entry) ([]byte, error) {
 }
 
 // walkWorkspace lists every non-directory under ws with its git mode,
-// never following a link and skipping any .git.
-func walkWorkspace(ws string) (map[string]string, error) {
-	files := map[string]string{}
-	err := filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
+// never following a link and skipping any .git. Directories and files the
+// agent made unreadable to their owner get owner access back, so the
+// comparison and git can read them (git keeps no such permission bits);
+// those files are listed in unreadable, since that alone is a change.
+func walkWorkspace(ws string) (files map[string]string, unreadable map[string]bool, err error) {
+	files, unreadable = map[string]string{}, map[string]bool{}
+	if err := ownerAccess(ws, 0o700); err != nil {
+		return nil, nil, err
+	}
+	err = filepath.WalkDir(ws, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -444,7 +457,7 @@ func walkWorkspace(ws string) (map[string]string, error) {
 			return nil
 		}
 		if d.IsDir() {
-			return nil
+			return ownerAccess(p, 0o700) // before WalkDir reads it
 		}
 		rel, err := filepath.Rel(ws, p)
 		if err != nil {
@@ -463,47 +476,107 @@ func walkWorkspace(ws string) (map[string]string, error) {
 		case fi.Mode().IsRegular():
 			mode = modeFile
 		}
-		files[filepath.ToSlash(rel)] = mode
+		rel = filepath.ToSlash(rel)
+		if mode == modeFile || mode == modeExec {
+			if fi.Mode().Perm()&0o400 == 0 {
+				unreadable[rel] = true
+			}
+			if err := ownerAccess(p, 0o600); err != nil {
+				return err
+			}
+		}
+		files[rel] = mode
 		return nil
 	})
-	return files, err
+	return files, unreadable, err
+}
+
+// ownerAccess adds the owner permission bits want to path's, never
+// following a link.
+func ownerAccess(p string, want os.FileMode) error {
+	fi, err := os.Lstat(p)
+	if err != nil || fi.Mode()&os.ModeSymlink != 0 || fi.Mode().Perm()&want == want {
+		return err
+	}
+	return os.Chmod(p, fi.Mode().Perm()|want)
 }
 
 // sameAsSnapshot reports whether the Workspace path matches the Snapshot
-// entry: both absent, or the same mode and content.
-func sameAsSnapshot(ws, rel string, b *entry, afterMode string) (bool, error) {
+// entry: both absent, or the same mode and content. A path it can't read
+// is changed.
+func sameAsSnapshot(ws, rel string, b *entry, afterMode string) bool {
 	switch {
 	case b == nil || afterMode == "":
-		return b == nil && afterMode == "", nil
+		return b == nil && afterMode == ""
 	case b.mode != afterMode:
-		return false, nil
+		return false
 	}
-	data, err := readEntry(ws, rel, afterMode)
-	if err != nil {
-		return false, err
-	}
-	return gitOID(data) == b.oid, nil
+	h, err := hashEntry(ws, rel, afterMode)
+	return err == nil && h.oid == b.oid
 }
 
-// readEntry reads a walked path's content without following a link: a
-// link's target text, a regular file's bytes, nothing for anything else.
-func readEntry(ws, rel, mode string) ([]byte, error) {
+// hashed is a walked path's content, streamed: its git object id, its
+// sha256, its size, and at most patchInputLimit+1 bytes of its start.
+type hashed struct {
+	oid, sum string
+	size     int64
+	head     []byte
+}
+
+// hashEntry hashes a walked path without following a link: a link's
+// target text, a regular file's bytes, nothing for anything else.
+func hashEntry(ws, rel, mode string) (hashed, error) {
 	full := filepath.Join(ws, filepath.FromSlash(rel))
+	var r io.Reader
+	var size int64
 	switch mode {
 	case modeSymlink:
 		t, err := os.Readlink(full)
-		return []byte(t), err
+		if err != nil {
+			return hashed{}, err
+		}
+		r, size = strings.NewReader(t), int64(len(t))
 	case modeFile, modeExec:
 		f, err := os.OpenFile(full, os.O_RDONLY|oNoFollow, 0)
 		if err != nil {
-			return nil, err
+			return hashed{}, err
 		}
 		defer f.Close()
-		var b bytes.Buffer
-		_, err = b.ReadFrom(f)
-		return b.Bytes(), err
+		fi, err := f.Stat()
+		if err != nil {
+			return hashed{}, err
+		}
+		r, size = f, fi.Size()
+	default:
+		r = strings.NewReader("")
 	}
-	return nil, nil
+	g, s := sha1.New(), sha256.New()
+	g.Write([]byte("blob " + strconv.FormatInt(size, 10) + "\x00"))
+	var head bytes.Buffer
+	n, err := io.Copy(io.MultiWriter(g, s, &capped{&head, patchInputLimit + 1}), r)
+	if err != nil {
+		return hashed{}, err
+	}
+	if n != size {
+		return hashed{}, fmt.Errorf("%s changed while it was read", rel)
+	}
+	return hashed{oid: hex.EncodeToString(g.Sum(nil)), sum: hex.EncodeToString(s.Sum(nil)), size: n, head: head.Bytes()}, nil
+}
+
+// capped keeps the first n bytes written to it.
+type capped struct {
+	b *bytes.Buffer
+	n int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.n - c.b.Len(); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		c.b.Write(p[:room])
+	}
+	return len(p), nil
 }
 
 // gitOID is the SHA-1 object id git gives a blob of data.
