@@ -8,7 +8,8 @@ import (
 
 // frictionMeter measures one turn's policy friction (ADR-0019, #90).
 //
-//   - Denied counts the Host requests Öge denies.
+//   - Denied counts the Host requests Öge denies, refusals before the
+//     envelope check passes included.
 //   - A recovery turn is each model turn after a denial, up to and
 //     including the next turn whose tool use is allowed or differs from
 //     the denied one. A model turn is one assistant message, by its id.

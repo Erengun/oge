@@ -119,7 +119,8 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		v := p.bash(cmd)
 		if v == vGrey {
 			if h := p.hint(cmd); h != "" {
-				// A hint replaces the tail's "don't retry this another way".
+				// TODO(#90-decision): a hint replaces denyTail, whose "don't
+				// retry this another way" it would contradict.
 				d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: this command isn't pre-authorised. "+h
 				return d
 			}

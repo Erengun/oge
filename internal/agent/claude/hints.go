@@ -22,6 +22,10 @@ var globPipes = map[string]bool{"head": true, "tail": true, "wc": true, "xargs":
 //   - cd <the Workspace, or a directory in it> && <rest>: run <rest>
 //     directly, as long as <rest> alone doesn't reach outside.
 //
+// TODO(#90-decision): a cd into a subdirectory gets the same wording,
+// and <rest> may itself still be denied (a pipe, say); the hint then
+// costs another retry.
+//
 // Every segment must lex as simple words; anything else gets no hint.
 func (p *policy) hint(cmd string) string {
 	if strings.ContainsAny(cmd, "\n\r") {

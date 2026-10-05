@@ -639,8 +639,14 @@ func TestAuthAndQuotaSignalsAreInfrastructureStops(t *testing.T) {
 func TestPermissionRequestsFollowThePolicy(t *testing.T) {
 	h := open(t, expect(fixture(t, "hook_decider.ndjson"), "allow", "allow", "allow", "allow", "deny", "deny", "allow"))
 	evs := h.turn("do the steps")
-	if s := settled(t, evs); s.Exit != "done" {
+	s := settled(t, evs)
+	if s.Exit != "done" {
 		t.Fatalf("settled %+v (the fake rejects a wrong answer)", s)
+	}
+	// Recorded wire order: two different denied Bash calls, each followed
+	// by one turn that moves on (#90).
+	if want := (agent.Friction{Denied: 2, RecoveryTurns: 2}); s.Friction == nil || *s.Friction != want {
+		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 	var got []string
 	for _, e := range evs {

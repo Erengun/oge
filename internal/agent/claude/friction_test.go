@@ -120,10 +120,10 @@ func TestNoHintElsewhere(t *testing.T) {
 		"find . -name x && grep y z":         grey,
 		"cd /tmp && ls":                      grey,
 		"cd " + dir + " && ls":               grey,
-		"cd " + ws + " && cat /etc/passwd":   grey, // its remedy reaches outside
+		"cd " + ws + " && cat /etc/hosts":    grey, // its remedy reaches outside
 		"cd " + ws + " && go test\nrm -rf .": grey,
 		"cd " + ws + "; go test":             grey,
-		"cat /etc/passwd":                    outside,
+		"cat /etc/hosts":                     outside,
 	} {
 		b, _ := json.Marshal(map[string]string{"command": cmd})
 		if d := p.decide("Bash", b); d.Decision != "deny" || d.Reason != want {
