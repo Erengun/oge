@@ -311,8 +311,8 @@ func TestExcludedByTheBuildContext(t *testing.T) {
 func TestCheckTreeChangedDuringTheCheckFailsClosed(t *testing.T) {
 	r := newCacheRunner(t)
 	repo := with(goFixture, map[string]string{
-		"add.go":       "package fx\n\nfunc Add(a, b int) int { return a + b }\n",
-		"zz_test.go":   "package fx\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestZRewrites(t *testing.T) {\n\tos.WriteFile(\"add.go\", []byte(\"package fx\\n\\nfunc Add(a, b int) int { return 0 }\\n\"), 0o644)\n}\n",
+		"add.go":     "package fx\n\nfunc Add(a, b int) int { return a + b }\n",
+		"zz_test.go": "package fx\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestZRewrites(t *testing.T) {\n\tos.WriteFile(\"add.go\", []byte(\"package fx\\n\\nfunc Add(a, b int) int { return 0 }\\n\"), 0o644)\n}\n",
 	})
 	res, err := r.Check(context.Background(), repo, v0(t, r, repo), "c", "", filepath.Join(t.TempDir(), "check"))
 	if err != nil {
