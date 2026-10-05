@@ -107,8 +107,13 @@ func TestRunUnreadableProtectedFileIsReverted(t *testing.T) {
 	if code != ExitParked || !strings.Contains(out, "1 protected test change reverted: add_test.go") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if got := candidateFile(t, f.onlyRun(t), "add_test.go"); got != fxTest {
+	dir := f.onlyRun(t)
+	if got := candidateFile(t, dir, "add_test.go"); got != fxTest {
 		t.Errorf("add_test.go: %q", got)
+	}
+	// Only its permissions changed.
+	if r := reverted(t, dir)["add_test.go"]; r["change"] != "mode" || r["before"] != r["after"] || r["tamper"] != true {
+		t.Errorf("revert: %v", r)
 	}
 }
 
@@ -151,5 +156,52 @@ func TestRunScopeLineEscapesPaths(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitParked || strings.ContainsRune(out, 0x1b) || !strings.Contains(out, `".oge/a\x1b[2Jb", .oge/a[2Jb`) {
 		t.Fatalf("exit %d\nstdout:\n%q\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// A symlink an escaped writer adds after the comparison never reaches the
+// Candidate, however inward its target text looks: l1 -> l2/.. with
+// l2 -> . resolves outside the Workspace's directory.
+func TestRunLateSymlinksAreDropped(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl not on PATH")
+	}
+	f := newRunFixture(t)
+	pidFile := f.state + ".escaped.pid"
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				if p, err := os.FindProcess(pid); err == nil {
+					_ = p.Kill()
+				}
+			}
+		}
+	})
+	escaped := `perl -MPOSIX -e '
+fork and exit; setsid(); fork and exit;
+open STDIN, "</dev/null"; open STDOUT, ">/dev/null"; open STDERR, ">/dev/null";
+open P, ">", "$ENV{OGE_TEST_STATE}.escaped.pid"; print P "$$\n"; close P;
+for (1..1000) {
+  last if system("grep -q ScopeObserved $ENV{OGE_TEST_STATE}/private/runs/*/ledger.jsonl") == 0;
+  select(undef, undef, undef, 0.005);
+}
+for (1..2000) {
+  unlink "l1", "l2"; symlink(".", "l2") or exit; symlink("l2/..", "l1") or exit;
+  select(undef, undef, undef, 0.001);
+}'
+`
+	code, out, errOut := f.run(t, escaped+fixScript+"ln -s add.go kept\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
+	dir := f.onlyRun(t)
+	files := "\n" + gitOut(t, filepath.Join(dir, "repo.git"), "ls-tree", "-r", "--name-only", "refs/oge/candidates/c1")
+	for _, p := range []string{"l1", "l2"} {
+		if strings.Contains(files, "\n"+p+"\n") {
+			t.Errorf("the Candidate took the late link %s:%s", p, files)
+		}
+	}
+	if !strings.Contains(files, "\nkept\n") {
+		t.Errorf("the agent's own link was dropped:%s", files)
+	}
+	if code != ExitOK || !strings.Contains(out, "symlinks out of the Workspace removed") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

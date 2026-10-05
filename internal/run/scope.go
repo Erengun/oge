@@ -98,7 +98,7 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 	if err := recordTamper(l, a, s.Reverts, applyErr == nil, false); err != nil {
 		return err
 	}
-	a.Reverted = s.Reverts
+	a.Reverted, a.links = s.Reverts, s.Links
 	if applyErr != nil {
 		a.Failure = failAttempt(a.Failure, "revert_failed: "+applyErr.Error())
 	}
@@ -110,7 +110,7 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 // construction, so a write that raced the comparison can't reach the
 // Candidate; one that did is recorded before the Candidate's ref is set.
 func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap, ws string, protected func(string) string) error {
-	c, late, err := repo.CommitScoped(ws, snap, "Candidate c1 ("+a.ID+")", protected)
+	c, late, err := repo.CommitScoped(ws, snap, "Candidate c1 ("+a.ID+")", protected, a.links)
 	var addErr *workspace.AddError
 	if errors.As(err, &addErr) {
 		a.Failure = failAttempt(a.Failure, "candidate_commit_failed: "+addErr.Error())

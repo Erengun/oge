@@ -114,6 +114,7 @@ type Attempt struct {
 	Changed   []string
 	// Reverted are the writes outside the Write scope that Öge undid.
 	Reverted []workspace.Revert
+	links    map[string]string // the links the scope check let stand
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration

@@ -132,7 +132,7 @@ func TestScopeRestoresContentAndMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	s = f.check(t)
-	if r := byPath(s)["prot/a.txt"]; r.Change != "modified" || r.NoPatch != "content unchanged" {
+	if r := byPath(s)["prot/a.txt"]; r.Change != "mode" || r.NoPatch != "content unchanged" {
 		t.Fatalf("mode change: %+v", s.Reverts)
 	}
 	if err := s.Apply(); err != nil {

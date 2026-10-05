@@ -2,8 +2,6 @@ package workspace
 
 import (
 	"bytes"
-	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -14,14 +12,16 @@ const zeroOID = "0000000000000000000000000000000000000000"
 // CommitScoped commits the Workspace dir as a Candidate on top of parent,
 // but never takes a protected path or an escaping link from it: in the
 // index git built from dir, every protected path is set back to parent's
-// entry and every new link out of the tree is dropped. Whatever the index
-// held there is a write made after the scope comparison (by a process that
-// outlived the agent's group, say), and comes back as a Revert. The ref
+// entry, and every link that is neither parent's nor one of links (the
+// links the scope comparison let stand) is dropped, whatever its target
+// text says. Whatever the index held there is a write made after the
+// scope comparison (by a process that outlived the agent's group, say),
+// and comes back as a Revert. The ref
 // is not updated; SetRef does that once the reverts are recorded.
 //
 // The Candidate's protected content therefore never depends on a race
 // with the Workspace: it is the parent's by construction.
-func (r *RunRepo) CommitScoped(dir, parent, message string, protected func(string) string) (string, []Revert, error) {
+func (r *RunRepo) CommitScoped(dir, parent, message string, protected func(string) string, links map[string]string) (string, []Revert, error) {
 	base, err := r.tree(parent)
 	if err != nil {
 		return "", nil, err
@@ -99,8 +99,9 @@ func (r *RunRepo) CommitScoped(dir, parent, message string, protected func(strin
 				if err != nil {
 					return err
 				}
-				t := string(target)
-				if filepath.IsAbs(t) || strings.HasPrefix(t, "/") || outside(filepath.FromSlash(path.Join(path.Dir(p), t))) {
+				// A late link is hostile by definition: dropped, never
+				// judged by its text (l1 -> l2/.. with l2 -> . escapes).
+				if t, ok := links[p]; !ok || t != string(target) {
 					if err := set(p, e, ClassSymlinkEscape, false); err != nil {
 						return err
 					}

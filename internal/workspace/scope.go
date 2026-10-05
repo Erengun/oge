@@ -83,7 +83,10 @@ type Revert struct {
 type Scope struct {
 	Compared int // paths compared, ignored files included
 	Reverts  []Revert
-	ws       string
+	// Links are the symlinks the Workspace holds once the reverts are
+	// made, with their targets: the only links a Candidate may take.
+	Links map[string]string
+	ws    string
 }
 
 // Tamper counts the Tamper events among the reverts.
@@ -228,6 +231,20 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 		s.Reverts = append(s.Reverts, *rv)
 	}
 	sort.Slice(s.Reverts, func(i, j int) bool { return s.Reverts[i].Path < s.Reverts[j].Path })
+	s.Links = map[string]string{}
+	for p, mode := range after {
+		if mode != modeSymlink || planned[p] != nil {
+			continue
+		}
+		if t, err := os.Readlink(filepath.Join(ws, filepath.FromSlash(p))); err == nil {
+			s.Links[p] = t
+		}
+	}
+	for p, rv := range planned {
+		if rv.restore != nil && rv.restore.mode == modeSymlink {
+			s.Links[p] = string(rv.restore.data)
+		}
+	}
 	return s, nil
 }
 
@@ -261,6 +278,8 @@ func (r *RunRepo) describe(ws string, rv *Revert, afterMode string, rules ScopeR
 		rv.Change = "added"
 	case afterMode == "":
 		rv.Change = "deleted"
+	case !unreadable && rv.Before == rv.After:
+		rv.Change = "mode" // the same content: only its mode or permissions changed
 	default:
 		rv.Change = "modified"
 	}
