@@ -52,10 +52,15 @@ func decidedText(ev run.Event) string {
 	if ev.Decision.Note != "" {
 		s += " · note: " + ev.Decision.Note
 	}
+	s = clean(s)
 	if len(ev.Decision.Files) > 0 {
-		s += " · " + strings.Join(ev.Decision.Files, ", ")
+		var files []string
+		for _, f := range ev.Decision.Files {
+			files = append(files, shownPath(f))
+		}
+		s += " · " + strings.Join(files, ", ")
 	}
-	return clean(s)
+	return s
 }
 
 // gateScreen is an open Gate: what happened, what is pinned, what is
@@ -73,7 +78,7 @@ func gateLinesWith(r gate.Request, need string) []string {
 		lines = append(lines, "  "+clean(d))
 	}
 	for i, f := range r.Files {
-		lines = append(lines, fmt.Sprintf("  %d  %s", i+1, clean(pathText(f))))
+		lines = append(lines, fmt.Sprintf("  %d  %s", i+1, shownPath(f)))
 	}
 	lines = append(lines, pinsLine(r.Pins), "", need)
 	choice := func(key, says string) {
@@ -126,7 +131,8 @@ func (r *renderer) parkedSummary(res *run.Result) {
 	r.p("")
 	r.p("%-10s at the %s · Candidate %s · Oracle v%d · %s", "PARKED", gateTitle(gateLabel(res)), short(res.Candidate), res.Oracle, res.Duration.Round(100*time.Millisecond))
 	for _, w := range res.Why {
-		r.p("  %s", clean(w))
+		// It may name Candidate files: what hides text is escaped.
+		r.p("  %s", shownLine(w))
 	}
 	r.p("  Unattended Runs never decide a Gate; a human must (exit 10).")
 	r.observed(res)
@@ -267,7 +273,7 @@ const inspectMax = 200
 // the terminal: at most max lines, each cleaned, and a binary file only
 // named. Candidate content never reaches the terminal raw.
 func inspectLines(req gate.Request, path string, max int) []string {
-	head := "── " + clean(pathText(path))
+	head := "── " + shownPath(path)
 	b, err := req.Inspect(path)
 	if err != nil {
 		return []string{head, "  can't show it: " + clean(err.Error())}
@@ -286,9 +292,9 @@ func inspectLines(req gate.Request, path string, max int) []string {
 			out = append(out, fmt.Sprintf("  … %d more lines not shown", len(all)-max))
 			break
 		}
-		out = append(out, "  "+clean(strings.ReplaceAll(l, "\t", "    ")))
+		out = append(out, "  "+shownLine(l))
 	}
-	return append(out, "── end of "+clean(pathText(path)))
+	return append(out, "── end of "+shownPath(path))
 }
 
 // reason reads c's reason or note. ok is false when Ctrl-C returned to

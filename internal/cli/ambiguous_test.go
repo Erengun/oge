@@ -78,6 +78,7 @@ func reviewObservations(t *testing.T, runDir string) []int {
 }
 
 func TestAmbiguousUnattendedParks(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, strayScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitParked {
@@ -116,6 +117,7 @@ func TestAmbiguousUnattendedParks(t *testing.T) {
 
 // Globs that cover every new file: no review, no Observation.
 func TestAmbiguousNoReviewWhenTheGlobsCoverEverything(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, strayScript, "fix Add", "--fast", "--agent", "fake", "--unattended",
 		"--output", "docs/**", "--output", "tmp/*.json")
@@ -137,6 +139,7 @@ func TestAmbiguousNoReviewWhenTheGlobsCoverEverything(t *testing.T) {
 // Drop all, then the final Check, then Accepted; oge apply never delivers
 // a dropped file.
 func TestAmbiguousDropAllThenApply(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.attended("\nd\n")
 	code, out, errOut := f.run(t, strayScript, "fix Add", "--fast", "--agent", "fake", "--plain")
@@ -217,6 +220,7 @@ func attemptCauses(t *testing.T, runDir string) string {
 // Promote all: a fresh QA pass that now sees the file, then the final
 // Check on exactly that Candidate, then Accepted.
 func TestAmbiguousPromoteAllThenQA(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.attended("p\n")
 	code, out, errOut := f.run(t, verifierThen(sawHelper, helperScript), standardTask, "--agent", "fake", "--plain")
@@ -271,6 +275,7 @@ func TestAmbiguousPromoteAllThenQA(t *testing.T) {
 // A mixed selection: promote one, then drop the rest. The review stays
 // open until every file is resolved, then one QA pass and one Check.
 func TestAmbiguousMixedSelection(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.attended("p 9\np 2\nd\n")
 	code, out, errOut := f.run(t, verifierThen(sawHelper, strayScript+helperScript), standardTask, "--agent", "fake", "--plain")
@@ -307,6 +312,21 @@ func TestAmbiguousMixedSelection(t *testing.T) {
 	if got := reviewObservations(t, dir); len(got) != 1 || got[0] != 3 {
 		t.Errorf("ambiguous_review Observations: %v", got)
 	}
+	// The second round decides on the promote's Candidate, and pins the
+	// one the Verdict was reached on.
+	var first struct{ From, Candidate string }
+	recordData(t, dir, run.RecAmbiguousResolved, &first)
+	var second struct {
+		Pins struct {
+			Candidate string   `json:"candidate"`
+			Checked   string   `json:"checked_candidate"`
+			Files     []string `json:"files"`
+		} `json:"pins"`
+	}
+	recordNth(t, dir, run.RecGateOpened, 1, &second)
+	if second.Pins.Candidate != first.Candidate || second.Pins.Checked != first.From || len(second.Pins.Files) != 2 {
+		t.Errorf("second round pins %+v, first resolution %+v", second.Pins, first)
+	}
 }
 
 // helperWants42 is a held-out test the promoted helper.go fails.
@@ -316,6 +336,7 @@ package fx
 import "testing"
 
 func TestHelper(t *testing.T) {
+	t.Parallel()
 	if helper() != 42 {
 		t.Fatalf("helper() = %d, want 42", helper())
 	}
@@ -327,6 +348,7 @@ EOF
 // which now sees it, adds a test it fails, and the Candidate goes back to
 // the implementer. The promotion holds: the repaired Run isn't asked again.
 func TestAmbiguousPromotedFileBreaksTheCheck(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.attended("p\n")
 	impl := `case "$OGE_FAKE_TURN" in
@@ -361,6 +383,7 @@ esac
 
 // Bound exhaustion after a promotion: the normal Gate, never Accepted.
 func TestAmbiguousPromotedFileExhaustsTheBound(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	f.attended("p\nq\n")
@@ -376,11 +399,15 @@ func TestAmbiguousPromotedFileExhaustsTheBound(t *testing.T) {
 // Inspect shows a file's content, safe for the terminal, and decides
 // nothing; reject at the review ends the Run Rejected, never Accepted.
 func TestAmbiguousInspectThenReject(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
-	f.attended("i 1\ni\ni 2\nreject not mine\n")
+	f.attended("i 3\ni\ni 2\ni 1\ni 4\nreject not mine\n")
+	// A Trojan Source line and file name: U+202E reverses what follows.
 	script := `mkdir -p docs
-printf '# notes\n\033]0;pwned\007\033[31mred\033[0m\n' > docs/debug.md
+printf '# notes\n\033]0;pwned\007\033[31mred\033[0m\nok = 1 \342\200\256 // admin\n' > docs/debug.md
 printf '\000\001binary' > blob.bin
+head -c 1100000 /dev/zero | tr '\000' a > big.txt
+printf 'x\n' > "$(printf 'evil\342\200\256gpj.sh')"
 ` + fixScript
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--plain")
 	if code != ExitRejected {
@@ -388,17 +415,21 @@ printf '\000\001binary' > blob.bin
 	}
 	t.Logf("stdout:\n%s", out)
 	for _, want := range []string{
+		"  1  big.txt", "  4  \"evil\\u202egpj.sh\"",
 		"── blob.bin", "binary, 8 bytes: not shown",
-		"name the file to inspect: i 1 to i 2",
-		"── docs/debug.md · 2 lines", "  # notes", "]0;pwned[31mred[0m", "── end of docs/debug.md",
+		"name the file to inspect: i 1 to i 4",
+		"── docs/debug.md · 3 lines", "  # notes", "]0;pwned[31mred[0m", "  ok = 1 <U+202E> // admin", "── end of docs/debug.md",
+		"── big.txt", "can't show it: 1100000 bytes, too large to show here",
+		"── \"evil\\u202egpj.sh\" · 1 line",
 		"REJECTED   Candidate ",
+		"Not covered 4 new files no output glob covers, never promoted or dropped · an independent verifier",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.ContainsAny(out, "\033\007") {
-		t.Errorf("raw control bytes reached the terminal:\n%q", out)
+	if strings.ContainsAny(out, "\033\007\u202e") {
+		t.Errorf("raw control or bidi characters reached the terminal:\n%q", out)
 	}
 	dir := f.onlyRun(t)
 	if got := strings.Join(gateRecords(t, dir), "|"); got != "GateOpened gate.ambiguous_file|GateDecided gate.ambiguous_file reject not mine|RunEnded Rejected" {
@@ -406,5 +437,20 @@ printf '\000\001binary' > blob.bin
 	}
 	if got := ambiguousResolutions(t, dir); len(got) != 0 {
 		t.Errorf("resolutions: %v", got)
+	}
+}
+
+// An inspect line is bounded, and what hides text is escaped.
+func TestShownLine(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", inspectLineRunes+10)
+	if got := shownLine(long); got != strings.Repeat("a", inspectLineRunes)+"… (10 more characters)" {
+		t.Errorf("long line: %q", got)
+	}
+	if got := shownLine("a\u2066b\u200bc\tz"); got != "a<U+2066>b<U+200B>c    z" {
+		t.Errorf("%q", got)
+	}
+	if got := shownPath("ok/name.go"); got != "ok/name.go" {
+		t.Errorf("%q", got)
 	}
 }

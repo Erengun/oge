@@ -32,9 +32,10 @@ type Resolution struct {
 
 // promotedNew reports whether a new file reaches judged roles: it matches
 // an output or test glob, or a human promoted it this Run. No location or
-// extension heuristic promotes anything (ADR-0019).
-// TODO(#97-decision): a promotion holds by path for the rest of the Run,
-// so a send-back that rewrites the file doesn't ask again.
+// extension heuristic promotes anything (ADR-0019). A promotion holds by
+// path for the rest of the Run (GLOSSARY: Ambiguous file). A new file
+// matching the test-config globs never gets here: the implementer's scope
+// check reverts it.
 func (w *walk) promotedNew(p string) bool {
 	pr := w.p.Frozen.Project
 	return oracle.MatchAny(pr.OutputGlobs, p) || oracle.MatchAny(pr.TestGlobs, p) || w.promoted[p]
@@ -71,14 +72,29 @@ func (w *walk) ambiguousRequest(r *gate.Request, cand string) {
 	r.What = fmt.Sprintf("%s not covered by the declared output/test globs:", pluralFiles(n, "was", "were"))
 	r.Need = fmt.Sprintf("%s a decision", pluralFiles(n, "needs", "need"))
 	r.Files, r.Pins.Files = files, files
+	blobs := map[string]string{}
+	for _, f := range w.ambiguous {
+		blobs[f.Path] = f.Hash
+	}
 	r.Inspect = func(p string) ([]byte, error) {
-		b, ok, err := w.repo.Show(cand, p)
-		if err == nil && !ok {
-			err = fmt.Errorf("%s isn't in Candidate %s", p, cand[:7])
+		oid, ok := blobs[p]
+		if !ok {
+			return nil, fmt.Errorf("%s isn't one of the files shown", p)
 		}
-		return b, err
+		// Sized before it is read: a huge file is named, never loaded.
+		n, err := w.repo.BlobSize(oid)
+		if err != nil {
+			return nil, err
+		}
+		if n > InspectMaxBytes {
+			return nil, fmt.Errorf("%d bytes, too large to show here; oge diff shows the Candidate once the Run ends", n)
+		}
+		return w.repo.Blob(oid)
 	}
 }
+
+// InspectMaxBytes bounds the file an inspect view reads.
+const InspectMaxBytes = 1 << 20
 
 func pluralFiles(n int, one, many string) string {
 	if n == 1 {
@@ -92,9 +108,8 @@ func pluralFiles(n int, one, many string) string {
 // making a new Candidate. Once none is left the walk goes on, from the
 // resolved Candidate, to a fresh QA pass if anything was promoted (when
 // the Pipeline has a verifier), and the final Check.
-// TODO(#97-decision): the review routes once, after every file is
-// resolved, so a mixed selection costs one QA pass and one Check rather
-// than one per batch.
+// It routes once, after every file is resolved, so a mixed selection costs
+// one QA pass and one Check (GLOSSARY: Ambiguous-file review).
 func (w *walk) review(ctx context.Context, a *Attempt, oracleVersion int, cr *oracle.Result) (step, error) {
 	// How often the review fires, for the evaluation: if it is common,
 	// fix the globs `oge init` proposes rather than the Gate.
@@ -109,6 +124,11 @@ func (w *walk) review(ctx context.Context, a *Attempt, oracleVersion int, cr *or
 		r, err := w.request(gateAmbiguous, &cur, oracleVersion, cr)
 		if err != nil {
 			return step{}, err
+		}
+		if cur.Candidate != a.Candidate {
+			// The Verdicts shown were reached on the checked Candidate;
+			// this round decides on a later one.
+			r.Pins.Checked = a.Candidate
 		}
 		d, stop, err := w.decide(ctx, gateAmbiguous, r)
 		if err != nil {

@@ -241,8 +241,8 @@ func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVe
 		r, err := w.request(e.To, a, oracleVersion, cr)
 		var nb errNotBuilt
 		if errors.As(err, &nb) {
-			// TODO(#48): the Ambiguous-file Gate, and the walk into check
-			// or verify after a promote or drop.
+			// TODO(#50): the infeasible Gate, and Gates whose choices
+			// lead to a node the walk can't enter yet.
 			return step{stop: InfrastructureStop, why: []string{nb.Error()}}, nil
 		}
 		if err != nil {

@@ -185,6 +185,9 @@ type Result struct {
 	Friction *agent.Friction
 	// Resolutions are the Ambiguous-file review's promotes and drops.
 	Resolutions []Resolution
+	// Unresolved are the Ambiguous files a Run that isn't Accepted ended
+	// with: in its Candidate, never promoted or dropped.
+	Unresolved []string
 }
 
 // gateHeldOutConflict is where a Run parks when QA's held-out test no
@@ -271,8 +274,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	var w *walk // the walk of the graph, once it starts
 	end := func(o Outcome, why ...string) (*Result, error) {
 		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
+		if o != Accepted && w != nil {
+			res.Unresolved = w.ambiguousPaths()
+		}
 		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": res.Candidate}
 		if o == Parked {
 			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
@@ -374,7 +381,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	defer control.Stop()
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
-	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits, repo: repo, snap: snap, promoted: map[string]bool{}}
+	w = &walk{p: p, l: l, g: f.Graph, limits: f.Limits, repo: repo, snap: snap, promoted: map[string]bool{}}
 	// The implementer's protected set is Oracle v0's: held-out tests never
 	// enter its Workspace (ADR-0009).
 	scope := implementerScope(m, f)

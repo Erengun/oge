@@ -109,7 +109,7 @@ The mandatory Gate a Run reaches when Implementer-authored tests fail on a Candi
 _Avoid_: Test failure gate (ambiguous with a failed Check), self-test gate
 
 **Ambiguous-file gate**:
-The mandatory Gate before final acceptance where a human promotes or drops each remaining Ambiguous file. Any resolution makes a new Candidate, which the final Check judges.
+The mandatory Gate before final acceptance where a human promotes or drops each remaining Ambiguous file. Any resolution makes a new Candidate, which the final Check judges. It is one batch review at the end of the Run, shown only when Ambiguous files remain: promote and drop act on the files the human selects, and a bare promote or drop covers every file shown, which is an explicit choice, not a default. The review stays open until every file is resolved, then routes once: a fresh verifier Attempt if any file was promoted and the mode has a verifier, then the final Check (#97).
 _Avoid_: Cleanup gate, file review
 
 **Recheck**:
@@ -186,7 +186,7 @@ An agent's notes, configuration or instruction file that never reaches a verifie
 _Avoid_: Ignored file, junk
 
 **Ambiguous file**:
-Any other new file the implementer created. It may stay in a working Candidate but is withheld from verifiers and reviewers, and a human must promote or drop it at a Gate before the final Candidate. Promoting a file the verifier never saw requires a fresh verifier Attempt before the final Check.
+Any other new file the implementer created. It may stay in a working Candidate but is withheld from verifiers and reviewers, and a human must promote or drop it at a Gate before the final Candidate. Promoting a file the verifier never saw requires a fresh verifier Attempt before the final Check. A promotion holds by path for the rest of the Run: if a later Attempt rewrites the file, the verifier and the Check judge the new content, and the human isn't asked again (#97).
 _Avoid_: Unknown file, untracked file
 
 ### Verdicts and outcomes

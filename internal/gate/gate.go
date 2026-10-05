@@ -70,6 +70,10 @@ type Pins struct {
 	Tamper    []string `json:"tamper,omitempty"`
 	// Files are the files a batch Gate showed, still to be decided.
 	Files []string `json:"files,omitempty"`
+	// Checked is the Candidate the Verdicts were reached on, when the
+	// Candidate decided on is a later one: an Ambiguous-file review after
+	// an earlier promote or drop in the same review.
+	Checked string `json:"checked_candidate,omitempty"`
 }
 
 // Request is an open Gate.

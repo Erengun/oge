@@ -135,10 +135,13 @@ func qaStep(e agent.Event) bool {
 // TODO(#63): the Receipt replaces it.
 func notCovered(f *pipeline.Frozen, res *run.Result) string {
 	const unconfined = "Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges"
-	if f == nil || f.Mode == pipeline.Fast {
-		return "an independent verifier and held-out tests (Fast mode) · " + unconfined
-	}
 	var parts []string
+	if s := unresolvedText(res); s != "" {
+		parts = append(parts, s)
+	}
+	if f == nil || f.Mode == pipeline.Fast {
+		return strings.Join(append(parts, "an independent verifier and held-out tests (Fast mode)", unconfined), " · ")
+	}
 	if res.Oracle == 0 {
 		// QA never claims more than it did (docs/positioning.md).
 		parts = append(parts, "QA added no held-out tests")
@@ -147,8 +150,9 @@ func notCovered(f *pipeline.Frozen, res *run.Result) string {
 		if q.UnmappedTotal > 0 {
 			parts = append(parts, pluralOf(q.UnmappedTotal, "held-out test names", "held-out tests name")+" no acceptance criterion")
 		}
-		// Ambiguous files never reach here unresolved: the Ambiguous-file
-		// review promotes or drops each one before Accepted (#97).
+		// An Accepted Run has no Ambiguous files left: the review resolved
+		// each one (#97). Any other outcome lists its unresolved ones
+		// above; delivering them is #105.
 	}
 	return strings.Join(append(parts, unconfined), " · ")
 }

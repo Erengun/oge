@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -39,6 +40,17 @@ func (r *RunRepo) Changes(from, to string) ([]Change, error) {
 		cs = append(cs, c)
 	}
 	return cs, nil
+}
+
+// BlobSize returns a blob's size in bytes, without reading it.
+func (r *RunRepo) BlobSize(oid string) (int64, error) {
+	out, err := r.git("", "", nil, "cat-file", "-s", oid)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	_, err = fmt.Sscan(strings.TrimSpace(string(out)), &n)
+	return n, err
 }
 
 // Blob returns a blob's bytes.
