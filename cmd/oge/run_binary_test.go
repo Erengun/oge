@@ -118,10 +118,10 @@ func TestReleaseBinaryCannotReachTheFake(t *testing.T) {
 	}
 }
 
-func TestReleaseBinaryRefusesARealRun(t *testing.T) {
+func TestReleaseBinaryRefusesAStandardRun(t *testing.T) {
 	repo, env := runFixture(t)
-	code, _, errOut := runBinary(t, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
-	if code != 2 || !strings.Contains(errOut, "running a Task with claude isn't implemented yet") {
+	code, _, errOut := runBinary(t, repo, env, "fix Add", "--agent", "claude", "--unattended")
+	if code != 2 || !strings.Contains(errOut, "Standard mode needs a verifier") {
 		t.Fatalf("exit %d, stderr: %s", code, errOut)
 	}
 }

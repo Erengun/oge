@@ -457,11 +457,7 @@ func (r *RunRepo) git(workTree, index string, stdin io.Reader, args ...string) (
 	if workTree != "" {
 		cmd.Dir = workTree
 	}
-	cmd.Env = append(scrubGitEnv(os.Environ()),
-		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
-		"GIT_AUTHOR_NAME=Öge", "GIT_AUTHOR_EMAIL=oge@localhost",
-		"GIT_COMMITTER_NAME=Öge", "GIT_COMMITTER_EMAIL=oge@localhost",
-		"GIT_TERMINAL_PROMPT=0")
+	cmd.Env = gitEnv()
 	if index != "" {
 		cmd.Env = append(cmd.Env, "GIT_INDEX_FILE="+index)
 	}
@@ -473,6 +469,62 @@ func (r *RunRepo) git(workTree, index string, stdin io.Reader, args ...string) (
 		return nil, fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
+}
+
+// gitEnv is the environment Öge's own git commands run with.
+func gitEnv() []string {
+	return append(scrubGitEnv(os.Environ()),
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
+		"GIT_AUTHOR_NAME=Öge", "GIT_AUTHOR_EMAIL=oge@localhost",
+		"GIT_COMMITTER_NAME=Öge", "GIT_COMMITTER_EMAIL=oge@localhost",
+		"GIT_TERMINAL_PROMPT=0")
+}
+
+// InitWorkspaceGit gives a Workspace holding the Snapshot a minimal
+// Öge-owned .git (ADR-0010, #44), so the agent's git diff and git status
+// work: the Snapshot as HEAD and index, copied in by a fetch that writes
+// no FETCH_HEAD, no remote, hooks off, no reflog, nothing that names
+// Öge's private state. Candidates never take its contents.
+func (r *RunRepo) InitWorkspaceGit(ws string) error {
+	gd := filepath.Join(ws, ".git")
+	run := func(args ...string) error {
+		cmd := exec.Command("git", append([]string{"--git-dir=" + gd, "--work-tree=" + ws}, args...)...)
+		cmd.Dir, cmd.Env = ws, gitEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if err := run("init", "-q", "--template="); err != nil {
+		return err
+	}
+	for _, kv := range [][2]string{
+		{"core.hooksPath", os.DevNull}, {"core.fsmonitor", "false"}, {"core.logAllRefUpdates", "false"},
+		{"core.autocrlf", "false"}, {"core.symlinks", "true"}, {"gc.auto", "0"},
+	} {
+		if err := run("config", kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	// Öge's own marker isn't the agent's change.
+	if err := os.MkdirAll(filepath.Join(gd, "info"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(gd, "info", "exclude"), []byte("/"+ledger.WorkspaceMarker+"\n"), 0o644); err != nil {
+		return err
+	}
+	steps := [][]string{
+		{"fetch", "-q", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", r.Dir, "+" + SnapshotRef + ":refs/heads/oge"},
+		{"symbolic-ref", "HEAD", "refs/heads/oge"},
+		{"read-tree", "HEAD"},
+		{"update-index", "-q", "--refresh"},
+	}
+	for _, a := range steps {
+		if err := run(a...); err != nil && a[0] != "update-index" {
+			return err
+		}
+	}
+	return nil
 }
 
 // scrubGitEnv drops the user's GIT_* variables, which could redirect a git

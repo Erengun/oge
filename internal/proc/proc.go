@@ -79,3 +79,12 @@ func WaitGone(pgid int, timeout time.Duration) bool {
 	}
 	return true
 }
+
+// Terminate sends SIGTERM to cmd's process group, so its processes can end
+// cleanly before a Kill; where groups aren't supported it kills the
+// process.
+func Terminate(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		termGroup(cmd)
+	}
+}

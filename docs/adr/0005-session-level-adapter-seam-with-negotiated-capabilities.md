@@ -1,5 +1,5 @@
 ---
-status: accepted (Codex topology, envelope check and interrupt guard amended in part by ADR-0018; Host-request policy (pre-authorise / auto-deny / ask) amended in part by ADR-0019)
+status: accepted (Codex topology, envelope check and interrupt guard amended in part by ADR-0018; Host-request policy (pre-authorise / auto-deny / ask) amended in part by ADR-0019; envelope-check timing amended per #44)
 ---
 
 # Agents sit behind a session-level adapter seam with negotiated capabilities, typed host requests and fail-closed degradation
@@ -32,7 +32,7 @@ status: accepted (Codex topology, envelope check and interrupt guard amended in 
 
 ## Consequences
 
-- Every adapter's `Open` includes an envelope check against the Launch profile. For Claude the observed envelope is `system/init`. For Codex it is the `thread/start` response (`approvalPolicy`, `approvalsReviewer`, `sandbox`, `cwd`, `model`, `instructionSources`). `approvalsReviewer` is pinned to `user`.
+- Every adapter checks the observed envelope against the Launch profile. *Amended per [#44](https://github.com/Erengun/oge/issues/44): Claude emits `system/init` only after the first user message, so the Briefing may be delivered before the observed environment is available. The guarantee is that no agent action requiring Öge's authorisation is permitted until the envelope check succeeds. For a verifier or other judged role, an unexpected trust-sensitive source fails closed before Öge authorises any tool activity.* For Claude the observed envelope is `system/init`. For Codex it is the `thread/start` response (`approvalPolicy`, `approvalsReviewer`, `sandbox`, `cwd`, `model`, `instructionSources`). `approvalsReviewer` is pinned to `user`.
   - *Amended in part by [ADR-0018](0018-codex-adapter-native-app-server-one-per-run.md):* the Codex `thread/start` response does not show read/deny carve-outs. Those properties are proven instead by a no-model `codex sandbox -P` self-test, cached per Codex version, platform, launch-profile hash and sandbox policy.
 - The interface was checked on paper against ACP v1:
   - `initialize`/`session/new` map to `Open`;

@@ -249,15 +249,23 @@ func TestRunScopeCheckRunsAfterTheAgentTreeIsKilled(t *testing.T) {
 }
 
 // New tests the implementer writes are its own, not the Oracle's, and the
-// agent's own .git is ignored.
+// Workspace's .git (Öge's copy, which the agent may still write) is
+// ignored: no scope or Tamper record, never in the Candidate.
 func TestRunNewTestsAndAgentGitAreInScope(t *testing.T) {
 	f := newRunFixture(t)
-	script := fixScript + "printf 'package fx\\n' > more_test.go\nmkdir .git && echo x > .git/HEAD\n"
+	script := fixScript + "printf 'package fx\\n' > more_test.go\ntest -d .git/objects || exit 7\necho x > .git/HEAD && echo y > .git/objects/junk\n"
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK || strings.Contains(out, "scope") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if len(reverted(t, f.onlyRun(t))) != 0 {
+	dir := f.onlyRun(t)
+	if len(reverted(t, dir)) != 0 {
 		t.Error("an in-scope write was reverted")
+	}
+	if n := len(records(t, dir, run.RecTamperEvent)); n != 0 {
+		t.Errorf("the Workspace .git caused %d Tamper events", n)
+	}
+	if files := gitOut(t, filepath.Join(dir, "repo.git"), "ls-tree", "-r", "--name-only", "refs/oge/candidates/c1"); strings.Contains(files, ".git/") {
+		t.Errorf("the Candidate holds the Workspace .git:\n%s", files)
 	}
 }

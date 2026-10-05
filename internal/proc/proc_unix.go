@@ -30,3 +30,7 @@ func group(cmd *exec.Cmd) int {
 func groupGone(pgid int) bool {
 	return syscall.Kill(-pgid, 0) == syscall.ESRCH
 }
+
+func termGroup(cmd *exec.Cmd) {
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+}
