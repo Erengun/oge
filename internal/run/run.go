@@ -592,7 +592,7 @@ loop:
 					if err := l.Append(RecObservation, obs); err != nil {
 						return nil, err
 					}
-					if note := residueNotice(p.State.Private, stage.Agent, ev.Session.Residue); note != "" {
+					if note := residueNotice(p.State.Private, stage.Agent, stage.Role, ev.Session.Residue); note != "" {
 						p.Observe(Event{Kind: EvNotice, Attempt: a, Notice: note})
 					}
 				}
@@ -674,9 +674,15 @@ loop:
 // residueNotice is what to tell the user about an agent's startup residue:
 // the first time it appears, and whenever it changes, never on every Run
 // (#44). The last-seen residue is kept in the state root, where doctor
-// can report it.
-func residueNotice(private, agentName string, r *agent.Residue) string {
-	path := filepath.Join(private, "agents", agentName+".residue.json")
+// can report it. Each Role kind keeps its own: a verifier launches with
+// fewer skills than an implementer, and the two must not take turns
+// "changing" it.
+func residueNotice(private, agentName, role string, r *agent.Residue) string {
+	key := agentName
+	if role != "" && role != "implementer" {
+		key += "." + role
+	}
+	path := filepath.Join(private, "agents", key+".residue.json")
 	var last struct{ Fingerprint string }
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &last)

@@ -26,7 +26,7 @@ Criteria   none
 
 Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph 605090a522b3)
+Pipeline   default (frozen, compiled graph 981c61b8903f)
            implement ─▶ verify (after) ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)
@@ -34,7 +34,7 @@ Pipeline   default (frozen, compiled graph 605090a522b3)
   Check      go test -json ./...   go-test-json · timeout 10m · network off   (project)
   tests      **/*_test.go  **/testdata/**
   output     cmd/**/*.go  internal/**/*.go
-  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 4 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
 
 ! No acceptance criteria found in the Task.
 !   Held-out tests will be reported as unmapped, and send-back feedback can name no criteria.

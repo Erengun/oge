@@ -8,7 +8,7 @@ Criteria   AC-1  After 5 failed logins for one account within 15 minutes, furthe
 
 Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph 605090a522b3)
+Pipeline   default (frozen, compiled graph 981c61b8903f)
            implement ─▶ verify (after) ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)
@@ -17,7 +17,7 @@ Pipeline   default (frozen, compiled graph 605090a522b3)
   tests      **/*_test.go  testdata/**
   output     internal/**/*.go
   setup      go mod download   network on
-  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 4 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
 
 ! Trust-weakening options in effect
 !   setup network = on       from .oge/oge.toml   (setup = "go mod download")

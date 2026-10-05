@@ -7,7 +7,7 @@ Criteria   none
 
 Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph ad3fc0798e5b)
+Pipeline   default (frozen, compiled graph cb4c8843108a)
            verify (before) ─▶ implement ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     codex:gpt-5.5  network off   fresh Session every Attempt   (cli)
@@ -16,7 +16,7 @@ Pipeline   default (frozen, compiled graph ad3fc0798e5b)
   tests      **/*_test.go  testdata/**
   output     internal/**/*.go
   setup      go mod download   network on
-  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 4 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
 
 ! No acceptance criteria found in the Task.
 !   Held-out tests will be reported as unmapped, and send-back feedback can name no criteria.

@@ -81,11 +81,11 @@ func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal s
 		}
 		injected = append(injected, "MCP servers: "+strings.Join(names, ", "))
 	}
-	if r := residueOf(in); r != nil && e.role == "verifier" {
+	if r := residueOf(in); r != nil && e.role == "verifier" && !onlyBuiltin(r) {
 		// Residue a judged role can't be kept from: plugins, skills and
 		// subagents may carry instructions, so the verifier fails closed
-		// (ADR-0009). For other roles it is recorded and shown once.
-		// TODO(#46-decision): no allowlist, not even for @builtin plugins.
+		// (ADR-0009), unless it is exactly the pinned binary's own builtin
+		// plugins. For other roles it is recorded and shown once.
 		var parts []string
 		for _, x := range []struct {
 			what string
@@ -233,4 +233,18 @@ func sorted(l []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// onlyBuiltin reports whether r is exactly the pinned binary's builtin
+// plugins, with no skill or subagent.
+func onlyBuiltin(r *agent.Residue) bool {
+	if len(r.Skills)+len(r.Agents) > 0 || len(r.Plugins) != len(builtinPlugins) {
+		return false
+	}
+	for _, p := range r.Plugins {
+		if !oneOf(p, builtinPlugins) {
+			return false
+		}
+	}
+	return true
 }

@@ -497,10 +497,19 @@ func TestEnvelopeRules(t *testing.T) {
 				Source string `json:"source"`
 			}{"org", "org@corp"})
 		}, fatal: "the verifier would load 1 plugins, 1 skills, 1 subagents that Öge can't remove"},
-		"built-in subagents don't fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Agents = builtinAgents }},
-		"wrong cwd":                              {role: "implementer", edit: func(f *initFrame) { f.Cwd = "/elsewhere" }, fatal: "working directory"},
-		"too old":                                {role: "implementer", edit: func(f *initFrame) { f.Version = "2.1.200" }, fatal: "older than the oldest supported"},
-		"newer warns":                            {role: "implementer", edit: func(f *initFrame) { f.Version = "2.2.0" }, warn: "newer than the last tested"},
+		"built-in subagents don't fail verifier":         {role: "verifier", edit: func(f *initFrame) { f.Agents = builtinAgents }},
+		"the pinned builtin plugins don't fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Plugins = pluginsOf(builtinPlugins...) }},
+		"fewer builtin plugins fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Plugins = pluginsOf(builtinPlugins[1:]...) },
+			fatal: "the verifier would load 3 plugins"},
+		"another builtin plugin fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins = pluginsOf(append(append([]string{}, builtinPlugins...), "cc-plugin-new@builtin")...)
+		}, fatal: "the verifier would load 5 plugins"},
+		"builtin plugins with a skill fail verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins, f.Skills = pluginsOf(builtinPlugins...), []string{"debug"}
+		}, fatal: "4 plugins, 1 skills"},
+		"wrong cwd":   {role: "implementer", edit: func(f *initFrame) { f.Cwd = "/elsewhere" }, fatal: "working directory"},
+		"too old":     {role: "implementer", edit: func(f *initFrame) { f.Version = "2.1.200" }, fatal: "older than the oldest supported"},
+		"newer warns": {role: "implementer", edit: func(f *initFrame) { f.Version = "2.2.0" }, warn: "newer than the last tested"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1116,5 +1125,38 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {
 		t.Errorf("long target has %d runes", len([]rune(got)))
+	}
+}
+
+func pluginsOf(sources ...string) []struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+} {
+	var out []struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	for _, src := range sources {
+		out = append(out, struct {
+			Name   string `json:"name"`
+			Source string `json:"source"`
+		}{src, src})
+	}
+	return out
+}
+
+func TestVerifierLaunchDisablesSkills(t *testing.T) {
+	for role, want := range map[string]bool{"verifier": true, "implementer": false} {
+		p, err := profileFor(role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args, err := p.args(agent.LaunchSpec{Role: role, Workspace: t.TempDir()}, "id", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(strings.Join(args, " "), "--disable-slash-commands"); got != want {
+			t.Errorf("%s: --disable-slash-commands = %v", role, got)
+		}
 	}
 }

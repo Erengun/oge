@@ -184,3 +184,21 @@ func TestPassEnvCannotOverrideCheckPrivateVariables(t *testing.T) {
 		}
 	}
 }
+
+// The normal repair loop never trips the growth limit on verifier
+// Attempts: one follows every implementer Attempt the send-backs allow.
+func TestGrowthAttemptsCoverTheSendBackBudget(t *testing.T) {
+	seven, two := 7, 2
+	for _, c := range []struct {
+		cfg  LimitsConfig
+		want int
+	}{
+		{LimitsConfig{}, DefaultLimits.SendBacks + 1},
+		{LimitsConfig{SendBacks: &seven}, 8},
+		{LimitsConfig{SendBacks: &seven, OracleGrowthAttempts: &two}, 2}, // configured wins
+	} {
+		if got := resolveLimits(c.cfg).OracleGrowthAttempts; got != c.want {
+			t.Errorf("%+v: %d, want %d", c.cfg, got, c.want)
+		}
+	}
+}
