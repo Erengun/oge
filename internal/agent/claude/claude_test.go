@@ -1044,6 +1044,9 @@ func TestExitOf(t *testing.T) {
 }
 
 func TestToolTargetsAreShortAndRedacted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the targets are POSIX paths; Runs are refused on Windows (ADR-0017)")
+	}
 	ws := "/w"
 	// Built at run time, so the source holds no key-shaped string.
 	key := "sk" + "-ant-" + strings.Repeat("q", 24)
