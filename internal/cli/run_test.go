@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -392,5 +393,34 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitRejected || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// A Run cancelled during its Check stops with no Verdict, in both views:
+// the Check killed by the cancel is not a fail.
+func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tty=%v", tty), func(t *testing.T) {
+			f := newRunFixture(t)
+			f.interactive = tty
+			t.Setenv("TERM", "xterm-256color")
+			// The Check interrupts this process, as Ctrl-C would, then
+			// would take far longer than the test.
+			slow := fmt.Sprintf("sh -c 'kill -INT %d; exec sleep 30'", os.Getpid())
+			args := []string{"fix Add", "--fast", "--agent", "fake", "--check", slow}
+			if !tty {
+				args = append(args, "--unattended")
+			}
+			code, out, errOut := f.run(t, fixScript, args...)
+			if code != ExitInfra || strings.Contains(out, "REJECTED") || !strings.Contains(out, "INFRASTRUCTURE STOP") {
+				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+			}
+			types := recordTypes(t, f.onlyRun(t))
+			for _, rec := range types {
+				if rec == run.RecVerdict {
+					t.Errorf("a cancelled Check wrote a Verdict: %v", types)
+				}
+			}
+		})
 	}
 }

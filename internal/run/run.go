@@ -118,6 +118,11 @@ type Result struct {
 	Candidate string
 }
 
+// interrupted is why a cancelled Run stopped.
+// TODO(#40-decision): ADR-0012's interrupted status and exit 130 come
+// later; until then a cancelled Run is an Infrastructure stop.
+const interrupted = "interrupted: the Run was cancelled"
+
 // ErrNoAdapter means the Stage's agent has no adapter in this build.
 var ErrNoAdapter = errors.New("no adapter")
 
@@ -233,6 +238,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		pre["setup"] = e
+		if ctx.Err() != nil {
+			if err := l.Append(RecPreflightObserved, pre); err != nil {
+				return nil, err
+			}
+			return end(InfrastructureStop, interrupted)
+		}
 		if !e.Pass {
 			if err := l.Append(RecPreflightObserved, pre); err != nil {
 				return nil, err
@@ -265,13 +276,23 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	res.Candidate = a.Candidate
 
-	// The Check.
+	// The Check. A cancelled Run never reaches a Verdict: the Check it
+	// killed didn't fail.
+	if ctx.Err() != nil {
+		return end(InfrastructureStop, interrupted)
+	}
 	if err := l.Append(RecCheckStarted, map[string]any{"check": 1, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 		return nil, err
 	}
 	cr, err := runner.Check(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", "1"))
 	if err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		if err := l.Append(RecCheckEnded, map[string]any{"check": 1, "result": cr, "uncontained": true, "interrupted": true}); err != nil {
+			return nil, err
+		}
+		return end(InfrastructureStop, interrupted)
 	}
 	res.Check = cr
 	verdict := "fail"
