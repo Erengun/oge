@@ -1,0 +1,279 @@
+package cli
+
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/fake"
+	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/run"
+)
+
+// The fixture is a Go package whose test fails until Add is fixed. The
+// test file is untracked, so reaching it in the Check proves the Snapshot
+// includes untracked work.
+const (
+	fxConfig = `schema = 1
+[project]
+test_globs = ["**/*_test.go"]
+[[check.commands]]
+run    = "go test -json ./..."
+report = "go-test-json"
+`
+	fxBroken = "package fx\n\nfunc Add(a, b int) int { return 0 }\n"
+	fxTest   = "package fx\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(2, 3) != 5 {\n\t\tt.Fatal(\"Add(2, 3) != 5\")\n\t}\n}\n"
+
+	// fixScript fixes Add.
+	fixScript = `echo "fixing Add in add.go"
+printf 'package fx\n\nfunc Add(a, b int) int { return a + b }\n' > add.go
+echo "exit: done"
+`
+	// cheatScript leaves Add broken and rewrites the test to pass; the
+	// Oracle overlay must put the real test back.
+	cheatScript = `echo "making the test pass"
+printf 'package fx\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {}\n' > add_test.go
+`
+)
+
+type runFixture struct {
+	repo, state, hookMarker string
+	statusBefore            string
+}
+
+func newRunFixture(t *testing.T) *runFixture {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	base := t.TempDir()
+	// A private temp dir keeps the state root (under HOME) outside the
+	// system temp directory without disabling that refusal.
+	for _, d := range []string{"home", "tmp", "repo"} {
+		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := filepath.Join(base, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	t.Setenv(ledger.StateDirEnv, "")
+	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	f := &runFixture{repo: filepath.Join(base, "repo"), state: filepath.Join(home, ".local", "state", "oge")}
+	initRepo(t, f.repo)
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig))
+	writeFile(t, filepath.Join(f.repo, "go.mod"), []byte("module fx\n\ngo 1.22\n"))
+	writeFile(t, filepath.Join(f.repo, "add.go"), []byte(fxBroken))
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "fixture")
+	writeFile(t, filepath.Join(f.repo, "add_test.go"), []byte(fxTest)) // untracked
+
+	f.hookMarker = filepath.Join(base, "hook-ran")
+	hook := "#!/bin/sh\ntouch '" + f.hookMarker + "'\n"
+	for _, h := range []string{"pre-commit", "post-commit", "post-checkout", "reference-transaction"} {
+		if err := os.WriteFile(filepath.Join(f.repo, ".git", "hooks", h), []byte(hook), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
+	return f
+}
+
+func (f *runFixture) run(t *testing.T, script string, args ...string) (int, string, string) {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(f.repo), "agent.sh")
+	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	env := Env{
+		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
+		Dir:         f.repo,
+		Interactive: func() bool { return false },
+		LookPath:    exec.LookPath,
+		Edit:        func(string) error { t.Fatal("editor opened"); return nil },
+		GOOS:        runtime.GOOS,
+		Version:     "test",
+		Getenv:      os.Getenv,
+		Agents:      map[string]agent.Adapter{fake.Name: fake.New(path)},
+	}
+	code := Main(env, args)
+	return code, stdout.String(), stderr.String()
+}
+
+// assertUntouched checks the user's checkout was never written.
+func (f *runFixture) assertUntouched(t *testing.T) {
+	t.Helper()
+	if got := gitOut(t, f.repo, "status", "--porcelain"); got != f.statusBefore {
+		t.Errorf("the user's checkout changed:\n%s\nwas:\n%s", got, f.statusBefore)
+	}
+	for path, want := range map[string]string{"add.go": fxBroken, "add_test.go": fxTest} {
+		if b, _ := os.ReadFile(filepath.Join(f.repo, path)); string(b) != want {
+			t.Errorf("%s in the user's checkout changed: %q", path, b)
+		}
+	}
+	if _, err := os.Stat(f.hookMarker); err == nil {
+		t.Error("a hook in the user's repository ran")
+	}
+}
+
+// onlyRun returns the one Run's private directory.
+func (f *runFixture) onlyRun(t *testing.T) string {
+	t.Helper()
+	runs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*"))
+	if len(runs) != 1 {
+		t.Fatalf("want one Run, got %v", runs)
+	}
+	return runs[0]
+}
+
+func recordTypes(t *testing.T, runDir string) []string {
+	t.Helper()
+	recs, err := ledger.Replay(runDir)
+	if err != nil {
+		t.Fatalf("replaying the Ledger: %v", err)
+	}
+	var types []string
+	for _, r := range recs {
+		types = append(types, r.Type)
+	}
+	return types
+}
+
+var wantOrder = []string{
+	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
+	run.RecAttemptStarting, run.RecProcessStarted, run.RecAttemptEnded,
+	run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
+}
+
+func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
+	f := newRunFixture(t)
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	t.Logf("stdout:\n%s", out)
+	for _, want := range []string{
+		"· Fast mode · HEAD ", "+ 1 untracked",
+		"implement  fake · Exit done · Candidate ", "· 1 file changed",
+		"check      go test -json ./... · 1 ran · 0 failed · pass",
+		"ACCEPTED   Candidate ", "Oracle v0",
+		"Not covered", "Nothing was written to your repository.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "[implement") {
+		t.Errorf("the event stream showed without -v:\n%s", out)
+	}
+	f.assertUntouched(t)
+
+	dir := f.onlyRun(t)
+	if got := strings.Join(recordTypes(t, dir), ","); got != strings.Join(wantOrder, ",") {
+		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(wantOrder, ","))
+	}
+	repo := filepath.Join(dir, "repo.git")
+	if out := gitOut(t, repo, "remote"); out != "" {
+		t.Errorf("the Run repository has remotes: %q", out)
+	}
+	if out := strings.TrimSpace(gitOut(t, repo, "config", "core.hooksPath")); out != os.DevNull {
+		t.Errorf("core.hooksPath = %q", out)
+	}
+	if fi, err := os.Stat(filepath.Join(f.state, "private")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("private/: %v %v", fi, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(f.state, "work", "*")); len(left) != 0 {
+		t.Errorf("Workspaces left behind: %v", left)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "checks", "*")); len(left) != 0 {
+		t.Errorf("Check directories left behind: %v", left)
+	}
+}
+
+func TestRunRejectsWhenTheOracleFails(t *testing.T) {
+	f := newRunFixture(t)
+	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "-v")
+	if code != ExitRejected {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		`[implement #1 fake] "making the test pass"`,
+		"[implement #1 fake] Exit: done   (Claim)",
+		"check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1)",
+		"[verdict] FAIL",
+		"REJECTED   Candidate ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+	}
+	f.assertUntouched(t)
+	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(wantOrder, ",") {
+		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(wantOrder, ","))
+	}
+}
+
+func TestRunRefusals(t *testing.T) {
+	f := newRunFixture(t)
+	for name, c := range map[string]struct {
+		args []string
+		want string
+	}{
+		"standard needs a verifier": {[]string{"fix Add", "--agent", "fake", "--unattended"}, "Standard mode needs a verifier"},
+		"blind needs a verifier":    {[]string{"fix Add", "--blind", "--agent", "fake", "--unattended"}, "Blind mode needs a verifier"},
+		"no adapter for claude":     {[]string{"fix Add", "--fast", "--agent", "claude", "--unattended"}, "running a Task with claude isn't implemented yet"},
+		"attended needs a terminal": {[]string{"fix Add", "--fast", "--agent", "fake"}, "pass --unattended"},
+	} {
+		code, _, errOut := f.run(t, fixScript, c.args...)
+		if code != ExitRefused || !strings.Contains(errOut, c.want) {
+			t.Errorf("%s: exit %d, stderr %q", name, code, errOut)
+		}
+	}
+	if runs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*")); len(runs) != 0 {
+		t.Errorf("a refused Run left state: %v", runs)
+	}
+}
+
+func TestRunPreflightRefusesAMergeInProgress(t *testing.T) {
+	f := newRunFixture(t)
+	writeFile(t, filepath.Join(f.repo, ".git", "MERGE_HEAD"), []byte(strings.Repeat("0", 40)+"\n"))
+	code, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitRefused || !strings.Contains(errOut, "a merge is in progress") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+}
+
+func TestRunStateRootInsideTheRepositoryRefuses(t *testing.T) {
+	f := newRunFixture(t)
+	t.Setenv(ledger.StateDirEnv, filepath.Join(f.repo, "state"))
+	code, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitRefused || !strings.Contains(errOut, "inside the repository") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+}
+
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		if len(args) > 0 && (args[0] == "config" || args[0] == "remote") {
+			return string(out)
+		}
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
+}
