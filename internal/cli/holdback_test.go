@@ -57,7 +57,7 @@ func TestDeliverUnresolvedAmbiguousNeedsAChoice(t *testing.T) {
 	if got := deliveries(t, f.onlyRun(t)); len(got) != 0 {
 		t.Errorf("Delivery records: %v", got)
 	}
-	code, out, errOut = f.deliver(t, "apply", "--rejected", "--with-unresolved", "--without-unresolved")
+	code, _, errOut = f.deliver(t, "apply", "--rejected", "--with-unresolved", "--without-unresolved")
 	if code != ExitRefused || !strings.Contains(errOut, "not both") {
 		t.Errorf("both: exit %d\nstderr:\n%s", code, errOut)
 	}

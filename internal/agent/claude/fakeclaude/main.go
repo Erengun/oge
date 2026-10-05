@@ -9,6 +9,7 @@
 //	OGE_FAKE_CLAUDE_FIXTURE_<ROLE>  the one to replay instead for $OGE_ROLE,
 //	                         e.g. OGE_FAKE_CLAUDE_FIXTURE_VERIFIER
 //	OGE_FAKE_CLAUDE_RECORD   where to write its argv and environment as JSON
+//	OGE_FAKE_CLAUDE_RECORD_<ROLE>  where to write them instead for $OGE_ROLE
 //	OGE_FAKE_CLAUDE_STDIN    where to append every line it reads
 //
 // Replay: an "out" frame is written, with the recording's working
@@ -80,7 +81,11 @@ func main() {
 			return
 		}
 	}
-	if path := os.Getenv("OGE_FAKE_CLAUDE_RECORD"); path != "" {
+	record := os.Getenv("OGE_FAKE_CLAUDE_RECORD")
+	if p := os.Getenv("OGE_FAKE_CLAUDE_RECORD_" + strings.ToUpper(os.Getenv("OGE_ROLE"))); p != "" && os.Getenv("OGE_ROLE") != "" {
+		record = p
+	}
+	if path := record; path != "" {
 		b, _ := json.Marshal(map[string]any{"argv": os.Args[1:], "env": os.Environ()})
 		if err := os.WriteFile(path, b, 0o600); err != nil {
 			fail("recording: %v", err)

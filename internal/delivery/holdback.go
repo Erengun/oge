@@ -168,14 +168,6 @@ func (h *Holding) LeftLine() string {
 	return strings.Join(parts, " · ")
 }
 
-func paths(hs []Held) []string {
-	var out []string
-	for _, h := range hs {
-		out = append(out, h.Path)
-	}
-	return out
-}
-
 // shownList names paths safely for the terminal, at most five.
 func shownList(ps []string) string {
 	var out []string

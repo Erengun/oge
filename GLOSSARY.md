@@ -183,6 +183,7 @@ _Avoid_: Output, deliverable (when the classification is meant)
 
 **Excluded file**:
 An agent's notes, configuration or instruction file that never reaches a verifier or reviewer, from a fixed list Öge owns or the Attempt's scratch area outside the Candidate.
+Delivery: held back by `oge apply` and `oge branch` unless declared as output (an output glob that names it, e.g. `--output CLAUDE.md`); a declared one is ordinary Candidate content, seen by QA as data, never as instructions (#107).
 _Avoid_: Ignored file, junk
 
 **Ambiguous file**:
