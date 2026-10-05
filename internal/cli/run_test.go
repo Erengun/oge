@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/fake"
@@ -49,6 +50,9 @@ type runFixture struct {
 	statusBefore            string
 	// interactive mocks a terminal at stdin and stdout.
 	interactive bool
+	// coldSeed starts the Run's cache seed empty, as a real Run does,
+	// instead of from the tests' warm template.
+	coldSeed bool
 }
 
 func newRunFixture(t *testing.T) *runFixture {
@@ -113,7 +117,7 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		Version:           "test",
 		Getenv:            os.Getenv,
 		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
-		CacheSeedTemplate: testSeed,
+		CacheSeedTemplate: map[bool]string{false: testSeed}[f.coldSeed],
 	}
 	code := Main(env, args)
 	return code, stdout.String(), stderr.String()
@@ -431,6 +435,44 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitRejected || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// A Run cancelled while it waits for its cache seed's warm step stops
+// with no Verdict, not with an internal error.
+func TestRunCancelledWhileTheSeedWarmsHasNoVerdict(t *testing.T) {
+	f := newRunFixture(t)
+	f.coldSeed = true // a cold warm step takes seconds
+	// Interrupt as Ctrl-C would, once the Attempt has ended and the Run
+	// is waiting for the seed.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			logs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*", "ledger.jsonl"))
+			for _, l := range logs {
+				if b, _ := os.ReadFile(l); bytes.Contains(b, []byte(`"type":"AttemptEnded"`)) {
+					if p, err := os.FindProcess(os.Getpid()); err == nil {
+						_ = p.Signal(os.Interrupt)
+					}
+					return
+				}
+			}
+		}
+	}()
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitInfra || !strings.Contains(out, "INFRASTRUCTURE STOP") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, rec := range recordTypes(t, f.onlyRun(t)) {
+		if rec == run.RecCheckStarted || rec == run.RecVerdict {
+			t.Errorf("a Run cancelled before its Check wrote %s", rec)
+		}
 	}
 }
 

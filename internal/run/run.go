@@ -281,11 +281,8 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	res.Candidate = a.Candidate
 
-	// The Check. A cancelled Run never reaches a Verdict: the Check it
-	// killed didn't fail.
-	if ctx.Err() != nil {
-		return end(InfrastructureStop, interrupted)
-	}
+	// The Check, from the cache seed once it is warm. A cancelled Run
+	// never reaches a Verdict: the Check it killed didn't fail.
 	if seed != nil {
 		waitStart := time.Now()
 		warm, werr := seed.Wait()
@@ -297,6 +294,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		runner.Seed = seed
+	}
+	if ctx.Err() != nil {
+		return end(InfrastructureStop, interrupted)
 	}
 	if err := l.Append(RecCheckStarted, map[string]any{"check": 1, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 		return nil, err
