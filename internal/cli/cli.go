@@ -103,7 +103,6 @@ func runEditor(path string) error {
 // need `oge run <word>`.
 var notYet = map[string]bool{
 	"doctor": true, "init": true, "resume": true, "cancel": true, "status": true,
-	"receipt": true,
 }
 
 const usage = `Usage:
@@ -112,6 +111,7 @@ const usage = `Usage:
   oge diff [<run>]         show a Run's Candidate against its Snapshot
   oge apply [<run>]        apply an Accepted Candidate to your working tree
   oge branch [<name>] [<run>]   make a local branch with it, never checked out
+  oge receipt [<run>] [--md|--json]   a Run's Receipt, from its Ledger
   oge --version
 
 Run flags:
@@ -153,6 +153,8 @@ func Main(env Env, args []string) int {
 			args = args[1:]
 		case a == "diff" || a == "apply" || a == "branch":
 			return deliverCommand(env, a, args[1:])
+		case a == "receipt":
+			return receiptCommand(env, args[1:])
 		case notYet[a]:
 			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet\n", a)
 			return ExitRefused

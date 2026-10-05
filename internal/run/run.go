@@ -284,6 +284,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if o == Parked {
 			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
 		}
+		if len(res.Unresolved) > 0 {
+			// The Receipt's Not covered line (#63).
+			data["unresolved"] = res.Unresolved
+		}
 		if err := l.Append(rec, data); err != nil {
 			return nil, err
 		}

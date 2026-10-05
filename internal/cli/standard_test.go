@@ -81,7 +81,7 @@ func TestStandardVerifierAddsPassingTestsAccepted(t *testing.T) {
 		"QA         Fresh Fake · Exit extended · +1 held-out",
 		"check      visible Oracle · go test -json ./... · 1 ran · 0 failed · pass",
 		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
-		"ACCEPTED   Candidate ", "Oracle v1",
+		"Result        ✓ Accepted", "Oracle v1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -182,7 +182,7 @@ func TestStandardQAFindsABugAndRepairsIt(t *testing.T) {
 		"TestAddNegatives: Add(-2, 1) = 0, want -1",
 		"send back  1 of 3 · Repairing automatically…",
 		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -280,7 +280,8 @@ grep -q 'return a + b' add.go && touch "$OGE_TEST_OUT/saw-fix"
 			t.Errorf("%s: %v, want %v", name, err == nil, want)
 		}
 	}
-	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 2 files withheld") || !strings.Contains(out, "decision   drop · recorded at the Ambiguous-file Gate · NOTES.md") {
+	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 2 files withheld") || !strings.Contains(out, "decision   drop · recorded at the Ambiguous-file Gate · NOTES.md") ||
+		!strings.Contains(out, "Decisions     drop at the Ambiguous-file Gate: NOTES.md") || strings.Contains(out, "QA never saw") {
 		t.Errorf("stdout:\n%s", out)
 	}
 }
@@ -404,7 +405,7 @@ else
 ` + negTest + `fi
 `
 	code, out, errOut := f.run(t, verifierThen(verifier, buggyThenFixed), standardTask, "--agent", "fake", "--unattended")
-	if code != ExitParked || !strings.Contains(out, "Oracle-growth limit reached") || strings.Contains(out, "INFRASTRUCTURE STOP") {
+	if code != ExitParked || !strings.Contains(out, "Oracle-growth limit reached") || strings.Contains(out, "Infrastructure stop") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -507,7 +508,7 @@ func TestNothing(t *testing.T) {}
 EOF
 `
 	code, out, errOut := f.run(t, verifierThen(verifier, `echo "nothing to do"`), standardTask, "--agent", "fake", "--unattended")
-	if code == ExitOK || strings.Contains(out, "ACCEPTED") {
+	if code == ExitOK || strings.Contains(out, "✓ Accepted") {
 		t.Fatalf("a broken Candidate was Accepted: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if !strings.Contains(out, "+1 held-out (1 unmapped) · 1 addition left out") {
@@ -559,7 +560,7 @@ func TestStandardQAGlobalResetAtInitIsNeverAccepted(t *testing.T) {
 	verifier := `printf 'package fx\n\nimport "testing"\n\nvar _ = func() int { off = 0; return 0 }()\n\nfunc TestZ(t *testing.T) {}\n' > a_reset_test.go
 `
 	code, out, errOut := f.run(t, verifierThen(verifier, offAdd), standardTask, "--agent", "fake", "--unattended")
-	if code == ExitOK || strings.Contains(out, "ACCEPTED") {
+	if code == ExitOK || strings.Contains(out, "✓ Accepted") {
 		t.Fatalf("a broken Candidate was Accepted: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -572,7 +573,7 @@ func TestStandardQARuntimeMutationIsNeverAccepted(t *testing.T) {
 	verifier := `printf 'package fx\n\nimport "testing"\n\nfunc TestAAAReset(t *testing.T) { off = 0 }\n' > a_reset_test.go
 `
 	code, out, errOut := f.run(t, verifierThen(verifier, offAdd), standardTask, "--agent", "fake", "--unattended")
-	if code == ExitOK || strings.Contains(out, "ACCEPTED") {
+	if code == ExitOK || strings.Contains(out, "✓ Accepted") {
 		t.Fatalf("a broken Candidate was Accepted: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if !strings.Contains(out, "visible Oracle") || !strings.Contains(out, "held-out") {

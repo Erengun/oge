@@ -75,7 +75,7 @@ func TestFrictionSurvivesATimeout(t *testing.T) {
 	if code != ExitInfra || !strings.Contains(out, "Attempt failed: timeout") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	if !strings.Contains(out, "\nfriction   policy friction 1 turn (1 denied)\n") {
+	if !strings.Contains(out, "\nFriction      policy friction 1 turn (1 denied)\n") {
 		t.Errorf("no friction line:\n%s", out)
 	}
 	if !strings.Contains(ledger, oneLostTurn) {
@@ -88,7 +88,7 @@ func TestFrictionSurvivesATimeout(t *testing.T) {
 func TestFrictionOfASettledTurn(t *testing.T) {
 	t.Parallel()
 	code, out, ledger := runWithFriction(t, frictionAdapter{settle: true}, "")
-	if code != 0 || !strings.Contains(out, "\nfriction   policy friction 1 turn (1 denied)\n") {
+	if code != 0 || !strings.Contains(out, "\nFriction      policy friction 1 turn (1 denied)\n") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if !strings.Contains(ledger, oneLostTurn) {
@@ -142,7 +142,7 @@ func TestFrictionIsSummedAcrossASendBack(t *testing.T) {
 	if code != 0 || opened != 2 || !strings.Contains(out, "send back  1 of ") {
 		t.Fatalf("exit %d, %d Attempts\n%s", code, opened, out)
 	}
-	if !strings.Contains(out, "\nfriction   policy friction 2 turns (3 denied) · 1 refused before the envelope passed\n") {
+	if !strings.Contains(out, "\nFriction      policy friction 2 turns (3 denied) · 1 refused before the envelope passed\n") {
 		t.Errorf("the summary lacks the Run's friction:\n%s", out)
 	}
 	for _, want := range []string{oneLostTurn, `"policy_friction":{"denied":2,"envelope_refusals":1,"lost_turns":1}`} {

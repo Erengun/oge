@@ -421,7 +421,7 @@ func TestRunApplyFlagAppliesAnAcceptedCandidate(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if strings.Contains(out, "Nothing was written to your repository.") || !strings.Contains(out, "ACCEPTED") ||
+	if strings.Contains(out, "Nothing was written to your repository.") || !strings.Contains(out, "✓ Accepted") ||
 		!strings.HasSuffix(out, ": 1 changed. Nothing was committed or staged.\n") || strings.Contains(out, "next ") {
 		t.Errorf("stdout:\n%s", out)
 	}

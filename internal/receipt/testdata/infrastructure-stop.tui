@@ -1,0 +1,12 @@
+[1mÖGE RECEIPT   [mRun 20261005T090000-a1b2c3 · Fast mode
+Result        [1m[31m■ Infrastructure stop: no Verdict[m[m
+              the implementer Attempt failed: timeout
+Task          fix Add
+Checks        none ran
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          6.2s · preflight 400ms · implement 5.6s · your attention 0s
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              No Check reached a Verdict: there is no Evidence on any Candidate
+Ledger        [2mhead c8142d849fe9 · identifies this Receipt; not tamper-proof[m

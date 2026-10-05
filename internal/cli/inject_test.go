@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/oracle"
+	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/receipt/receipttest"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -58,7 +62,11 @@ func TestControlCharactersNeverReachTheTerminal(t *testing.T) {
 		r.observe(run.Event{Kind: run.EvAttempt, Attempt: a, Result: res})
 	}
 	r.observe(run.Event{Kind: run.EvCheck, Check: check, Result: res})
-	r.summary(&run.Result{Outcome: run.InfrastructureStop, Why: []string{hostile}})
+	lb := receipttest.New(pipeline.Fast)
+	lb.Attempt(receipttest.Attempt{ID: "implement#1", From: time.Second, To: 2 * time.Second, Candidate: receipttest.C1, Exit: "done", Claims: []string{hostile}})
+	lb.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "TestB" + hostile, Attested: "fail"}}, nil)
+	lb.End(5*time.Second, run.InfrastructureStop, receipttest.C1, hostile)
+	r.receipt(lb.Receipt(), &run.Result{Outcome: run.InfrastructureStop})
 	assertInert(t, "plain", out.String())
 	if !strings.Contains(out.String(), "TestB") {
 		t.Errorf("the failing test names are gone:\n%s", out.String())
@@ -78,5 +86,19 @@ func TestControlCharactersNeverReachTheTerminal(t *testing.T) {
 			h.send(run.Event{Kind: run.EvCheck, Check: check, Result: res})
 		}
 		assertInert(t, "tui stages", h.m.render())
+	}
+}
+
+// clean escapes every character that makes text read other than it is,
+// and drops invalid UTF-8, in every line the terminal shows.
+func TestCleanEscapesBidiAndInvisibleRunes(t *testing.T) {
+	for _, r := range []rune{0x202a, 0x202e, 0x2066, 0x2069, 0x200e, 0x200f, 0x061c, 0x200b, 0x200c, 0x200d, 0x2028, 0x2029, 0xfeff} {
+		got := clean("a" + string(r) + "b")
+		if want := fmt.Sprintf("a<U+%04X>b", r); got != want {
+			t.Errorf("clean(%U) = %q, want %q", r, got, want)
+		}
+	}
+	if got := clean("a\xffb"); got != "a�b" {
+		t.Errorf("invalid UTF-8: %q", got)
 	}
 }

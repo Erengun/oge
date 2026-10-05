@@ -86,12 +86,3 @@ func shownLine(l string) string {
 	}
 	return s
 }
-
-// unresolvedText is the "Not covered" part for a Run that isn't Accepted
-// and still holds Ambiguous files: no one promoted or dropped them.
-func unresolvedText(res *run.Result) string {
-	if res == nil || res.Outcome == run.Accepted || len(res.Unresolved) == 0 {
-		return ""
-	}
-	return pluralOf(len(res.Unresolved), "new file", "new files") + " no output glob covers, never promoted or dropped"
-}

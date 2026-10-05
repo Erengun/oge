@@ -141,7 +141,7 @@ func TestRunSkippedOnBothMayBeAccepted(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if !strings.Contains(out, "Not covered Oracle tests skipped on the Snapshot and the Candidate (1): fx.TestNeedsTool") {
+	if !strings.Contains(out, "Oracle tests skipped on the Snapshot and the Candidate (1): fx.TestNeedsTool") {
 		t.Errorf("the summary doesn't name the skipped test:\n%s", out)
 	}
 	var ended struct {
@@ -239,7 +239,7 @@ func TestRunAttestationFailingOnTheSnapshotIsInfrastructure(t *testing.T) {
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "main_test.go"), []byte("package fx\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) {\n\t"+forgedFrames+"\n\tos.Exit(0)\n}\n"))
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitInfra || !strings.Contains(out, "INFRASTRUCTURE STOP") || !strings.Contains(out, "attestation failed on the Snapshot control") {
+	if code != ExitInfra || !strings.Contains(out, "Infrastructure stop") || !strings.Contains(out, "attestation failed on the Snapshot control") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	dir := f.onlyRun(t)
@@ -274,5 +274,5 @@ func TestRunAllSkippedOnBothMeetsTheMinimum(t *testing.T) {
 // neverAccepted: a fail Verdict, with send-backs off, ends at the
 // bound-exhaustion Gate (Parked) or Rejected; never Accepted.
 func neverAccepted(code int, out string) bool {
-	return (code == ExitParked || code == ExitRejected) && !strings.Contains(out, "ACCEPTED")
+	return (code == ExitParked || code == ExitRejected) && !strings.Contains(out, "✓ Accepted")
 }

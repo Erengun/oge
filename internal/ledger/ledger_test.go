@@ -127,3 +127,28 @@ func TestStateRootRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The head is what the next record chains to, so it changes with every
+// record appended.
+func TestReplayHeadIsWhatTheNextRecordChainsTo(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Create(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append("RunStarted", nil); err != nil {
+		t.Fatal(err)
+	}
+	_, head, err := ReplayHead(dir)
+	if err != nil || len(head) != 64 {
+		t.Fatalf("head %q, %v", head, err)
+	}
+	if err := l.Append("RunEnded", nil); err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	recs, head2, err := ReplayHead(dir)
+	if err != nil || recs[1].Prev != head || head2 == head {
+		t.Fatalf("head %q then %q; record 1 chains to %q (%v)", head, head2, recs[1].Prev, err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/erengun/oge/internal/receipt/receipttest"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,10 @@ func shrinkCase(t *testing.T, grow []int) {
 	m.still = true // so the cursor rests below the frame when it shrinks
 	u := &tui{in: strings.NewReader(""), out: &out, stderr: &out, plain: &renderer{w: &out, frozen: h.f}, m: m}
 	pause := func() { time.Sleep(250 * time.Millisecond) }
+	h.res.Dir = t.TempDir()
+	if err := receipttest.Named("accepted-fast").WriteRun(h.res.Dir); err != nil {
+		t.Fatal(err)
+	}
 	res, err := u.show(context.Background(), newInterrupts(func() {}), func(_ context.Context, observe func(run.Event)) (*run.Result, error) {
 		observe(run.Event{Kind: run.EvStarted, Result: h.res})
 		observe(run.Event{Kind: run.EvPreflight, Result: h.res})
@@ -186,7 +191,7 @@ func shrinkCase(t *testing.T, grow []int) {
 	var screen vt
 	screen.write(out.Bytes())
 	got := screen.String()
-	for _, once := range []string{"fix Add", "Run 20261005T090000-a1b2c3", "✓ preflight", "ACCEPTED"} {
+	for _, once := range []string{"fix Add\nRun ", "Run 20261005T090000-a1b2c3 · Fast mode · HEAD", "✓ preflight", "✓ Accepted"} {
 		if n := strings.Count(got, once); n != 1 {
 			t.Errorf("%q is on the screen %d times:\n%s\n%q", once, n, got, out.String())
 		}

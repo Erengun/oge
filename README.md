@@ -24,14 +24,24 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
 ✓ implement  fake · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
 ✓ check      go test -json ./... · 1 ran · 0 failed · pass · 1.2s
 
-ACCEPTED   Candidate 6d1231d · Oracle v0 · 7.3s
-Not covered an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Fast mode
+Result        ✓ Accepted
+Task          fix Add
+Candidate     6d1231d · 1 file changed · Oracle v0
+Checks        Check #1 passed · 1 of 1 Oracle tests attested passing
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          7.4s · preflight 400ms · implement 5.6s · Check 1.2s · your attention 0s
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        head 3406de47c802 · identifies this Receipt; not tamper-proof
 Nothing was written to your repository.
 ```
 
 In CI, or with `--plain`, the same run prints plain lines.
 
-At the end of every run you get a Receipt: what was checked, what passed, and what was not covered. You take the result with `oge apply`.
+At the end of every run you get a Receipt: what was checked, what passed, and what was not covered. `oge receipt --md` prints it again as Markdown for a PR, and `oge receipt --json` as JSON. You take the result with `oge apply`.
 
 Öge uses the coding-agent CLIs you already have installed and logged in. It never asks for, reads or stores your provider credentials.
 

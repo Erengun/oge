@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "run": "20261005T090000-a1b2c3",
+  "mode": "Fast",
+  "task": "fix Add",
+  "outcome": "Infrastructure stop",
+  "headline": "■ Infrastructure stop: no Verdict",
+  "why": [
+    "the implementer Attempt failed: timeout"
+  ],
+  "oracle_version": 0,
+  "checks": [],
+  "protected": {
+    "reverted": []
+  },
+  "scope": {
+    "reverted": [],
+    "qa_discarded": []
+  },
+  "decisions": [],
+  "supervision": {
+    "approved_automatically": 0,
+    "denied": 0,
+    "cancelled": 0,
+    "sent_back": 0,
+    "human_interruptions": 0
+  },
+  "time": {
+    "total_ms": 6200,
+    "stages": [
+      {
+        "stage": "preflight",
+        "ms": 400
+      },
+      {
+        "stage": "implement",
+        "ms": 5600
+      }
+    ],
+    "human_attention_ms": 0
+  },
+  "not_covered": [
+    "No independent tests (fast mode): no QA and no held-out tests",
+    "No Check reached a Verdict: there is no Evidence on any Candidate"
+  ],
+  "deliveries": [],
+  "ledger_head": "c8142d849fe9b2cc616736349cd49a0206ef35d8b71747f70a76d261cb847a88"
+}

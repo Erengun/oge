@@ -254,8 +254,8 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 		"· Fast mode · HEAD ", "+ 1 untracked",
 		"implement  fake · Exit done · Candidate ", "· 1 file changed",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
-		"ACCEPTED   Candidate ", "Oracle v0",
-		"Not covered", "Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges",
+		"Result        ✓ Accepted", "Oracle v0",
+		"Not covered", "Checks ran unsandboxed; network not blocked", "No independent tests (fast mode)", "Handled       ", "Ledger        head ",
 		"Nothing was written to your repository.",
 	} {
 		if !strings.Contains(out, want) {
@@ -378,7 +378,7 @@ func TestRunSendsAFailingCandidateBackWithTheFailureOutput(t *testing.T) {
 		"check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1)",
 		"send back  1 of 3 · the Candidate goes back to the implementer with the failure output",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -421,14 +421,14 @@ func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
 		"[verdict] FAIL",
 		"send back  1 of 1 · ",
 		"[implement #2 fake] started (cause: send_back)",
-		"PARKED     at the bound-exhaustion Gate · Candidate ",
+		"Waiting for you: the bound-exhaustion Gate",
 		"The Check failed and the send-back limit (1) is used up.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "REJECTED") {
+	if strings.Contains(out, "✗ Not accepted") {
 		t.Errorf("a park was shown as Rejected:\n%s", out)
 	}
 	f.assertUntouched(t)
@@ -614,7 +614,7 @@ func TestRunCancelledWhileTheSeedWarmsHasNoVerdict(t *testing.T) {
 		}
 	}()
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitInfra || !strings.Contains(out, "INFRASTRUCTURE STOP") {
+	if code != ExitInfra || !strings.Contains(out, "Infrastructure stop") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, rec := range recordTypes(t, f.onlyRun(t)) {
@@ -645,7 +645,7 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 				args = append(args, "--unattended")
 			}
 			code, out, errOut := f.run(t, fixScript, args...)
-			if code != ExitInfra || strings.Contains(out, "REJECTED") || !strings.Contains(out, "INFRASTRUCTURE STOP") {
+			if code != ExitInfra || strings.Contains(out, "✗ Not accepted") || !strings.Contains(out, "Infrastructure stop") {
 				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 			}
 			types := recordTypes(t, f.onlyRun(t))

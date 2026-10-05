@@ -1,0 +1,15 @@
+[1mÖGE RECEIPT   [mRun 20261005T090000-a1b2c3 · Standard mode
+Result        [1m[32m✓ Accepted[m[m
+Task          fix Add
+Agent claimed [2m"Done. All tests pass." (Claim, implement#1)[m
+Öge found     Check #1 failed on its Candidate 6d1231d: 1 held-out test failing (AC-2)
+              → sent back to the implementer; the Candidate it then made was Accepted
+Candidate     5a1bd80 · 1 file changed · Oracle v1
+Checks        Check #2 passed · 2 of 2 Oracle tests attested passing · 1 held out from the implementer · 2 Checks in all
+QA            +1 held-out · 2 QA passes
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       18 operations approved automatically · 1 sent back to the implementer · Human interruptions: 0
+Time          28.1s · preflight 400ms · implement 10.4s · QA 8.8s · Check 7.7s · your attention 0s
+Not covered   Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        [2mhead f1fc93266303 · identifies this Receipt; not tamper-proof[m

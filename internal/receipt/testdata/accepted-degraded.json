@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "run": "20261005T090000-a1b2c3",
+  "mode": "Standard",
+  "task": "fix Add",
+  "outcome": "Accepted",
+  "headline": "✓ Accepted",
+  "candidate": {
+    "commit": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
+    "files_changed": 2,
+    "files": [
+      "add.go",
+      "notes/plan.md"
+    ]
+  },
+  "oracle_version": 1,
+  "checks": [
+    {
+      "check": 1,
+      "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
+      "oracle_version": 1,
+      "verdict": "pass",
+      "tests_passed": 3,
+      "tests_failed": 0,
+      "held_out": 2,
+      "held_out_failed": 0,
+      "commands": [
+        {
+          "run": "go test -json ./...",
+          "pass": true,
+          "duration_ms": 3800
+        }
+      ],
+      "skipped_on_both": [
+        "fx.TestNeedsTool"
+      ],
+      "not_built": [
+        "add_windows_test.go — GOOS=windows only"
+      ],
+      "visible_ms": 3800,
+      "cache": "seeded-clone",
+      "cache_materialise_ms": 210,
+      "uncontained": true
+    }
+  ],
+  "qa": {
+    "held_out_added": 2,
+    "unmapped": 1,
+    "additions_left_out": 0,
+    "attempts": 1,
+    "ambiguous": [
+      "notes/plan.md"
+    ]
+  },
+  "protected": {
+    "reverted": [
+      {
+        "id": "implement#1/tamper-1",
+        "attempt": "implement#1",
+        "path": "add_test.go",
+        "change": "modified",
+        "acknowledged": true
+      },
+      {
+        "id": "implement#1/tamper-2",
+        "attempt": "implement#1",
+        "path": ".oge/oge.toml",
+        "change": "modified",
+        "acknowledged": true
+      }
+    ]
+  },
+  "scope": {
+    "reverted": [
+      "../escape"
+    ],
+    "qa_discarded": [
+      "add.go"
+    ],
+    "degraded": [
+      "Write scope enforcement was Degraded (implement#1)"
+    ]
+  },
+  "decisions": [
+    {
+      "gate": "gate.tamper",
+      "actor": "human",
+      "choice": "acknowledge",
+      "reason": "the agent tidied a test; reverted is fine"
+    }
+  ],
+  "supervision": {
+    "approved_automatically": 0,
+    "denied": 0,
+    "cancelled": 0,
+    "sent_back": 0,
+    "human_interruptions": 1
+  },
+  "time": {
+    "total_ms": 25200,
+    "stages": [
+      {
+        "stage": "preflight",
+        "ms": 400
+      },
+      {
+        "stage": "implement",
+        "ms": 3500
+      },
+      {
+        "stage": "QA",
+        "ms": 4900
+      },
+      {
+        "stage": "Check",
+        "ms": 3790
+      }
+    ],
+    "human_attention_ms": 12000
+  },
+  "claim": {
+    "label": "Claim",
+    "attempt": "implement#1",
+    "exit": "done",
+    "text": "Fixed Add."
+  },
+  "oge_found": [
+    "2 protected-file changes reverted: add_test.go, .oge/oge.toml"
+  ],
+  "not_covered": [
+    "1 held-out test names no acceptance criterion",
+    "1 new file QA never saw (no output glob matches): notes/plan.md",
+    "Oracle tests skipped on the Snapshot and the Candidate (1): fx.TestNeedsTool",
+    "Oracle test files this machine doesn't build (1): add_windows_test.go — GOOS=windows only",
+    "trust-weakening option in effect: setup network = on (from .oge/oge.toml)",
+    "Degraded: Write scope enforcement was Degraded (implement#1)",
+    "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
+  ],
+  "deliveries": [],
+  "ledger_head": "1625b1d52f4d04aac51d2ace423652321ef1b7769edc00b23e355c8094915a88"
+}

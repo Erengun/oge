@@ -76,7 +76,9 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 		if report == "" {
 			report = "no report"
 		}
-		p("  %-10s %s   %s · timeout %s · network off   (%s)", "Check", c.Run, report, duration(c.Timeout), c.Source)
+		// Nothing blocks the network yet: there is no sandbox in the MVP
+		// (#63), so the line says so rather than suggesting it is enforced.
+		p("  %-10s %s   %s · timeout %s · network off (not enforced)   (%s)", "Check", c.Run, report, duration(c.Timeout), c.Source)
 	}
 	p("  %-10s %s", "tests", strings.Join(f.Project.TestGlobs, "  "))
 	if len(f.Project.OutputGlobs) > 0 {
@@ -86,8 +88,8 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 	}
 	if f.Setup.Run != "" {
 		network := f.Setup.Network
-		if network == "" {
-			network = "off"
+		if network == "" || network == "off" {
+			network = "off (not enforced)"
 		}
 		p("  %-10s %s   network %s", "setup", f.Setup.Run, network)
 	}

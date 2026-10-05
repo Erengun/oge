@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/erengun/oge/internal/gate"
@@ -125,32 +124,6 @@ func pinsLine(p gate.Pins) string {
 
 // gateHint is the line under the choices.
 const gateHint = "There is no default: type a choice and press Enter."
-
-// parkedSummary is a parked Run's end.
-func (r *renderer) parkedSummary(res *run.Result) {
-	r.p("")
-	r.p("%-10s at the %s · Candidate %s · Oracle v%d · %s", "PARKED", gateTitle(gateLabel(res)), short(res.Candidate), res.Oracle, res.Duration.Round(100*time.Millisecond))
-	for _, w := range res.Why {
-		// It may name Candidate files: what hides text is escaped.
-		r.p("  %s", shownLine(w))
-	}
-	r.p("  Unattended Runs never decide a Gate; a human must (exit 10).")
-	r.observed(res)
-	r.p("Nothing was written to your repository.")
-}
-
-func gateLabel(res *run.Result) string {
-	if res.Gate == "" {
-		return "?"
-	}
-	switch res.Gate {
-	case "gate.result":
-		return "Result gate"
-	case "gate.ambiguous_file":
-		return "Ambiguous-file"
-	}
-	return strings.ReplaceAll(strings.TrimPrefix(res.Gate, "gate."), "_", "-")
-}
 
 func short(rev string) string {
 	if len(rev) > 7 {

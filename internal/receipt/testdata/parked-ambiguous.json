@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "run": "20261005T090000-a1b2c3",
+  "mode": "Fast",
+  "task": "fix Add",
+  "outcome": "Parked",
+  "headline": "… Waiting for you: the Ambiguous-file Gate",
+  "why": [
+    "2 new files were not covered by the declared output/test globs:",
+    "Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)"
+  ],
+  "unresolved_ambiguous": [
+    "docs/debug.md",
+    "tmp/result.json"
+  ],
+  "waiting_at": "gate.ambiguous_file",
+  "candidate": {
+    "commit": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
+    "files_changed": 3,
+    "files": [
+      "add.go",
+      "docs/debug.md",
+      "tmp/result.json"
+    ]
+  },
+  "oracle_version": 0,
+  "checks": [
+    {
+      "check": 1,
+      "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
+      "oracle_version": 0,
+      "verdict": "pass",
+      "tests_passed": 1,
+      "tests_failed": 0,
+      "held_out": 0,
+      "held_out_failed": 0,
+      "commands": [
+        {
+          "run": "go test -json ./...",
+          "pass": true,
+          "duration_ms": 1000
+        }
+      ],
+      "visible_ms": 1000,
+      "cache": "seeded-clone",
+      "cache_materialise_ms": 210,
+      "uncontained": true
+    }
+  ],
+  "protected": {
+    "reverted": []
+  },
+  "scope": {
+    "reverted": [],
+    "qa_discarded": []
+  },
+  "decisions": [],
+  "supervision": {
+    "approved_automatically": 0,
+    "denied": 0,
+    "cancelled": 0,
+    "sent_back": 0,
+    "human_interruptions": 0
+  },
+  "time": {
+    "total_ms": 7400,
+    "stages": [
+      {
+        "stage": "preflight",
+        "ms": 400
+      },
+      {
+        "stage": "implement",
+        "ms": 5600
+      },
+      {
+        "stage": "Check",
+        "ms": 990
+      }
+    ],
+    "human_attention_ms": 0
+  },
+  "not_covered": [
+    "No independent tests (fast mode): no QA and no held-out tests",
+    "2 new files no output glob covers, never promoted or dropped: docs/debug.md, tmp/result.json",
+    "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
+  ],
+  "deliveries": [],
+  "ledger_head": "6117c954e1e70d1daf774d41c97fd53c7bd0ba810dcc95723c51118e6a8d6668"
+}

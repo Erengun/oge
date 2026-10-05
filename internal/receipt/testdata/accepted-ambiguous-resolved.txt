@@ -1,0 +1,15 @@
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Standard mode
+Result        ✓ Accepted
+Task          fix Add
+Candidate     9f00d6d · 3 files changed · Oracle v0
+Checks        Check #2 passed · 1 of 1 Oracle tests attested passing · 2 Checks in all
+QA            +0 held-out · 2 QA passes
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Decisions     drop at the Ambiguous-file Gate: NOTES.md
+              promote at the Ambiguous-file Gate: tools/gen.go
+Handled       0 operations approved automatically · Human interruptions: 2
+Time          31.1s · preflight 400ms · implement 3.5s · QA 8.8s · Check 6.7s · your attention 10.8s
+Not covered   QA added no held-out tests
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        head 45dd1fe2ab6b · identifies this Receipt; not tamper-proof

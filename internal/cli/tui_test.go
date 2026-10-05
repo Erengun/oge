@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/receipt/receipttest"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -31,6 +33,29 @@ type tuiHarness struct {
 	f     *pipeline.Frozen
 	res   *run.Result
 	att   *run.Attempt
+	// lb is the Ledger the Run would have written so far: the end screen
+	// is its Receipt.
+	lb     *receipttest.Builder
+	since  time.Duration // where the Ledger's last record is
+	checks int
+	oracle int // the latest Oracle version
+}
+
+func (h *tuiHarness) ledger() *receipttest.Builder {
+	if h.lb == nil {
+		h.lb, h.since = receipttest.New(h.f.Mode), 500*time.Millisecond
+	}
+	return h.lb
+}
+
+// now is the clock as an offset into the Ledger, after its last record.
+func (h *tuiHarness) now() (from, to time.Duration) {
+	from, to = h.since, h.clock.Sub(tuiT0)
+	if to <= from {
+		to = from + 100*time.Millisecond
+	}
+	h.since = to + 10*time.Millisecond
+	return from, to
 }
 
 func newTUIHarness(t *testing.T, color bool, width int) *tuiHarness {
@@ -53,6 +78,53 @@ func (h *tuiHarness) at(d time.Duration) { h.clock = tuiT0.Add(d) }
 
 func (h *tuiHarness) send(ev run.Event) {
 	h.m.Update(batchMsg{progressOf(ev, h.f, h.clock)})
+	h.record(ev)
+}
+
+// record writes what the Run would have written to its Ledger for ev.
+func (h *tuiHarness) record(ev run.Event) {
+	b := h.ledger()
+	switch ev.Kind {
+	case run.EvAttempt:
+		a := ev.Attempt
+		from, to := h.now()
+		ra := receipttest.Attempt{ID: a.ID, Role: a.Role, Stage: a.Stage, Cause: a.Cause, From: from, To: to, Candidate: a.Candidate,
+			Changed: a.Changed, Exit: a.Exit, Failure: a.Failure, Reverted: a.Reverted}
+		if a.Role == "verifier" {
+			ra.Stage = "verify"
+		}
+		if a.Role != "verifier" {
+			ra.Claims = []string{"fixing Add in add.go"}
+		}
+		b.Attempt(ra)
+		if q := a.QA; q != nil && q.HeldOut > 0 {
+			var held []oracle.HeldOut
+			for i := 0; i < q.HeldOut; i++ {
+				held = append(held, oracle.HeldOut{Test: oracle.TestID{Package: "fx", Name: fmt.Sprintf("TestHeld%d", i+1)}, Criteria: []string{"AC-1"}})
+			}
+			h.oracle++
+			b.Oracle(to, h.oracle, a.ID, held, 0)
+		}
+	case run.EvCheck:
+		tests := []receipttest.Test{{Name: "TestAdd", Attested: "pass"}}
+		for _, e := range ev.Check.Commands {
+			if r := e.Report; r != nil && len(r.FailedTests) > 0 {
+				tests = nil
+				for _, n := range r.FailedTests {
+					tests = append(tests, receipttest.Test{Name: n, Attested: "fail"})
+				}
+			}
+		}
+		if !ev.Check.Pass && len(tests) == 1 && tests[0].Attested == "pass" {
+			tests[0].Attested = "fail"
+		}
+		h.checks++
+		from, to := h.now()
+		b.Check(h.checks, ev.Result.Candidate, h.oracle, from, to, tests, nil)
+	case run.EvDecided:
+		from, to := h.now()
+		b.Gate(ev.Gate.Pins.Gate, from, to, ev.Decision.Choice, ev.Decision.Reason)
+	}
 }
 
 func (h *tuiHarness) agent(e agent.Event) {
@@ -87,6 +159,7 @@ func (h *tuiHarness) implemented(failure string) {
 		h.att.Exit, h.att.Candidate, h.att.Changed = "done", "6d1231d9f00d", []string{"add.go"}
 		h.agent(agent.Event{Kind: agent.TurnSettled, Exit: "done"})
 	}
+
 	h.send(run.Event{Kind: run.EvAttempt, Result: h.res, Attempt: h.att})
 }
 
@@ -102,15 +175,23 @@ func (h *tuiHarness) checked(pass bool) {
 }
 
 // end finishes the Run and returns the screen left in the scrollback: the
-// last frame, then the summary.
+// last frame, then the Receipt of the Ledger the Run wrote.
 func (h *tuiHarness) end(o run.Outcome, why ...string) string {
 	h.res.Outcome, h.res.Why, h.res.Duration = o, why, 7300*time.Millisecond
 	_, cmd := h.m.Update(batchMsg{doneMsg{at: h.clock, res: h.res}})
 	if cmd == nil {
 		h.t.Fatal("the view didn't quit when the Run ended")
 	}
+	lb := h.ledger()
+	_, at := h.now()
+	cand := h.res.Candidate
+	if o == run.Parked {
+		lb.Park(at, "gate.tamper", why...)
+	} else {
+		lb.End(at, o, cand, why...)
+	}
 	var b bytes.Buffer
-	(&renderer{w: &b, frozen: h.f}).summary(h.res)
+	(&renderer{w: &b, frozen: h.f}).receipt(lb.Receipt(), h.res)
 	return h.m.render() + b.String()
 }
 
@@ -313,7 +394,7 @@ func TestPlainFlagOnATerminalPrintsPlainLines(t *testing.T) {
 	if strings.ContainsRune(got, 0x1b) {
 		t.Errorf("--plain wrote escape sequences:\n%q", got)
 	}
-	norm := regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7}\b|\d+(\.\d+)?m?s\b`)
+	norm := regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|\d+(\.\d+)?m?s\b`)
 	if g, w := norm.ReplaceAllString(got, "X"), norm.ReplaceAllString(want, "X"); g != w {
 		t.Errorf("--plain on a terminal differs from a Run without one\n--- got\n%s\n--- want\n%s", got, want)
 	}

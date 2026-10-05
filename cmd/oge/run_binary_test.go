@@ -88,7 +88,7 @@ func TestBinaryRunAcceptedExitsZero(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n")
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != 0 || !strings.Contains(out, "ACCEPTED") || !strings.Contains(out, "1 ran · 0 failed") {
+	if code != 0 || !strings.Contains(out, "✓ Accepted") || !strings.Contains(out, "1 ran · 0 failed") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	// Without a terminal the output is plain lines (ADR-0022).
@@ -107,8 +107,8 @@ func TestBinaryRunParkedExitsTen(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withScript(t, env, "echo 'nothing to do'\n")
 	code, out, errOut := runExe(t, testBinary, repo, env, "run", "--fast", "--agent", "fake", "--unattended", "fix Add")
-	if code != 10 || !strings.Contains(out, "PARKED     at the bound-exhaustion Gate") || !strings.Contains(out, "send back  3 of 3") ||
-		strings.Contains(out, "REJECTED") || !strings.Contains(out, "1 failed: TestAdd") {
+	if code != 10 || !strings.Contains(out, "Waiting for you: the bound-exhaustion Gate") || !strings.Contains(out, "send back  3 of 3") ||
+		strings.Contains(out, "✗ Not accepted") || !strings.Contains(out, "1 failed: TestAdd") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -139,7 +139,7 @@ func TestBinaryRunTamperParksExitsTen(t *testing.T) {
 	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n"+
 		"printf 'package fx\\n' > add_test.go\n")
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != 10 || !strings.Contains(out, "1 protected test change reverted: add_test.go") || !strings.Contains(out, "PARKED") {
+	if code != 10 || !strings.Contains(out, "1 protected test change reverted: add_test.go") || !strings.Contains(out, "Waiting for you") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if b, _ := os.ReadFile(filepath.Join(repo, "add_test.go")); string(b) != addTest {

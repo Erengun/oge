@@ -1,0 +1,15 @@
+[1mÖGE RECEIPT   [mRun 20261005T090000-a1b2c3 · Fast mode
+Result        [1m[33m… Waiting for you: the Ambiguous-file Gate[m[m
+              2 new files were not covered by the declared output/test globs:
+              Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)
+Task          fix Add
+Candidate     6d1231d · 3 files changed · Oracle v0
+Checks        Check #1 passed · 1 of 1 Oracle tests attested passing
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          7.4s · preflight 400ms · implement 5.6s · Check 1s · your attention 0s
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              2 new files no output glob covers, never promoted or dropped: docs/debug.md, tmp/result.json
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        [2mhead 6117c954e1e7 · identifies this Receipt; not tamper-proof[m

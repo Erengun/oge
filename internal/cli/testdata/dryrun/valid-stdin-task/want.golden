@@ -13,14 +13,14 @@ Pipeline   default (frozen, compiled graph 981c61b8903f)
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)
   verify     claude         network off   fresh Session every Attempt   (inherits implement)
-  Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)
+  Check      go test -json ./...   go-test-json · timeout 5m · network off (not enforced)   (project)
   tests      **/*_test.go  testdata/**
   output     internal/**/*.go
   setup      go mod download   network on
   limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 4 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
 
 ! Trust-weakening options in effect
-!   setup network = on       from .oge/oge.toml   (setup = "go mod download")
+!   setup network = on       from .oge/oge.toml
 
 Valid. A Run would start from here.
 --- stderr

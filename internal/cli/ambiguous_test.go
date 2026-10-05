@@ -85,15 +85,15 @@ func TestAmbiguousUnattendedParks(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{
-		"PARKED     at the Ambiguous-file Gate",
+		"Waiting for you: the Ambiguous-file Gate",
 		"2 new files need a decision: docs/debug.md, tmp/result.json",
-		"Unattended Runs never decide a Gate; a human must (exit 10).",
+		"Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "ACCEPTED") {
+	if strings.Contains(out, "✓ Accepted") {
 		t.Errorf("an unresolved Run was Accepted:\n%s", out)
 	}
 	dir := f.onlyRun(t)
@@ -154,7 +154,7 @@ func TestAmbiguousDropAllThenApply(t *testing.T) {
 		"2 new files need a decision",
 		"  p  promote", "  d  drop", "  i  inspect", "  reject ", "  q  quit",
 		"decision   drop · recorded at the Ambiguous-file Gate · docs/debug.md, tmp/result.json",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -234,7 +234,7 @@ func TestAmbiguousPromoteAllThenQA(t *testing.T) {
 		"decision   promote · recorded at the Ambiguous-file Gate · helper.go",
 		"resolved   1 promoted · Candidate ",
 		"fresh QA, then the final Check",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -290,7 +290,7 @@ func TestAmbiguousMixedSelection(t *testing.T) {
 		"2 new files need a decision",
 		"decision   drop · recorded at the Ambiguous-file Gate · docs/debug.md, tmp/result.json",
 		"resolved   1 promoted · 2 dropped · Candidate ",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -367,7 +367,7 @@ esac
 		"QA         Fresh Fake · Exit extended · +1 held-out",
 		"1 failed: TestHelper · fail",
 		"send back  1 of 3 · Repairing automatically…",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -421,8 +421,8 @@ printf 'x\n' > "$(printf 'evil\342\200\256gpj.sh')"
 		"── docs/debug.md · 3 lines", "  # notes", "]0;pwned[31mred[0m", "  ok = 1 <U+202E> // admin", "── end of docs/debug.md",
 		"── big.txt", "can't show it: 1100000 bytes, too large to show here",
 		"── \"evil\\u202egpj.sh\" · 1 line",
-		"REJECTED   Candidate ",
-		"Not covered 4 new files no output glob covers, never promoted or dropped · an independent verifier",
+		"Result        ✗ Not accepted",
+		"4 new files no output glob covers, never promoted or dropped: ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)

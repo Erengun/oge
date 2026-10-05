@@ -13,7 +13,7 @@ func TestBinaryClaudePolicyFriction(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, frictionSession(true))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended", "-v")
-	if code != 0 || !strings.Contains(out, "ACCEPTED") {
+	if code != 0 || !strings.Contains(out, "✓ Accepted") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{
@@ -22,7 +22,7 @@ func TestBinaryClaudePolicyFriction(t *testing.T) {
 		"[implement #1 claude] Bash go test ./...\n",
 		"[implement #1 claude] allow Bash go test ./... · pre-authorised by Launch profile ",
 		"[implement #1 claude] policy friction 1 turn (1 denied)\n",
-		"\nfriction   policy friction 1 turn (1 denied)\n",
+		"\nFriction      policy friction 1 turn (1 denied)\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -39,10 +39,10 @@ func TestBinaryClaudeNoFrictionLine(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, frictionSession(false))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended", "-v")
-	if code != 0 || !strings.Contains(out, "ACCEPTED") {
+	if code != 0 || !strings.Contains(out, "✓ Accepted") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if strings.Contains(out, "\nfriction ") {
+	if strings.Contains(out, "\nFriction ") {
 		t.Errorf("a friction line with no friction:\n%s", out)
 	}
 	if !strings.Contains(out, "[implement #1 claude] policy friction 0 turns (0 denied)\n") {

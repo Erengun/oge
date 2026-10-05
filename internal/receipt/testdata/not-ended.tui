@@ -1,0 +1,10 @@
+[1mÖGE RECEIPT   [mRun 20261005T090000-a1b2c3 · Standard mode
+Result        [1m[33m… Not ended: the Ledger has no end yet (the Run is still going, or Öge stopped mid-Run)[m[m
+Task          fix Add
+Checks        none ran
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          500ms · preflight 400ms · your attention 0s
+Not covered   No Check reached a Verdict: there is no Evidence on any Candidate
+Ledger        [2mhead cebb54448ca0 · identifies this Receipt; not tamper-proof[m
