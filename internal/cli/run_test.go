@@ -294,3 +294,16 @@ func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
 		t.Error("the agent ran after setup failed on the Snapshot")
 	}
 }
+
+func TestRunSetupCannotRewriteTheOracle(t *testing.T) {
+	f := newRunFixture(t)
+	// Setup is Candidate-controlled; it runs before the overlay, so a
+	// setup that replaces the Oracle's test changes nothing.
+	cfg := fxConfig + "[setup]\nrun = \"sh setup.sh\"\n"
+	writeFile(t, filepath.Join(f.repo, "setup.sh"), []byte("printf 'package fx\\n\\nimport \"testing\"\\n\\nfunc TestAdd(t *testing.T) {}\\n' > add_test.go\n"))
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	code, out, errOut := f.run(t, "echo 'nothing to do'\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitRejected || !strings.Contains(out, "1 failed: TestAdd") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}

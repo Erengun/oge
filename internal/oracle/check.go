@@ -186,8 +186,8 @@ type Result struct {
 }
 
 // Check runs the Oracle on candidate in a fresh Check directory under
-// root: the Candidate with the Oracle's tests laid over its test paths,
-// then the setup command, then every Check command. The Verdict is pass
+// root: the Candidate, then the setup command, then the Oracle's tests
+// laid over its test paths, then every Check command. The Verdict is pass
 // only if every command passes. root is removed afterwards.
 func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, setup, root string) (*Result, error) {
 	defer RemoveAll(root)
@@ -196,9 +196,6 @@ func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, s
 		return nil, err
 	}
 	if err := repo.Checkout(candidate, dir); err != nil {
-		return nil, err
-	}
-	if err := r.overlay(m, dir); err != nil {
 		return nil, err
 	}
 	res := &Result{Pass: true}
@@ -214,6 +211,12 @@ func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, s
 			res.Pass = false
 			return res, nil
 		}
+	}
+	// The overlay comes after setup, which runs Candidate code, so nothing
+	// the Candidate controls runs between laying the Oracle down and the
+	// Check commands.
+	if err := r.overlay(m, dir); err != nil {
+		return nil, err
 	}
 	for _, c := range m.Commands {
 		e, out, err := r.Exec(ctx, c.Run, dir, env, time.Duration(c.TimeoutSec)*time.Second, c.OutputCap)
