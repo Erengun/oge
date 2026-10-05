@@ -14,9 +14,10 @@ A reader might expect a shared, writable per-Run or per-project cache, or the us
 Snapshot → Öge setup → Run cache seed → private copy per Check → Check runs → Check-local cache discarded
 ```
 
-- **Seed.** Setup runs on the trusted Snapshot and populates Run-level seeds for the build cache and module cache.
-  - Candidate code never runs with a seed directory as a writable cache.
-  - The seed lives in Öge's private state, outside Candidate access.
+- **Seed.** Öge's setup command and Öge's own offline warm step populate the seed, on the trusted Snapshot: Run-level seeds for the build cache and module cache.
+  - The warm step compiles the Snapshot's packages and tests without linking or running them, with the module proxy off. It runs niced, in the background, overlapping the implementer's Attempt. A Check waits for it only up to a bound, then stops it and starts from the partial seed.
+  - Candidate code never runs with a seed directory as a writable cache. Once warm, the seed is read-only, so a stray write from an uncontained Check fails.
+  - The seed lives in Öge's private state, outside Candidate access. A later Run sweeps the seeds and Check directories that a Run stopped without cleanup left behind.
 - **Per-Check copy.** Before each Check, Öge materialises a private, Check-local warm cache from the seed.
   - It prefers a filesystem clone (reflink, copy-on-write) where supported, then a regular copy.
   - If neither is practical, it uses a cold Check cache.
@@ -24,6 +25,7 @@ Snapshot → Öge setup → Run cache seed → private copy per Check → Check 
 - **Unchanged:** Check network stays off, and the Check-local cache is disposable, so it can't poison later Checks.
 - **Evidence.** It records the strategy per Check, e.g. `cache: seeded-private-copy` or `cache: cold`.
 - **Measurement.** Öge measures cold Check time, seeded Check time and materialisation overhead, and reports them in the evaluation (ADR-0019 metrics).
+  - Report three numbers per fixture: cold Check, seeded Check, and seed creation plus materialisation. Report each saving as absolute seconds saved and as a percentage reduction.
 
 ## Consequences
 
