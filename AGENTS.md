@@ -7,6 +7,8 @@
 3. What latency or interruption does it add?
 4. Can the complexity stay invisible on the happy path?
 
+**Product constraint:** if Öge is dramatically slower or more annoying than native Claude/Codex workflows without proportional value, we failed. A polished, Claude Code-like terminal experience is a core product goal, not decoration (ADR-0022). The trust architecture stays invisible underneath it.
+
 Implementation priority: get `oge "task"` working end to end as early as possible, first on the fake agent, then on Claude, then with verification. Don't build infrastructure ahead of a felt UX, and don't add architecture unless implementation exposes a real problem. See issue #66 and milestone M1.
 
 Decisions live in `docs/adr/`, vocabulary in `GLOSSARY.md`, and wording in `docs/positioning.md`.

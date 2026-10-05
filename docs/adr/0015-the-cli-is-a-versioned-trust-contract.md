@@ -1,5 +1,5 @@
 ---
-status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--apply`/`--fast`/`--blind`/`--require`, `oge receipt` amended in part by ADR-0019
+status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--apply`/`--fast`/`--blind`/`--require`, `oge receipt` amended in part by ADR-0019; "no elaborate TUI" and append-only output superseded by ADR-0022
 ---
 
 # The CLI is a versioned trust contract: exit code 0 means Accepted and only Accepted
@@ -54,7 +54,7 @@ status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--appl
   - Briefing content a role is forbidden to see;
   - unredacted output.
 
-  Output is append-only lines of summarised, normalised events. There is no elaborate TUI.
+  Output is append-only lines of summarised, normalised events. There is no elaborate TUI. *(Superseded by [ADR-0022](0022-the-terminal-experience-is-a-product-surface.md): a live TUI on interactive terminals, with plain lines as the CI/automation mode. These never-shown rules still apply.)*
 
 ## Consequences
 
