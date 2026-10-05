@@ -1,8 +1,10 @@
 Third-party notices
 ===================
 
-This repository includes the following third-party material. None of it is
-compiled into the oge binary.
+This repository includes the following third-party material, which is not
+compiled into the oge binary. The notices for what the binary does compile
+in, the Go standard library and the modules in go.mod, are in
+THIRD_PARTY_NOTICES_BINARY, which every GoReleaser archive includes.
 
 -------------------------------------------------------------------------------
 mattpocock/skills
