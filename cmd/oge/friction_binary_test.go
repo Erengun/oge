@@ -9,6 +9,7 @@ import (
 // "go test" under -v, carries its recovery hint, and the Run records and
 // shows its policy friction (#90).
 func TestBinaryClaudePolicyFriction(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, frictionSession(true))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended", "-v")
@@ -34,6 +35,7 @@ func TestBinaryClaudePolicyFriction(t *testing.T) {
 
 // With no friction, the summary says nothing about it; -v still does.
 func TestBinaryClaudeNoFrictionLine(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, frictionSession(false))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended", "-v")

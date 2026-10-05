@@ -383,6 +383,7 @@ func readGolden(t *testing.T, name string) string {
 
 // --plain on a terminal prints exactly what a Run without one prints.
 func TestPlainFlagOnATerminalPrintsPlainLines(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	_, want, _ := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	f.interactive = true

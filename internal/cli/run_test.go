@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +47,33 @@ printf 'package fx\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {}\n' > add
 `
 )
 
+// runFixture is one end-to-end test's repository, state root and
+// synthetic environment. It never touches the process environment, so
+// tests that use it can run in parallel. A new e2e test should:
+//
+//	func TestRunSomething(t *testing.T) {
+//		t.Parallel() // first, before the fixture
+//		f := newRunFixture(t)
+//		f.setenv("TERM", "xterm-256color") // never t.Setenv or os.Chdir
+//		code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+//		...
+//	}
+//
+// The CLI reads the fixture's HOME, XDG dirs, TMPDIR and state root, and
+// anything set with f.setenv, through Env.Getenv; other variables fall
+// through to the process environment, which TestMain isolates once. A
+// test that drives Main with its own adapter builds its Env with f.env,
+// not os.Getenv, or its Run lands in a state root every test shares.
+//
+// A test stays sequential (no t.Parallel) when it signals the test
+// process (every parallel Run would be interrupted too) or forces a stop
+// through Main (proc.KillAll kills every Run's processes).
 type runFixture struct {
 	repo, state, hookMarker string
 	statusBefore            string
+	// vars are the environment the CLI sees over the process's: a key
+	// that is present wins even when empty. Change them with setenv.
+	vars map[string]string
 	// interactive mocks a terminal at stdin and stdout.
 	interactive bool
 	stdin       string             // what the human types
@@ -68,26 +93,27 @@ func newRunFixture(t *testing.T) *runFixture {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH")
 	}
-	base := t.TempDir()
-	// A private temp dir keeps the state root (under HOME) outside the
-	// system temp directory without disabling that refusal.
-	for _, d := range []string{"home", "tmp", "repo"} {
+	// The base is outside the process's TMPDIR (see TestMain), which keeps
+	// the state root (under HOME) outside the system temp directory
+	// without disabling that refusal.
+	base, err := os.MkdirTemp(fixtureRoot, "run-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = oracle.RemoveAll(base) })
+	for _, d := range []string{"home", "tmp", "repo", "out"} {
 		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	home := filepath.Join(base, "home")
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
-	t.Setenv(ledger.StateDirEnv, "")
-	t.Setenv("TMPDIR", filepath.Join(base, "tmp"))
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-
 	f := &runFixture{repo: filepath.Join(base, "repo"), state: filepath.Join(home, ".local", "state", "oge")}
-	if err := os.MkdirAll(filepath.Join(base, "out"), 0o755); err != nil {
-		t.Fatal(err)
+	f.vars = map[string]string{
+		"HOME":             home,
+		"XDG_CONFIG_HOME":  filepath.Join(home, ".config"),
+		"XDG_STATE_HOME":   filepath.Join(home, ".local", "state"),
+		ledger.StateDirEnv: "",
+		"TMPDIR":           filepath.Join(base, "tmp"),
 	}
 	initRepo(t, f.repo)
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig))
@@ -116,23 +142,54 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	env := Env{
-		Stdin: strings.NewReader(f.stdin), Stdout: &stdout, Stderr: &stderr,
+	env := f.env(&stdout, &stderr)
+	// The fake's script gets the fixture's HOME and TMPDIR over the
+	// process's (the last of a duplicate key wins).
+	env.Agents = map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{
+		"HOME=" + f.vars["HOME"], "TMPDIR=" + f.vars["TMPDIR"], "OGE_TEST_STATE=" + f.state,
+		"OGE_TEST_OUT=" + filepath.Join(filepath.Dir(f.repo), "out"),
+	}}}
+	if f.wrap != nil {
+		env.Agents[fake.Name] = f.wrap(env.Agents[fake.Name])
+	}
+	code := Main(env, args)
+	return code, stdout.String(), stderr.String()
+}
+
+// setenv sets a variable the CLI sees in this fixture's later commands,
+// in place of t.Setenv, which a parallel test can't use.
+func (f *runFixture) setenv(key, value string) { f.vars[key] = value }
+
+// getenv is the fixture's environment as of now: its variables over the
+// process's. Later setenv calls don't change it, so a command's lingering
+// goroutines never race the next one's setup.
+func (f *runFixture) getenv() func(string) string {
+	vars := make(map[string]string, len(f.vars))
+	for k, v := range f.vars {
+		vars[k] = v
+	}
+	return func(key string) string {
+		if v, ok := vars[key]; ok {
+			return v
+		}
+		return os.Getenv(key)
+	}
+}
+
+// env is the Env a command in the fixture runs with, writing to stdout
+// and stderr. It has no agents; a test with its own adapter sets Agents.
+func (f *runFixture) env(stdout, stderr io.Writer) Env {
+	return Env{
+		Stdin: strings.NewReader(f.stdin), Stdout: stdout, Stderr: stderr,
 		Dir:               f.repo,
 		Interactive:       func() bool { return f.interactive },
 		LookPath:          exec.LookPath,
 		Edit:              f.edit,
 		GOOS:              runtime.GOOS,
 		Version:           "test",
-		Getenv:            os.Getenv,
-		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state, "OGE_TEST_OUT=" + filepath.Join(filepath.Dir(f.repo), "out")}}},
+		Getenv:            f.getenv(),
 		CacheSeedTemplate: map[bool]string{false: testSeed}[f.coldSeed],
 	}
-	if f.wrap != nil {
-		env.Agents[fake.Name] = f.wrap(env.Agents[fake.Name])
-	}
-	code := Main(env, args)
-	return code, stdout.String(), stderr.String()
 }
 
 // assertUntouched checks the user's checkout was never written.
@@ -186,6 +243,7 @@ const writeAheadScript = `grep '"type":"AttemptStarting"' "$OGE_TEST_STATE"/priv
 `
 
 func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, writeAheadScript+fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK {
@@ -310,6 +368,7 @@ esac
 ` + fixScript
 
 func TestRunSendsAFailingCandidateBackWithTheFailureOutput(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, fixOnSendBack, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK {
@@ -349,6 +408,7 @@ func TestRunSendsAFailingCandidateBackWithTheFailureOutput(t *testing.T) {
 // mandatory bound-exhaustion Gate, and the Run parks there: a park is
 // never turned into Rejected (ADR-0008).
 func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 1)
 	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "-v")
@@ -386,6 +446,7 @@ func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
 }
 
 func TestRunRefusals(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	for name, c := range map[string]struct {
 		args []string
@@ -406,6 +467,7 @@ func TestRunRefusals(t *testing.T) {
 }
 
 func TestRunPreflightRefusesAMergeInProgress(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, ".git", "MERGE_HEAD"), []byte(strings.Repeat("0", 40)+"\n"))
 	code, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -415,8 +477,9 @@ func TestRunPreflightRefusesAMergeInProgress(t *testing.T) {
 }
 
 func TestRunStateRootInsideTheRepositoryRefuses(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
-	t.Setenv(ledger.StateDirEnv, filepath.Join(f.repo, "state"))
+	f.setenv(ledger.StateDirEnv, filepath.Join(f.repo, "state"))
 	code, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitRefused || !strings.Contains(errOut, "inside the repository") {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
@@ -437,6 +500,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 }
 
 func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	// The setup command sees the Snapshot (untracked test included) and
 	// fails, so Preflight refuses before any agent starts.
@@ -453,6 +517,7 @@ func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
 }
 
 func TestRunSetupCannotRewriteTheOracle(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	// Setup is Candidate-controlled; it runs before the overlay, so a
 	// setup that replaces the Oracle's test changes nothing.
@@ -466,12 +531,14 @@ func TestRunSetupCannotRewriteTheOracle(t *testing.T) {
 }
 
 func TestRunRedactsAgentText(t *testing.T) {
+	t.Parallel()
 	const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz0123"
 	for name, script := range map[string]string{
 		"claim": "echo 'my key is " + secret + "'\n" + fixScript,
 		"exit":  "echo 'exit: " + secret + "'\n",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newRunFixture(t)
 			code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 			if code != ExitOK && code != ExitInfra {
@@ -494,6 +561,7 @@ func TestRunRedactsAgentText(t *testing.T) {
 }
 
 func TestRunPreflightRefusesASymlinkOutOfTheRepository(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	if err := os.Symlink(filepath.Dir(f.repo), filepath.Join(f.repo, "up")); err != nil {
 		t.Fatal(err)
@@ -505,6 +573,7 @@ func TestRunPreflightRefusesASymlinkOutOfTheRepository(t *testing.T) {
 }
 
 func TestRunEveryOracleTestMustPass(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "sub", "x.go"), []byte("package sub\n\nfunc X() int { return 0 }\n"))
 	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {\n\tif X() != 1 {\n\t\tt.Fatal(\"X() != 1\")\n\t}\n}\n"))
@@ -567,7 +636,7 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 		t.Run(fmt.Sprintf("tty=%v,SIG%s", tty, c.sig), func(t *testing.T) {
 			f := newRunFixture(t)
 			f.interactive = tty
-			t.Setenv("TERM", "xterm-256color")
+			f.setenv("TERM", "xterm-256color")
 			// The Check interrupts this process, as Ctrl-C would, then
 			// would take far longer than the test.
 			slow := fmt.Sprintf("sh -c 'kill -%s %d; exec sleep 30'", c.sig, os.Getpid())
@@ -593,6 +662,7 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 // its cache seed and Check directories; the next Run sweeps them, but
 // never a live Run's, nor any Run's Ledger.
 func TestRunSweepsLeftoverCachesOfDeadRuns(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	runs := filepath.Join(f.state, "private", "runs")
 	mk := func(id, pid string) {
@@ -635,6 +705,7 @@ func TestRunSweepsLeftoverCachesOfDeadRuns(t *testing.T) {
 // The implementer's Workspace is a git checkout of the Snapshot: git
 // status starts clean there, and the .git never reaches the Candidate.
 func TestRunWorkspaceHasAGitCheckoutOfTheSnapshot(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	script := `test -d .git && test -z "$(git status --porcelain)" || exit 7
 ` + fixScript + `git diff --name-only | grep -qx add.go || exit 8
@@ -662,6 +733,7 @@ func (c cacheSpy) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 // The implementer's run-private tool cache is never the seed, nor copied
 // into it: what the agent writes there never reaches a Check's cache.
 func TestRunImplementerCacheNeverReachesTheSeed(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	var cache string
 	f.wrap = func(a agent.Adapter) agent.Adapter { return cacheSpy{a, &cache} }

@@ -61,6 +61,7 @@ func withFakeClaude(t *testing.T, env []string, session string) []string {
 }
 
 func TestBinaryClaudeRunAccepted(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(true))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended", "-v")
@@ -100,6 +101,7 @@ func TestBinaryClaudeRunAccepted(t *testing.T) {
 // A Candidate that keeps failing the Check is sent back until the limit,
 // then an unattended Run parks at the bound-exhaustion Gate (ADR-0008).
 func TestBinaryClaudeRunParked(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(false))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
@@ -111,6 +113,7 @@ func TestBinaryClaudeRunParked(t *testing.T) {
 // The release binary runs claude: a claude that can't start a session is
 // an Attempt failure, reported with its own last words.
 func TestReleaseBinaryRunsClaude(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, `{"dir": "die"}`+"\n")
 	code, out, errOut := runBinary(t, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
@@ -144,6 +147,7 @@ func findLedger(t *testing.T, env []string) string {
 // Residue an isolated launch can't remove is shown once, when it first
 // appears and when it changes, never on every Run (#44).
 func TestBinaryClaudeResidueIsShownOnce(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	runWith := func(skills string) string {
 		t.Helper()
@@ -202,6 +206,7 @@ const standardTask = "# Fix Add\n\n## Acceptance criteria\n- Add returns the sum
 // Standard mode on the real Claude adapter: the implementer, then a fresh
 // verifier Session with the verifier's Launch profile, then the Check.
 func TestBinaryClaudeStandardAccepted(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(true))
 	path := filepath.Join(t.TempDir(), "verifier.ndjson")
@@ -242,6 +247,7 @@ func TestBinaryClaudeStandardAccepted(t *testing.T) {
 // A verifier whose isolated launch still loads skills fails closed: no
 // Verdict without an independent QA pass (ADR-0009).
 func TestBinaryClaudeVerifierResidueFailsClosed(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(true))
 	path := filepath.Join(t.TempDir(), "verifier.ndjson")
