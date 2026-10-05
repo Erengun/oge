@@ -24,6 +24,9 @@ type Manifest struct {
 	TestGlobs []string  `json:"test_globs"`
 	Commands  []Command `json:"commands"`
 	Tests     []File    `json:"tests"`
+	// Expected are the top-level Go tests in Tests; each must pass in a
+	// go-test-json report for the Check to pass.
+	Expected []TestID `json:"expected,omitempty"`
 }
 
 // Command is one Check command as the Oracle pins it.
@@ -75,6 +78,14 @@ func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs)
 		m.Tests = append(m.Tests, File{Path: p, Blob: id})
 	}
 	sort.Slice(m.Tests, func(i, j int) bool { return m.Tests[i].Path < m.Tests[j].Path })
+	var testPaths []string
+	for _, t := range m.Tests {
+		testPaths = append(testPaths, t.Path)
+	}
+	m.Expected = expectedTests(testPaths, files, func(p string) ([]byte, error) {
+		b, _, err := src.Show(snapshot, p)
+		return b, err
+	})
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return nil, "", err

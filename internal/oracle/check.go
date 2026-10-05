@@ -184,9 +184,11 @@ func (c *capture) store(blobs *ledger.Blobs, outputCap int64) (Output, error) {
 // Result is a Check's outcome on one Candidate against one Oracle version.
 type Result struct {
 	Pass bool `json:"pass"`
-	// Why is set when the Check failed before any Check command ran, such
-	// as an Oracle path the Candidate blocked.
+	// Why is set when the Check failed for a reason no single command
+	// shows: an Oracle path the Candidate blocked, or Oracle tests no
+	// report shows passing (named in Missing).
 	Why      string      `json:"why,omitempty"`
+	Missing  []string    `json:"missing_tests,omitempty"`
 	Setup    *Execution  `json:"setup,omitempty"`
 	Commands []Execution `json:"commands"`
 }
@@ -248,6 +250,25 @@ func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, s
 		}
 		res.Commands = append(res.Commands, e)
 		res.Pass = res.Pass && e.Pass
+	}
+	// Every Oracle test must pass in some go-test-json report: a package
+	// that silently dropped out of the run (a nested go.mod, a build
+	// constraint) is not a pass.
+	var reports []*Report
+	for _, e := range res.Commands {
+		if e.Report != nil {
+			reports = append(reports, e.Report)
+		}
+	}
+	if len(reports) > 0 {
+		if res.Missing = missingTests(m.Expected, reports); len(res.Missing) > 0 {
+			names := res.Missing
+			if len(names) > 5 {
+				names = append(names[:5:5], "…")
+			}
+			res.Pass = false
+			res.Why = fmt.Sprintf("Oracle tests that never passed (%d): %s", len(res.Missing), strings.Join(names, ", "))
+		}
 	}
 	return res, nil
 }
@@ -367,6 +388,23 @@ type Report struct {
 	Skipped     int      `json:"skipped"`
 	FailedTests []string `json:"failed_tests,omitempty"`
 	Error       string   `json:"error,omitempty"` // missing or malformed
+
+	outcomes map[TestID]string // top-level tests' terminal actions, by package
+}
+
+// outcome is id's terminal action in the report ("" when it never ran);
+// an id with no package matches the test in any package, a pass first.
+func (r *Report) outcome(id TestID) string {
+	if id.Package != "" {
+		return r.outcomes[id]
+	}
+	got := ""
+	for p, o := range r.outcomes {
+		if p.Name == id.Name && (got == "" || o == "pass") {
+			got = o
+		}
+	}
+	return got
 }
 
 // ParseGoTestJSON reads `go test -json` output. Every non-empty line must
@@ -391,9 +429,16 @@ func ParseGoTestJSON(b []byte) Report {
 		if ev.Test == "" {
 			continue
 		}
+		if (ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip") && !strings.Contains(ev.Test, "/") {
+			if rep.outcomes == nil {
+				rep.outcomes = map[TestID]string{}
+			}
+			rep.outcomes[TestID{Package: ev.Package, Name: ev.Test}] = ev.Action
+		}
 		switch ev.Action {
 		case "pass":
 			rep.Ran++
+
 		case "fail":
 			rep.Ran++
 			rep.Failed++

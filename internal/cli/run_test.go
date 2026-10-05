@@ -380,3 +380,15 @@ func TestRunPreflightRefusesASymlinkOutOfTheRepository(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 }
+
+func TestRunEveryOracleTestMustPass(t *testing.T) {
+	f := newRunFixture(t)
+	writeFile(t, filepath.Join(f.repo, "sub", "x.go"), []byte("package sub\n\nfunc X() int { return 0 }\n"))
+	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {\n\tif X() != 1 {\n\t\tt.Fatal(\"X() != 1\")\n\t}\n}\n"))
+	// A nested module drops sub out of ./..., so TestX never runs.
+	script := fixScript + "printf 'module sub\\n\\ngo 1.22\\n' > sub/go.mod\n"
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitRejected || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
