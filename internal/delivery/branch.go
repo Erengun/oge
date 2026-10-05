@@ -161,7 +161,7 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 	// Nothing has reached the user's repository yet. If their own git add
 	// would run a clean filter on a delivered path, this commit differs
 	// from theirs: refuse rather than run the filter or hide it.
-	if err := refuseUserFilters(g, sc, r, c); err != nil {
+	if err := refuseUserFilters(g, sc, r, c, filepath.Join(tmp, Short(r.Candidate))); err != nil {
 		return nil, err
 	}
 	if _, err := sc.run("", "", "update-ref", "refs/heads/oge", c); err != nil {
@@ -292,9 +292,13 @@ func scratchRepo(g *userGit, dir string) (*userGit, error) {
 
 // refuseUserFilters refuses the branch when a delivered path (one the
 // branch's commits add or change on top of the Snapshot's HEAD) has a
-// filter attribute in the user's repository whose driver has a clean or
-// process command configured. Nothing is executed to find out.
-func refuseUserFilters(g, sc *userGit, r *Run, commit string) error {
+// filter attribute whose driver has a clean or process command configured
+// in the user's repository. The attributes are checked twice: as the
+// user's repository sees them now, and as the Candidate's own
+// .gitattributes (checked out at candidate) set them, since the user's
+// git add of the applied files would read those. Nothing is executed to
+// find out.
+func refuseUserFilters(g, sc *userGit, r *Run, commit, candidate string) error {
 	base := r.Head
 	if base == "" {
 		empty, err := sc.runIn("", "mktree")
@@ -315,7 +319,17 @@ func refuseUserFilters(g, sc *userGit, r *Run, commit string) error {
 	if err != nil {
 		return err
 	}
-	f := strings.Split(attrs, "\x00")
+	// The Candidate's attributes: its checkout as the work tree, an empty
+	// index so the user's staged .gitattributes don't stand in, and the
+	// user's info/attributes and core.attributesFile as they are.
+	theirs := *g
+	theirs.gitDir = gitDirOf(g)
+	theirs.env = append(append([]string{}, g.env...), "GIT_INDEX_FILE="+filepath.Join(filepath.Dir(candidate), "empty-index"))
+	cand, err := theirs.runInTree(candidate, paths+"\x00", "check-attr", "-z", "--stdin", "filter")
+	if err != nil {
+		return err
+	}
+	f := strings.Split(attrs+cand, "\x00")
 	active := map[string]bool{}
 	var hit []string
 	for i := 0; i+2 < len(f); i += 3 {
@@ -339,6 +353,7 @@ func refuseUserFilters(g, sc *userGit, r *Run, commit string) error {
 	if len(hit) == 0 {
 		return nil
 	}
+	hit = dedupe(hit)
 	shown := hit
 	if len(shown) > 5 {
 		shown = append(shown[:5:5], fmt.Sprintf("and %d more", len(hit)-5))
@@ -361,4 +376,33 @@ func (g *userGit) runIn(stdin string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return string(out), nil
+}
+
+// runInTree is runIn with workTree as the work tree of the user's git
+// directory.
+func (g *userGit) runInTree(workTree, stdin string, args ...string) (string, error) {
+	return g.runIn(stdin, append([]string{"--git-dir=" + g.gitDir, "--work-tree=" + workTree}, args...)...)
+}
+
+func gitDirOf(g *userGit) string {
+	if g.gitDir != "" {
+		return g.gitDir
+	}
+	out, err := g.run("", "", "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return filepath.Join(g.root, ".git")
+	}
+	return strings.TrimSpace(out)
+}
+
+func dedupe(list []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range list {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }

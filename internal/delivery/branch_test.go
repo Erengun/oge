@@ -26,29 +26,41 @@ func userGitOut(t *testing.T, repo string, args ...string) (string, error) {
 }
 
 // An agent-added .gitattributes can't make oge branch run a filter: the
-// user's clean and smudge filters are off for Öge's commits.
+// filters are off for Öge's commits. If it names a driver the user has a
+// clean command for, the branch is refused (the user's git add would run
+// it); with only a smudge command, the branch is made.
 func TestBranchRunsNoFilter(t *testing.T) {
-	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
-		os.WriteFile(filepath.Join(ws, ".gitattributes"), []byte("*.txt filter=evil\n"), 0o644)
-		os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
-	})
-	branchable(t, r)
-	marker := filepath.Join(t.TempDir(), "filter-ran")
-	if out, err := userGitOut(t, user, "config", "filter.evil.clean", "touch '"+marker+"'; cat"); err != nil {
-		t.Fatal(err, out)
-	}
-	b, err := Branch(r, user, "taken", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("oge branch ran the filter")
-	}
-	if out, _ := userGitOut(t, user, "cat-file", "blob", b.Commit+":a.txt"); out != "A\n" {
-		t.Errorf("a.txt on the branch: %q", out)
-	}
-	if out, _ := userGitOut(t, user, "cat-file", "-p", b.Commit); strings.Contains(out, "gpgsig") {
-		t.Errorf("the commit is signed:\n%s", out)
+	for _, key := range []string{"clean", "smudge"} {
+		t.Run(key, func(t *testing.T) {
+			user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+				os.WriteFile(filepath.Join(ws, ".gitattributes"), []byte("*.txt filter=evil\n"), 0o644)
+				os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
+			})
+			branchable(t, r)
+			marker := filepath.Join(t.TempDir(), "filter-ran")
+			if out, err := userGitOut(t, user, "config", "filter.evil."+key, "touch '"+marker+"'; cat"); err != nil {
+				t.Fatal(err, out)
+			}
+			b, err := Branch(r, user, "taken", "")
+			if _, serr := os.Stat(marker); serr == nil {
+				t.Error("oge branch ran the filter")
+			}
+			if key == "clean" {
+				if !IsRefused(err) || !strings.Contains(err.Error(), "for a.txt without executing user-configured filters") {
+					t.Fatalf("Branch: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out, _ := userGitOut(t, user, "cat-file", "blob", b.Commit+":a.txt"); out != "A\n" {
+				t.Errorf("a.txt on the branch: %q", out)
+			}
+			if out, _ := userGitOut(t, user, "cat-file", "-p", b.Commit); strings.Contains(out, "gpgsig") {
+				t.Errorf("the commit is signed:\n%s", out)
+			}
+		})
 	}
 }
 
@@ -245,5 +257,29 @@ func TestBranchRefusesSymlinksIntoGit(t *testing.T) {
 	branchable(t, r)
 	if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "x: a symlink to .git/config, into .git") {
 		t.Errorf("Branch: %v", err)
+	}
+}
+
+// A .gitattributes the Candidate adds can name a filter the user has
+// configured (git-crypt on other paths, say). The user's own git add
+// would run it on the new path, so oge branch refuses rather than commit
+// that path unfiltered.
+func TestBranchRefusesAFilterTheCandidatesAttributesName(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.WriteFile(filepath.Join(ws, ".gitattributes"), []byte("newsecret.txt filter=keep\n"), 0o644)
+		os.WriteFile(filepath.Join(ws, "newsecret.txt"), []byte("secret\n"), 0o644)
+	})
+	branchable(t, r)
+	marker := filepath.Join(t.TempDir(), "filter-ran")
+	userGitOut(t, user, "config", "filter.keep.clean", "touch '"+marker+"'; cat")
+	before := objectFiles(t, user)
+	if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "for newsecret.txt without executing user-configured filters") {
+		t.Fatalf("Branch: %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the filter ran")
+	}
+	if after := objectFiles(t, user); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Errorf("objects left behind")
 	}
 }
