@@ -268,7 +268,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	end := func(o Outcome, why ...string) (*Result, error) {
 		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
-		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why}
+		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": res.Candidate}
 		if o == Parked {
 			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
 		}
