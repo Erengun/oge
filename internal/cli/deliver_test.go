@@ -452,3 +452,15 @@ func TestDiffPlainAndOnATerminal(t *testing.T) {
 		t.Errorf("exit %d: %s", code, errOut)
 	}
 }
+
+// An unattended Run never waits on a key, even on a terminal that draws
+// the live view: it prints the commands instead of the action bar.
+func TestUnattendedRunOnATerminalOffersNoActionBar(t *testing.T) {
+	f := newRunFixture(t)
+	f.interactive = true
+	t.Setenv("TERM", "xterm-256color")
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(out, "next       oge apply ") || strings.Contains(out, "[a] apply") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}

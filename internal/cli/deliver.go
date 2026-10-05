@@ -72,7 +72,8 @@ const deliverUsage = `Usage:
                                             apply it to your working tree; nothing is committed
   oge branch [<name>] [<run>] [--overridden|--rejected]
                                             make a local branch with it as a commit; never checked out
-<run> is a Run id (or its start); the default is this repository's latest Run.
+<run> is a Run id, or its start from the date on (20261005T1204...); the default is
+this repository's latest Run. oge branch takes any other argument as the branch name.
 `
 
 // deliverCommand runs oge diff, oge apply or oge branch (#54).

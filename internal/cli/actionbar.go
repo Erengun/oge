@@ -34,7 +34,8 @@ func afterRun(env Env, f runFlags, v view, root string, res *run.Result) int {
 		// Accepted and oge apply delivers it later.
 		return applyCommand(env, r, root, "")
 	}
-	if _, live := v.(*tui); live {
+	// --unattended never prompts, even when the live view draws.
+	if _, live := v.(*tui); live && !f.unattended {
 		var bar *actionBar
 		bar = newActionBar(env, r, root, func() {
 			// Once applied, the summary no longer says nothing was written.
@@ -160,7 +161,7 @@ func (b *actionBar) run() {
 			act(b.diff)
 		case 'r', 'R':
 			act(b.receipt)
-		case 'q', 'Q', '\r', '\n', 0x03, 0x04, 0x1b:
+		case 'q', 'Q', '\r', '\n', 0x03, 0x04:
 			clear()
 			return
 		}
