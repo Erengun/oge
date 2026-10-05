@@ -111,7 +111,9 @@ Run flags:
   --tests <glob>           add a test glob for this Run
   --output <glob>          add an output glob for this Run
   --unattended             never prompt
-  -v                       show the event stream
+  --plain                  print plain lines instead of the live view
+  -v                       show the event stream (plain lines)
+  -vv                      same as -v for now
 
 Environment:
   OGE_STATE_DIR            where Öge keeps private Run state (default
@@ -149,7 +151,11 @@ type runFlags struct {
 	dryRun     bool
 	unattended bool
 	verbose    bool
-	o          pipeline.Overrides
+	// TODO(#79-decision): -vv is accepted and means -v until ADR-0019's
+	// second level has something more to show.
+	veryVerbose bool
+	plain       bool
+	o           pipeline.Overrides
 }
 
 func parseRunFlags(args []string) (runFlags, []string, error) {
@@ -160,6 +166,8 @@ func parseRunFlags(args []string) (runFlags, []string, error) {
 	fs.BoolVar(&f.dryRun, "dry-run", false, "")
 	fs.BoolVar(&f.unattended, "unattended", false, "")
 	fs.BoolVar(&f.verbose, "v", false, "")
+	fs.BoolVar(&f.veryVerbose, "vv", false, "")
+	fs.BoolVar(&f.plain, "plain", false, "")
 	fs.BoolVar(&f.o.Fast, "fast", false, "")
 	fs.BoolVar(&f.o.Blind, "blind", false, "")
 	fs.BoolVar(&f.o.Confirm, "confirm", false, "")

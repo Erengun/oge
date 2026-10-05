@@ -1,0 +1,9 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+✓ preflight  ok · 0.4s
+✗ implement  fake · Attempt failed: interrupted · 5.7s
+· check      not run
+
+INFRASTRUCTURE STOP   no Verdict
+  the implementer Attempt failed: interrupted

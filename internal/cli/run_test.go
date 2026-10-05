@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,8 @@ printf 'package fx\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {}\n' > add
 type runFixture struct {
 	repo, state, hookMarker string
 	statusBefore            string
+	// interactive mocks a terminal at stdin and stdout.
+	interactive bool
 }
 
 func newRunFixture(t *testing.T) *runFixture {
@@ -101,7 +104,7 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 	env := Env{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
 		Dir:         f.repo,
-		Interactive: func() bool { return false },
+		Interactive: func() bool { return f.interactive },
 		LookPath:    exec.LookPath,
 		Edit:        func(string) error { t.Fatal("editor opened"); return nil },
 		GOOS:        runtime.GOOS,
@@ -390,5 +393,39 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitRejected || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// A Run cancelled during its Check stops with no Verdict, in both views:
+// the Check killed by the cancel is not a fail. SIGTERM cancels like
+// Ctrl-C, rather than killing Öge and orphaning its children.
+func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
+	for _, c := range []struct {
+		tty bool
+		sig string
+	}{{false, "INT"}, {true, "INT"}, {false, "TERM"}} {
+		tty := c.tty
+		t.Run(fmt.Sprintf("tty=%v,SIG%s", tty, c.sig), func(t *testing.T) {
+			f := newRunFixture(t)
+			f.interactive = tty
+			t.Setenv("TERM", "xterm-256color")
+			// The Check interrupts this process, as Ctrl-C would, then
+			// would take far longer than the test.
+			slow := fmt.Sprintf("sh -c 'kill -%s %d; exec sleep 30'", c.sig, os.Getpid())
+			args := []string{"fix Add", "--fast", "--agent", "fake", "--check", slow}
+			if !tty {
+				args = append(args, "--unattended")
+			}
+			code, out, errOut := f.run(t, fixScript, args...)
+			if code != ExitInfra || strings.Contains(out, "REJECTED") || !strings.Contains(out, "INFRASTRUCTURE STOP") {
+				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+			}
+			types := recordTypes(t, f.onlyRun(t))
+			for _, rec := range types {
+				if rec == run.RecVerdict {
+					t.Errorf("a cancelled Check wrote a Verdict: %v", types)
+				}
+			}
+		})
 	}
 }

@@ -92,6 +92,10 @@ func TestBinaryRunAcceptedExitsZero(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "ACCEPTED") || !strings.Contains(out, "1 ran · 0 failed") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
+	// Without a terminal the output is plain lines (ADR-0022).
+	if strings.ContainsRune(out+errOut, 0x1b) {
+		t.Errorf("a Run without a terminal wrote escape sequences:\n%q", out+errOut)
+	}
 	if b, _ := os.ReadFile(filepath.Join(repo, "add.go")); string(b) != brokenAdd {
 		t.Errorf("the user's add.go was written: %q", b)
 	}

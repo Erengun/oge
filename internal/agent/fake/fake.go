@@ -111,7 +111,7 @@ func (s *session) read(stdout io.Reader) {
 		}
 		s.events <- agent.Event{Kind: agent.Claim, Text: line}
 	}
-	err := s.cmd.Wait()
+	err := proc.Wait(s.cmd)
 	if !accepted {
 		s.events <- agent.Event{Kind: agent.TurnAccepted}
 	}

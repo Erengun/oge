@@ -109,7 +109,7 @@ func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]stri
 	if err := proc.Start(cmd); err != nil {
 		return e, nil, fmt.Errorf("starting %q: %w", line, err)
 	}
-	err := cmd.Wait()
+	err := proc.Wait(cmd)
 	e.DurationMs = time.Since(e.StartedAt).Milliseconds()
 	e.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	var exitErr *exec.ExitError
