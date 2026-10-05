@@ -205,6 +205,9 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	if len(f.Project.TestGlobs) == 0 {
 		add("project.test_globs", "no test globs: the Oracle's tests must be named. Set project.test_globs in %s or pass --tests", ConfigPath)
 	}
+	// TODO(#46-decision): no --check-report flag. A CLI-only --check gets
+	// a report only when inferReport recognises it (go test -json); any
+	// other held-out runner declares its report in the config.
 	if f.Mode != Fast {
 		for i, c := range f.Checks {
 			if c.Report == "" {

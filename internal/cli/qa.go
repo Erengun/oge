@@ -136,6 +136,10 @@ func notCovered(f *pipeline.Frozen, res *run.Result) string {
 		return "an independent verifier and held-out tests (Fast mode) · " + unconfined
 	}
 	var parts []string
+	if res.Oracle == 0 {
+		// QA never claims more than it did (docs/positioning.md).
+		parts = append(parts, "QA added no held-out tests")
+	}
 	if q := res.QA; q != nil {
 		if q.UnmappedTotal > 0 {
 			parts = append(parts, plural(q.UnmappedTotal, "held-out test names", "held-out tests name")+" no acceptance criterion")

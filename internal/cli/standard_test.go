@@ -270,7 +270,7 @@ grep -q 'return a + b' add.go && touch "$OGE_TEST_OUT/saw-fix"
 			t.Errorf("%s: %v, want %v", name, err == nil, want)
 		}
 	}
-	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 2 files withheld") {
+	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 2 files withheld") || !strings.Contains(out, "Not covered QA added no held-out tests · 1 new file QA never saw") {
 		t.Errorf("stdout:\n%s", out)
 	}
 }

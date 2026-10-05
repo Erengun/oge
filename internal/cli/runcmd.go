@@ -36,6 +36,8 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 		fmt.Fprintln(env.Stderr, "oge: Blind mode isn't built yet. Leave out --blind (and verify = \"before\") for Standard mode, or pass --fast")
 		return ExitRefused
 	}
+	// TODO(#46-decision): no report_path key yet: held-out collection is
+	// go-test-json on stdout only, until a non-Go held-out runner needs junit.
 	for _, c := range frozen.Checks {
 		if c.Report != "" && c.Report != oracle.ReportGoTestJSON {
 			fmt.Fprintf(env.Stderr, "oge: Check %q declares a %s report, which Öge can't read yet; use go-test-json\n", c.Run, c.Report)
