@@ -77,10 +77,11 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 	v := selectView(env, f, t, frozen)
+	withWarning(v, testConfigWarning(root, frozen))
 	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		p := run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
-			State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: observe,
+			State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
 		}
 		if !f.unattended {
 			p.Gates = viewPort{v}
@@ -175,6 +176,7 @@ type renderer struct {
 	input   *lines             // what the human types at a Gate
 	edit    func(string) error // $EDITOR, for a Gate reason
 	intr    *interrupts
+	warn    string // shown with the summary
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
@@ -243,6 +245,9 @@ func (r *renderer) observe(ev run.Event) {
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
+		if s := scopeText(ev.Attempt); s != "" {
+			r.p("%-10s %s", "scope", s)
+		}
 	case run.EvSendBack:
 		r.p("%-10s %s", "send back", sendBackText(ev))
 	case run.EvDecided:
@@ -399,8 +404,16 @@ func (r *renderer) summary(res *run.Result) {
 		head := strings.ToUpper(string(res.Outcome))
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
+		if res.Outcome == run.Parked {
+			for _, w := range res.Why {
+				r.p("%-10s the Check passed, but %s", "", clean(w))
+			}
+		}
 		// TODO(#63): the Receipt replaces these lines.
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
+		if r.warn != "" {
+			r.p("! %s", r.warn)
+		}
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")

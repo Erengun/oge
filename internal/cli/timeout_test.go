@@ -53,7 +53,7 @@ func TestRunStageTimeoutWinsOverALateResult(t *testing.T) {
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
 		Interactive: func() bool { return false }, LookPath: exec.LookPath,
 		Edit: func(string) error { return nil }, GOOS: runtime.GOOS, Version: "test", Getenv: os.Getenv,
-		Agents: map[string]agent.Adapter{"fake": lateAdapter{}}, CheckGoCache: hostGoCache,
+		Agents: map[string]agent.Adapter{"fake": lateAdapter{}}, CacheSeedTemplate: testSeed,
 	}
 	code := Main(env, []string{"fix Add", "--fast", "--agent", "fake", "--unattended"})
 	out := stdout.String()

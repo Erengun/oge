@@ -25,8 +25,6 @@ report = "go-test-json"
 // runFixture makes the fixture repository and an environment with a
 // synthetic HOME (the state root takes its default place under it), a
 // private TMPDIR beside it, and PATH holding git, go and the system tools.
-// OGE_TEST_SHARED_GOCACHE (honoured only by the ogetest build) gives Checks
-// the shared GOCACHE, only to keep tests fast.
 func runFixture(t *testing.T) (repo string, env []string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -51,7 +49,7 @@ func runFixture(t *testing.T) (repo string, env []string) {
 	env = []string{
 		"HOME=" + home, "TMPDIR=" + tmp, "XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"PATH=" + filepath.Dir(gitPath) + ":" + filepath.Dir(goPath) + ":/usr/bin:/bin",
-		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GOCACHE=" + goCache, "OGE_TEST_SHARED_GOCACHE=" + goCache,
+		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GOCACHE=" + goCache, "OGE_TEST_CACHE_SEED=" + testSeed,
 	}
 	write := func(rel, s string) {
 		p := filepath.Join(repo, rel)
@@ -126,5 +124,20 @@ func TestReleaseBinaryRefusesAStandardRun(t *testing.T) {
 	code, _, errOut := runBinary(t, repo, env, "fix Add", "--agent", "claude", "--unattended")
 	if code != 2 || !strings.Contains(errOut, "Standard mode needs a verifier") {
 		t.Fatalf("exit %d, stderr: %s", code, errOut)
+	}
+}
+
+// A fixed Candidate whose Attempt also rewrote the Oracle's test parks,
+// exit 10, until the Tamper event is acknowledged.
+func TestBinaryRunTamperParksExitsTen(t *testing.T) {
+	repo, env := runFixture(t)
+	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n"+
+		"printf 'package fx\\n' > add_test.go\n")
+	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != 10 || !strings.Contains(out, "1 protected test change reverted: add_test.go") || !strings.Contains(out, "PARKED") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(filepath.Join(repo, "add_test.go")); string(b) != addTest {
+		t.Errorf("the user's add_test.go was written: %q", b)
 	}
 }

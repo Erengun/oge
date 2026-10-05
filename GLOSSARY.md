@@ -166,6 +166,10 @@ _Avoid_: Patch, result, diff
 The fresh folder Öge builds for one execution of a Check: the Candidate with the Oracle version laid over its test paths. No agent ever works in it.
 _Avoid_: Test workspace, CI dir
 
+**Cache seed**:
+A Run's warm build and module caches in Private state, filled on the Snapshot by the setup command and Öge's warm step. Each Check starts from a private clone or copy of it, or cold; no Check ever writes to the seed.
+_Avoid_: Shared cache, Run cache (as a cache Checks write to)
+
 **Implementer-authored test**:
 A test the implementer wrote into the Candidate. Passing it never produces or strengthens a pass Verdict, and it never becomes part of the Oracle; a known failure stops the Run at the Own-test-failure gate, and a Candidate taken anyway is Overridden, never Accepted.
 _Avoid_: Visible test (as the Oracle's), self-test

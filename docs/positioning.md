@@ -82,12 +82,20 @@ The rhythm (from Wayfinder's implementer → independent QA → fixer): Implemen
 The coordination roles extend the same identity rather than pivoting it:
 Sequence, by user value (revised 2026-10-05; supersedes the #65 order):
 
-1. **MVP trust loop:** implement → QA → Check → Receipt, zero interruptions on the happy path.
-2. **Supervisor/Decider:** grey-zone permissions answered without the human.
-3. **Stronger QA and fixer loop:** QA findings drive automatic repair rounds, possibly with a separate fixer.
-4. **Handoff:** route around quota and model failures.
-5. **Advisor:** resolves uncertainty at stall points.
+1. **M1: the trust loop plus an excellent CLI/TUI.** Implement → QA → repair → Check → Accepted → apply and Receipt, with zero interruptions on the happy path. The terminal experience is part of M1 acceptance, not later polish.
+2. **Decider:** answers grey-zone permissions without the human, reducing supervision friction.
+3. **Advisor:** resolves uncertainty and stalls. It removes the human as the copy-paste bridge between models, which is the workflow that started Öge. It is **event-driven, never a permanent agent in every Run**. It is invoked when:
+   - the implementer is stuck;
+   - the implementer asks a material technical question;
+   - repeated repair fails;
+   - two plausible approaches have meaningful trade-offs.
+4. **Stronger QA and fixer loop.**
+5. **Handoff:** routes around quota and model failures.
 6. **Challenger:** hardens the Oracle.
+
+> One supervision experience, not an AI org chart.
+
+The risk to avoid is finishing all the trust machinery while postponing the two things that made Öge interesting: a Claude-quality terminal experience and intelligent cross-agent consultation.
 
 Supervision turns Öge from "Claude with another verifier" into "I delegate development to Öge, and Öge manages the coding agents for me."
 

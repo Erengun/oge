@@ -24,6 +24,7 @@ import (
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	procs "github.com/erengun/oge/internal/proc"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -39,6 +40,8 @@ const (
 	Refused Outcome = "Refused"
 	// InfrastructureStop is a status: no Verdict could be reached.
 	InfrastructureStop Outcome = "Infrastructure stop"
+	// Parked is a status: the Run waits for a human decision.
+	Parked Outcome = "Parked"
 )
 
 // Ledger record types, in the order a Run writes them.
@@ -51,6 +54,7 @@ const (
 	RecProcessStarted    = "ProcessStarted"
 	RecObservation       = "Observation"
 	RecAttemptEnded      = "AttemptEnded"
+	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
 	RecVerdict           = "Verdict"
@@ -69,9 +73,12 @@ type Params struct {
 	State   *ledger.StateRoot
 	Version string
 	Getenv  func(string) string
-	// CheckGoCache, when set, is the GOCACHE Checks share. Only tests set
-	// it; see cli.Env.CheckGoCache.
-	CheckGoCache string
+	// CacheSeedTemplate is a build cache the Run's seed starts from. Only
+	// tests set it; see cli.Env.CacheSeedTemplate.
+	CacheSeedTemplate string
+	// CacheWait bounds how long the Check waits for the seed's warm step
+	// (DefaultCacheWait when zero).
+	CacheWait time.Duration
 	// Observe receives progress as it happens, for rendering.
 	Observe func(Event)
 	// Gates is where a Gate waits for a human. Nil means unattended: a
@@ -121,6 +128,9 @@ type Attempt struct {
 	Stop      string
 	Candidate string
 	Changed   []string
+	// Reverted are the writes outside the Write scope that Öge undid.
+	Reverted []workspace.Revert
+	links    map[string]string // the links the scope check let stand
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration
@@ -146,6 +156,13 @@ type Result struct {
 	Gate     string
 	Decision *gate.Decision
 }
+
+// DefaultCacheWait bounds the Check's wait for the warm step: past it the
+// warm step is stopped and the Check starts from the partial seed, so a
+// large module with a fast agent never waits longer than a cold Check.
+// TODO(#74-decision): a fixed bound; make it a config key if projects
+// need another.
+const DefaultCacheWait = 30 * time.Second
 
 // interrupted is why a cancelled Run stopped.
 // TODO(#40-decision): ADR-0012's interrupted status and exit 130 come
@@ -187,6 +204,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := os.MkdirAll(res.Dir, 0o700); err != nil {
 		return nil, err
 	}
+	release, err := markLive(res.Dir)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	sweepDeadRuns(filepath.Dir(res.Dir), res.Dir)
 	defer oracle.RemoveAll(workDir) // Workspaces are disposable
 	l, err := ledger.Create(res.Dir)
 	if err != nil {
@@ -267,13 +290,17 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 
-	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, GoCache: p.CheckGoCache}
+	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, SeedTemplate: p.CacheSeedTemplate}
 	pre := map[string]any{"checks": []string{"submodules", "lfs", "unmerged", "operation_in_progress"}}
-	if f.Setup.Run != "" {
-		e, err := setupOnSnapshot(ctx, runner, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "preflight"))
-		if err != nil {
-			return nil, err
-		}
+	// Setup runs on the Snapshot into the Run's cache seed, whose warm
+	// step then overlaps the implementer's Attempt (ADR-0021).
+	seed, setup, err := runner.NewSeed(ctx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
+	if err != nil {
+		return nil, err
+	}
+	defer seed.Close()
+	if setup != nil {
+		e := *setup
 		pre["setup"] = e
 		if ctx.Err() != nil {
 			if err := l.Append(RecPreflightObserved, pre); err != nil {
@@ -295,10 +322,11 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
 	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
+	scope := implementerScope(m, f)
 	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
 	for check := 1; ; check++ {
 		w.attempts++
-		a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, next)
+		a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
 		if err != nil {
 			return nil, err
 		}
@@ -319,9 +347,24 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
 		}
 		res.Candidate = a.Candidate
+		// A Tamper event stays unacknowledged for the rest of the Run,
+		// whatever later Attempts do (ADR-0019 #2).
+		w.tamper += a.Tamper()
 
-		// The Check. A cancelled Run never reaches a Verdict: the Check it
-		// killed didn't fail.
+		// The Check, from the cache seed once it is warm. A cancelled Run
+		// never reaches a Verdict: the Check it killed didn't fail.
+		if seed != nil && runner.Seed == nil {
+			limit := p.CacheWait
+			if limit <= 0 {
+				limit = DefaultCacheWait
+			}
+			sw := seed.WaitFor(limit)
+			sw.Error = string(redact.Redact([]byte(sw.Error)))
+			if err := l.Append(RecCacheSeeded, sw); err != nil {
+				return nil, err
+			}
+			runner.Seed = seed
+		}
 		if ctx.Err() != nil {
 			return end(InfrastructureStop, interrupted)
 		}
@@ -352,9 +395,11 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		w.check = check
 		p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
 
-		// TODO(#41, #47, #48): Tamper events, failing own tests and
-		// Ambiguous files become conditions here.
-		holds := func(c string) bool { return c == "verdict:"+verdict }
+		// TODO(#47, #48): failing own tests and Ambiguous files become
+		// conditions here.
+		holds := func(c string) bool {
+			return c == "verdict:"+verdict || (c == "tamper_event" && w.tamper > 0)
+		}
 		e, ok := f.Graph.Route("check", holds, w.exhausted)
 		if !ok {
 			return nil, fmt.Errorf("the frozen graph has no edge for this Verdict")
@@ -394,24 +439,11 @@ type attemptSpec struct {
 	ws    string
 }
 
-func setupOnSnapshot(ctx context.Context, r *oracle.Runner, repo *workspace.RunRepo, snap, setup, root string) (oracle.Execution, error) {
-	defer oracle.RemoveAll(root)
-	dir, env, err := r.Prepare(root)
-	if err != nil {
-		return oracle.Execution{}, err
-	}
-	if err := repo.Checkout(snap, dir); err != nil {
-		return oracle.Execution{}, err
-	}
-	e, _, err := r.Exec(ctx, setup, dir, env, 10*time.Minute, 1<<20)
-	return e, err
-}
-
 // implement runs one implementer Attempt: AttemptStarting before the
 // spawn, ProcessStarted right after it, AttemptEnded only once the
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
-	adapter agent.Adapter, stage pipeline.Stage, runID, snap string, at attemptSpec) (*Attempt, error) {
+	adapter agent.Adapter, stage pipeline.Stage, runID, snap string, at attemptSpec, protected func(string) string) (*Attempt, error) {
 	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Agent: stage.Agent, Cause: at.cause}
 	ws := at.ws
 	instructions, err := repoInstructions(repo, snap)
@@ -521,7 +553,12 @@ loop:
 	if !settled && a.Failure == "" {
 		a.Failure = "lost_subprocess: the turn never settled"
 	}
-	_ = sess.Close()
+	_ = sess.Close() // kills the agent's whole process group
+	// The scope check below needs the agent's whole tree gone, so nothing
+	// writes after it. A tree that outlives the kill fails the Attempt.
+	if !procs.WaitGone(proc.PGID, 5*time.Second) && a.Failure == "" {
+		a.Failure = "lost_subprocess: the agent's processes outlived the kill"
+	}
 	// Everything the agent said is redacted before it's persisted; the
 	// Exit name and failure reach AttemptEnded and RunEnded.why.
 	a.Exit = string(redact.Redact([]byte(a.Exit)))
@@ -540,23 +577,22 @@ loop:
 	if err := l.Append(RecObservation, obs); err != nil {
 		return nil, err
 	}
+	// The scope check runs after every Attempt whose agent ran, failed or
+	// not, and before the Candidate is committed.
+	if err := enforceScope(l, blobs, repo, a, snap, ws, protected); err != nil {
+		return nil, err
+	}
+	if a.Failure == "" && a.Stop == "" {
+		if err := commitCandidate(l, repo, a, snap, at.start, fmt.Sprintf("c%d", at.n), ws, protected); err != nil {
+			return nil, err
+		}
+	}
 	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
 	if a.Stop != "" {
 		ended["stop"] = a.Stop
 	}
-	if a.Failure == "" && a.Stop == "" {
-		// TODO(#41): Write-scope comparison, revert and Tamper detection
-		// run here, before the Candidate is committed.
-		name := fmt.Sprintf("c%d", at.n)
-		c, err := repo.CommitCandidate(ws, at.start, "refs/oge/candidates/"+name, "Candidate "+name+" ("+a.ID+")")
-		if err != nil {
-			return nil, err
-		}
-		a.Candidate = c
-		if a.Changed, err = repo.ChangedFiles(snap, c); err != nil {
-			return nil, err
-		}
-		ended["candidate"] = c
+	if a.Candidate != "" {
+		ended["candidate"] = a.Candidate
 	}
 	return a, l.Append(RecAttemptEnded, ended)
 }

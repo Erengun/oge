@@ -20,8 +20,6 @@ const (
 	Cancelled  Outcome = "Cancelled"
 	Overridden Outcome = "Overridden"
 	Infeasible Outcome = "Infeasible"
-	// Parked is a status: an unattended Run waits at a mandatory Gate.
-	Parked Outcome = "Parked"
 )
 
 // Gate records. A decision is written before it takes effect (ADR-0008).
@@ -61,6 +59,16 @@ func gateSpecs(l pipeline.Limits) map[string]gateSpec {
 				"quit":      "end the Run Cancelled",
 			},
 		},
+		"gate.tamper": {
+			what: "Öge's Check passed, but an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged before the Run can be Accepted.",
+			need: "a protected file change was reverted",
+			says: map[string]string{
+				"reject": "end the Run Rejected (type the word and a reason)",
+				"quit":   "end the Run Cancelled",
+			},
+			// TODO(#49): the acknowledgement choices, and the Tamper events'
+			// ids in the pins.
+		},
 		"gate.bound_exhaustion": {
 			what: fmt.Sprintf("The Check failed and the send-back limit (%d) is used up.", l.SendBacks),
 			need: "Decide what happens to the Candidate.",
@@ -82,6 +90,7 @@ type walk struct {
 	limits    pipeline.Limits
 	sendBacks int
 	attempts  int // implementer Attempts so far
+	tamper    int // Tamper events so far, none acknowledged yet
 	check     int // the latest Check: the Verdict a Gate shows
 }
 

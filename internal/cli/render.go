@@ -21,7 +21,7 @@ var modeNotes = map[pipeline.Mode]string{
 
 // renderDryRun prints what a Run would do. It is the startup summary
 // without a Run id or Preflight.
-func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig bool) {
+func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig bool, warn string) {
 	p := func(format string, a ...any) { fmt.Fprintf(w, format+"\n", a...) }
 
 	p("Dry run: nothing was started.")
@@ -111,6 +111,10 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 			}
 			p("%s", line)
 		}
+	}
+	if warn != "" {
+		p("")
+		p("! %s", warn)
 	}
 	p("")
 	p("Valid. A Run would start from here.")

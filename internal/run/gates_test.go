@@ -45,3 +45,23 @@ func TestUnbuiltPathsStopTheRun(t *testing.T) {
 		t.Errorf("unbuilt edge: %+v %v", s, err)
 	}
 }
+
+// The Tamper Gate offers no way to Accepted until #49's acknowledgement,
+// and its attention line says what happened (ADR-0022).
+func TestTamperGate(t *testing.T) {
+	w := testWalk(t, pipeline.Compile(pipeline.Fast, false), nil)
+	r, err := w.request("gate.tamper", testAttempt, 0, &oracle.Result{Pass: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var words []string
+	for _, c := range r.Choices {
+		words = append(words, c.Word)
+	}
+	if got := strings.Join(words, ","); got != "reject,quit" {
+		t.Errorf("choices %s", got)
+	}
+	if got := gate.Attention(&r); got != "ATTENTION NEEDED: a protected file change was reverted" {
+		t.Errorf("attention %q", got)
+	}
+}

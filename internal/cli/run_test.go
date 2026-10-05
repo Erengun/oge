@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,10 +11,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/fake"
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -50,6 +53,11 @@ type runFixture struct {
 	interactive bool
 	stdin       string             // what the human types
 	edit        func(string) error // the human's $EDITOR
+	// coldSeed starts the Run's cache seed empty, as a real Run does,
+	// instead of from the tests' warm template.
+	coldSeed bool
+	// wrap, when set, wraps the fake adapter.
+	wrap func(agent.Adapter) agent.Adapter
 }
 
 func newRunFixture(t *testing.T) *runFixture {
@@ -107,29 +115,22 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 	var stdout, stderr bytes.Buffer
 	env := Env{
 		Stdin: strings.NewReader(f.stdin), Stdout: &stdout, Stderr: &stderr,
-		Dir:         f.repo,
-		Interactive: func() bool { return f.interactive },
-		LookPath:    exec.LookPath,
-		Edit:        f.edit,
-		GOOS:        runtime.GOOS,
-		Version:     "test",
-		Getenv:      os.Getenv,
-		Agents:      map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
-		// A shared GOCACHE keeps these tests fast; real Runs never share.
-		CheckGoCache: hostGoCache,
+		Dir:               f.repo,
+		Interactive:       func() bool { return f.interactive },
+		LookPath:          exec.LookPath,
+		Edit:              f.edit,
+		GOOS:              runtime.GOOS,
+		Version:           "test",
+		Getenv:            os.Getenv,
+		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
+		CacheSeedTemplate: map[bool]string{false: testSeed}[f.coldSeed],
+	}
+	if f.wrap != nil {
+		env.Agents[fake.Name] = f.wrap(env.Agents[fake.Name])
 	}
 	code := Main(env, args)
 	return code, stdout.String(), stderr.String()
 }
-
-// hostGoCache is the developer's GOCACHE, read before any test swaps HOME.
-var hostGoCache = func() string {
-	out, err := exec.Command("go", "env", "GOCACHE").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}()
 
 // assertUntouched checks the user's checkout was never written.
 func (f *runFixture) assertUntouched(t *testing.T) {
@@ -172,8 +173,8 @@ func recordTypes(t *testing.T, runDir string) []string {
 
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
-	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
-	run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
+	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecScopeObserved, run.RecScopeReverted, run.RecAttemptEnded,
+	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
 // writeAheadScript fails the Attempt unless the Ledger already records it
@@ -225,6 +226,53 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	if left, _ := filepath.Glob(filepath.Join(dir, "checks", "*")); len(left) != 0 {
 		t.Errorf("Check directories left behind: %v", left)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "cache-seed")); err == nil {
+		t.Error("the cache seed was left behind")
+	}
+
+	// The Check started from a private copy of the seed the warm step
+	// filled on the Snapshot, and its Evidence says so (ADR-0021).
+	var seeded struct {
+		Warm *struct {
+			Run  string
+			Pass bool
+		} `json:"warm"`
+		Complete bool   `json:"complete"`
+		WaitedMs *int64 `json:"waited_ms"`
+	}
+	var ended struct {
+		Result struct {
+			Cache   string `json:"cache"`
+			CacheMs *int64 `json:"cache_materialise_ms"`
+		} `json:"result"`
+	}
+	recordData(t, dir, run.RecCacheSeeded, &seeded)
+	recordData(t, dir, run.RecCheckEnded, &ended)
+	if seeded.Warm == nil || !strings.Contains(seeded.Warm.Run, " go list ") || !seeded.Warm.Pass || !seeded.Complete || seeded.WaitedMs == nil {
+		t.Errorf("CacheSeeded = %+v, want the passing warm step and the wait", seeded)
+	}
+	want := map[bool]string{true: oracle.CacheClone, false: ""}[runtime.GOOS == "darwin"]
+	if c := ended.Result.Cache; c == oracle.CacheCold || c == "" || (want != "" && c != want) || ended.Result.CacheMs == nil {
+		t.Errorf("CheckEnded cache = %q (%v ms), want a seeded cache", c, ended.Result.CacheMs)
+	}
+}
+
+// recordData decodes the data of the Run's only record of type typ.
+func recordData(t *testing.T, runDir, typ string, v any) {
+	t.Helper()
+	recs, err := ledger.Replay(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if r.Type == typ {
+			if err := json.Unmarshal(r.Data, v); err != nil {
+				t.Fatalf("%s: %v", typ, err)
+			}
+			return
+		}
+	}
+	t.Fatalf("no %s record", typ)
 }
 
 // sendBackLimit sets the fixture's send-back limit.
@@ -241,11 +289,11 @@ func (f *runFixture) limits(t *testing.T, lines string) {
 	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
 }
 
-// fixOnSendBack cheats on the first turn and fixes Add once a send-back
-// turn hands it the Check's failure output.
+// fixOnSendBack changes nothing on the first turn and fixes Add once a
+// send-back turn hands it the Check's failure output.
 const fixOnSendBack = `case "$OGE_FAKE_TURN" in
 *"Add(2, 3) != 5"*) ;;
-*) echo "making the test pass"; printf 'package fx\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {}\n' > add_test.go; exit 0 ;;
+*) echo "nothing to do"; exit 0 ;;
 esac
 ` + fixScript
 
@@ -312,11 +360,12 @@ func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
 		t.Errorf("a park was shown as Rejected:\n%s", out)
 	}
 	f.assertUntouched(t)
-	want := append(append([]string{}, wantOrder[:len(wantOrder)-1]...),
-		run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
-		run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecGateOpened, run.RecRunParked)
-	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(want, ",") {
-		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(want, ","))
+	// Each rewrite of the test is reverted and recorded; the Run ends
+	// parked at the Gate, never with RunEnded.
+	got := strings.Join(recordTypes(t, f.onlyRun(t)), ",")
+	if strings.Count(got, run.RecTamperEvent) != 2 || strings.Contains(got, run.RecRunEnded) ||
+		!strings.HasSuffix(got, run.RecVerdict+","+run.RecGateOpened+","+run.RecRunParked) {
+		t.Errorf("Ledger order: %s", got)
 	}
 	// The Gate is pinned to the Verdict it shows: the latest Check's.
 	if got := gatePins(t, f.onlyRun(t)); got != "GateOpened [2]" {
@@ -433,25 +482,6 @@ func TestRunRedactsAgentText(t *testing.T) {
 	}
 }
 
-func TestRunOverlayNeverWritesThroughASymlink(t *testing.T) {
-	f := newRunFixture(t)
-	writeFile(t, filepath.Join(f.repo, "sub", "x.go"), []byte("package sub\n"))
-	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n"))
-	outside := filepath.Join(filepath.Dir(f.repo), "outside")
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := "rm -rf sub && ln -s '" + outside + "' sub\n" + fixScript
-	f.sendBackLimit(t, 0)
-	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if _, err := os.Lstat(filepath.Join(outside, "x_test.go")); err == nil {
-		t.Error("the overlay wrote an Oracle test outside the Check directory")
-	}
-	if code != ExitParked || !strings.Contains(out, "Oracle path sub/x_test.go is blocked by a symlink in the Candidate") {
-		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
-	}
-}
-
 func TestRunPreflightRefusesASymlinkOutOfTheRepository(t *testing.T) {
 	f := newRunFixture(t)
 	if err := os.Symlink(filepath.Dir(f.repo), filepath.Join(f.repo, "up")); err != nil {
@@ -473,6 +503,44 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitParked || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// A Run cancelled while it waits for its cache seed's warm step stops
+// with no Verdict, not with an internal error.
+func TestRunCancelledWhileTheSeedWarmsHasNoVerdict(t *testing.T) {
+	f := newRunFixture(t)
+	f.coldSeed = true // a cold warm step takes seconds
+	// Interrupt as Ctrl-C would, once the Attempt has ended and the Run
+	// is waiting for the seed.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(20 * time.Millisecond):
+			}
+			logs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*", "ledger.jsonl"))
+			for _, l := range logs {
+				if b, _ := os.ReadFile(l); bytes.Contains(b, []byte(`"type":"AttemptEnded"`)) {
+					if p, err := os.FindProcess(os.Getpid()); err == nil {
+						_ = p.Signal(os.Interrupt)
+					}
+					return
+				}
+			}
+		}
+	}()
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitInfra || !strings.Contains(out, "INFRASTRUCTURE STOP") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, rec := range recordTypes(t, f.onlyRun(t)) {
+		if rec == run.RecCheckStarted || rec == run.RecVerdict {
+			t.Errorf("a Run cancelled before its Check wrote %s", rec)
+		}
 	}
 }
 
@@ -510,6 +578,49 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 	}
 }
 
+// A Run that Öge couldn't clean up after (a forced stop, a crash) leaves
+// its cache seed and Check directories; the next Run sweeps them, but
+// never a live Run's, nor any Run's Ledger.
+func TestRunSweepsLeftoverCachesOfDeadRuns(t *testing.T) {
+	f := newRunFixture(t)
+	runs := filepath.Join(f.state, "private", "runs")
+	mk := func(id, pid string) {
+		for _, p := range []string{"cache-seed/seed/gocache/ab/x-d", "checks/1/gocache/y", "ledger.jsonl"} {
+			writeFile(t, filepath.Join(runs, id, p), []byte("x"))
+		}
+		if err := os.Chmod(filepath.Join(runs, id, "cache-seed", "seed", "gocache", "ab"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if pid != "" {
+			writeFile(t, filepath.Join(runs, id, "live.pid"), []byte(pid))
+		}
+	}
+	mk("20200101T000000-dead01", "")
+	mk("20200101T000000-dead02", "999999999")
+	mk("20200101T000000-live01", fmt.Sprint(os.Getpid()))
+	defer oracle.RemoveAll(filepath.Join(runs, "20200101T000000-live01"))
+	if code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended"); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, id := range []string{"20200101T000000-dead01", "20200101T000000-dead02"} {
+		for _, p := range []string{"cache-seed", "checks"} {
+			if _, err := os.Stat(filepath.Join(runs, id, p)); err == nil {
+				t.Errorf("%s/%s of a dead Run was left", id, p)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(runs, id, "ledger.jsonl")); err != nil {
+			t.Errorf("the sweep removed %s's Ledger: %v", id, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runs, "20200101T000000-live01", "cache-seed")); err != nil {
+		t.Errorf("the sweep removed a live Run's seed: %v", err)
+	}
+	others, _ := filepath.Glob(filepath.Join(runs, "*", "live.pid"))
+	if len(others) != 1 {
+		t.Errorf("live.pid files after the Run: %v; want only the live Run's", others)
+	}
+}
+
 // The implementer's Workspace is a git checkout of the Snapshot: git
 // status starts clean there, and the .git never reaches the Candidate.
 func TestRunWorkspaceHasAGitCheckoutOfTheSnapshot(t *testing.T) {
@@ -520,5 +631,35 @@ func TestRunWorkspaceHasAGitCheckoutOfTheSnapshot(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK || !strings.Contains(out, "· 1 file changed") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// cacheSpy records the implementer's tool cache and writes into it.
+type cacheSpy struct {
+	agent.Adapter
+	cache *string
+}
+
+func (c cacheSpy) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Session, error) {
+	*c.cache = spec.Cache
+	if err := os.WriteFile(filepath.Join(spec.Cache, "agent-poison"), []byte("x"), 0o600); err != nil {
+		return nil, err
+	}
+	return c.Adapter.Open(ctx, spec)
+}
+
+// The implementer's run-private tool cache is never the seed, nor copied
+// into it: what the agent writes there never reaches a Check's cache.
+func TestRunImplementerCacheNeverReachesTheSeed(t *testing.T) {
+	f := newRunFixture(t)
+	var cache string
+	f.wrap = func(a agent.Adapter) agent.Adapter { return cacheSpy{a, &cache} }
+	check := `test ! -e "$GOCACHE/agent-poison" && ! find "$GOCACHE" "$GOMODCACHE" -name agent-poison | grep -q .`
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "--check", check)
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if cache == "" || strings.HasPrefix(cache, filepath.Join(f.state, "private")) {
+		t.Errorf("the implementer's cache %q is empty or inside private state, where the seed lives", cache)
 	}
 }
