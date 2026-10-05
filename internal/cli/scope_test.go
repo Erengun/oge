@@ -240,10 +240,14 @@ func TestRunScopeCheckRunsAfterTheAgentTreeIsKilled(t *testing.T) {
 	f := newRunFixture(t)
 	script := "( while :; do echo '// more' >> add_test.go; sleep 0.01; done ) >/dev/null 2>&1 &\nsleep 0.1\n" + fixScript
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	dir, committed := raced(t, f, code, out, errOut)
+	if !committed {
+		return
+	}
 	if code != ExitParked {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if got := candidateFile(t, f.onlyRun(t), "add_test.go"); got != fxTest {
+	if got := candidateFile(t, dir, "add_test.go"); got != fxTest {
 		t.Errorf("the Candidate's add_test.go: %q", got)
 	}
 }
