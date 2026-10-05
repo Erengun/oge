@@ -206,6 +206,7 @@ const standardTask = "# Fix Add\n\n## Acceptance criteria\n- Add returns the sum
 // Standard mode on the real Claude adapter: the implementer, then a fresh
 // verifier Session with the verifier's Launch profile, then the Check.
 func TestBinaryClaudeStandardAccepted(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(true))
 	path := filepath.Join(t.TempDir(), "verifier.ndjson")
@@ -246,6 +247,7 @@ func TestBinaryClaudeStandardAccepted(t *testing.T) {
 // A verifier whose isolated launch still loads skills fails closed: no
 // Verdict without an independent QA pass (ADR-0009).
 func TestBinaryClaudeVerifierResidueFailsClosed(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(true))
 	path := filepath.Join(t.TempDir(), "verifier.ndjson")
