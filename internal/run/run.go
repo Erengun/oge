@@ -13,10 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/briefing"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
@@ -45,6 +48,7 @@ const (
 	RecPreflightObserved = "PreflightObserved"
 	RecAttemptStarting   = "AttemptStarting"
 	RecProcessStarted    = "ProcessStarted"
+	RecObservation       = "Observation"
 	RecAttemptEnded      = "AttemptEnded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
@@ -93,13 +97,19 @@ type Event struct {
 
 // Attempt is one execution of a Stage.
 type Attempt struct {
-	ID        string
-	Stage     string
-	Agent     string
-	Exit      string
-	Failure   string
+	ID      string
+	Stage   string
+	Agent   string
+	Exit    string
+	Failure string
+	// Stop is set when the agent signalled an environmental cause, such
+	// as authentication or quota: an Infrastructure stop (ADR-0012).
+	Stop      string
 	Candidate string
 	Changed   []string
+	// FirstActivity is the time from launch to the agent's first visible
+	// activity (ADR-0022); zero when it showed none.
+	FirstActivity time.Duration
 }
 
 // Result is what a Run ended with.
@@ -257,12 +267,15 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	p.Observe(Event{Kind: EvPreflight, Result: res})
 
 	// The implementer Attempt.
-	a, err := implement(ctx, p, l, blobs, repo, adapter, impl, snap, ws)
+	a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, ws)
 	if err != nil {
 		return nil, err
 	}
 	res.Attempt = a
 	p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
+	if a.Stop != "" {
+		return end(InfrastructureStop, a.Stop)
+	}
 	if a.Failure != "" {
 		// TODO(#40-decision): an Attempt failure should retry on its budget
 		// and then reach the bound-exhaustion Gate (ADR-0012); with neither
@@ -332,15 +345,39 @@ func setupOnSnapshot(ctx context.Context, r *oracle.Runner, repo *workspace.RunR
 // spawn, ProcessStarted right after it, AttemptEnded only once the
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
-	adapter agent.Adapter, stage pipeline.Stage, snap, ws string) (*Attempt, error) {
+	adapter agent.Adapter, stage pipeline.Stage, runID, snap, ws string) (*Attempt, error) {
 	a := &Attempt{ID: stage.Name + "#1", Stage: stage.Name, Agent: stage.Agent}
-	spec := agent.LaunchSpec{Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network}
+	instructions, err := repoInstructions(repo, snap)
+	if err != nil {
+		return nil, err
+	}
+	var checks []string
+	for _, c := range p.Frozen.Checks {
+		checks = append(checks, c.Run)
+	}
+	// The agent's tool caches live beside the Workspace, never in it, so
+	// they can't become part of the Candidate.
+	cache := filepath.Join(filepath.Dir(ws), "cache", stage.Name)
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		return nil, err
+	}
+	spec := agent.LaunchSpec{
+		Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network, RunID: runID,
+		RepoInstructions: instructions, CheckCommands: checks, DenyRead: []string{p.State.Private}, Cache: cache,
+	}
+	brief := briefing.Implementer(p.Task, checks)
+	briefingBlob, err := blobs.Put([]byte(brief))
+	if err != nil {
+		return nil, err
+	}
 	if err := l.Append(RecAttemptStarting, map[string]any{
 		"attempt": a.ID, "stage": stage.Name, "cause": "first", "start_revision": snap, "session": "fresh",
 		"launch_profile": map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network},
+		"briefing":       briefingBlob, "repo_instructions": instructions != "",
 	}); err != nil {
 		return nil, err
 	}
+	launched := time.Now()
 	sess, err := adapter.Open(ctx, spec)
 	if err != nil {
 		a.Failure = string(redact.Redact([]byte("launch_failed: " + err.Error())))
@@ -351,13 +388,13 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	if err := l.Append(RecProcessStarted, map[string]any{"attempt": a.ID, "pid": proc.PID, "pgid": proc.PGID}); err != nil {
 		return nil, err
 	}
-	// The Briefing is the Task for now; #44 brings Öge's Briefing builder.
-	if err := sess.Send(agent.Turn{Text: p.Task.Text}); err != nil {
+	if err := sess.Send(agent.Turn{Text: brief}); err != nil {
 		a.Failure = "send_failed: " + err.Error()
 	}
 	var stream bytes.Buffer
 	enc := json.NewEncoder(&stream)
 	settled := false
+	hosts := map[string]int{}
 	timeout := time.NewTimer(p.Frozen.Limits.StageTimeout)
 	defer timeout.Stop()
 loop:
@@ -368,10 +405,28 @@ loop:
 				break loop
 			}
 			_ = enc.Encode(ev)
+			if a.FirstActivity == 0 && visible(ev) {
+				a.FirstActivity = time.Since(launched)
+			}
 			p.Observe(Event{Kind: EvAgent, Agent: ev, Attempt: a})
-			if ev.Kind == agent.TurnSettled {
+			switch ev.Kind {
+			case agent.SessionOpened:
+				if ev.Session != nil {
+					// An environment and capability observation (ADR-0011).
+					if err := l.Append(RecObservation, map[string]any{"attempt": a.ID, "kind": "session",
+						"agent_version": ev.Session.AgentVersion, "capabilities": ev.Session.Capabilities,
+						"launch_profile": ev.Session.Profile, "envelope": ev.Session.Envelope, "auth_source": ev.Session.AuthSource,
+						"since_launch_ms": time.Since(launched).Milliseconds()}); err != nil {
+						return nil, err
+					}
+				}
+			case agent.HostRequest:
+				if ev.Host != nil {
+					hosts[ev.Host.Rule]++
+				}
+			case agent.TurnSettled:
 				settled = true
-				a.Exit, a.Failure = ev.Exit, ev.Failure
+				a.Exit, a.Failure, a.Stop = ev.Exit, ev.Failure, ev.Stop
 				break loop
 			}
 		case <-timeout.C:
@@ -390,12 +445,25 @@ loop:
 	// Exit name and failure reach AttemptEnded and RunEnded.why.
 	a.Exit = string(redact.Redact([]byte(a.Exit)))
 	a.Failure = string(redact.Redact([]byte(a.Failure)))
+	a.Stop = string(redact.Redact([]byte(a.Stop)))
 	streamBlob, err := blobs.Put(redact.Redact(stream.Bytes()))
 	if err != nil {
 		return nil, err
 	}
+	// How responsive the agent was, and how its Host requests were
+	// answered (ADR-0019 metrics, ADR-0022).
+	obs := map[string]any{"attempt": a.ID, "kind": "responsiveness", "duration_ms": time.Since(launched).Milliseconds(), "host_requests": hosts}
+	if a.FirstActivity > 0 {
+		obs["first_activity_ms"] = a.FirstActivity.Milliseconds()
+	}
+	if err := l.Append(RecObservation, obs); err != nil {
+		return nil, err
+	}
 	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
-	if a.Failure == "" {
+	if a.Stop != "" {
+		ended["stop"] = a.Stop
+	}
+	if a.Failure == "" && a.Stop == "" {
 		// TODO(#41): Write-scope comparison, revert and Tamper detection
 		// run here, before the Candidate is committed.
 		c, err := repo.CommitCandidate(ws, snap, "refs/oge/candidates/c1", "Candidate c1 ("+a.ID+")")
@@ -409,6 +477,38 @@ loop:
 		ended["candidate"] = c
 	}
 	return a, l.Append(RecAttemptEnded, ended)
+}
+
+// visible reports whether an agent event shows as activity in the views:
+// what the agent says or does, or a request Öge denied.
+func visible(ev agent.Event) bool {
+	return ev.Kind == agent.Claim || (ev.Kind == agent.HostRequest && ev.Host != nil && ev.Host.Decision != "allow")
+}
+
+// repoInstructions is the Snapshot's CLAUDE.md, with whole-line @imports
+// of other Snapshot files inlined one level deep.
+// TODO(#44-decision): only the root CLAUDE.md, and only whole-line
+// "@relative/path" imports (such as "@AGENTS.md"), are injected.
+func repoInstructions(repo *workspace.RunRepo, snap string) (string, error) {
+	data, ok, err := repo.Show(snap, "CLAUDE.md")
+	if err != nil || !ok {
+		return "", err
+	}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		ref, ok := strings.CutPrefix(strings.TrimSpace(line), "@")
+		if !ok || ref == "" || strings.ContainsAny(ref, " \t") || path.IsAbs(ref) {
+			continue
+		}
+		ref = path.Clean(ref)
+		if ref == ".." || strings.HasPrefix(ref, "../") {
+			continue
+		}
+		if b, ok, err := repo.Show(snap, ref); err == nil && ok {
+			lines[i] = strings.TrimRight(string(b), "\n")
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n")), nil
 }
 
 // newID is a time-sortable Run id.

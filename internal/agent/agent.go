@@ -19,6 +19,18 @@ type LaunchSpec struct {
 	Model     string
 	Workspace string // the directory the agent works in
 	Network   string // "off" or "on"
+	RunID     string
+	// RepoInstructions is the Snapshot's agent instruction file (CLAUDE.md),
+	// read by Öge from the Snapshot, never from the Workspace (ADR-0009).
+	RepoInstructions string
+	// CheckCommands are the Run's Check commands, which a Launch profile
+	// may pre-authorise the implementer to run (ADR-0019).
+	CheckCommands []string
+	// DenyRead are absolute paths no agent may read: Öge's private state.
+	DenyRead []string
+	// Cache is a Run-private directory, outside the Workspace, for the
+	// agent's tool caches (such as GOCACHE).
+	Cache string
 }
 
 // Session is one agent conversation. At most one turn is in flight;
@@ -62,14 +74,66 @@ const (
 // Event is one normalised event.
 type Event struct {
 	Kind EventKind
-	// Text is a Claim's or Warning's text.
+	// Text is a Claim's or Warning's text, or an Unknown message's type.
 	Text string
+	// Tool and Target are a tool-use Claim's tool name and a short,
+	// redacted target, such as a Workspace-relative path or a command's
+	// first line. Tool is empty for any other Claim.
+	Tool   string `json:",omitempty"`
+	Target string `json:",omitempty"`
+	// Host is a Host request and how it was answered.
+	Host *HostDecision `json:",omitempty"`
+	// Session is set on SessionOpened when the agent reports it.
+	Session *SessionInfo `json:",omitempty"`
 	// Exit is the Exit a settled turn declared, from the Role kind's closed
 	// set (e.g. "done"); empty when none was declared.
 	Exit string
 	// Failure is set on a settled turn that did not complete: an Attempt
 	// failure reason code.
 	Failure string
+	// Stop is set instead of Failure when the turn ended for an
+	// environmental reason the agent signalled in structured form, such as
+	// authentication or quota: an Infrastructure stop, not an Attempt
+	// failure (ADR-0012).
+	Stop string `json:",omitempty"`
+}
+
+// Host-request families (ADR-0005).
+const (
+	Approval = "approval"
+	Question = "question"
+)
+
+// HostDecision is a Host request and its answer. Until interactive
+// answers exist (#45) every one is answered by policy: pre-authorised by
+// the Launch profile, or denied with a reason. A question is never
+// answered on the human's behalf (ADR-0019).
+type HostDecision struct {
+	Family string // Approval or Question
+	Tool   string
+	Target string // short and redacted, as on a tool-use Claim
+	// Decision is "allow", "deny" or "cancel".
+	Decision string
+	Reason   string `json:",omitempty"`
+	// By is who answered, e.g. "launch_profile:<hash>" or "policy".
+	By string
+	// Rule names the policy rule that decided, e.g. "pre_authorised",
+	// "outside_role" or "no_interactive_approval".
+	Rule string
+}
+
+// SessionInfo is what the agent reported about its Session at startup.
+type SessionInfo struct {
+	AgentVersion string
+	// Capabilities are the effective Capabilities (ADR-0005).
+	Capabilities []string
+	// Profile is the Launch profile's hash.
+	Profile string
+	// Envelope is "ok" or "warn"; a failed envelope settles the turn.
+	Envelope string
+	// AuthSource is the kind of authentication the agent reports, never
+	// a credential (ADR-0006).
+	AuthSource string `json:",omitempty"`
 }
 
 // ErrTurnInFlight is returned by Send while a turn is active.

@@ -43,8 +43,8 @@ type Env struct {
 	Version string
 	Getenv  func(string) string
 	// Agents are the adapters this build can run, by agent name. Release
-	// builds register none until the Claude adapter (#44) exists; test
-	// builds register the scripted fake (ADR-0017).
+	// builds register the Claude adapter; test builds add the scripted fake
+	// (ADR-0017).
 	Agents map[string]agent.Adapter
 	// CheckGoCache, when set, is a GOCACHE every Check shares instead of a
 	// private one. Only tests set it (in-process, or OGE_TEST_SHARED_GOCACHE
