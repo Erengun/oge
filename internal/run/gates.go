@@ -31,6 +31,9 @@ const (
 	// RecRunParked ends the Ledger of a parked Run, in place of RunEnded:
 	// the Run hasn't finished.
 	RecRunParked = "RunParked"
+	// RecGateAbandoned closes a Gate nobody decided: the Run was cancelled
+	// or the terminal closed. Öge never decides in the human's place.
+	RecGateAbandoned = "GateAbandoned"
 )
 
 // gateSpec is how the Run words one Gate.
@@ -38,8 +41,9 @@ type gateSpec struct {
 	what, need string
 	// says is what each choice does at this Gate.
 	says map[string]string
-	// reason lists ordinary choices that need a reason here.
-	reason map[string]bool
+	// extends names the limit a choice extends by one here. An extension
+	// is typed in full with a reason, and recorded as one (ADR-0008).
+	extends map[string]string
 }
 
 // gateSpecs words each Gate the Run can open. A new Gate adds its entry
@@ -61,13 +65,11 @@ func gateSpecs(l pipeline.Limits) map[string]gateSpec {
 			what: fmt.Sprintf("The Check failed and the send-back limit (%d) is used up.", l.SendBacks),
 			need: "Decide what happens to the Candidate.",
 			says: map[string]string{
-				"send back": "one more send-back past the limit, with the failure output (needs a reason)",
+				"send back": "one more send-back past the limit, with the failure output (type it in full, with a reason)",
 				"reject":    "end the Run Rejected (type the word and a reason)",
 				"quit":      "end the Run Cancelled",
 			},
-			// TODO(#43-decision): a send back past the limit is an
-			// extension, and ADR-0008 gives every extension a reason.
-			reason: map[string]bool{"send back": true},
+			extends: map[string]string{"send back": "send_backs"},
 		},
 	}
 }
@@ -79,13 +81,21 @@ type walk struct {
 	g         pipeline.Graph
 	limits    pipeline.Limits
 	sendBacks int
-	verdicts  []int
+	attempts  int // implementer Attempts so far
+	check     int // the latest Check: the Verdict a Gate shows
 }
 
+// capped reports whether the Run's Attempt cap is reached. The cap is
+// hard: nothing extends it yet.
+// TODO(#51): `extend attempts +N` with a reason, at the Gate.
+func (w *walk) capped() bool { return w.attempts >= w.limits.Attempts }
+
+// exhausted reports whether bound is used up. A send-back also needs an
+// Attempt under the cap.
 func (w *walk) exhausted(bound string) bool {
 	switch bound {
 	case "send_backs":
-		return w.sendBacks >= w.limits.SendBacks
+		return w.sendBacks >= w.limits.SendBacks || w.capped()
 	}
 	return false
 }
@@ -95,29 +105,94 @@ func (w *walk) exhausted(bound string) bool {
 func (w *walk) request(node string, a *Attempt, oracleVersion int, cr *oracle.Result) (gate.Request, error) {
 	spec, ok := gateSpecs(w.limits)[node]
 	if !ok {
-		return gate.Request{}, fmt.Errorf("the walk reached %s, which isn't built yet", node)
+		return gate.Request{}, errNotBuilt{node}
+	}
+	if node == "gate.bound_exhaustion" && w.capped() {
+		spec.what = fmt.Sprintf("The Check failed and the Attempt cap (%d per Run) is reached.", w.limits.Attempts)
 	}
 	r := gate.Request{
 		Name: gateName(w.g, node), What: spec.what, Need: spec.need, Check: cr,
-		Pins: gate.Pins{Gate: node, Attempt: a.ID, Candidate: a.Candidate, Oracle: oracleVersion,
-			Verdicts: append([]int(nil), w.verdicts...)},
+		Pins: gate.Pins{Gate: node, Attempt: a.ID, Candidate: a.Candidate, Oracle: oracleVersion, Verdicts: []int{w.check}},
 	}
 	for _, word := range w.g.Choices(node) {
 		e, _ := w.g.Choice(node, word)
 		if e.Bound != "" && w.exhausted(e.Bound) {
 			continue
 		}
+		if e.To == "implement" && w.capped() {
+			continue // no Attempt is left to send it back to
+		}
 		c, ok := gate.Choices[word]
 		if !ok {
 			return gate.Request{}, fmt.Errorf("choice %q has no entry rule", word)
 		}
 		c.Says = spec.says[word]
-		if spec.reason[word] {
-			c.Reason, c.Note = true, false
+		if limit := spec.extends[word]; limit != "" {
+			c.Key, c.Reason, c.Note, c.Extends = "", true, false, limit
 		}
 		r.Choices = append(r.Choices, c)
 	}
 	return r, nil
+}
+
+// errNotBuilt means the walk reached a node it can't enter yet.
+type errNotBuilt struct{ node string }
+
+func (e errNotBuilt) Error() string {
+	return fmt.Sprintf("the walk reached %s, which isn't built yet", e.node)
+}
+
+// step is where following an edge through Gates got to: a send-back, the
+// end of the Run, or a stop.
+type step struct {
+	edge     pipeline.Edge
+	gate     string // the last Gate it passed or stopped at
+	decision *gate.Decision
+	stop     Outcome // set when the Run stops here
+	why      []string
+}
+
+// follow takes e through every Gate it reaches until it comes to the end
+// of the Run or back to the implementer.
+func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVersion int, cr *oracle.Result) (step, error) {
+	var s step
+	for e.To != "end" && e.To != "implement" {
+		r, err := w.request(e.To, a, oracleVersion, cr)
+		var nb errNotBuilt
+		if errors.As(err, &nb) {
+			// TODO(#48): the Ambiguous-file Gate, and the walk into check
+			// or verify after a promote or drop.
+			return step{stop: InfrastructureStop, why: []string{nb.Error()}}, nil
+		}
+		if err != nil {
+			return s, err
+		}
+		s.gate = e.To
+		d, err := w.open(ctx, r)
+		switch {
+		case errors.Is(err, errParked):
+			return step{gate: e.To, stop: Parked, why: []string{r.What}}, nil
+		case ctx.Err() != nil, errors.Is(err, gate.ErrNoDecision):
+			why := interrupted
+			if ctx.Err() == nil {
+				why = fmt.Sprintf("the %s Gate got no decision: the terminal closed", r.Name)
+			}
+			if err := w.l.Append(RecGateAbandoned, map[string]any{"pins": r.Pins, "why": why}); err != nil {
+				return s, err
+			}
+			return step{gate: e.To, stop: InfrastructureStop, why: []string{why}}, nil
+		case err != nil:
+			return s, err
+		}
+		s.decision = &d
+		next, ok := w.g.Choice(e.To, d.Choice)
+		if !ok {
+			return s, fmt.Errorf("the %s Gate has no edge for %q", r.Name, d.Choice)
+		}
+		e = next
+	}
+	s.edge = e
+	return s, nil
 }
 
 func gateName(g pipeline.Graph, node string) string {
@@ -152,9 +227,14 @@ func (w *walk) open(ctx context.Context, r gate.Request) (gate.Decision, error) 
 	}
 	// Pinned and durable before it takes effect; the actor is a kind,
 	// never an identity (ADR-0006).
-	if err := w.l.Append(RecGateDecided, map[string]any{
-		"pins": r.Pins, "actor": "human", "choice": d.Choice, "reason": d.Reason, "note": d.Note,
-	}); err != nil {
+	rec := map[string]any{"pins": r.Pins, "actor": "human", "choice": d.Choice, "reason": d.Reason, "note": d.Note}
+	for _, c := range r.Choices {
+		if c.Word == d.Choice && c.Extends != "" {
+			d.Extends = c.Extends
+			rec["extension"] = map[string]any{"limit": c.Extends, "by": 1}
+		}
+	}
+	if err := w.l.Append(RecGateDecided, rec); err != nil {
 		return d, err
 	}
 	w.p.Observe(Event{Kind: EvDecided, Gate: &r, Decision: &d})

@@ -28,6 +28,9 @@ func sendBackText(ev run.Event) string {
 // decidedText echoes a decision once it is recorded (ADR-0015).
 func decidedText(ev run.Event) string {
 	s := fmt.Sprintf("%s · recorded at the %s", ev.Decision.Choice, gateTitle(ev.Gate.Name))
+	if ev.Decision.Extends != "" {
+		s += fmt.Sprintf(" · extends %s +1", ev.Decision.Extends)
+	}
 	if ev.Decision.Reason != "" {
 		s += " · reason: " + ev.Decision.Reason
 	}
@@ -76,7 +79,7 @@ const gateHint = "There is no default: type a choice and press Enter."
 // parkedSummary is a parked Run's end.
 func (r *renderer) parkedSummary(res *run.Result) {
 	r.p("")
-	r.p("%-10s at the %s Gate · Candidate %s · Oracle v%d · %s", "PARKED", gateLabel(res), short(res.Candidate), res.Oracle, res.Duration.Round(100*time.Millisecond))
+	r.p("%-10s at the %s · Candidate %s · Oracle v%d · %s", "PARKED", gateTitle(gateLabel(res)), short(res.Candidate), res.Oracle, res.Duration.Round(100*time.Millisecond))
 	for _, w := range res.Why {
 		r.p("  %s", clean(w))
 	}
@@ -87,6 +90,9 @@ func (r *renderer) parkedSummary(res *run.Result) {
 func gateLabel(res *run.Result) string {
 	if res.Gate == "" {
 		return "?"
+	}
+	if res.Gate == "gate.result" {
+		return "Result gate"
 	}
 	return strings.ReplaceAll(strings.TrimPrefix(res.Gate, "gate."), "_", "-")
 }

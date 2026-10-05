@@ -281,6 +281,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
 	next := attemptSpec{n: 1, cause: "first", start: snap, turn: p.Task.Text, ws: ws}
 	for check := 1; ; check++ {
+		w.attempts++
 		a, err := implement(ctx, p, l, blobs, repo, adapter, impl, snap, next)
 		if err != nil {
 			return nil, err
@@ -329,40 +330,28 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := l.Append(RecVerdict, map[string]any{"check": check, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
 			return nil, err
 		}
-		w.verdicts = append(w.verdicts, check)
+		w.check = check
 		p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
 
 		// TODO(#41, #47, #48): Tamper events, failing own tests and
 		// Ambiguous files become conditions here.
 		holds := func(c string) bool { return c == "verdict:"+verdict }
 		e, ok := f.Graph.Route("check", holds, w.exhausted)
-		var d *gate.Decision
-		for ok && e.To != "end" && e.To != "implement" {
-			r, err := w.request(e.To, a, m.Version, cr)
-			if err != nil {
-				return nil, err
-			}
-			got, err := w.open(ctx, r)
-			switch {
-			case errors.Is(err, errParked):
-				res.Gate = e.To
-				return end(Parked, r.What)
-			case ctx.Err() != nil:
-				return end(InfrastructureStop, interrupted)
-			case errors.Is(err, gate.ErrNoDecision):
-				return end(InfrastructureStop, fmt.Sprintf("the %s Gate got no decision: the terminal closed", r.Name))
-			case err != nil:
-				return nil, err
-			}
-			res.Gate, res.Decision, d = e.To, &got, &got
-			e, ok = f.Graph.Choice(e.To, got.Choice)
-		}
 		if !ok {
 			return nil, fmt.Errorf("the frozen graph has no edge for this Verdict")
 		}
-		if e.To == "end" {
-			return end(Outcome(e.Outcome))
+		s, err := w.follow(ctx, e, a, m.Version, cr)
+		if err != nil {
+			return nil, err
 		}
+		res.Gate, res.Decision = s.gate, s.decision
+		if s.stop != "" {
+			return end(s.stop, s.why...)
+		}
+		if s.edge.To == "end" {
+			return end(Outcome(s.edge.Outcome))
+		}
+		d := s.decision
 		// A send-back Attempt, from the Candidate it sends back.
 		w.sendBacks++
 		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks})

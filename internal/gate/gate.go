@@ -32,9 +32,12 @@ type Choice struct {
 	// Key is the single letter for an ordinary choice, and empty for one
 	// that must be typed in full.
 	Key    string
-	Reason bool   // a non-empty reason is required
-	Note   bool   // an optional note goes with it (send back)
-	Says   string // what it does, for the screen
+	Reason bool // a non-empty reason is required
+	Note   bool // an optional note goes with it (send back)
+	// Extends names the limit this choice extends by one at this Gate;
+	// an extension is typed in full with a reason (ADR-0008).
+	Extends string
+	Says    string // what it does, for the screen
 }
 
 // Choices are the entry rules for each choice word (ADR-0015). A Gate's
@@ -76,6 +79,8 @@ type Decision struct {
 	Choice string `json:"choice"`
 	Reason string `json:"reason,omitempty"`
 	Note   string `json:"note,omitempty"`
+	// Extends is the limit the decision extended, once recorded.
+	Extends string `json:"-"`
 }
 
 // Match reads one line typed at the Gate. An empty line matches nothing,

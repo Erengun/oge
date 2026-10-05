@@ -45,7 +45,7 @@ func boundExhaustionAt(h *tuiHarness) gate.Request {
 	r := boundExhaustionRequest()
 	r.Check = &oracle.Result{Commands: []oracle.Execution{{Run: "go test -json ./...", DurationMs: 1180, Why: "exit 1",
 		Report: &oracle.Report{Ran: 1, Failed: 1, FailedTests: []string{"TestAdd"}}}}}
-	r.Choices[0].Says = "one more send-back past the limit, with the failure output (needs a reason)"
+	r.Choices[0].Says = "one more send-back past the limit, with the failure output (type it in full, with a reason)"
 	r.Choices[1].Says = "end the Run Rejected (type the word and a reason)"
 	r.Choices[2].Says = "end the Run Cancelled"
 	return r
@@ -104,12 +104,19 @@ func TestTUIBoundExhaustionGate(t *testing.T) {
 	default:
 		t.Fatal("no decision")
 	}
-	// It is shown as taken only once the Run has recorded it.
-	if got := h.m.render(); strings.Contains(got, "decision") {
-		t.Errorf("the decision showed before it was recorded:\n%s", got)
+	// The Gate stays until the Run has recorded the decision; only then
+	// is it echoed and closed.
+	got := h.m.render()
+	if strings.Contains(got, "decision") || !strings.Contains(got, "bound-exhaustion Gate") || !strings.Contains(got, "recording…") {
+		t.Errorf("before GateDecided:\n%s", got)
 	}
+	h.typeLine("quit")
+	noDecision(t, reply)
 	h.at(9 * time.Second)
 	h.decided(r, gate.Decision{Choice: "reject", Reason: "the test can't pass as written"})
+	if got := h.m.render(); strings.Contains(got, "recording…") || strings.Contains(got, "  bound-exhaustion Gate") {
+		t.Errorf("after GateDecided the Gate is still open:\n%s", got)
+	}
 	golden(t, "gate-rejected", h.end(run.Rejected))
 }
 
@@ -197,7 +204,7 @@ func TestTUIAttentionLine(t *testing.T) {
 	h.checked(false)
 	h.openGate(boundExhaustionAt(h))
 	got := h.m.render()
-	if !strings.Contains(got, "\nATTENTION NEEDED: Decide what happens to the Candidate.\n    s  send back") || strings.Contains(got, "Nothing needs you") {
+	if !strings.Contains(got, "\nATTENTION NEEDED: Decide what happens to the Candidate.\n    send back") || strings.Contains(got, "Nothing needs you") {
 		t.Errorf("at a Gate:\n%s", got)
 	}
 }

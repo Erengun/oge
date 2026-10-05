@@ -23,6 +23,9 @@ type gateState struct {
 	// choice, when set, is the choice whose reason or note is being typed.
 	choice *gate.Choice
 	msg    string
+	// recording: the decision went to the Run, which hasn't recorded it
+	// yet. The Gate stays until it has (ADR-0015).
+	recording bool
 }
 
 // gate opens r in the live view and waits for the human, or for ctx.
@@ -52,6 +55,11 @@ func (m *model) gateKey(k tea.KeyPressMsg) (ok bool) {
 	switch k.String() {
 	case "ctrl+o":
 		return false
+	}
+	if g.recording {
+		return k.String() != "ctrl+c"
+	}
+	switch k.String() {
 	case "ctrl+c", "esc":
 		if g.choice != nil {
 			// Back to the Gate; the Run goes on waiting.
@@ -107,7 +115,7 @@ func (m *model) gateEnter() {
 	}
 	// The view shows it as taken only when the Run has recorded it.
 	g.reply <- d
-	m.gate = nil
+	g.recording, g.input, g.msg = true, "", ""
 }
 
 // gateLines draw the open Gate under the stages: calm, with no default.
@@ -132,6 +140,10 @@ func (m *model) gateLines() []string {
 		}
 	}
 	out = append(out, "")
+	if g.recording {
+		out = append(out, st.dim("  "+g.choice.Word+" · recording…"))
+		return out
+	}
 	if g.choice != nil {
 		l := label(g.choice)
 		if !g.choice.Reason {

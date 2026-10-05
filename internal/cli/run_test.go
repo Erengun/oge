@@ -230,7 +230,13 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 // sendBackLimit sets the fixture's send-back limit.
 func (f *runFixture) sendBackLimit(t *testing.T, n int) {
 	t.Helper()
-	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig+fmt.Sprintf("[pipelines.default.limits]\nsend_backs = %d\n", n)))
+	f.limits(t, fmt.Sprintf("send_backs = %d\n", n))
+}
+
+// limits sets the fixture's limits from TOML lines.
+func (f *runFixture) limits(t *testing.T, lines string) {
+	t.Helper()
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig+"[pipelines.default.limits]\n"+lines))
 	gitIn(t, f.repo, "-c", "core.hooksPath="+os.DevNull, "commit", "-q", "-am", "limit send-backs")
 	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
 }
@@ -311,6 +317,10 @@ func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
 		run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecGateOpened, run.RecRunParked)
 	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(want, ",") {
 		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(want, ","))
+	}
+	// The Gate is pinned to the Verdict it shows: the latest Check's.
+	if got := gatePins(t, f.onlyRun(t)); got != "GateOpened [2]" {
+		t.Errorf("pins: %s", got)
 	}
 }
 

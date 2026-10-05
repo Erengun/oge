@@ -355,6 +355,7 @@ func (m *model) apply(msg tea.Msg) bool {
 		case run.EvPreflight, run.EvAttempt, run.EvCheck:
 			m.finish(msg)
 		case run.EvDecided:
+			m.gate = nil // recorded: now it is taken
 			m.note(msg)
 		case run.EvSendBack:
 			m.note(msg)

@@ -45,6 +45,9 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 			return ExitRefused
 		}
 	}
+	for _, n := range frozen.Notices {
+		fmt.Fprintf(env.Stderr, "oge: %s\n", n)
+	}
 	if !f.unattended && !env.Interactive() {
 		fmt.Fprintln(env.Stderr, "oge: an attended Run needs a terminal; pass --unattended to run without one")
 		return ExitRefused
@@ -359,7 +362,11 @@ func (r *renderer) summary(res *run.Result) {
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")
-		r.p("INFRASTRUCTURE STOP   no Verdict")
+		if res.Gate != "" {
+			r.p("INFRASTRUCTURE STOP   no decision at the %s", gateTitle(gateLabel(res)))
+		} else {
+			r.p("INFRASTRUCTURE STOP   no Verdict")
+		}
 		for _, w := range res.Why {
 			r.p("  %s", clean(w))
 		}

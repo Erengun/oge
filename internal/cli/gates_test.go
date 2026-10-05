@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -22,6 +23,26 @@ func (f *runFixture) attended(stdin string) {
 	f.interactive, f.stdin = true, stdin
 }
 
+// gatePins are each Gate record's pinned Verdicts.
+func gatePins(t *testing.T, runDir string) string {
+	t.Helper()
+	recs, err := ledger.Replay(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, r := range recs {
+		if r.Type == run.RecGateOpened || r.Type == run.RecGateDecided {
+			var d struct{ Pins struct{ Verdicts []int } }
+			if err := json.Unmarshal(r.Data, &d); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, fmt.Sprintf("%s %v", r.Type, d.Pins.Verdicts))
+		}
+	}
+	return strings.Join(out, "|")
+}
+
 // gateRecords are the Run's Gate records, as "type choice reason".
 func gateRecords(t *testing.T, runDir string) []string {
 	t.Helper()
@@ -32,7 +53,7 @@ func gateRecords(t *testing.T, runDir string) []string {
 	var out []string
 	for _, r := range recs {
 		switch r.Type {
-		case run.RecGateOpened, run.RecGateDecided, run.RecRunEnded, run.RecRunParked:
+		case run.RecGateOpened, run.RecGateDecided, run.RecGateAbandoned, run.RecRunEnded, run.RecRunParked:
 			var d struct {
 				Pins struct {
 					Gate      string
@@ -44,7 +65,7 @@ func gateRecords(t *testing.T, runDir string) []string {
 			if err := json.Unmarshal(r.Data, &d); err != nil {
 				t.Fatal(err)
 			}
-			if r.Type == run.RecGateDecided && (d.Actor != "human" || d.Pins.Candidate == "" || len(d.Pins.Verdicts) == 0) {
+			if r.Type == run.RecGateDecided && (d.Actor != "human" || d.Pins.Candidate == "" || len(d.Pins.Verdicts) != 1) {
 				t.Errorf("a decision isn't pinned: %s", r.Data)
 			}
 			var parts []string
@@ -73,7 +94,7 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 			want: []string{
 				"bound-exhaustion Gate", "The Check failed and the send-back limit (0) is used up.",
 				"Candidate ", " · Attempt implement#1 · Oracle v0 · Verdicts #1",
-				"  s  send back  one more send-back past the limit",
+				"  send back     one more send-back past the limit",
 				"  reject        end the Run Rejected", "  q  quit       end the Run Cancelled",
 				gateHint, `type "reject" in full`, "a reason is required",
 				"decision   reject · recorded at the bound-exhaustion Gate · reason: the test can't pass as written",
@@ -93,8 +114,8 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 		},
 		{
 			name: "the terminal closes", stdin: "", code: ExitInfra,
-			want:    []string{"the bound-exhaustion Gate got no decision: the terminal closed"},
-			records: "GateOpened gate.bound_exhaustion|RunEnded Infrastructure stop",
+			want:    []string{"INFRASTRUCTURE STOP   no decision at the bound-exhaustion Gate", "the bound-exhaustion Gate got no decision: the terminal closed"},
+			records: "GateOpened gate.bound_exhaustion|GateAbandoned gate.bound_exhaustion|RunEnded Infrastructure stop",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -113,30 +134,70 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 			if got := strings.Join(gateRecords(t, f.onlyRun(t)), "|"); got != c.records {
 				t.Errorf("records:\n got %s\nwant %s", got, c.records)
 			}
+			if strings.Contains(out, "no Verdict") {
+				t.Errorf("a Run with a fail Verdict says it has none:\n%s", out)
+			}
 			f.assertUntouched(t)
 		})
 	}
 }
 
-// A send back past the limit needs a reason, and the next turn carries it
+// A send back past the limit is an extension (ADR-0008): typed in full
+// with a reason, recorded as one, and its next turn carries the reason
 // with the failure output.
 func TestAttendedSendBackPastTheLimit(t *testing.T) {
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
-	f.attended("s\n\ntry once more\n")
+	f.attended("s\nsend back\n\ntry once more\n")
 	code, out, errOut := f.run(t, fixOnSendBack, "fix Add", "--fast", "--agent", "fake", "--plain")
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, w := range []string{
-		"a reason is required",
-		"decision   send back · recorded at the bound-exhaustion Gate · reason: try once more",
+		`type "send back" in full`, "a reason is required",
+		"decision   send back · recorded at the bound-exhaustion Gate · extends send_backs +1 · reason: try once more",
 		"send back  1 (limit 0, extended at the Gate) · ", "ACCEPTED   Candidate ",
 	} {
 		if !strings.Contains(out, w) {
 			t.Errorf("stdout lacks %q:\n%s", w, out)
 		}
 	}
+	recs, err := ledger.Replay(f.onlyRun(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range recs {
+		if r.Type == run.RecGateDecided {
+			found = strings.Contains(string(r.Data), `"extension":{"by":1,"limit":"send_backs"}`)
+		}
+	}
+	if !found {
+		t.Error("the decision isn't recorded as an extension")
+	}
+}
+
+// The Attempt cap is hard: once it is reached nothing can send the
+// Candidate back, at the Check or at the Gate.
+func TestAttemptCapIsEnforced(t *testing.T) {
+	t.Run("unattended", func(t *testing.T) {
+		f := newRunFixture(t)
+		f.limits(t, "send_backs = 5\nattempts = 2\n")
+		code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+		if code != ExitParked || !strings.Contains(out, "The Check failed and the Attempt cap (2 per Run) is reached.") ||
+			strings.Count(out, "implement  fake") != 2 {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+		}
+	})
+	t.Run("attended", func(t *testing.T) {
+		f := newRunFixture(t)
+		f.limits(t, "send_backs = 0\nattempts = 1\n")
+		f.attended("send back once more\nquit\n")
+		code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--plain")
+		if code != ExitCancelled || !strings.Contains(out, `"send back once more" isn't a choice here`) || strings.Contains(out, "  send back") {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+		}
+	})
 }
 
 // The reason can be written in $EDITOR; its comment lines are dropped.
@@ -215,6 +276,10 @@ func TestNoResultGateByDefaultOrUnattended(t *testing.T) {
 		if code != ExitOK || strings.Contains(out, "Result gate") {
 			t.Fatalf("%v: exit %d\nstdout:\n%s\nstderr:\n%s", args, code, out, errOut)
 		}
+		// Dropping it is never silent.
+		if notice := "--confirm ignored: unattended Runs have no Result gate (ADR-0008)"; strings.Contains(errOut, notice) != (args[0] == "--confirm") {
+			t.Errorf("%v: notice %q in stderr: %q", args, notice, errOut)
+		}
 		if got := strings.Join(gateRecords(t, f.onlyRun(t)), "|"); got != "RunEnded Accepted" {
 			t.Errorf("%v: records %s", args, got)
 		}
@@ -251,7 +316,7 @@ func boundExhaustionRequest() gate.Request {
 		Name: "bound-exhaustion", What: "The Check failed and the send-back limit (3) is used up.", Need: "Decide what happens to the Candidate.",
 		Pins: gate.Pins{Gate: "gate.bound_exhaustion", Attempt: "implement#4", Candidate: "6d1231d9f00d", Verdicts: []int{1, 2, 3, 4}},
 		Choices: []gate.Choice{
-			{Word: "send back", Key: "s", Reason: true}, gate.Choices["reject"], gate.Choices["quit"],
+			{Word: "send back", Reason: true, Extends: "send_backs"}, gate.Choices["reject"], gate.Choices["quit"],
 		},
 	}
 }
