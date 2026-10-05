@@ -229,9 +229,9 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 		defer RemoveAll(work)
 		if hasModule {
 			env["GOPROXY"] = "off" // the warm step never fetches
-			if toolexec != "" {
-				env[warmToolexecEnv] = toolexec
-			}
+			// Always set, even empty: an empty value aborts the vet leg, and
+			// pass_env can't supply one from the user's environment.
+			env[warmToolexecEnv] = toolexec
 			e, _, err := r.Exec(wctx, warmCommand, dir, env, 10*time.Minute, 64<<10)
 			s.warm, s.err = &e, err
 		}
