@@ -5,5 +5,16 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
 ✗ implement  fake · Attempt failed: interrupted · 5.7s
 · check      not run
 
-INFRASTRUCTURE STOP   no Verdict
-  the implementer Attempt failed: interrupted
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Fast mode
+Result        ■ Infrastructure stop: no Verdict
+              the implementer Attempt failed: interrupted
+Task          fix Add
+Checks        none ran
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          6.2s · preflight 400ms · implement 5.6s · your attention 0s
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              No Check reached a Verdict: there is no Evidence on any Candidate
+Ledger        head 5aa0517db6c4 · identifies this Receipt; not tamper-proof
+Nothing was written to your repository.

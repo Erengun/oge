@@ -4,7 +4,7 @@
   "mode": "Standard",
   "task": "fix Add",
   "outcome": "Interrupted",
-  "headline": "■ Interrupted: the Run was cancelled before a Verdict",
+  "headline": "■ Interrupted (Infrastructure stop): the Run was cancelled before a Verdict",
   "oracle_version": 0,
   "checks": [],
   "protected": {

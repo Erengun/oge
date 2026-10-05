@@ -1,4 +1,4 @@
-### Öge Receipt: ■ Interrupted: the Run was cancelled before a Verdict
+### Öge Receipt: ■ Interrupted (Infrastructure stop): the Run was cancelled before a Verdict
 
 Run 20261005T090000-a1b2c3 · Standard mode
 

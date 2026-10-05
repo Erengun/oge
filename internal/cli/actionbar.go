@@ -38,10 +38,10 @@ func afterRun(env Env, f runFlags, v view, root string, res *run.Result) int {
 	if _, live := v.(*tui); live && !f.unattended {
 		var bar *actionBar
 		bar = newActionBar(env, r, root, func() {
-			// Once applied, the summary no longer says nothing was written.
+			// Once applied, the Receipt lists the Delivery.
 			p := plainOf(v)
 			p.applying = bar.applied
-			p.summary(res)
+			p.endScreen(res)
 		})
 		fmt.Fprintln(env.Stdout)
 		bar.run()
@@ -53,7 +53,7 @@ func afterRun(env Env, f runFlags, v view, root string, res *run.Result) int {
 
 // actionBar is the end-of-run choice after an Accepted Run in the live
 // view: [a] applies (the human's explicit act of taking the result), [d]
-// pages the diff and comes back, [r] shows the summary again, q or Enter
+// pages the diff and comes back, [r] shows the Receipt again, q or Enter
 // leaves. It is never offered for a Run that isn't Accepted, which takes
 // oge apply --overridden or --rejected (ADR-0015).
 type actionBar struct {
@@ -70,7 +70,6 @@ type actionBar struct {
 }
 
 func newActionBar(env Env, r *delivery.Run, root string, receipt func()) *actionBar {
-	// TODO(#63): [r] shows the Receipt; until it lands, the summary.
 	b := &actionBar{in: env.Stdin, out: env.Stdout, st: newStyles(colorAllowed(env.Getenv)), receipt: receipt}
 	if f, ok := env.Stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		b.raw = func() func() {

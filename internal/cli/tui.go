@@ -115,7 +115,7 @@ func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.R
 		panic(fmt.Sprintf("%v\n\n%s", e.panicked, e.stack))
 	}
 	if e.err == nil {
-		u.plain.summary(e.res)
+		u.plain.endScreen(e.res)
 	}
 	return e.res, e.err
 }

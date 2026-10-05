@@ -9,7 +9,6 @@ import (
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
-	"github.com/erengun/oge/internal/workspace"
 )
 
 // QA is the user-facing label for the verifier Stage (docs/positioning.md):
@@ -130,34 +129,4 @@ func shortLine(s string, n int) string {
 // they are in the Ledger.
 func qaStep(e agent.Event) bool {
 	return !(e.Kind == agent.Claim && e.Tool == "")
-}
-
-// notCovered is the summary's "Not covered" text for the Run's mode.
-// TODO(#63): the Receipt replaces it.
-func notCovered(f *pipeline.Frozen, res *run.Result) string {
-	const unconfined = "Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges"
-	if f == nil || f.Mode == pipeline.Fast {
-		return "an independent verifier and held-out tests (Fast mode) · " + unconfined
-	}
-	var parts []string
-	if res.Oracle == 0 {
-		// QA never claims more than it did (docs/positioning.md).
-		parts = append(parts, "QA added no held-out tests")
-	}
-	if q := res.QA; q != nil {
-		if q.UnmappedTotal > 0 {
-			parts = append(parts, pluralOf(q.UnmappedTotal, "held-out test names", "held-out tests name")+" no acceptance criterion")
-		}
-		ambiguous := 0
-		for _, w := range q.Withheld {
-			if w.Class == workspace.ClassAmbiguous {
-				ambiguous++
-			}
-		}
-		// TODO(#48): the Ambiguous-file gate resolves these before Accepted.
-		if ambiguous > 0 {
-			parts = append(parts, pluralOf(ambiguous, "new file", "new files")+" QA never saw (no output glob matches)")
-		}
-	}
-	return strings.Join(append(parts, unconfined), " · ")
 }

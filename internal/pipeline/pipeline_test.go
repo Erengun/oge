@@ -202,3 +202,37 @@ func TestGrowthAttemptsCoverTheSendBackBudget(t *testing.T) {
 		}
 	}
 }
+
+// A Problem names the flag, never the value typed with it, and the
+// trust-weakening line never echoes the setup command: either may hold a
+// token (#39).
+func TestProblemsAndWeakeningsDontEchoValues(t *testing.T) {
+	ok := Overrides{Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"}}
+	for _, o := range []Overrides{
+		{Agents: []string{"implement=gemini:sk-secret"}},
+		{Agents: []string{"nosuch=claude:sk-secret"}},
+		{Implement: "gemini:sk-secret"},
+	} {
+		o.Checks, o.Tests = ok.Checks, ok.Tests
+		_, probs := Resolve(nil, o, []string{"claude"})
+		if len(probs) == 0 {
+			t.Fatalf("%+v: no problem", o)
+		}
+		for _, p := range probs {
+			if strings.Contains(p.Key, "sk-secret") || strings.Contains(p.Key, "=") {
+				t.Errorf("%+v: key %q echoes the value", o, p.Key)
+			}
+		}
+	}
+	cfg, probs := Load([]byte("schema = 1\n[project]\ntest_globs = [\"*_test.go\"]\n[[check.commands]]\nrun = \"go test -json ./...\"\nreport = \"go-test-json\"\n[setup]\nrun = \"TOKEN=sk-secret make deps\"\nnetwork = \"on\"\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	f, probs := Resolve(cfg, Overrides{}, []string{"claude"})
+	if len(probs) > 0 || len(f.TrustWeakening) != 1 {
+		t.Fatalf("%v %v", probs, f)
+	}
+	if w := f.TrustWeakening[0]; strings.Contains(w.Option+w.Detail, "sk-secret") {
+		t.Errorf("the weakening echoes the setup command: %+v", w)
+	}
+}

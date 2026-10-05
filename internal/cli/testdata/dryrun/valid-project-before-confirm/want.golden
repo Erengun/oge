@@ -12,7 +12,7 @@ Pipeline   default (frozen, compiled graph dd873be2ee41)
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     claude:opus    network off   fresh Session every Attempt   (inherits implement)
   implement  claude:opus    network on   (project)
-  Check      go test -json ./...   go-test-json · timeout 10m · network off   (project)
+  Check      go test -json ./...   go-test-json · timeout 10m · network off (not enforced)   (project)
   tests      **/*_test.go
   output     docs/**
   limits     retries 1/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 4 Attempts, 20/Attempt, 50/Run · Stage 30m active, idle 10m

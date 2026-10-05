@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/oracle"
+	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/receipt/receipttest"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -58,7 +61,11 @@ func TestControlCharactersNeverReachTheTerminal(t *testing.T) {
 		r.observe(run.Event{Kind: run.EvAttempt, Attempt: a, Result: res})
 	}
 	r.observe(run.Event{Kind: run.EvCheck, Check: check, Result: res})
-	r.summary(&run.Result{Outcome: run.InfrastructureStop, Why: []string{hostile}})
+	lb := receipttest.New(pipeline.Fast)
+	lb.Attempt(receipttest.Attempt{ID: "implement#1", From: time.Second, To: 2 * time.Second, Candidate: receipttest.C1, Exit: "done", Claims: []string{hostile}})
+	lb.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "TestB" + hostile, Attested: "fail"}}, nil)
+	lb.End(5*time.Second, run.InfrastructureStop, receipttest.C1, hostile)
+	r.receipt(lb.Receipt(), &run.Result{Outcome: run.InfrastructureStop})
 	assertInert(t, "plain", out.String())
 	if !strings.Contains(out.String(), "TestB") {
 		t.Errorf("the failing test names are gone:\n%s", out.String())

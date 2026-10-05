@@ -12,7 +12,7 @@ Pipeline   default (frozen, compiled graph cb4c8843108a)
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     codex:gpt-5.5  network off   fresh Session every Attempt   (cli)
   implement  claude:sonnet  network off   (cli)
-  Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)
+  Check      go test -json ./...   go-test-json · timeout 5m · network off (not enforced)   (project)
   tests      **/*_test.go  testdata/**
   output     internal/**/*.go
   setup      go mod download   network on
@@ -23,7 +23,7 @@ Pipeline   default (frozen, compiled graph cb4c8843108a)
 !   Add a "## Acceptance criteria" list to fix this.
 
 ! Trust-weakening options in effect
-!   setup network = on       from .oge/oge.toml   (setup = "go mod download")
+!   setup network = on       from .oge/oge.toml
 
 Valid. A Run would start from here.
 --- stderr

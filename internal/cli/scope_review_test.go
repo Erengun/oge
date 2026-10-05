@@ -104,7 +104,7 @@ func TestRunHonestEolAttributeIsNoTamper(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "go.mod"), []byte("module fx\r\n\r\ngo 1.22\r\n"))
 	f.useConfig(t, cfgGoModProtected)
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitOK || strings.Contains(out, "scope") {
+	if code != ExitOK || strings.Contains(out, "\nscope ") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

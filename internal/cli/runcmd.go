@@ -17,6 +17,7 @@ import (
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/proc"
+	"github.com/erengun/oge/internal/receipt"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -167,11 +168,12 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	if f.plain || plain.verbose || !env.Interactive() {
 		return plain
 	}
+	plain.paint = receipt.Colors(colorAllowed(env.Getenv))
 	return newTUI(env, t, frozen, plain)
 }
 
 // renderer is the plain view. It prints one line per stage, then the
-// summary; -v adds the event stream (ADR-0019).
+// Receipt; -v adds the event stream (ADR-0019).
 type renderer struct {
 	w       io.Writer
 	verbose bool
@@ -181,8 +183,10 @@ type renderer struct {
 	intr    *interrupts
 	warn    string // shown with the summary
 	// applying: --apply is about to take an Accepted Candidate into the
-	// working tree, so the summary doesn't say nothing was written.
+	// working tree, so the end screen doesn't say nothing was written.
 	applying bool
+	// paint colours the Receipt: only the live view sets it.
+	paint receipt.Paint
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
@@ -194,7 +198,7 @@ func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*
 			panic(fmt.Sprintf("%v\n\n%s", e.panicked, e.stack))
 		}
 		if e.err == nil {
-			r.summary(e.res)
+			r.endScreen(e.res)
 		}
 		return e.res, e.err
 	case <-in.forced:
@@ -439,77 +443,6 @@ func commandLine(e oracle.Execution) string {
 	parts = append(parts, (time.Duration(e.DurationMs) * time.Millisecond).Round(100*time.Millisecond).String())
 	// Test names come from the Candidate's own test output.
 	return clean(strings.Join(parts, " · "))
-}
-
-func (r *renderer) summary(res *run.Result) {
-	switch res.Outcome {
-	case run.Parked:
-		r.parkedSummary(res)
-	case run.Accepted, run.Rejected, run.Cancelled, run.Overridden, run.Infeasible:
-		head := strings.ToUpper(string(res.Outcome))
-		r.p("")
-		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
-		if res.Outcome == run.Parked {
-			for _, w := range res.Why {
-				r.p("%-10s the Check passed, but %s", "", clean(w))
-			}
-		}
-		r.friction(res)
-		// TODO(#63): the Receipt replaces these lines.
-		label := "Not covered"
-		if c := res.Check; c != nil {
-			// Coverage gaps the Snapshot already had: shown first.
-			for _, gap := range []struct {
-				what  string
-				items []string
-			}{{"Oracle tests skipped on the Snapshot and the Candidate", c.Skipped}, {"Oracle test files this machine doesn't build", c.NotBuilt}} {
-				if len(gap.items) > 0 {
-					r.p("%-10s %s", label, clean(fmt.Sprintf("%s (%d): %s", gap.what, len(gap.items), strings.Join(gap.items, "; "))))
-					label = strings.Repeat(" ", len("Not covered"))
-				}
-			}
-		}
-		r.p("%-10s %s", label, notCovered(r.frozen, res))
-		r.observed(res)
-		if r.warn != "" {
-			r.p("! %s", r.warn)
-		}
-		if !r.applying || res.Outcome != run.Accepted {
-			r.p("Nothing was written to your repository.")
-		}
-	case run.InfrastructureStop:
-		r.p("")
-		if res.Gate != "" {
-			r.p("INFRASTRUCTURE STOP   no decision at the %s", gateTitle(gateLabel(res)))
-		} else {
-			r.p("INFRASTRUCTURE STOP   no Verdict")
-		}
-		for _, w := range res.Why {
-			r.p("  %s", clean(w))
-		}
-		r.friction(res)
-	}
-}
-
-// observed prints the tripwires a Run set off, if any: the static ones
-// on the Candidate's changes, and attestation lines that named no test.
-func (r *renderer) observed(res *run.Result) {
-	obs := append([]string(nil), res.Tripwires...)
-	if c := res.Check; c != nil && c.Stray > 0 {
-		obs = append(obs, fmt.Sprintf("%d stray lines on the attestation channel", c.Stray))
-	}
-	if len(obs) > 0 {
-		r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(obs, " · ")))
-	}
-}
-
-// friction is the Run's policy friction line, for every outcome.
-// TODO(#90-decision): shown only when there was friction, so the happy
-// path stays quiet; -v always shows each Attempt's.
-func (r *renderer) friction(res *run.Result) {
-	if f := res.Friction; f != nil && (f.Denied > 0 || f.LostTurns > 0) {
-		r.p("%-10s %s", "friction", frictionText(*f))
-	}
 }
 
 // denialWhy is why a request was denied, in short: its recovery hint,

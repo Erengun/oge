@@ -5,6 +5,18 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
 ✓ implement  fake · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
 ✗ check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1) · …
 
-REJECTED   Candidate 6d1231d · Oracle v0 · 7.3s
-Not covered an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Fast mode
+Result        ✗ Not accepted: 1 test still failing (fx.TestAdd)
+Task          fix Add
+Agent claimed "fixing Add in add.go" (Claim, implement#1)
+Öge found     Check #1 failed on its Candidate 6d1231d: 1 test failing (fx.TestAdd)
+Candidate     6d1231d · 1 file changed · Oracle v0
+Checks        Check #1 failed: 1 test failing (fx.TestAdd) · 0 of 1 Oracle tests attested passing
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          7.4s · preflight 400ms · implement 5.6s · Check 1.2s · your attention 0s
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        head 250d6c1757eb · identifies this Receipt; not tamper-proof
 Nothing was written to your repository.

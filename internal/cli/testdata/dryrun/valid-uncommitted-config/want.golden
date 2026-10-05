@@ -11,7 +11,7 @@ Pipeline   default (frozen, compiled graph d4b2b7e9629e)
            implement ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)
-  Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)
+  Check      go test -json ./...   go-test-json · timeout 5m · network off (not enforced)   (project)
   tests      **/*_test.go  testdata/**
   output     internal/**/*.go
   setup      go mod download   network on
@@ -21,7 +21,7 @@ Pipeline   default (frozen, compiled graph d4b2b7e9629e)
 !   Send-back feedback can name no criteria. Add a "## Acceptance criteria" list to fix this.
 
 ! Trust-weakening options in effect
-!   setup network = on       from .oge/oge.toml   (setup = "go mod download")
+!   setup network = on       from .oge/oge.toml
 
 Valid. A Run would start from here.
 --- stderr

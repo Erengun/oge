@@ -265,7 +265,8 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	// Trust-weakening options: from the project file only (there is no user
 	// config and no CLI network flag in the MVP).
 	if cfg.Setup.Network == "on" {
-		f.TrustWeakening = append(f.TrustWeakening, Weakening{"setup network = on", FromProject, fmt.Sprintf("setup = %q", cfg.Setup.Run)})
+		// The setup command isn't echoed: it may hold a token (#39).
+		f.TrustWeakening = append(f.TrustWeakening, Weakening{"setup network = on", FromProject, ""})
 	}
 	if impl.Network == "on" {
 		f.TrustWeakening = append(f.TrustWeakening, Weakening{"implement network = on", FromProject, ""})
@@ -344,8 +345,10 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 		}
 		probs = append(probs, Problem{flag, fmt.Sprintf("no Stage %q in this mode (Stages: %s)", stage, stageNames(stages))})
 	}
+	// A Problem's key names the flag, never its value, which may hold
+	// anything the user typed (#39).
 	for _, a := range o.Agents {
-		flag := "--agent " + a
+		flag := "--agent"
 		if stage, spec, ok := strings.Cut(a, "="); ok {
 			set(flag, stage, spec)
 			continue
@@ -370,7 +373,7 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 		}
 		switch len(match) {
 		case 1:
-			set(flag+" "+spec, match[0], spec)
+			set(flag, match[0], spec)
 		case 0:
 			probs = append(probs, Problem{flag, fmt.Sprintf("no %s Stage in this mode; use --agent <stage>=<agent>", role)})
 		default:

@@ -68,14 +68,14 @@ func TestRunTamperWithAnOracleTestIsRevertedAndBlocksAccepted(t *testing.T) {
 	for _, want := range []string{
 		"scope      1 protected test change reverted: add_test.go",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
-		"PARKED     at the tamper Gate · Candidate ",
+		"Waiting for you: the tamper Gate",
 		"an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "ACCEPTED") {
+	if strings.Contains(out, "✓ Accepted") {
 		t.Errorf("a Run with an unacknowledged Tamper event was Accepted:\n%s", out)
 	}
 	f.assertUntouched(t)
@@ -132,7 +132,7 @@ func TestRunTamperWithAFailingCheckGoesBack(t *testing.T) {
 	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitParked || !strings.Contains(out, "scope      1 protected test change reverted: add_test.go") ||
-		!strings.Contains(out, "PARKED     at the bound-exhaustion Gate") {
+		!strings.Contains(out, "Waiting for you: the bound-exhaustion Gate") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -262,7 +262,7 @@ func TestRunNewTestsAndAgentGitAreInScope(t *testing.T) {
 	f := newRunFixture(t)
 	script := fixScript + "printf 'package fx\\n' > more_test.go\ntest -d .git/objects || exit 7\necho x > .git/HEAD && echo y > .git/objects/junk\n"
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitOK || strings.Contains(out, "scope") {
+	if code != ExitOK || strings.Contains(out, "\nscope ") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	dir := f.onlyRun(t)
@@ -295,12 +295,12 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 		code  int
 		want  []string
 	}{
-		{"unattended", "", []string{"--unattended"}, ExitParked, []string{"PARKED     at the tamper Gate · Candidate "}},
+		{"unattended", "", []string{"--unattended"}, ExitParked, []string{"Waiting for you: the tamper Gate"}},
 		{"attended", "quit\n", []string{"--plain"}, ExitCancelled, []string{
 			"tamper Gate", "a protected file change was reverted", "  reverted: add_test.go (modified)",
 			"  acknowledge   ",
 			"  reject        end the Run Rejected", "  q  quit       end the Run Cancelled",
-			"decision   quit · recorded at the tamper Gate", "CANCELLED  Candidate ",
+			"decision   quit · recorded at the tamper Gate", "Result        ■ Cancelled",
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -309,7 +309,7 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 				f.attended(c.stdin)
 			}
 			code, out, errOut := f.run(t, emptyThenFix, append([]string{"fix Add", "--fast", "--agent", "fake"}, c.args...)...)
-			if code != c.code || strings.Contains(out, "ACCEPTED") {
+			if code != c.code || strings.Contains(out, "✓ Accepted") {
 				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 			}
 			for _, w := range append(c.want, "send back  1 of 3", "check      go test -json ./... · 1 ran · 0 failed · pass") {
@@ -348,7 +348,7 @@ func TestRunAcknowledgedTamperIsAccepted(t *testing.T) {
 		"  reverted: add_test.go (modified)",
 		`type "acknowledge" in full`, "a reason is required for acknowledge",
 		"decision   acknowledge · recorded at the tamper Gate · reason: my edit to the test was a mistake",
-		"ACCEPTED   Candidate ",
+		"Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, w) {
 			t.Errorf("stdout lacks %q:\n%s", w, out)

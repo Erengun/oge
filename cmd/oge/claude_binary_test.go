@@ -64,7 +64,7 @@ func TestBinaryClaudeRunAccepted(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(true))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended", "-v")
-	if code != 0 || !strings.Contains(out, "ACCEPTED") || !strings.Contains(out, "1 ran · 0 failed") {
+	if code != 0 || !strings.Contains(out, "✓ Accepted") || !strings.Contains(out, "1 ran · 0 failed") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{
@@ -103,7 +103,7 @@ func TestBinaryClaudeRunParked(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(false))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
-	if code != 10 || !strings.Contains(out, "PARKED     at the bound-exhaustion Gate") || !strings.Contains(out, "1 failed: TestAdd") {
+	if code != 10 || !strings.Contains(out, "Waiting for you: the bound-exhaustion Gate") || !strings.Contains(out, "1 failed: TestAdd") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -221,7 +221,7 @@ func TestBinaryClaudeStandardAccepted(t *testing.T) {
 		"QA         Fresh Claude · Exit extended · +1 held-out",
 		"check      visible Oracle · go test -json ./... · 1 ran · 0 failed · pass",
 		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
-		"ACCEPTED   Candidate ", "Oracle v1",
+		"Result        ✓ Accepted", "Oracle v1",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -250,10 +250,10 @@ func TestBinaryClaudeVerifierResidueFailsClosed(t *testing.T) {
 	}
 	env = append(env, "OGE_FAKE_CLAUDE_FIXTURE_VERIFIER="+path)
 	code, out, errOut := runExe(t, testBinary, repo, env, standardTask, "--agent", "claude", "--unattended")
-	if code != 11 || !strings.Contains(out, "INFRASTRUCTURE STOP") || !strings.Contains(out, "the verifier would load 1 skills") {
+	if code != 11 || !strings.Contains(out, "Infrastructure stop") || !strings.Contains(out, "the verifier would load 1 skills") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if strings.Contains(out, "ACCEPTED") || strings.Contains(out, "check      ") {
+	if strings.Contains(out, "✓ Accepted") || strings.Contains(out, "check      ") {
 		t.Errorf("a Check ran without QA:\n%s", out)
 	}
 }

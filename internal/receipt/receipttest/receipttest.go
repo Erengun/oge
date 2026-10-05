@@ -399,3 +399,38 @@ func Scenarios() []Scenario {
 		}},
 	}
 }
+
+// WriteRun writes the Ledger and its blobs as a Run directory dir, for a
+// test that reads a Run from disk. Record times are the write's own.
+func (b *Builder) WriteRun(dir string) error {
+	l, err := ledger.Create(dir)
+	if err != nil {
+		return err
+	}
+	defer l.Close()
+	blobs, err := ledger.OpenBlobs(dir)
+	if err != nil {
+		return err
+	}
+	for _, data := range b.blobs {
+		if _, err := blobs.Put(data); err != nil {
+			return err
+		}
+	}
+	for _, r := range b.recs {
+		if err := l.Append(r.Type, r.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Named is the scenario called name, built.
+func Named(name string) *Builder {
+	for _, s := range Scenarios() {
+		if s.Name == name {
+			return s.Build()
+		}
+	}
+	panic("no scenario " + name)
+}

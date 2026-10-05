@@ -98,13 +98,13 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 				"  reject        end the Run Rejected", "  q  quit       end the Run Cancelled",
 				gateHint, `type "reject" in full`, "a reason is required",
 				"decision   reject · recorded at the bound-exhaustion Gate · reason: the test can't pass as written",
-				"REJECTED   Candidate ",
+				"Result        ✗ Not accepted",
 			},
 			records: "GateOpened gate.bound_exhaustion|GateDecided gate.bound_exhaustion reject the test can't pass as written|RunEnded Rejected",
 		},
 		{
 			name: "quit", stdin: "q\n", code: ExitCancelled,
-			want:    []string{"decision   quit · recorded at the bound-exhaustion Gate", "CANCELLED  Candidate "},
+			want:    []string{"decision   quit · recorded at the bound-exhaustion Gate", "Result        ■ Cancelled"},
 			records: "GateOpened gate.bound_exhaustion|GateDecided gate.bound_exhaustion quit|RunEnded Cancelled",
 		},
 		{
@@ -114,7 +114,7 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 		},
 		{
 			name: "the terminal closes", stdin: "", code: ExitInfra,
-			want:    []string{"INFRASTRUCTURE STOP   no decision at the bound-exhaustion Gate", "the bound-exhaustion Gate got no decision: the terminal closed"},
+			want:    []string{"Result        ■ Infrastructure stop: no decision at the bound-exhaustion Gate", "the bound-exhaustion Gate got no decision: the terminal closed"},
 			records: "GateOpened gate.bound_exhaustion|GateAbandoned gate.bound_exhaustion|RunEnded Infrastructure stop",
 		},
 	} {
@@ -156,7 +156,7 @@ func TestAttendedSendBackPastTheLimit(t *testing.T) {
 	for _, w := range []string{
 		`type "send back" in full`, "a reason is required",
 		"decision   send back · recorded at the bound-exhaustion Gate · extends send_backs +1 · reason: try once more",
-		"send back  1 (limit 0, extended at the Gate) · ", "ACCEPTED   Candidate ",
+		"send back  1 (limit 0, extended at the Gate) · ", "Result        ✓ Accepted",
 	} {
 		if !strings.Contains(out, w) {
 			t.Errorf("stdout lacks %q:\n%s", w, out)
@@ -226,18 +226,18 @@ func TestResultGate(t *testing.T) {
 			want: []string{
 				"Result gate", "Öge's Check passed on the Candidate.", "1 ran · 0 failed · pass",
 				"  t  take       end the Run Accepted", "  s  send back  return it to the implementer",
-				"decision   take · recorded at the Result gate", "ACCEPTED   Candidate ",
+				"decision   take · recorded at the Result gate", "Result        ✓ Accepted",
 			},
 			records: "GateOpened gate.result|GateDecided gate.result take|RunEnded Accepted",
 		},
 		{
 			name: "reject", stdin: "reject not what I asked for\n", script: fixScript, code: ExitRejected,
-			want:    []string{"REJECTED   Candidate "},
+			want:    []string{"Result        ✗ Not accepted"},
 			records: "GateOpened gate.result|GateDecided gate.result reject not what I asked for|RunEnded Rejected",
 		},
 		{
 			name: "quit", stdin: "quit\n", script: fixScript, code: ExitCancelled,
-			want:    []string{"CANCELLED  Candidate "},
+			want:    []string{"Result        ■ Cancelled"},
 			records: "GateOpened gate.result|GateDecided gate.result quit|RunEnded Cancelled",
 		},
 		{

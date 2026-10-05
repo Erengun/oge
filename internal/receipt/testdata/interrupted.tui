@@ -1,5 +1,5 @@
 [1mÖGE RECEIPT   [mRun 20261005T090000-a1b2c3 · Standard mode
-Result        [1m[31m■ Interrupted: the Run was cancelled before a Verdict[m[m
+Result        [1m[31m■ Interrupted (Infrastructure stop): the Run was cancelled before a Verdict[m[m
 Task          fix Add
 Checks        none ran
 Protected     no test changes kept

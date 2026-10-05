@@ -11,7 +11,7 @@ Pipeline   default (frozen, compiled graph d4b2b7e9629e)
            implement ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)
-  Check      make test   no report · timeout 10m · network off   (cli)
+  Check      make test   no report · timeout 10m · network off (not enforced)   (cli)
   tests      tests/**
   output     none: every new file is Ambiguous until you decide
   limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · Stage 60m active, idle 10m

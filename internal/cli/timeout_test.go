@@ -57,7 +57,7 @@ func TestRunStageTimeoutWinsOverALateResult(t *testing.T) {
 	}
 	code := Main(env, []string{"fix Add", "--fast", "--agent", "fake", "--unattended"})
 	out := stdout.String()
-	if code != ExitInfra || !strings.Contains(out, "Attempt failed: timeout") || strings.Contains(out, "ACCEPTED") {
+	if code != ExitInfra || !strings.Contains(out, "Attempt failed: timeout") || strings.Contains(out, "✓ Accepted") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, stderr.String())
 	}
 	for _, rec := range recordTypes(t, f.onlyRun(t)) {

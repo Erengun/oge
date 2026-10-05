@@ -362,6 +362,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		attempts  []attemptEnded
 		tamperIdx = map[string]int{}
 		openAt    *time.Time
+		abandoned string // the Gate a human was asked at and never answered
 		qa        QA
 		qaSeen    bool
 	)
@@ -549,6 +550,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			if !get(rec.Data, &d) {
 				continue
 			}
+			abandoned = ""
 			r.Decisions = append(r.Decisions, Decision{Gate: d.Pins.Gate, Actor: d.Actor, Choice: clean(d.Choice), Reason: clean(d.Reason), Note: clean(d.Note)})
 			if d.Choice == "acknowledge" {
 				for _, id := range d.TamperIDs {
@@ -563,6 +565,9 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				openAt = nil
 			}
 		case run.RecGateAbandoned:
+			var d gateOpened
+			get(rec.Data, &d)
+			abandoned = d.Pins.Gate
 			r.Supervised.Interruptions++
 			if openAt != nil {
 				r.Time.AttentionMs += rec.At.Sub(*openAt).Milliseconds()
@@ -624,7 +629,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		r.Candidate = c
 	}
 
-	r.outcome(ended)
+	r.outcome(ended, abandoned)
 	r.claim(attempts, src)
 	r.notCovered(frozen, setup)
 	return r
@@ -702,7 +707,7 @@ func (r *Receipt) last() *Check {
 }
 
 // outcome sets the Outcome, Headline and Why from how the Run ended.
-func (r *Receipt) outcome(e *runEnded) {
+func (r *Receipt) outcome(e *runEnded, abandoned string) {
 	if e == nil {
 		r.Outcome, r.Headline = NotEnded, "… Not ended: the Ledger has no end yet (the Run is still going, or Öge stopped mid-Run)"
 		return
@@ -734,12 +739,26 @@ func (r *Receipt) outcome(e *runEnded) {
 		r.WaitingAt = e.Gate
 		r.Headline = "… Waiting for you: the " + GateTitle(e.Gate)
 	case run.InfrastructureStop:
-		if len(e.Why) > 0 && strings.HasPrefix(e.Why[0], "interrupted") {
-			r.Outcome, r.Headline = Interrupted, "■ Interrupted: the Run was cancelled before a Verdict"
-			r.Why = r.Why[1:]
-			return
+		verdict := false
+		for _, c := range r.Checks {
+			verdict = verdict || c.Verdict != ""
 		}
-		r.Headline = "■ Infrastructure stop: no Verdict"
+		switch {
+		case len(e.Why) > 0 && strings.HasPrefix(e.Why[0], "interrupted"):
+			r.Outcome, r.Headline = Interrupted, "■ Interrupted (Infrastructure stop): the Run was cancelled"
+			r.Why = r.Why[1:]
+			if abandoned != "" {
+				r.Headline += " at the " + GateTitle(abandoned)
+			} else if !verdict {
+				r.Headline += " before a Verdict"
+			}
+		case abandoned != "":
+			r.Headline = "■ Infrastructure stop: no decision at the " + GateTitle(abandoned)
+		case verdict:
+			r.Headline = "■ Infrastructure stop"
+		default:
+			r.Headline = "■ Infrastructure stop: no Verdict"
+		}
 	case run.Refused:
 		r.Headline = "■ Refused"
 	default:

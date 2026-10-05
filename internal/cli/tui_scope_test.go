@@ -19,7 +19,7 @@ func TestTUIParkedOnATamperEvent(t *testing.T) {
 	h.res.Gate = "gate.tamper"
 	got := h.end(run.Parked, "Öge's Check passed, but an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged before the Run can be Accepted.")
 	golden(t, "parked", got)
-	if !strings.Contains(got, "scope 1 protected test change reverted: add_test.go") || strings.Contains(got, "ACCEPTED") {
+	if !strings.Contains(got, "scope 1 protected test change reverted: add_test.go") || strings.Contains(got, "✓ Accepted") {
 		t.Errorf("frame:\n%s", got)
 	}
 }
