@@ -19,6 +19,8 @@ type Branched struct {
 	// SnapshotCommit is the commit holding the Snapshot's uncommitted
 	// work under the Candidate, or "" when there was none.
 	SnapshotCommit string
+	// Held is what the Candidate held back, and what was included anyway.
+	Held *Holding
 }
 
 // DefaultBranch is the branch name Branch uses when none is given.
@@ -40,11 +42,15 @@ func DefaultBranch(r *Run) string { return "oge/" + r.ID }
 // Candidate commit shows only the agent's change. The user's hooks don't
 // run for either commit or the branch ref (ADR-0010: Öge's commits run no
 // hooks), and the commits carry the user's own git identity.
-func Branch(r *Run, target, name, flag string) (*Branched, error) {
-	if err := Authorize(r, flag); err != nil {
+func Branch(r *Run, target, name string, choice Choice) (*Branched, error) {
+	if err := Authorize(r, choice.Outcome); err != nil {
 		return nil, err
 	}
 	if err := sameRepo(r, target); err != nil {
+		return nil, err
+	}
+	h, err := Hold(r, choice)
+	if err != nil {
 		return nil, err
 	}
 	if name == "" {
@@ -63,7 +69,12 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 			return nil, refuse("the Snapshot's HEAD %s is no longer in this repository", Short(r.Head))
 		}
 	}
-	changes, err := candidateChanges(r)
+	changes, err := candidateChanges(r, h.skip())
+	if err != nil {
+		return nil, err
+	}
+	// The held-back paths keep the Snapshot's version in the commit.
+	restore, err := snapshotStates(r, h.skip())
 	if err != nil {
 		return nil, err
 	}
@@ -108,12 +119,17 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 			return nil, err
 		}
 	}
-	b := &Branched{Name: name, Base: r.Head}
+	b := &Branched{Name: name, Base: r.Head, Held: h}
 	parent := r.Head
 	commit := func(rev, message string) (string, error) {
 		wt := filepath.Join(tmp, Short(rev))
 		if err := r.repo().Checkout(rev, wt); err != nil {
 			return "", err
+		}
+		if rev == r.Candidate {
+			if err := restore.write(wt); err != nil {
+				return "", err
+			}
 		}
 		// -f: the checkout holds exactly the Run's tree; nothing in it is
 		// left out for being ignored here.
@@ -154,6 +170,9 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c == "" && len(h.Left) > 0 {
+		return nil, refuse("everything Candidate %s changes is held back (%s); there is nothing to branch", Short(r.Candidate), h.LeftLine())
+	}
 	if c == "" {
 		return nil, refuse("the Candidate changes nothing on top of the Snapshot; there is nothing to branch")
 	}
@@ -171,8 +190,8 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 	if _, err := g.run("", "", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "-q", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", sc.root, "refs/heads/oge"); err != nil {
 		return nil, err
 	}
-	if err := record(r, map[string]any{"kind": "branch", "candidate": r.Candidate, "outcome": r.Outcome, "flag": flag,
-		"branch": name, "commit": c, "base": r.Head, "snapshot_commit": b.SnapshotCommit, "target": target}); err != nil {
+	if err := record(r, h.note(map[string]any{"kind": "branch", "candidate": r.Candidate, "outcome": r.Outcome, "flag": choice.Outcome,
+		"branch": name, "commit": c, "base": r.Head, "snapshot_commit": b.SnapshotCommit, "target": target})); err != nil {
 		return nil, err
 	}
 	// Create-only: the empty old value makes this fail if the branch
@@ -405,4 +424,28 @@ func dedupe(list []string) []string {
 		}
 	}
 	return out
+}
+
+// snapshotStates is a plan that puts each path in skip back to the
+// Snapshot's version: the content it had, or absent.
+func snapshotStates(r *Run, skip map[string]bool) (*Plan, error) {
+	p := &Plan{}
+	if len(skip) == 0 {
+		return p, nil
+	}
+	all, err := r.repo().Changes(r.Snapshot, r.Candidate)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range all {
+		if !skip[c.Path] {
+			continue
+		}
+		base, err := blobState(r.repo(), c.OldMode, c.OldOID)
+		if err != nil {
+			return nil, err
+		}
+		p.actions = append(p.actions, action{c.Path, base})
+	}
+	return p, nil
 }

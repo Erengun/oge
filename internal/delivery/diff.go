@@ -8,8 +8,9 @@ import (
 
 // Diff is the Candidate's change since the Snapshot as a unified patch,
 // byte for byte: text files as text, whatever their attributes in the
-// Snapshot, and binary files as git's one-line stanza. Viewing it is not a
-// Delivery and records nothing (ADR-0014).
+// Snapshot, and binary files as git's one-line stanza. A change delivery
+// holds back by default is shown after a "# Öge:" line saying so. Viewing
+// it is not a Delivery and records nothing (ADR-0014).
 func Diff(r *Run) ([]byte, error) {
 	if r.Candidate == "" {
 		return nil, refuse("Run %s has no Candidate yet", r.ID)
@@ -19,8 +20,15 @@ func Diff(r *Run) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	held, err := r.held()
+	if err != nil {
+		return nil, err
+	}
+	marks := heldMarks(held)
 	var out bytes.Buffer
 	for _, c := range changes {
+		// Shown, and marked: delivery holds it back (#105, #107).
+		out.WriteString(marks[c.Path])
 		if gitlink(c) {
 			// Shown, and marked: apply and branch refuse it.
 			fmt.Fprintf(&out, "# Öge: %s is a submodule (gitlink); oge apply and oge branch refuse it\n", c.Path)

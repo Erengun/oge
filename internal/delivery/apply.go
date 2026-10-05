@@ -26,10 +26,8 @@ const (
 
 // Authorize refuses a delivery the Run's outcome doesn't allow: Accepted
 // with no flag, Overridden only with --overridden, Rejected only with
-// --rejected. A flag that names another outcome is refused too.
-// TODO(#105): unresolved Ambiguous files in a non-Accepted Candidate need
-// an explicit include or exclude here (ADR-0015). An Accepted Candidate
-// has none: the Ambiguous-file review resolves each one first (#97).
+// --rejected. A flag that names another outcome is refused too. What the
+// Candidate holds back is Hold's to decide.
 func Authorize(r *Run, flag string) error {
 	switch {
 	case r.Candidate == "":
@@ -116,9 +114,12 @@ func (p *Plan) Deletes() int {
 // tree ours, the Candidate theirs. Working-tree bytes meet working-tree
 // bytes, so the user's attributes (eol, filters, encodings) never come
 // into it.
-func PlanApply(r *Run, target string) (*Plan, error) {
+func PlanApply(r *Run, target string) (*Plan, error) { return planApply(r, target, nil) }
+
+// planApply is PlanApply leaving out the paths in skip.
+func planApply(r *Run, target string, skip map[string]bool) (*Plan, error) {
 	repo := r.repo()
-	changes, err := candidateChanges(r)
+	changes, err := candidateChanges(r, skip)
 	if err != nil {
 		return nil, err
 	}
@@ -449,16 +450,21 @@ func linkLeaves(rel, target string) bool {
 func gitlink(c workspace.Change) bool { return c.NewMode == "160000" || c.OldMode == "160000" }
 
 // candidateChanges is what the Candidate changes since the Snapshot,
-// refusing what delivery can't carry.
-func candidateChanges(r *Run) ([]workspace.Change, error) {
-	changes, err := r.repo().Changes(r.Snapshot, r.Candidate)
+// less the held-back paths in skip, refusing what delivery can't carry.
+func candidateChanges(r *Run, skip map[string]bool) ([]workspace.Change, error) {
+	all, err := r.repo().Changes(r.Snapshot, r.Candidate)
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range changes {
+	var changes []workspace.Change
+	for _, c := range all {
+		if skip[c.Path] {
+			continue
+		}
 		if gitlink(c) {
 			return nil, refuse("%s is a submodule (a nested repository) in Candidate %s, which Öge doesn't deliver", c.Path, Short(r.Candidate))
 		}
+		changes = append(changes, c)
 	}
 	return changes, nil
 }
@@ -475,17 +481,23 @@ func removeEmptyParents(root, dir string) {
 // Applied is what Apply did.
 type Applied struct {
 	Plan *Plan
+	// Held is what the Candidate held back, and what was included anyway.
+	Held *Holding
 }
 
 // Apply applies the Run's final Candidate to the working tree at target
 // (ADR-0010, ADR-0015): only when every path lands without conflict, and
 // never touching the index, HEAD or any branch. The Delivery is recorded
 // before the first write.
-func Apply(r *Run, target, flag string) (*Applied, error) {
-	if err := Authorize(r, flag); err != nil {
+func Apply(r *Run, target string, c Choice) (*Applied, error) {
+	if err := Authorize(r, c.Outcome); err != nil {
 		return nil, err
 	}
 	if err := sameRepo(r, target); err != nil {
+		return nil, err
+	}
+	h, err := Hold(r, c)
+	if err != nil {
 		return nil, err
 	}
 	unlock, err := lock(r)
@@ -493,25 +505,25 @@ func Apply(r *Run, target, flag string) (*Applied, error) {
 		return nil, err
 	}
 	defer unlock()
-	p, err := PlanApply(r, target)
+	p, err := planApply(r, target, h.skip())
 	if err != nil {
 		return nil, err
 	}
 	if len(p.Conflicts) > 0 {
-		return &Applied{Plan: p}, &ConflictError{Conflicts: p.Conflicts}
+		return &Applied{Plan: p, Held: h}, &ConflictError{Conflicts: p.Conflicts}
 	}
 	if p.Writes() == 0 {
-		return &Applied{Plan: p}, nil
+		return &Applied{Plan: p, Held: h}, nil
 	}
-	if err := record(r, map[string]any{"kind": "apply", "candidate": r.Candidate, "outcome": r.Outcome, "flag": flag,
-		"files": p.Writes(), "merged": p.Merged, "target": target}); err != nil {
+	if err := record(r, h.note(map[string]any{"kind": "apply", "candidate": r.Candidate, "outcome": r.Outcome, "flag": c.Outcome,
+		"files": p.Writes(), "merged": p.Merged, "target": target})); err != nil {
 		return nil, err
 	}
 	if err := p.write(target); err != nil {
 		_ = recordFailed(r, err)
 		return nil, fmt.Errorf("applying the Candidate: %w; some files may already be written (see git status)", err)
 	}
-	return &Applied{Plan: p}, nil
+	return &Applied{Plan: p, Held: h}, nil
 }
 
 // ConflictError is an apply refused because the working tree changed in a

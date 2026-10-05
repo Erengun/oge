@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -51,6 +52,12 @@ type Run struct {
 	Why []string
 	// Deliveries counts the Deliveries already recorded.
 	Deliveries int
+	// OutputGlobs are the Run's frozen output globs: an agent-config file
+	// one of them declares is delivered like any other (#107).
+	OutputGlobs []string
+	// Unresolved are the Ambiguous files the Run ended or parked with,
+	// never promoted or dropped (#105).
+	Unresolved []string
 }
 
 func (r *Run) repo() *workspace.RunRepo {
@@ -86,7 +93,7 @@ func Load(dir string) (*Run, error) {
 	for _, rec := range recs {
 		switch rec.Type {
 		case run.RecRunStarted:
-			var d struct{ Run, Source, Task string }
+			var d struct{ Run, Source, Task, Frozen string }
 			if err := json.Unmarshal(rec.Data, &d); err != nil {
 				return nil, err
 			}
@@ -97,6 +104,12 @@ func Load(dir string) (*Run, error) {
 			if blobs, err := ledger.OpenBlobs(dir); err == nil {
 				if b, err := blobs.Get(d.Task); err == nil {
 					r.Title = task.Parse(string(b)).Title
+				}
+				// Unreadable, no glob declares anything: agent
+				// configuration stays held back.
+				var f pipeline.Frozen
+				if b, err := blobs.Get(d.Frozen); err == nil && json.Unmarshal(b, &f) == nil {
+					r.OutputGlobs = f.Project.OutputGlobs
 				}
 			}
 		case run.RecSnapshotTaken:
@@ -127,16 +140,19 @@ func Load(dir string) (*Run, error) {
 		case run.RecGateDecided:
 			_ = json.Unmarshal(rec.Data, &decided)
 		case run.RecRunParked:
-			r.Parked = true
+			var d struct{ Unresolved []string }
+			_ = json.Unmarshal(rec.Data, &d)
+			r.Parked, r.Unresolved = true, d.Unresolved
 		case run.RecRunEnded:
 			var d struct {
-				Outcome   run.Outcome
-				Candidate string
+				Outcome    run.Outcome
+				Candidate  string
+				Unresolved []string
 			}
 			if err := json.Unmarshal(rec.Data, &d); err != nil {
 				return nil, err
 			}
-			r.Outcome, r.Parked = d.Outcome, false
+			r.Outcome, r.Parked, r.Unresolved = d.Outcome, false, d.Unresolved
 			if d.Candidate != "" {
 				r.Candidate = d.Candidate
 			}

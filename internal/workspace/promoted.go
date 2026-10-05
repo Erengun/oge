@@ -38,34 +38,39 @@ var (
 
 // Excluded reports whether p is on Öge's fixed agent, config and
 // instruction list, or is Öge's own Workspace marker.
-func Excluded(p string) bool {
+func Excluded(p string) bool { return ExcludedEntry(p) != "" }
+
+// ExcludedEntry is the path segment that puts p on Öge's fixed list: the
+// agent config directory it is under, or its instruction file name. It is
+// "" for a path not on the list.
+func ExcludedEntry(p string) string {
 	if p == ledger.WorkspaceMarker {
-		return true
+		return p
 	}
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
 		if i == len(parts)-1 {
 			for _, n := range excludedNames {
 				if part == n {
-					return true
+					return part
 				}
 			}
 			break
 		}
 		for _, d := range excludedDirs {
 			if part == d {
-				return true
+				return part
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // PromotedView commits the part of candidate a judged role may see, as one
 // change on top of snap (ADR-0009): changes to files that already existed,
 // and new files promotedNew accepts (the output and test globs). Excluded
-// paths keep the Snapshot's version and other new files are left out; both
-// are returned as withheld.
+// paths promotedNew doesn't accept keep the Snapshot's version and other
+// new files are left out; both are returned as withheld.
 func (r *RunRepo) PromotedView(snap, candidate string, promotedNew func(path string) bool) (string, []Withheld, error) {
 	promoted, withheld, err := r.Classify(snap, candidate, promotedNew)
 	if err != nil {
@@ -105,7 +110,9 @@ func (r *RunRepo) PromotedView(snap, candidate string, promotedNew func(path str
 // ones, and the withheld ones, Excluded or Ambiguous, in path order. A new
 // file is Promoted only when promotedNew accepts it: the output and test
 // globs, or a human's promotion. Nothing else decides it, not its
-// directory, its extension or how important it looks.
+// directory, its extension or how important it looks. An Excluded path is
+// withheld unless promotedNew accepts it too: agent configuration the
+// Run declared as output (#107).
 func (r *RunRepo) Classify(snap, candidate string, promotedNew func(path string) bool) ([]Change, []Withheld, error) {
 	before, err := r.entries(snap)
 	if err != nil {
@@ -125,7 +132,7 @@ func (r *RunRepo) Classify(snap, candidate string, promotedNew func(path string)
 		_, inSnap := before[p]
 		a, inCand := after[p]
 		switch {
-		case Excluded(p):
+		case Excluded(p) && !promotedNew(p):
 			if inCand {
 				withheld = append(withheld, Withheld{p, ClassExcluded, a.oid})
 			}

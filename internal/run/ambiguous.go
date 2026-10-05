@@ -35,9 +35,13 @@ type Resolution struct {
 // extension heuristic promotes anything (ADR-0019). A promotion holds by
 // path for the rest of the Run (GLOSSARY: Ambiguous file). A new file
 // matching the test-config globs never gets here: the implementer's scope
-// check reverts it.
+// check reverts it. An Excluded agent-config file reaches them only when
+// the Run declared it as output (#107).
 func (w *walk) promotedNew(p string) bool {
 	pr := w.p.Frozen.Project
+	if workspace.Excluded(p) {
+		return DeclaredAgentConfig(pr.OutputGlobs, p)
+	}
 	return oracle.MatchAny(pr.OutputGlobs, p) || oracle.MatchAny(pr.TestGlobs, p) || w.promoted[p]
 }
 
