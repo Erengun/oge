@@ -43,8 +43,8 @@ type Env struct {
 	Version string
 	Getenv  func(string) string
 	// Agents are the adapters this build can run, by agent name. Release
-	// builds register none until the Claude adapter (#44) exists; test
-	// builds register the scripted fake (ADR-0017).
+	// builds register the Claude adapter; test builds add the scripted fake
+	// (ADR-0017).
 	Agents map[string]agent.Adapter
 	// CacheSeedTemplate, when set, is a warm build cache each Run's cache
 	// seed starts as a private copy of. Only tests set it (in-process, or

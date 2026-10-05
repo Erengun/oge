@@ -25,3 +25,7 @@ func group(cmd *exec.Cmd) int {
 	}
 	return g
 }
+
+func termGroup(cmd *exec.Cmd) {
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+}

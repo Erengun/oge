@@ -20,7 +20,7 @@ import (
 
 // binary is the release build; testBinary is built with -tags ogetest and
 // carries the scripted fake adapter.
-var binary, testBinary, goCache, testSeed string
+var binary, testBinary, fakeClaudeDir, goCache, testSeed string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "oge-bin-")
@@ -39,6 +39,14 @@ func TestMain(m *testing.M) {
 		panic(string(out))
 	}
 	if out, err := exec.Command("go", "build", "-tags", "ogetest", "-o", testBinary, ".").CombinedOutput(); err != nil {
+		panic(string(out))
+	}
+	fakeClaudeDir = filepath.Join(dir, "fakeclaude")
+	fake := filepath.Join(fakeClaudeDir, "claude")
+	if runtime.GOOS == "windows" {
+		fake += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", fake, "github.com/erengun/oge/internal/agent/claude/fakeclaude").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
 	if out, err := exec.Command("go", "env", "GOCACHE").Output(); err == nil {

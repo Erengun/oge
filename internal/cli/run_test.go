@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -53,6 +54,8 @@ type runFixture struct {
 	// coldSeed starts the Run's cache seed empty, as a real Run does,
 	// instead of from the tests' warm template.
 	coldSeed bool
+	// wrap, when set, wraps the fake adapter.
+	wrap func(agent.Adapter) agent.Adapter
 }
 
 func newRunFixture(t *testing.T) *runFixture {
@@ -119,6 +122,9 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
 		CacheSeedTemplate: map[bool]string{false: testSeed}[f.coldSeed],
 	}
+	if f.wrap != nil {
+		env.Agents[fake.Name] = f.wrap(env.Agents[fake.Name])
+	}
 	code := Main(env, args)
 	return code, stdout.String(), stderr.String()
 }
@@ -164,7 +170,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
-	run.RecAttemptStarting, run.RecProcessStarted, run.RecAttemptEnded,
+	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
 	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
@@ -551,5 +557,48 @@ func TestRunSweepsLeftoverCachesOfDeadRuns(t *testing.T) {
 	others, _ := filepath.Glob(filepath.Join(runs, "*", "live.pid"))
 	if len(others) != 1 {
 		t.Errorf("live.pid files after the Run: %v; want only the live Run's", others)
+	}
+}
+
+// The implementer's Workspace is a git checkout of the Snapshot: git
+// status starts clean there, and the .git never reaches the Candidate.
+func TestRunWorkspaceHasAGitCheckoutOfTheSnapshot(t *testing.T) {
+	f := newRunFixture(t)
+	script := `test -d .git && test -z "$(git status --porcelain)" || exit 7
+` + fixScript + `git diff --name-only | grep -qx add.go || exit 8
+`
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(out, "· 1 file changed") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// cacheSpy records the implementer's tool cache and writes into it.
+type cacheSpy struct {
+	agent.Adapter
+	cache *string
+}
+
+func (c cacheSpy) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Session, error) {
+	*c.cache = spec.Cache
+	if err := os.WriteFile(filepath.Join(spec.Cache, "agent-poison"), []byte("x"), 0o600); err != nil {
+		return nil, err
+	}
+	return c.Adapter.Open(ctx, spec)
+}
+
+// The implementer's run-private tool cache is never the seed, nor copied
+// into it: what the agent writes there never reaches a Check's cache.
+func TestRunImplementerCacheNeverReachesTheSeed(t *testing.T) {
+	f := newRunFixture(t)
+	var cache string
+	f.wrap = func(a agent.Adapter) agent.Adapter { return cacheSpy{a, &cache} }
+	check := `test ! -e "$GOCACHE/agent-poison" && ! find "$GOCACHE" "$GOMODCACHE" -name agent-poison | grep -q .`
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "--check", check)
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if cache == "" || strings.HasPrefix(cache, filepath.Join(f.state, "private")) {
+		t.Errorf("the implementer's cache %q is empty or inside private state, where the seed lives", cache)
 	}
 }

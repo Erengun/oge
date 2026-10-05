@@ -224,6 +224,8 @@ func (r *renderer) observe(ev run.Event) {
 		if step, ok := agentStep(ev.Agent); ok {
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
+	case run.EvNotice:
+		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
 	case run.EvCheck:
@@ -260,15 +262,30 @@ func preflightText(f *pipeline.Frozen) string {
 // agentStep is one agent event as a line of activity; ok is false for
 // events that show nothing.
 func agentStep(e agent.Event) (string, bool) {
+	if step, ok := activityStep(e); ok {
+		if e.Kind == agent.Claim && e.Tool == "" {
+			step = fmt.Sprintf("%q", step) // what the agent says, as said
+		}
+		return step, true
+	}
 	switch e.Kind {
 	case agent.SessionOpened:
-		return "started (cause: first) · fresh Session · Workspace from Snapshot", true
-	case agent.Claim:
-		return fmt.Sprintf("%q", clean(e.Text)), true
+		line := "started (cause: first) · fresh Session · Workspace from Snapshot"
+		if s := e.Session; s != nil {
+			line += clean(fmt.Sprintf(" · %s · envelope %s · Launch profile %s", s.AgentVersion, s.Envelope, s.Profile))
+		}
+		return line, true
+	case agent.HostRequest:
+		if h := e.Host; h != nil {
+			return clean(fmt.Sprintf("%s %s %s · %s", h.Decision, h.Tool, h.Target, h.Reason)), true
+		}
 	case agent.Warning:
 		return "warning: " + clean(e.Text), true
 	case agent.TurnSettled:
-		if e.Failure != "" {
+		switch {
+		case e.Stop != "":
+			return "Infrastructure stop: " + clean(e.Stop), true
+		case e.Failure != "":
 			return "Attempt failure: " + clean(e.Failure), true
 		}
 		return "Exit: " + clean(e.Exit) + "   (Claim)", true
@@ -276,8 +293,33 @@ func agentStep(e agent.Event) (string, bool) {
 	return "", false
 }
 
+// activityStep is what the agent is doing, as both views show it: a tool
+// it uses, the first line of what it says, or a request Öge denied. It
+// never shows a raw frame.
+func activityStep(e agent.Event) (string, bool) {
+	switch e.Kind {
+	case agent.Claim:
+		if e.Tool != "" {
+			return clean(strings.TrimSpace(e.Tool + " " + e.Target)), true
+		}
+		first, _, _ := strings.Cut(strings.TrimSpace(e.Text), "\n")
+		return clean(first), true
+	case agent.HostRequest:
+		if h := e.Host; h != nil && h.Decision != "allow" {
+			what := "denied"
+			if h.Family == agent.Question {
+				what = "question cancelled"
+			}
+			return clean(strings.TrimSpace(fmt.Sprintf("%s: %s %s", what, h.Tool, h.Target))), true
+		}
+	}
+	return "", false
+}
+
 func attemptText(a *run.Attempt) string {
 	switch {
+	case a.Stop != "":
+		return fmt.Sprintf("%s · Infrastructure stop", a.Agent)
 	case a.Failure != "":
 		return fmt.Sprintf("%s · Attempt failed: %s", a.Agent, clean(a.Failure))
 	case a.Candidate == "":
