@@ -639,8 +639,14 @@ func TestAuthAndQuotaSignalsAreInfrastructureStops(t *testing.T) {
 func TestPermissionRequestsFollowThePolicy(t *testing.T) {
 	h := open(t, expect(fixture(t, "hook_decider.ndjson"), "allow", "allow", "allow", "allow", "deny", "deny", "allow"))
 	evs := h.turn("do the steps")
-	if s := settled(t, evs); s.Exit != "done" {
+	s := settled(t, evs)
+	if s.Exit != "done" {
 		t.Fatalf("settled %+v (the fake rejects a wrong answer)", s)
+	}
+	// Recorded wire order: two denied Bash calls, each in a turn of its
+	// own with nothing allowed (#90).
+	if want := (agent.Friction{Denied: 2, LostTurns: 2}); s.Friction == nil || *s.Friction != want {
+		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 	var got []string
 	for _, e := range evs {
@@ -726,8 +732,13 @@ func TestNoAuthorisationBeforeTheEnvelopePasses(t *testing.T) {
 	if first == nil || first.Decision != "deny" || first.Rule != ruleUnchecked {
 		t.Errorf("early request = %+v", first)
 	}
-	if s := settled(t, evs); s.Exit != "done" {
+	s := settled(t, evs)
+	if s.Exit != "done" {
 		t.Errorf("settled %+v", s)
+	}
+	// A refusal for timing isn't policy friction (#90).
+	if want := (agent.Friction{EnvelopeRefusals: 1}); s.Friction == nil || *s.Friction != want {
+		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 }
 
@@ -1033,6 +1044,9 @@ func TestExitOf(t *testing.T) {
 }
 
 func TestToolTargetsAreShortAndRedacted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the targets are POSIX paths; Runs are refused on Windows (ADR-0017)")
+	}
 	ws := "/w"
 	// Built at run time, so the source holds no key-shaped string.
 	key := "sk" + "-ant-" + strings.Repeat("q", 24)
@@ -1045,8 +1059,22 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 		t.Errorf("Edit target = %q", got)
 	}
 	sp := "/srv/Application Support/w"
-	if got := target("Bash", map[string]any{"command": `cd /srv/Application\ Support/w && go test ./...`}, []string{sp}); got != "go test ./..." {
-		t.Errorf("cd target = %q", got)
+	// The cd prefix stays, so a denied "cd <ws> && go test" reads apart
+	// from an allowed "go test"; the Workspace itself shortens to ".".
+	for cmd, want := range map[string]string{
+		`cd /srv/Application\ Support/w && go test ./...`:  "cd . && go test ./...",
+		`cd "/srv/Application Support/w" && go test ./...`: "cd . && go test ./...",
+		`cd /srv/Application\ Support/w/pkg && go test`:    "cd pkg && go test",
+		`go test /srv/Application\ Support/w/pkg`:          "go test pkg",
+		`ls /srv/Application\ Support/wx`:                  `ls /srv/Application\ Support/wx`,
+	} {
+		if got := target("Bash", map[string]any{"command": cmd}, []string{sp}); got != want {
+			t.Errorf("target(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+	// No control character reaches a target: no terminal escapes.
+	if got := target("Bash", map[string]any{"command": "ls \x1b[31mred\x07\u009b"}, []string{ws}); got != "ls [31mred" {
+		t.Errorf("control target = %q", got)
 	}
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {

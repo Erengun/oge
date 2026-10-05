@@ -72,7 +72,7 @@ func TestBinaryClaudeRunAccepted(t *testing.T) {
 		"[implement #1 claude] Edit add.go",
 		"[implement #1 claude] allow Edit add.go · pre-authorised by Launch profile ",
 		"[implement #1 claude] Bash curl https://example.com",
-		"[implement #1 claude] denied: Bash curl https://example.com",
+		"[implement #1 claude] denied: Bash curl https://example.com (this command isn't pre-authorised)\n",
 		"[implement #1 claude] Exit: done",
 		"implement  claude · Exit done · Candidate",
 	} {
