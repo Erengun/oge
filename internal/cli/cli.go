@@ -113,6 +113,7 @@ Run flags:
   --unattended             never prompt
   --plain                  print plain lines instead of the live view
   -v                       show the event stream (plain lines)
+  -vv                      same as -v for now
 
 Environment:
   OGE_STATE_DIR            where Öge keeps private Run state (default

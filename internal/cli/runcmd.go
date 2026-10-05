@@ -131,6 +131,8 @@ var errNotBuilt = errors.New("not built yet")
 // otherwise: without a TTY, with --plain, or with -v/-vv (ADR-0022).
 func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view {
 	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen}
+	// TODO(#79-decision): --unattended on a terminal still draws the live
+	// view; unattended means "never prompt", and the view doesn't.
 	if f.plain || plain.verbose || !env.Interactive() {
 		return plain
 	}
