@@ -1,5 +1,5 @@
 ---
-status: accepted (Codex write-glob and envelope assumptions amended in part by ADR-0018)
+status: accepted (Codex write-glob and envelope assumptions amended in part by ADR-0018; private Check caches may start from a warm seed per ADR-0021)
 ---
 
 # Agents work in disposable clones of an Öge-owned Run repository; Öge guarantees only what reaches the Candidate and the Oracle

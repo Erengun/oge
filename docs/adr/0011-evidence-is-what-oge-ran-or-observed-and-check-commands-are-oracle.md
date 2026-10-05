@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (pass rule amended by ADR-0020: protected-test execution attestation is required Evidence, the structured report is diagnostic)
 ---
 
 # Evidence is what Öge ran or observed itself; Check commands are Oracle content; failures are attributed to their cause
