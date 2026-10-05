@@ -411,6 +411,9 @@ func judge(res *Result, control *Control) {
 			case t.Snapshot == AttestUnattested:
 				infra = append(infra, name+" skipped, and attestation failed on the Snapshot control")
 			case t.Snapshot == AttestAbsent:
+				// TODO(#73-decision): a test that never ran on the Snapshot
+				// (it didn't build there) grants no skip: the Candidate must
+				// run it.
 				failed = append(failed, name+" skipped, and never ran on the Snapshot")
 			default:
 				failed = append(failed, name+" skipped, but it ran on the Snapshot")

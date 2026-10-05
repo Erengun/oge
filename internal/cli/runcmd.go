@@ -380,11 +380,11 @@ func (r *renderer) summary(res *run.Result) {
 		if c := res.Check; c != nil && len(c.Skipped) > 0 {
 			// A coverage gap the Snapshot already had: shown first.
 			r.p("%-10s %s", label, clean(fmt.Sprintf("Oracle tests skipped on the Snapshot and the Candidate (%d): %s", len(c.Skipped), strings.Join(c.Skipped, ", "))))
-			label = ""
+			label = strings.Repeat(" ", len("Not covered"))
 		}
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges", label)
-		if len(res.Tripwires) > 0 {
-			r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(res.Tripwires, " · ")))
+		if obs := observed(res); len(obs) > 0 {
+			r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(obs, " · ")))
 		}
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
@@ -394,6 +394,16 @@ func (r *renderer) summary(res *run.Result) {
 			r.p("  %s", clean(w))
 		}
 	}
+}
+
+// observed are the tripwires a Run set off: the static ones on the
+// Candidate's changes, and attestation lines that named no test.
+func observed(res *run.Result) []string {
+	obs := res.Tripwires
+	if c := res.Check; c != nil && c.Stray > 0 {
+		obs = append(obs, fmt.Sprintf("%d stray lines on the attestation channel", c.Stray))
+	}
+	return obs
 }
 
 func files(n int) string {

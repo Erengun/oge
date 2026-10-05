@@ -326,6 +326,10 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 	}
 	ch.finish()
 	res.Tests, res.Stray = ch.results(att, m.Expected, reports)
+	// TODO(#73-decision): attestation is required whenever the Oracle
+	// has expected Go tests, whether or not a Check command declares a
+	// go-test-json report (main only checked them with a report). Checks
+	// that don't run those tests now can't pass.
 	if res.Pass {
 		judge(res, control)
 	}

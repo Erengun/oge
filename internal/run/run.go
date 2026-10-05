@@ -363,6 +363,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := l.Append(RecCheckEnded, map[string]any{"check": 1, "result": cr, "uncontained": true}); err != nil {
 		return nil, err
 	}
+	// TODO(#73-decision): a control the Verdict didn't need is stopped if
+	// still running, so its Snapshot dispositions go unrecorded; with a
+	// real agent it has long finished by now.
 	if err := l.Append(RecControlEnded, control.Stop()); err != nil {
 		return nil, err
 	}

@@ -220,3 +220,26 @@ func TestRunSkippedOnTheSnapshotRunOnTheCandidatePasses(t *testing.T) {
 		t.Errorf("attested = %v, want TestAdd and TestMul passing", got)
 	}
 }
+
+// Attestation that fails on the Snapshot control too is the mechanism's
+// failure, not the Candidate's: an Infrastructure stop, never a Verdict.
+// Here the Oracle's own TestMain prints frames and exits before any test.
+func TestRunAttestationFailingOnTheSnapshotIsInfrastructure(t *testing.T) {
+	f := newRunFixture(t)
+	writeFile(t, filepath.Join(f.repo, "main_test.go"), []byte("package fx\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) {\n\t"+forgedFrames+"\n\tos.Exit(0)\n}\n"))
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitInfra || !strings.Contains(out, "INFRASTRUCTURE STOP") || !strings.Contains(out, "attestation failed on the Snapshot control") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	dir := f.onlyRun(t)
+	for _, rec := range recordTypes(t, dir) {
+		if rec == run.RecVerdict {
+			t.Error("a Verdict was recorded")
+		}
+	}
+	var control struct{ Consulted bool }
+	recordData(t, dir, run.RecControlEnded, &control)
+	if !control.Consulted {
+		t.Error("the Snapshot control wasn't consulted")
+	}
+}
