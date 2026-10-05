@@ -411,10 +411,17 @@ func (r *renderer) summary(res *run.Result) {
 		}
 		// TODO(#63): the Receipt replaces these lines.
 		label := "Not covered"
-		if c := res.Check; c != nil && len(c.Skipped) > 0 {
-			// A coverage gap the Snapshot already had: shown first.
-			r.p("%-10s %s", label, clean(fmt.Sprintf("Oracle tests skipped on the Snapshot and the Candidate (%d): %s", len(c.Skipped), strings.Join(c.Skipped, ", "))))
-			label = strings.Repeat(" ", len("Not covered"))
+		if c := res.Check; c != nil {
+			// Coverage gaps the Snapshot already had: shown first.
+			for _, gap := range []struct {
+				what  string
+				items []string
+			}{{"Oracle tests skipped on the Snapshot and the Candidate", c.Skipped}, {"Oracle test files this machine doesn't build", c.NotBuilt}} {
+				if len(gap.items) > 0 {
+					r.p("%-10s %s", label, clean(fmt.Sprintf("%s (%d): %s", gap.what, len(gap.items), strings.Join(gap.items, "; "))))
+					label = strings.Repeat(" ", len("Not covered"))
+				}
+			}
 		}
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges", label)
 		r.observed(res)

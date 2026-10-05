@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -229,6 +230,10 @@ type Result struct {
 	// Skipped are expected tests skipped on both the Snapshot control and
 	// the Candidate: allowed, but not covered.
 	Skipped []string `json:"skipped_on_both,omitempty"`
+	// NotBuilt are expected tests the Check's fixed build context
+	// excludes and that never started on the Snapshot control: not
+	// covered, each as "path — reason".
+	NotBuilt []string `json:"not_built,omitempty"`
 	// Stray counts attestation lines that named no test of this Check.
 	Stray int `json:"stray_attestations,omitempty"`
 	// Cache is how the Check-local caches were made (CacheClone, CacheCopy
@@ -282,6 +287,11 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 	if err != nil {
 		return nil, err
 	}
+	goflags := ""
+	if named(r.PassEnv, "GOFLAGS") {
+		goflags = r.Getenv("GOFLAGS")
+	}
+	att.ctx = buildContext(m, goflags)
 	if blocked, err := r.overlay(m, dir, att); err != nil {
 		return nil, err
 	} else if blocked != "" {
@@ -332,13 +342,38 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 	// has expected Go tests, whether or not a Check command declares a
 	// go-test-json report (main only checked them with a report). Checks
 	// that don't run those tests now can't pass.
-	if res.Pass {
+	switch {
+	case res.Pass && len(m.Expected) == 0 && hasGoTests(m):
+		// Fail closed: Go test files Öge can't attest vouch for nothing.
+		res.Pass = false
+		res.Infra = "the Oracle's Go test files declare no test Öge can attest (TestXxx(*testing.T), or an Example with an output comment)"
+	case res.Pass:
 		judge(res, control)
 	}
 	if res.Pass {
 		minimumRan(res, m, short)
 	}
 	return res, nil
+}
+
+// hasGoTests reports whether the Oracle holds Go test files the go
+// command builds.
+func hasGoTests(m *Manifest) bool {
+	for _, f := range m.Tests {
+		if strings.HasSuffix(f.Path, "_test.go") && goPackageDir(path.Dir(f.Path)) {
+			return true
+		}
+	}
+	return false
+}
+
+func named(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // minimumRan applies each command's expected_tests minimum once skips are
@@ -496,7 +531,8 @@ type Report struct {
 	FailedTests []string `json:"failed_tests,omitempty"`
 	Error       string   `json:"error,omitempty"` // missing or malformed
 
-	outcomes map[TestID]string // top-level tests' terminal actions, by package
+	outcomes    map[TestID]string // tests' and subtests' terminal actions, by package
+	buildFailed map[string]bool   // packages whose test binary didn't build
 }
 
 // outcome is id's terminal action in the report ("" when it never ran);
@@ -514,6 +550,19 @@ func (r *Report) outcome(id TestID) string {
 	return got
 }
 
+// subtests are the names of id's subtests whose terminal action is
+// action.
+func (r *Report) subtests(id TestID, action string) []string {
+	var out []string
+	for k, o := range r.outcomes {
+		if o == action && strings.HasPrefix(k.Name, id.Name+"/") && (id.Package == "" || k.Package == id.Package) {
+			out = append(out, k.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ParseGoTestJSON reads `go test -json` output. Every non-empty line must
 // be a JSON event; tests count by their terminal pass, fail or skip
 // action. Unknown actions are ignored.
@@ -527,16 +576,22 @@ func ParseGoTestJSON(b []byte) Report {
 		if len(line) == 0 {
 			continue
 		}
-		var ev struct{ Action, Package, Test string }
+		var ev struct{ Action, Package, Test, FailedBuild string }
 		if err := json.Unmarshal(line, &ev); err != nil || ev.Action == "" {
 			rep.Error = fmt.Sprintf("line %q is not a go test -json event", truncate(string(line), 80))
 			return rep
 		}
 		events++
 		if ev.Test == "" {
+			if ev.Action == "fail" && ev.FailedBuild != "" {
+				if rep.buildFailed == nil {
+					rep.buildFailed = map[string]bool{}
+				}
+				rep.buildFailed[ev.Package] = true
+			}
 			continue
 		}
-		if (ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip") && !strings.Contains(ev.Test, "/") {
+		if ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip" {
 			if rep.outcomes == nil {
 				rep.outcomes = map[TestID]string{}
 			}

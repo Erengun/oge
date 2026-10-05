@@ -49,7 +49,7 @@ func Tripwires(changed []string, before, after func(string) ([]byte, bool)) []st
 			}
 		}
 		for _, call := range exitsFromInit(f) {
-			out = append(out, p+": "+call+" called from init")
+			out = append(out, p+": "+call+" may be reachable from package initialisation")
 		}
 	}
 	return out
@@ -66,9 +66,11 @@ func testMain(fset *token.FileSet, f *ast.File, src []byte) string {
 }
 
 // exitsFromInit lists the process exits (os.Exit, syscall.Exit,
-// runtime.Goexit) reachable at package initialisation within f: from its
-// init functions and package-level variable initialisers, through calls
-// to f's own top-level functions.
+// runtime.Goexit) that may be reachable at package initialisation within
+// f: from its init functions and package-level variable initialisers,
+// through calls to f's own top-level functions and to function literals
+// called in place. A function literal only stored (in a map, say) isn't
+// followed.
 func exitsFromInit(f *ast.File) []string {
 	pkgs := map[string]string{} // local name → import path
 	for _, imp := range f.Imports {
@@ -105,11 +107,16 @@ func exitsFromInit(f *ast.File) []string {
 		n := roots[0]
 		roots = roots[1:]
 		ast.Inspect(n, func(n ast.Node) bool {
+			if _, ok := n.(*ast.FuncLit); ok {
+				return false // a function value isn't run unless called
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
 			switch fun := call.Fun.(type) {
+			case *ast.FuncLit: // called in place
+				roots = append(roots, fun.Body)
 			case *ast.Ident:
 				if fn := funcs[fun.Name]; fn != nil && !seen[fun.Name] {
 					seen[fun.Name] = true

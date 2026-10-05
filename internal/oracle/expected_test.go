@@ -31,8 +31,9 @@ func TestExpectedTestsComeFromTheOracle(t *testing.T) {
 		}
 		return []byte(s), nil
 	})
-	// testdata, _old and the nested module mod2 are outside ./...
-	want := []TestID{{"example.com/fx", "Test"}, {"example.com/fx", "TestAdd"}, {"example.com/fx/sub", "TestX"}}
+	// testdata and _old are never built; the nested module mod2 is, by a
+	// Check command run inside it.
+	want := []TestID{{"example.com/fx", "Test"}, {"example.com/fx", "TestAdd"}, {"example.com/fx/sub", "TestX"}, {"example.com/two/deep", "TestY"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}

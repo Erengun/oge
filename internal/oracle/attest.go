@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"os"
@@ -71,13 +72,22 @@ type TestResult struct {
 	// Snapshot is the test's disposition on the Snapshot control, set
 	// when the Check consulted it.
 	Snapshot string `json:"snapshot,omitempty"`
+	// Excluded is set when the Check's fixed build context never builds
+	// the test's file: the file and why.
+	Excluded string `json:"excluded,omitempty"`
+	// SkippedSubtests are subtests a report shows skipping. A report is
+	// trusted one way only: Candidate code can add frames, never remove a
+	// real skip.
+	SkippedSubtests []string `json:"skipped_subtests,omitempty"`
 }
 
 // attestation is one Check's tokens and the helpers its overlay adds.
 type attestation struct {
-	suffix  string            // makes the helper's identifiers and files unguessable
-	tokens  map[string]TestID // token → the test it attests
-	helpers map[[2]string]bool
+	suffix   string            // makes the helper's identifiers and files unguessable
+	tokens   map[string]TestID // token → the test it attests
+	helpers  map[[2]string]bool
+	ctx      build.Context     // the Check's fixed build context
+	excluded map[TestID]string // tests ctx never builds: "path — reason"
 }
 
 func newAttestation() (*attestation, error) {
@@ -85,7 +95,8 @@ func newAttestation() (*attestation, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &attestation{suffix: s, tokens: map[string]TestID{}, helpers: map[[2]string]bool{}}, nil
+	return &attestation{suffix: s, tokens: map[string]TestID{}, helpers: map[[2]string]bool{},
+		ctx: build.Default, excluded: map[TestID]string{}}, nil
 }
 
 func randomHex(n int) (string, error) {
@@ -106,11 +117,15 @@ func (a *attestation) instrument(f File, src []byte) ([]byte, error) {
 		return src, nil
 	}
 	want := map[string]TestID{}
+	why := excluded(a.ctx, f.Path, src)
 	for _, id := range f.Expected {
 		want[id.Name] = id
+		if why != "" {
+			a.excluded[id] = f.Path + " — " + why
+		}
 	}
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, f.Path, src, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, f.Path, src, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
 		return src, nil
 	}
@@ -143,6 +158,22 @@ func (a *attestation) instrument(f File, src []byte) ([]byte, error) {
 		}
 		at := fset.Position(fn.Body.Lbrace).Offset + 1
 		edits = append(edits, edit{at, at, fmt.Sprintf(" ogeAttest%s(%s, %q);", a.suffix, name, tok)})
+	}
+	// An example attests when it starts and when it returns. go test
+	// compares its output after that, in the same goroutine; a mismatch
+	// is a real "--- FAIL" and a nonzero exit.
+	for _, fn := range exampleFuncs(file) {
+		id, ok := want[fn.Name.Name]
+		if !ok {
+			continue
+		}
+		tok, err := randomHex(16)
+		if err != nil {
+			return nil, err
+		}
+		a.tokens[tok] = id
+		at := fset.Position(fn.Body.Lbrace).Offset + 1
+		edits = append(edits, edit{at, at, fmt.Sprintf(" defer ogeAttestEx%s(%q)();", a.suffix, tok)})
 	}
 	if len(edits) == 0 {
 		return src, nil
@@ -200,6 +231,11 @@ func ogeAttest%[2]s(t *testing.T, token string) {
 		}
 		ogeAttestSend%[2]s(token + " " + status + "\n")
 	})
+}
+
+func ogeAttestEx%[2]s(token string) func() {
+	ogeAttestSend%[2]s(token + " start\n")
+	return func() { ogeAttestSend%[2]s(token + " pass\n") }
 }
 
 func ogeAttestSend%[2]s(line string) {
@@ -332,9 +368,26 @@ func (c *channel) results(a *attestation, expected []TestID, reports []*Report) 
 				r.Report = o
 			}
 		}
+		r.Excluded = a.excluded[id]
+		for _, rep := range reports {
+			r.SkippedSubtests = appendNew(r.SkippedSubtests, rep.subtests(id, AttestSkip)...)
+		}
 		out = append(out, r)
 	}
 	return out, stray
+}
+
+func appendNew(list []string, items ...string) []string {
+	for _, it := range items {
+		dup := false
+		for _, x := range list {
+			dup = dup || x == it
+		}
+		if !dup {
+			list = append(list, it)
+		}
+	}
+	return list
 }
 
 // disposition is one token's outcome across every command that ran it:
@@ -361,19 +414,32 @@ func worse(a, b string) bool {
 }
 
 // judge applies the attestation pass rule to a Check whose commands all
-// passed: every expected test attested passing, or skipped where its
-// Snapshot control skipped too (ADR-0020's baseline-relative skips). The
-// control is consulted only when some test didn't attest passing, so the
-// happy path never waits for it.
+// passed (ADR-0020). Which protected tests count is never the Candidate's
+// to decide; the Snapshot control decides:
+//
+//   - a test that starts on the Snapshot control must attest passing, or
+//     skip where it skipped there too (the same for subtests);
+//   - a test the fixed build context excludes, and that never started on
+//     the Snapshot, is not covered, with its reason;
+//   - where the Snapshot doesn't compile, every statically eligible test
+//     is required;
+//   - a test that never started on either side, though eligible, and a
+//     test whose report ran but never attested, are the Oracle's or the
+//     mechanism's failure: an Infrastructure stop;
+//   - and with nothing protected left to run, the Check can't pass.
+//
+// The control is consulted only when some test didn't attest passing, or
+// a subtest skipped, so the happy path never waits for it.
 func judge(res *Result, control *Control) {
 	need := false
 	for _, t := range res.Tests {
-		need = need || t.Attested != AttestPass
+		need = need || t.Attested != AttestPass || len(t.SkippedSubtests) > 0
 	}
 	if !need {
 		return
 	}
 	var snap map[TestID]string
+	ran, skipped, buildFailed := map[TestID]bool{}, map[TestID]bool{}, map[string]bool{}
 	ctlWhy := "no Snapshot control"
 	if control != nil {
 		ctl, err := control.Wait()
@@ -391,15 +457,31 @@ func judge(res *Result, control *Control) {
 				}
 				snap[t.TestID] = d
 			}
+			for _, e := range ctl.Commands {
+				if rep := e.Report; rep != nil {
+					for id, o := range rep.outcomes {
+						ran[id] = ran[id] || o != AttestSkip
+						skipped[id] = skipped[id] || o == AttestSkip
+					}
+					for p := range rep.buildFailed {
+						buildFailed[p] = true
+					}
+				}
+			}
 		}
 	}
+	started := func(d string) bool {
+		return d == AttestPass || d == AttestFail || d == AttestSkip || d == AttestExited
+	}
 	var failed, infra []string
+	covered := 0 // tests that ran or skipped on both sides: what the Check vouches for
 	for i := range res.Tests {
 		t := &res.Tests[i]
 		t.Snapshot = snap[t.TestID]
 		name := t.TestID.String()
 		switch t.Attested {
 		case AttestPass:
+			covered++
 		case AttestFail:
 			failed = append(failed, name+" failed")
 		case AttestSkip:
@@ -407,16 +489,16 @@ func judge(res *Result, control *Control) {
 			case snap == nil:
 				infra = append(infra, name+" skipped, and "+ctlWhy)
 			case t.Snapshot == AttestSkip:
+				covered++
 				res.Skipped = append(res.Skipped, name)
 			case t.Snapshot == AttestUnattested:
 				infra = append(infra, name+" skipped, and attestation failed on the Snapshot control")
-			case t.Snapshot == AttestAbsent:
-				// TODO(#73-decision): a test that never ran on the Snapshot
-				// (it didn't build there) grants no skip: the Candidate must
-				// run it.
-				failed = append(failed, name+" skipped, and never ran on the Snapshot")
-			default:
+			case started(t.Snapshot):
 				failed = append(failed, name+" skipped, but it ran on the Snapshot")
+			case buildFailed[t.Package]:
+				failed = append(failed, name+" skipped, and the Snapshot didn't build it")
+			default:
+				infra = append(infra, name+" skipped, and never ran on the Snapshot control")
 			}
 		default: // exited or absent
 			why := name + " never ran"
@@ -426,10 +508,30 @@ func judge(res *Result, control *Control) {
 			if t.Report != "" {
 				why += "; the report claims " + t.Report
 			}
-			if t.Snapshot == AttestUnattested {
-				infra = append(infra, why+", and attestation failed on the Snapshot control")
-			} else {
+			switch {
+			case snap == nil || started(t.Snapshot):
 				failed = append(failed, why)
+			case t.Snapshot == AttestUnattested:
+				infra = append(infra, why+", and attestation failed on the Snapshot control")
+			case t.Excluded != "":
+				res.NotBuilt = appendNew(res.NotBuilt, t.Excluded)
+			case buildFailed[t.Package]:
+				failed = append(failed, why) // statically eligible where the Snapshot doesn't compile
+			default:
+				infra = append(infra, name+" never ran on the Snapshot control either")
+			}
+		}
+		for _, sub := range t.SkippedSubtests {
+			id := TestID{Package: t.Package, Name: sub}
+			switch {
+			case snap == nil:
+				infra = append(infra, id.String()+" skipped, and "+ctlWhy)
+			case ran[id] || (id.Package == "" && ranAnywhere(ran, sub)):
+				failed = append(failed, id.String()+" skipped, but it ran on the Snapshot")
+			case skipped[id] || (id.Package == "" && ranAnywhere(skipped, sub)):
+				res.Skipped = append(res.Skipped, id.String())
+			default:
+				failed = append(failed, id.String()+" skipped, and never ran on the Snapshot")
 			}
 		}
 	}
@@ -440,8 +542,20 @@ func judge(res *Result, control *Control) {
 		res.Why = fmt.Sprintf("Oracle tests not attested passing (%d): %s", len(failed), list(failed))
 	case len(infra) > 0:
 		res.Pass = false
-		res.Infra = "the attestation of Oracle tests failed on the Snapshot control: " + list(infra)
+		res.Infra = "the Oracle's tests can't be judged: " + list(infra)
+	case covered == 0:
+		res.Pass = false
+		res.Infra = "no protected test runs on this machine: " + list(res.NotBuilt)
 	}
+}
+
+func ranAnywhere(m map[TestID]bool, name string) bool {
+	for id, ok := range m {
+		if ok && id.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func list(items []string) string {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"path"
@@ -28,8 +29,10 @@ func (id TestID) String() string {
 	return id.Package + "." + id.Name
 }
 
-// expectedTests reads every top-level func TestXxx(t *testing.T) in the
-// Oracle's Go test files, overall and by file. files is the Snapshot's
+// expectedTests reads every top-level func TestXxx(t *testing.T), and
+// every ExampleXxx with an output comment, in the Oracle's Go test files,
+// overall and by file. Nested modules count: a Check command run inside
+// one runs their tests, and one that never does leaves them unattested. files is the Snapshot's
 // file list; show reads a Snapshot file. A test file that doesn't parse
 // adds nothing: it fails the Check on its own.
 func expectedTests(tests []string, files []string, show func(string) ([]byte, error)) ([]TestID, map[string][]TestID) {
@@ -48,7 +51,7 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 	var ids []TestID
 	byFile := map[string][]TestID{}
 	for _, f := range tests {
-		if !strings.HasSuffix(f, "_test.go") || !inDotDotDot(path.Dir(f), mods) {
+		if !strings.HasSuffix(f, "_test.go") || !goPackageDir(path.Dir(f)) {
 			continue
 		}
 		src, err := show(f)
@@ -69,23 +72,15 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 	return ids, byFile
 }
 
-// inDotDotDot reports whether go test ./... from the root would build
-// dir: not under testdata, vendor or a _ or . directory, and, when the
-// root has a go.mod, not inside a nested module.
-func inDotDotDot(dir string, mods map[string]string) bool {
+// goPackageDir reports whether the go command ever builds dir as a
+// package: not under testdata, vendor or a _ or . directory.
+func goPackageDir(dir string) bool {
 	if dir == "." {
 		return true
 	}
 	for _, part := range strings.Split(dir, "/") {
 		if part == "testdata" || part == "vendor" || strings.HasPrefix(part, "_") || strings.HasPrefix(part, ".") {
 			return false
-		}
-	}
-	if _, ok := mods["."]; ok {
-		for d := dir; d != "."; d = path.Dir(d) {
-			if _, nested := mods[d]; nested {
-				return false
-			}
 		}
 	}
 	return true
@@ -125,9 +120,9 @@ func modulePath(b []byte) string {
 	return ""
 }
 
-// testNames lists src's top-level func TestXxx(t *testing.T) declarations.
+// testNames lists src's tests and run examples.
 func testNames(src []byte) []string {
-	f, err := parser.ParseFile(token.NewFileSet(), "x_test.go", src, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(token.NewFileSet(), "x_test.go", src, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
 		return nil
 	}
@@ -135,7 +130,28 @@ func testNames(src []byte) []string {
 	for _, fn := range testFuncs(f) {
 		names = append(names, fn.Name.Name)
 	}
+	for _, fn := range exampleFuncs(f) {
+		names = append(names, fn.Name.Name)
+	}
 	return names
+}
+
+// exampleFuncs are f's examples that go test runs: those with an output
+// comment (f must be parsed with comments).
+func exampleFuncs(f *ast.File) []*ast.FuncDecl {
+	run := map[string]bool{}
+	for _, ex := range doc.Examples(f) {
+		if ex.Output != "" || ex.EmptyOutput {
+			run["Example"+ex.Name] = true
+		}
+	}
+	var fns []*ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Body != nil && run[fn.Name.Name] {
+			fns = append(fns, fn)
+		}
+	}
+	return fns
 }
 
 // testFuncs are f's top-level func TestXxx(t *testing.T) declarations:

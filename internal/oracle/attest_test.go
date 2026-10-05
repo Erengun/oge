@@ -141,7 +141,8 @@ func TestJudgeAppliesTheBaselineTable(t *testing.T) {
 		{"runs, skips", AttestSkip, ctl(AttestFail, "fail"), false, "fx.TestX skipped, but it ran on the Snapshot", "", ""},
 		{"skips, skips", AttestSkip, ctl(AttestSkip, "skip"), true, "", "", "fx.TestX"},
 		{"skips, runs", AttestPass, ctl(AttestSkip, "skip"), true, "", "", ""},
-		{"absent, skips", AttestSkip, ctl(AttestAbsent, ""), false, "never ran on the Snapshot", "", ""},
+		{"absent, skips", AttestSkip, ctl(AttestAbsent, ""), false, "", "never ran on the Snapshot control", ""},
+		{"absent on both", AttestAbsent, ctl(AttestAbsent, ""), false, "", "fx.TestX never ran on the Snapshot control either", ""},
 		{"exits early", AttestExited, ctl(AttestPass, "pass"), false, "fx.TestX started but never finished", "", ""},
 		{"attests a fail", AttestFail, ctl(AttestPass, "pass"), false, "fx.TestX failed", "", ""},
 		{"mechanism failed on the Snapshot", AttestAbsent, ctl(AttestAbsent, "pass"), false, "", "attestation failed on the Snapshot control", ""},
@@ -179,19 +180,22 @@ func TestTripwires(t *testing.T) {
 		"new_test.go":  "package fx\n\nimport \"testing\"\n\nfunc TestMain(m *testing.M) {}\n",
 		"init.go":      "package fx\n\nimport (\n\tx \"os\"\n\t\"syscall\"\n)\n\nvar _ = quit()\n\nfunc init() { helper() }\n\nfunc helper() { x.Exit(0) }\n\nfunc quit() int { syscall.Exit(0); return 0 }\n\nfunc notFromInit() { x.Exit(1) }\n",
 		"other.go":     "package fx\n\nimport \"os\"\n\nfunc Quit() { os.Exit(1) }\n",
+		"table.go":     "package fx\n\nimport \"os\"\n\nvar cmds = map[string]func(){\"quit\": func() { os.Exit(1) }}\n",
+		"now.go":       "package fx\n\nimport \"runtime\"\n\nvar _ = func() int { runtime.Goexit(); return 0 }()\n",
 		"env.sh":       "echo $OGE_ATTEST_FD\n",
 	}
-	changed := []string{"env.sh", "init.go", "main_test.go", "new_test.go", "other.go", "same_test.go", "gone.go"}
+	changed := []string{"env.sh", "init.go", "main_test.go", "new_test.go", "now.go", "other.go", "same_test.go", "table.go", "gone.go"}
 	look := func(m map[string]string) func(string) ([]byte, bool) {
 		return func(p string) ([]byte, bool) { s, ok := m[p]; return []byte(s), ok }
 	}
 	got := strings.Join(Tripwires(changed, look(before), look(after)), "\n")
 	want := strings.Join([]string{
 		"env.sh: mentions OGE_ATTEST_FD",
-		"init.go: syscall.Exit called from init",
-		"init.go: os.Exit called from init",
+		"init.go: syscall.Exit may be reachable from package initialisation",
+		"init.go: os.Exit may be reachable from package initialisation",
 		"main_test.go: TestMain added or changed",
 		"new_test.go: TestMain added or changed",
+		"now.go: runtime.Goexit may be reachable from package initialisation",
 	}, "\n")
 	if got != want {
 		t.Errorf("tripwires:\n%s\nwant:\n%s", got, want)
@@ -211,6 +215,85 @@ func TestMinimumRanExcusesOnlySkipsOnBoth(t *testing.T) {
 		minimumRan(res, m, []int{0})
 		if res.Pass != c.pass || res.Commands[0].Pass != c.pass {
 			t.Errorf("snapshot %q: pass %v, why %q", c.snapshot, res.Pass, res.Commands[0].Why)
+		}
+	}
+}
+
+// Buildability is baseline-relative: the Snapshot control decides which
+// protected tests count, never the Candidate.
+func TestJudgeBuildability(t *testing.T) {
+	a, b := TestID{Package: "fx", Name: "TestA"}, TestID{Package: "fx", Name: "TestTagged"}
+	control := func(failedBuild bool, tests ...TestResult) *Control {
+		rep := Report{}
+		if failedBuild {
+			rep.buildFailed = map[string]bool{"fx": true}
+		}
+		c := &Control{done: make(chan struct{}), cancel: func() {}, res: &Result{Tests: tests, Commands: []Execution{{Report: &rep}}}}
+		close(c.done)
+		return c
+	}
+	tagged := "tagged_test.go — requires build constraint \"integration\""
+	for _, c := range []struct {
+		name     string
+		tests    []TestResult
+		ctl      *Control
+		pass     bool
+		why      string
+		infra    string
+		notBuilt string
+	}{
+		{"excluded on the Snapshot: not covered", []TestResult{{TestID: a, Attested: AttestPass}, {TestID: b, Attested: AttestAbsent, Excluded: tagged}},
+			control(false, TestResult{TestID: a, Attested: AttestFail}, TestResult{TestID: b, Attested: AttestAbsent}), true, "", "", tagged},
+		{"excluded, but it started on the Snapshot: required", []TestResult{{TestID: a, Attested: AttestPass}, {TestID: b, Attested: AttestAbsent, Excluded: tagged}},
+			control(false, TestResult{TestID: a, Attested: AttestFail}, TestResult{TestID: b, Attested: AttestPass}), false, "fx.TestTagged never ran", "", ""},
+		{"everything excluded: fail closed", []TestResult{{TestID: b, Attested: AttestAbsent, Excluded: tagged}},
+			control(false, TestResult{TestID: b, Attested: AttestAbsent}), false, "", "no protected test runs on this machine", tagged},
+		{"the Snapshot doesn't compile: eligible tests are required", []TestResult{{TestID: a, Attested: AttestAbsent}},
+			control(true, TestResult{TestID: a, Attested: AttestAbsent}), false, "fx.TestA never ran", "", ""},
+		{"the Snapshot doesn't compile: excluded tests aren't", []TestResult{{TestID: a, Attested: AttestPass}, {TestID: b, Attested: AttestAbsent, Excluded: tagged}},
+			control(true, TestResult{TestID: a, Attested: AttestAbsent}, TestResult{TestID: b, Attested: AttestAbsent}), true, "", "", tagged},
+	} {
+		res := &Result{Pass: true, Tests: c.tests}
+		judge(res, c.ctl)
+		if res.Pass != c.pass || !strings.Contains(res.Why, c.why) || !strings.Contains(res.Infra, c.infra) || strings.Join(res.NotBuilt, ",") != c.notBuilt ||
+			(c.why == "") != (res.Why == "") || (c.infra == "") != (res.Infra == "") {
+			t.Errorf("%s: pass %v, why %q, infra %q, not built %v", c.name, res.Pass, res.Why, res.Infra, res.NotBuilt)
+		}
+	}
+}
+
+func TestJudgeSubtestSkips(t *testing.T) {
+	id := TestID{Package: "fx", Name: "TestX"}
+	ctl := func(o string) *Control {
+		rep := Report{outcomes: map[TestID]string{{Package: "fx", Name: "TestX/sub"}: o}}
+		c := &Control{done: make(chan struct{}), cancel: func() {}, res: &Result{Tests: []TestResult{{TestID: id, Attested: AttestPass}}, Commands: []Execution{{Report: &rep}}}}
+		close(c.done)
+		return c
+	}
+	for o, pass := range map[string]bool{AttestPass: false, AttestFail: false, AttestSkip: true} {
+		res := &Result{Pass: true, Tests: []TestResult{{TestID: id, Attested: AttestPass, SkippedSubtests: []string{"TestX/sub"}}}}
+		judge(res, ctl(o))
+		if res.Pass != pass {
+			t.Errorf("Snapshot %s: pass %v, why %q, infra %q", o, res.Pass, res.Why, res.Infra)
+		}
+	}
+}
+
+func TestExcludedByTheBuildContext(t *testing.T) {
+	ctx := buildContext(&Manifest{Commands: []Command{{Run: "go test -tags=wanted,also ./..."}}}, "")
+	other := map[string]string{"darwin": "linux"}[ctx.GOOS]
+	if other == "" {
+		other = "darwin"
+	}
+	for p, c := range map[string]struct{ src, want string }{
+		"a_test.go":                  {"package a\n", ""},
+		"i/b_test.go":                {"//go:build integration\n\npackage b\n", `requires build constraint "integration"`},
+		"c_test.go":                  {"//go:build wanted && also\n\npackage c\n", ""},
+		"d_" + other + "_test.go":    {"package d\n", "the Check platform is " + ctx.GOOS + "/" + ctx.GOARCH},
+		"e_" + ctx.GOOS + "_test.go": {"package e\n", ""},
+	} {
+		if got := excluded(ctx, p, []byte(c.src)); got != c.want {
+			t.Errorf("%s: %q, want %q", p, got, c.want)
 		}
 	}
 }

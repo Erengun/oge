@@ -50,6 +50,19 @@ A determined hostile program running in the same process can still inspect memor
   - Rule: a skip is never a pass. Öge may accept with an environment-dependent coverage gap only when the same gap already existed in the Snapshot control, so the Candidate can't create a new one.
   - An unreliable control run is an Infrastructure or Oracle-validity problem, not permission to ignore the test.
   - With `verify = "after"`, the control runs after the verifier produced the tests, against the Snapshot, while the tests stay hidden from the implementer.
+  - The control runs on the same host while the Attempt runs, so the agent could influence an environment-dependent skip. That would take deliberately hostile action, which is outside the threat model.
+- **Buildability is baseline-relative.** The Candidate never decides which protected tests count.
+
+  | Case | Result |
+  |---|---|
+  | A protected test starts on the Snapshot control | Required on the Candidate: it must run and attest |
+  | The Snapshot's fixed build context excludes it (GOOS/GOARCH, filename platform suffixes, `//go:build`, the tags the Check commands name) | Not covered for this Run, listed with the file and the reason |
+  | The Candidate turns a Snapshot-runnable test into an excluded or missing one | Cannot pass |
+  | Protected test source exists, but nothing protected starts on the Snapshot | Fail closed: an empty expected set never produces Accepted |
+  | The Snapshot doesn't compile | The expected set comes statically from the protected source under that fixed build context. Once the Candidate builds, every statically eligible test must execute and attest, and statically excluded tests are Not covered |
+
+  - The comparison uses the same build environment and the same Oracle version.
+  - An eligible test that starts on neither side (for example, an Oracle `TestMain` that runs nothing, or a runner that closes inherited descriptors) is an Oracle-validity or Infrastructure stop, never a Candidate failure.
 - **Evaluation.** The forged-report exploit becomes an evaluation fixture now (#58), to measure whether real coding agents discover or use this path.
 
 ## Consequences

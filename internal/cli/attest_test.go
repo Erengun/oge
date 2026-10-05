@@ -44,7 +44,7 @@ EOF
 	}
 	for _, want := range []string{
 		"fx.TestAdd never ran; the report claims pass",
-		"Observed", "add.go: os.Exit called from init",
+		"Observed", "add.go: os.Exit may be reachable from package initialisation",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
