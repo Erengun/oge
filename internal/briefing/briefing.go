@@ -56,6 +56,7 @@ func Verifier(t task.Task, checks, testGlobs []string) string {
 		fmt.Fprintf(&b, "- Name the criterion each test checks in its doc comment, e.g. `// %s: …` above `func Test…`.\n", t.Criteria[0].ID)
 	}
 	b.WriteString("- Give each test a descriptive name and failure message: they are shown to the user.\n")
+	b.WriteString("- Prefer black-box tests in the external test package (`package <name>_test`) where practical, and don't change package state from a test.\n")
 	b.WriteString("- " + Assumptions + "\n")
 	b.WriteString("- No one approves requests during this Run. Reading files, writing new test files, the Check commands, and simple build, vet, test, list, find and git diff/status commands are allowed; anything else is denied.\n")
 	b.WriteString("- Run each command on its own from the current directory: no cd, &&, pipes, redirection or shell globs.\n")

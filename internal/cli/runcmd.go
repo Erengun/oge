@@ -393,6 +393,12 @@ func checkLines(c *oracle.Result) []string {
 	}
 	for _, e := range c.Commands {
 		l := commandLine(e)
+		switch e.Part {
+		case oracle.PartVisible:
+			l = "visible Oracle · " + l
+		case oracle.PartHeldOut:
+			l = "held-out · " + l
+		}
 		if forged != "" && e.Pass {
 			l = strings.Replace(l, " · pass · ", " · "+clean(forged)+" · ", 1)
 		}

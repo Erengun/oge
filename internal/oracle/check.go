@@ -69,6 +69,9 @@ type Execution struct {
 	Report     *Report   `json:"report,omitempty"`
 	Pass       bool      `json:"pass"`
 	Why        string    `json:"why,omitempty"` // why it didn't pass
+	// Part is which execution of a split Check ran it: PartVisible or
+	// PartHeldOut; empty when the Check isn't split.
+	Part string `json:"part,omitempty"`
 }
 
 // Output is one captured stream: the redacted, capped copy's blob plus the
@@ -243,6 +246,10 @@ type Result struct {
 	CacheMs  int64       `json:"cache_materialise_ms"`
 	Setup    *Execution  `json:"setup,omitempty"`
 	Commands []Execution `json:"commands"`
+	// VisibleMs and HeldOutMs time the two executions of a split Check
+	// (SplitCheck); an unsplit Check has only VisibleMs.
+	VisibleMs int64  `json:"visible_ms"`
+	HeldOutMs *int64 `json:"heldout_ms,omitempty"`
 }
 
 // Check is CheckAgainst with no Snapshot control.

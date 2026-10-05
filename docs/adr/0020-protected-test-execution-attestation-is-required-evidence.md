@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (the Check splits into visible and held-out executions, #46)
 ---
 
 # Protected-test execution attestation is required Evidence; the structured report is diagnostic
@@ -68,6 +68,23 @@ A determined hostile program running in the same process can still inspect memor
   - Subtests whose case table comes from Candidate code are out of scope: they are a question of Oracle quality, and attestation covers only the protected test that runs them.
   - Each Example with an output comment attests through a generated test. That test runs the Example, captures and compares its output the way `go test` does, and only then attests.
 - **Evaluation.** The forged-report exploit becomes an evaluation fixture now (#58), to measure whether real coding agents discover or use this path.
+
+## Amendment: visible and held-out executions (#46)
+
+A held-out test compiles into the same test binary as the visible Oracle when they share a package, so held-out code could change the visible tests' environment. During the review of PR #96, a held-out file reset a package global and made a broken Candidate pass.
+
+**Invariant:** protected QA code must never be able to alter the execution environment used to prove that the visible Oracle passes.
+
+So when the Oracle holds held-out tests, a Check has two independent executions against the exact same Candidate:
+
+1. **Visible.** The Candidate plus the visible Oracle (v0's tests and test configuration) in its own Check directory, cache copy and process tree. No held-out file is in its build. It must pass and attest under this ADR's rules: the Snapshot control, baseline-relative skips and buildability.
+2. **Held-out.** The Candidate plus the held-out tests (and test configuration), also on its own. It must pass and attest independently.
+
+Rules for the split:
+
+- The Candidate is Accepted only if both executions pass. The two run concurrently, and Evidence times them separately (`visible_ms`, `heldout_ms`). Fast mode has no held-out tests, so it runs the visible execution only.
+- A held-out test the Snapshot control never ran is judged on the Candidate alone: anything but an attested pass fails it.
+- When the held-out build of a package fails but its visible build doesn't, the conflict is QA's, never the implementer's. The Run parks and names the package, without the held-out names or source. Only a human removes an Oracle test (ADR-0007).
 
 ## Consequences
 

@@ -13,7 +13,7 @@ import (
 // buildTimeout bounds one compile-only build of a package.
 const buildTimeout = 2 * time.Minute
 
-// Unbuildable lists the files next adds to parent that break their
+// Unbuildable lists the held-out files next adds to parent that break their
 // package's build on candidate, the exact tree the Check uses (Ambiguous
 // files included): QA's own defects, which would fail every later Check
 // whatever the implementer did (#46). Each added file is built with
@@ -65,7 +65,9 @@ func (r *Runner) Unbuildable(ctx context.Context, repo Repo, parent, next *Manif
 		}
 		return os.WriteFile(dst, b, 0o600)
 	}
-	for _, f := range append(append([]File(nil), parent.Tests...), parent.Config...) {
+	// As the held-out execution of a split Check builds it: the held-out
+	// tests and test configuration, never the visible Oracle.
+	for _, f := range append(parent.HeldOutOnly().Tests, parent.Config...) {
 		if err := put(f); err != nil {
 			return nil, err
 		}

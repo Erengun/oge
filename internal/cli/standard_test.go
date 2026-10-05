@@ -78,7 +78,8 @@ func TestStandardVerifierAddsPassingTestsAccepted(t *testing.T) {
 		"· Standard mode · ",
 		"implement  fake · Exit done · Candidate ",
 		"QA         Fresh Fake · Exit extended · +1 held-out",
-		"check      go test -json ./... · 2 ran · 0 failed · pass",
+		"check      visible Oracle · go test -json ./... · 1 ran · 0 failed · pass",
+		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
 		"ACCEPTED   Candidate ", "Oracle v1",
 	} {
 		if !strings.Contains(out, want) {
@@ -173,11 +174,11 @@ func TestStandardQAFindsABugAndRepairsIt(t *testing.T) {
 	t.Logf("stdout:\n%s", out)
 	for _, want := range []string{
 		"QA         Fresh Fake · Exit extended · +1 held-out",
-		"check      go test -json ./... · 2 ran · 1 failed: TestAddNegatives · fail (exit 1)",
+		"check      held-out · go test -json ./... · 1 ran · 1 failed: TestAddNegatives · fail (exit 1)",
 		"QA found 1 issue",
 		"TestAddNegatives: Add(-2, 1) = 0, want -1",
 		"send back  1 of 3 · Repairing automatically…",
-		"check      go test -json ./... · 2 ran · 0 failed · pass",
+		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
 		"ACCEPTED   Candidate ",
 	} {
 		if !strings.Contains(out, want) {
@@ -524,5 +525,75 @@ EOF
 	}
 	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 1 addition left out · 1 file withheld") {
 		t.Errorf("stdout:\n%s", out)
+	}
+}
+
+// offAdd is a broken Add that works only once something sets off to 0.
+const offAdd = `printf 'package fx\n\nvar off = 1\n\nfunc Add(a, b int) int {\n\tif off == 1 {\n\t\treturn 0\n\t}\n\treturn a + b\n}\n' > add.go
+`
+
+// The visible Oracle proves itself in a build and process QA's code never
+// enters (#46: protected QA code can't alter the environment that proves
+// the visible Oracle passes). A held-out package-global reset at
+// initialisation never makes a broken Candidate Accepted.
+func TestStandardQAGlobalResetAtInitIsNeverAccepted(t *testing.T) {
+	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
+	verifier := `printf 'package fx\n\nimport "testing"\n\nvar _ = func() int { off = 0; return 0 }()\n\nfunc TestZ(t *testing.T) {}\n' > a_reset_test.go
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, offAdd), standardTask, "--agent", "fake", "--unattended")
+	if code == ExitOK || strings.Contains(out, "ACCEPTED") {
+		t.Fatalf("a broken Candidate was Accepted: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// Nor does a held-out test that resets package state while it runs.
+func TestStandardQARuntimeMutationIsNeverAccepted(t *testing.T) {
+	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
+	verifier := `printf 'package fx\n\nimport "testing"\n\nfunc TestAAAReset(t *testing.T) { off = 0 }\n' > a_reset_test.go
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, offAdd), standardTask, "--agent", "fake", "--unattended")
+	if code == ExitOK || strings.Contains(out, "ACCEPTED") {
+		t.Fatalf("a broken Candidate was Accepted: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "visible Oracle") || !strings.Contains(out, "held-out") {
+		t.Errorf("the two Check executions aren't shown:\n%s", out)
+	}
+	var ended struct {
+		Result struct {
+			VisibleMs *int64 `json:"visible_ms"`
+			HeldOutMs *int64 `json:"heldout_ms"`
+		} `json:"result"`
+	}
+	recordData(t, f.onlyRun(t), run.RecCheckEnded, &ended)
+	if ended.Result.VisibleMs == nil || ended.Result.HeldOutMs == nil {
+		t.Errorf("CheckEnded lacks the two timings: %+v", ended)
+	}
+}
+
+// A held-out test that a later Candidate no longer builds against parks
+// the Run with QA named: the implementer, who can't see it, is never sent
+// back over it, and Öge never drops an Oracle test itself (ADR-0007).
+func TestStandardHeldOutBuildConflictParks(t *testing.T) {
+	f := newRunFixture(t)
+	impl := `case "$OGE_FAKE_TURN" in
+*"held-out test"*)
+` + fixScript + ` exit 0 ;;
+esac
+printf 'package fx\n\nfunc Neg(x int) int { return -x }\n\nfunc Add(a, b int) int {\n\tif a < 0 {\n\t\treturn 0\n\t}\n\treturn a + b\n}\n' > add.go
+`
+	verifier := `if [ -e "$OGE_TEST_OUT/verifier-2.turn" ]; then exit 0; fi
+printf 'package fx\n\nimport "testing"\n\n// AC-1\nfunc TestAddNeg(t *testing.T) {\n\tif Add(Neg(2), 1) != -1 {\n\t\tt.Fatal("negatives")\n\t}\n}\n' > neg_test.go
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, impl), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitParked || !strings.Contains(out, "QA's held-out test in package fx no longer builds against the Candidate") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if n := strings.Count(out, "send back"); n != 1 {
+		t.Errorf("%d send-backs, want only the first:\n%s", n, out)
+	}
+	if strings.Contains(out, "TestAddNeg") && strings.Contains(f.out(t, "implementer-2.turn"), "TestAddNeg") {
+		t.Error("a held-out name reached the implementer")
 	}
 }

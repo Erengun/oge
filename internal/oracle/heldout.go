@@ -246,13 +246,24 @@ func (m *Manifest) HeldOutFailures(r *Result) []HeldOut {
 // test conflict, and neither can be blamed without the other's source.
 // Their held-out tests are left out of HeldOutFailures.
 func (m *Manifest) HeldOutBuildConflicts(r *Result) []string {
-	failed := map[string]bool{}
+	// In a split Check, a package counts only when the held-out build
+	// failed and the visible one didn't: then the held-out test, not the
+	// Candidate alone, breaks it.
+	failed, visible := map[string]bool{}, map[string]bool{}
 	for _, e := range r.Commands {
-		if e.Report != nil {
-			for p := range e.Report.buildFailed {
+		if e.Report == nil {
+			continue
+		}
+		for p := range e.Report.buildFailed {
+			if e.Part == PartVisible {
+				visible[p] = true
+			} else {
 				failed[p] = true
 			}
 		}
+	}
+	for p := range visible {
+		delete(failed, p)
 	}
 	seen := map[string]bool{}
 	var out []string

@@ -182,6 +182,12 @@ type Result struct {
 	Friction *agent.Friction
 }
 
+// gateHeldOutConflict is where a Run parks when QA's held-out test no
+// longer builds against the Candidate. It isn't in the frozen graph yet.
+// TODO(#46-decision): until a Gate offers `remove <test>`, a human
+// resolves it outside the Run.
+const gateHeldOutConflict = "gate.held_out_conflict"
+
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
 // warm step is stopped and the Check starts from the partial seed, so a
 // large module with a fast agent never waits longer than a cold Check.
@@ -439,7 +445,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := l.Append(RecCheckStarted, map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 			return nil, err
 		}
-		cr, err := runner.CheckAgainst(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
+		// With held-out tests, two executions: the visible Oracle in a build
+		// no held-out file enters, and the held-out tests on their own
+		// (#46); both must pass.
+		cr, err := runner.SplitCheck(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
 		if err != nil {
 			return nil, err
 		}
@@ -477,6 +486,20 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			ev.Issues, ev.Conflicts = issues(m, cr, blobs), m.HeldOutBuildConflicts(cr)
 		}
 		p.Observe(ev)
+		if len(ev.Conflicts) > 0 {
+			// QA's held-out test no longer builds against the Candidate. The
+			// implementer can't see it, so a send-back can't fix it, and
+			// only a human removes an Oracle test (ADR-0007): the Run parks,
+			// naming QA and the package, never a held-out name or source.
+			// TODO(#46-decision): a Gate offering `remove <test>` is post-M1;
+			// until then this parks with no choice to make here.
+			var why []string
+			for _, pkg := range ev.Conflicts {
+				why = append(why, "QA's held-out test in package "+pkg+" no longer builds against the Candidate; the implementer isn't sent back over it, and only a human removes an Oracle test")
+			}
+			res.Gate = gateHeldOutConflict
+			return end(Parked, why...)
+		}
 
 		// TODO(#47, #48): failing own tests and Ambiguous files become
 		// conditions here.

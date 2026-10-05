@@ -219,7 +219,8 @@ func TestBinaryClaudeStandardAccepted(t *testing.T) {
 		"[verify #1 claude] denied: Edit add.go",
 		"[verify #1 claude] allow Write neg_test.go · pre-authorised by Launch profile ",
 		"QA         Fresh Claude · Exit extended · +1 held-out",
-		"check      go test -json ./... · 2 ran · 0 failed · pass",
+		"check      visible Oracle · go test -json ./... · 1 ran · 0 failed · pass",
+		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
 		"ACCEPTED   Candidate ", "Oracle v1",
 	} {
 		if !strings.Contains(out, want) {
