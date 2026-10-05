@@ -34,7 +34,6 @@ func runIn(t *testing.T, repo string, args ...string) (code int, stdout, stderr 
 
 func committedRepo(t *testing.T, config string) string {
 	t.Helper()
-	isolate(t)
 	repo := t.TempDir()
 	initRepo(t, repo)
 	writeFile(t, filepath.Join(repo, ".oge", "oge.toml"), []byte(config))
@@ -103,7 +102,6 @@ func TestTOMLSyntaxErrorReportsPositionOnly(t *testing.T) {
 }
 
 func TestConfigSymlinkIsRefused(t *testing.T) {
-	isolate(t)
 	outside := filepath.Join(t.TempDir(), "elsewhere.toml")
 	writeFile(t, outside, []byte("schema = 1\n[project]\ntest_globs = [\"x\"]\n[[check.commands]]\nrun = \"go test -json ./...\"\nreport = \"go-test-json\"\n"))
 	repo := t.TempDir()
@@ -127,7 +125,6 @@ func TestConfigSymlinkIsRefused(t *testing.T) {
 }
 
 func TestConfigRecordedAsSymlinkInGitIsRefused(t *testing.T) {
-	isolate(t)
 	repo := t.TempDir()
 	initRepo(t, repo)
 	if err := os.MkdirAll(filepath.Join(repo, ".oge"), 0o755); err != nil {
@@ -153,7 +150,6 @@ func TestConfigRecordedAsSymlinkInGitIsRefused(t *testing.T) {
 }
 
 func TestConfigDirectoryIsRefused(t *testing.T) {
-	isolate(t)
 	repo := t.TempDir()
 	initRepo(t, repo)
 	writeFile(t, filepath.Join(repo, ".oge", "oge.toml", "inner"), []byte("x"))

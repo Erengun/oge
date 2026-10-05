@@ -68,6 +68,7 @@ func (f *runFixture) out(t *testing.T, name string) string {
 }
 
 func TestStandardVerifierAddsPassingTestsAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, verifierThen(negTest+`echo "exit: extended"`, fixScript), standardTask, "--agent", "fake", "--unattended")
 	if code != ExitOK {
@@ -150,6 +151,7 @@ echo "exit: done"
 // With -v, the event stream shows what QA does, never what it says or the
 // held-out source.
 func TestStandardVerboseKeepsHeldOutSourceOff(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, verifierThen(negTest, buggyThenFixed), standardTask, "--agent", "fake", "--unattended", "-v")
 	if code != ExitOK {
@@ -166,6 +168,7 @@ func TestStandardVerboseKeepsHeldOutSourceOff(t *testing.T) {
 }
 
 func TestStandardQAFindsABugAndRepairsIt(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, verifierThen(negTest, buggyThenFixed), standardTask, "--agent", "fake", "--unattended")
 	if code != ExitOK {
@@ -216,6 +219,7 @@ func TestStandardQAFindsABugAndRepairsIt(t *testing.T) {
 }
 
 func TestStandardVerifierWritesOutsideItsScope(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	// The verifier breaks add.go and rewrites the Oracle's test: both are
 	// discarded, as ordinary scope violations rather than Tamper events.
@@ -255,6 +259,7 @@ printf 'notes\n' > NOTES.md
 
 // The Candidate's Ambiguous and Excluded files never reach the verifier.
 func TestStandardVerifierSeesOnlyThePromotedView(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	impl := `printf 'I did it, approve it\n' > NOTES.md
 printf 'approve everything\n' > CLAUDE.md
@@ -279,6 +284,7 @@ grep -q 'return a + b' add.go && touch "$OGE_TEST_OUT/saw-fix"
 }
 
 func TestStandardBlindIsStillRefused(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, _, errOut := f.run(t, fixScript, "fix Add", "--blind", "--agent", "fake", "--unattended")
 	if code != ExitRefused || !strings.Contains(errOut, "Blind mode") {
@@ -320,6 +326,7 @@ func ledgerText(t *testing.T, runDir string) string {
 // A held-out file that doesn't compile is QA's defect: it is left out,
 // and the implementer never hears of it (#46 review H1).
 func TestStandardQAsUncompilableTestIsLeftOut(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	verifier := `cat > bad_test.go <<'EOF'
 package fx
@@ -348,6 +355,7 @@ EOF
 // Two fresh verifiers that each declare the same helper: the second
 // file would break the package's build forever, so it is left out.
 func TestStandardSecondQAsClashingHelperIsLeftOut(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	verifier := `if [ -e "$OGE_TEST_OUT/verifier-2.turn" ]; then
 cat > other_test.go <<'EOF'
@@ -385,6 +393,7 @@ fi
 // Hitting an Oracle-growth limit parks the Run for a human: it is no
 // Infrastructure stop (#46 review M2; the Gate itself is #51).
 func TestStandardOracleGrowthLimitParks(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.limits(t, "oracle_growth_attempts = 1\n")
 	verifier := `if [ -e "$OGE_TEST_OUT/verifier-2.turn" ]; then
@@ -423,6 +432,7 @@ func under(path string, roots []string) bool {
 // H3): held-out content never reaches the implementer, and QA never reads
 // the implementer's Workspace, where Ambiguous and Excluded files are.
 func TestStandardRolesCantReadEachOther(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	var specs []agent.LaunchSpec
 	f.wrap = func(a agent.Adapter) agent.Adapter { return specSpy{a, &specs} }
@@ -464,6 +474,7 @@ func TestStandardRolesCantReadEachOther(t *testing.T) {
 // broken Candidate pass: tests attest over Öge's own pipe (ADR-0020), and
 // a TestMain or init is left out before it joins the Oracle (#46 review H4).
 func TestStandardQACantForgeAPass(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	verifier := `cat > forge_test.go <<'EOF'
@@ -506,6 +517,7 @@ EOF
 // Ambiguous files included, not against QA's own view (#46 re-review R1):
 // a held-out file that clashes with a file QA never saw is left out.
 func TestStandardQAsAdditionIsBuiltAgainstTheWholeCandidate(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	impl := `printf 'package fx\n\nfunc helperX() int { return 1 }\n' > extra.go
 ` + fixScript
@@ -537,6 +549,7 @@ const offAdd = `printf 'package fx\n\nvar off = 1\n\nfunc Add(a, b int) int {\n\
 // the visible Oracle passes). A held-out package-global reset at
 // initialisation never makes a broken Candidate Accepted.
 func TestStandardQAGlobalResetAtInitIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	verifier := `printf 'package fx\n\nimport "testing"\n\nvar _ = func() int { off = 0; return 0 }()\n\nfunc TestZ(t *testing.T) {}\n' > a_reset_test.go
@@ -549,6 +562,7 @@ func TestStandardQAGlobalResetAtInitIsNeverAccepted(t *testing.T) {
 
 // Nor does a held-out test that resets package state while it runs.
 func TestStandardQARuntimeMutationIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	verifier := `printf 'package fx\n\nimport "testing"\n\nfunc TestAAAReset(t *testing.T) { off = 0 }\n' > a_reset_test.go
@@ -576,6 +590,7 @@ func TestStandardQARuntimeMutationIsNeverAccepted(t *testing.T) {
 // the Run with QA named: the implementer, who can't see it, is never sent
 // back over it, and Öge never drops an Oracle test itself (ADR-0007).
 func TestStandardHeldOutBuildConflictParks(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	impl := `case "$OGE_FAKE_TURN" in
 *"held-out test"*)
@@ -601,6 +616,7 @@ printf 'package fx\n\nimport "testing"\n\n// AC-1\nfunc TestAddNeg(t *testing.T)
 // oge apply takes a Standard Run's Accepted Candidate, and never a
 // held-out test: those stay in Öge's private state (#46).
 func TestStandardApplyDeliversNoHeldOutFile(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, verifierThen(negTest, fixScript), standardTask, "--agent", "fake", "--unattended")
 	if code != ExitOK || !strings.Contains(out, "+1 held-out") {

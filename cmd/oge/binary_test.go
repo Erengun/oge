@@ -134,6 +134,7 @@ report = "go-test-json"
 `
 
 func TestBinaryDryRunValidExitsZero(t *testing.T) {
+	t.Parallel()
 	repo, env := fixtureRepo(t, validConfig)
 	code, out, errOut := runBinary(t, repo, env, "fix the login bug", "--dry-run")
 	if code != 0 {
@@ -147,6 +148,7 @@ func TestBinaryDryRunValidExitsZero(t *testing.T) {
 }
 
 func TestBinaryDryRunInvalidExitsTwo(t *testing.T) {
+	t.Parallel()
 	repo, env := fixtureRepo(t, "schema = 1\n[pipelines.default.gates]\ntamper = false\n")
 	code, _, errOut := runBinary(t, repo, env, "run", "--dry-run", "fix it")
 	if code != 2 || !strings.Contains(errOut, "tamper Gate is mandatory") {
@@ -155,6 +157,7 @@ func TestBinaryDryRunInvalidExitsTwo(t *testing.T) {
 }
 
 func TestBinaryWithoutTerminalOrConfigRefuses(t *testing.T) {
+	t.Parallel()
 	repo, env := fixtureRepo(t, "")
 	code, _, errOut := runBinary(t, repo, env, "--dry-run", "fix it")
 	if code != 2 || !strings.Contains(errOut, "no terminal") {
@@ -208,6 +211,7 @@ func stdoutTargets(t *testing.T) []string {
 }
 
 func TestBinaryDevNullStdinIsNotATerminal(t *testing.T) {
+	t.Parallel()
 	for _, stdout := range stdoutTargets(t) {
 		repo, env := fixtureRepo(t, "")
 		code, errOut := runRedirected(t, repo, env, stdout, "--dry-run", "fix it")
@@ -218,6 +222,7 @@ func TestBinaryDevNullStdinIsNotATerminal(t *testing.T) {
 }
 
 func TestBinaryDevNullStdinNeverLaunchesEditor(t *testing.T) {
+	t.Parallel()
 	for _, stdout := range stdoutTargets(t) {
 		repo, env := fixtureRepo(t, validConfig)
 		marker := filepath.Join(t.TempDir(), "editor-ran")

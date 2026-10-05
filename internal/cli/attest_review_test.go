@@ -30,6 +30,7 @@ func init() {
 // A nested module's tests, run by a Check command of their own, are
 // expected and attest like any other.
 func TestRunForgedReportInANestedModuleIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig+`[[check.commands]]
 run    = "cd sub && go test -json ./..."
@@ -51,7 +52,9 @@ const exampleTest = "package fx\n\nimport \"fmt\"\n\nfunc ExampleAdd() {\n\tfmt.
 
 // An Example with an Output comment is a protected test: it attests.
 func TestRunExampleOracle(t *testing.T) {
+	t.Parallel()
 	t.Run("forged", func(t *testing.T) {
+		t.Parallel()
 		f := newRunFixture(t)
 		f.sendBackLimit(t, 0)
 		if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
@@ -67,6 +70,7 @@ func TestRunExampleOracle(t *testing.T) {
 	// The example returns, and once go test has restored stdout, before
 	// it compares the output, a Candidate goroutine exits 0.
 	t.Run("exit before the comparison", func(t *testing.T) {
+		t.Parallel()
 		f := newRunFixture(t)
 		f.sendBackLimit(t, 0)
 		if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
@@ -126,6 +130,7 @@ EOF
 // An Oracle with Go test files but nothing Öge can attest can't vouch
 // for anything: an Oracle-validity stop, not a pass.
 func TestRunOracleWithNothingToAttestStops(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
 		t.Fatal(err)
@@ -140,6 +145,7 @@ func TestRunOracleWithNothingToAttestStops(t *testing.T) {
 
 // A skip forced inside a subtest is a gap the Candidate made.
 func TestRunCandidateForcedSubtestSkipIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	writeFile(t, filepath.Join(f.repo, "sub.go"), []byte("package fx\n\nfunc Sub(a, b int) int { return 0 }\n"))
@@ -171,6 +177,7 @@ func TestSubtests(t *testing.T) {
 // The Oracle's own TestMain runs no tests: the Snapshot control shows the
 // same absence, so it's an Oracle-validity stop, not the Candidate's fail.
 func TestRunOracleTestMainThatRunsNothingIsInfrastructure(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "main_test.go"), []byte("package fx\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(0) }\n"))
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -186,6 +193,7 @@ const taggedTest = "//go:build oge_integration\n\npackage fx\n\nimport \"testing
 
 // Excluded on the Snapshot by build tags: not covered, with the reason.
 func TestRunBuildTaggedProtectedTestIsNotCovered(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "tagged_test.go"), []byte(taggedTest))
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -196,6 +204,7 @@ func TestRunBuildTaggedProtectedTestIsNotCovered(t *testing.T) {
 
 // Protected source exists, but nothing protected runs here: fail closed.
 func TestRunOnlyExcludedProtectedTestsFailClosed(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
 		t.Fatal(err)
@@ -210,11 +219,13 @@ func TestRunOnlyExcludedProtectedTestsFailClosed(t *testing.T) {
 // The Candidate can't make a Snapshot-runnable test excluded: a
 // //go:build ignore line or a platform-suffixed rename never passes.
 func TestRunCandidateCannotExcludeAProtectedTest(t *testing.T) {
+	t.Parallel()
 	for name, script := range map[string]string{
 		"build ignore": "printf '//go:build ignore\\n\\n' | cat - add_test.go > x && mv x add_test.go\n",
 		"rename":       "mv add_test.go add_windows_test.go\n",
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newRunFixture(t)
 			f.sendBackLimit(t, 0)
 			code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -228,6 +239,7 @@ func TestRunCandidateCannotExcludeAProtectedTest(t *testing.T) {
 // The Snapshot doesn't compile: the statically eligible tests are
 // required once the Candidate builds, and excluded ones aren't covered.
 func TestRunSnapshotThatDoesNotCompile(t *testing.T) {
+	t.Parallel()
 	setup := func(t *testing.T) *runFixture {
 		f := newRunFixture(t)
 		f.sendBackLimit(t, 0)
@@ -236,6 +248,7 @@ func TestRunSnapshotThatDoesNotCompile(t *testing.T) {
 		return f
 	}
 	t.Run("fixed", func(t *testing.T) {
+		t.Parallel()
 		f := setup(t)
 		code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 		if code != ExitOK || !strings.Contains(out, "tagged_test.go — requires build constraint") {
@@ -243,6 +256,7 @@ func TestRunSnapshotThatDoesNotCompile(t *testing.T) {
 		}
 	})
 	t.Run("forged", func(t *testing.T) {
+		t.Parallel()
 		f := setup(t)
 		script := "printf 'package fx\\n\\nfunc Add(a, b int) int { return 0 }\\n' > add.go\ncat > forge.go <<'EOF'\n" + forgeInit("fx", "TestAdd") + "EOF\n"
 		code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
