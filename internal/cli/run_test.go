@@ -48,6 +48,8 @@ type runFixture struct {
 	statusBefore            string
 	// interactive mocks a terminal at stdin and stdout.
 	interactive bool
+	stdin       string             // what the human types
+	edit        func(string) error // the human's $EDITOR
 }
 
 func newRunFixture(t *testing.T) *runFixture {
@@ -92,6 +94,7 @@ func newRunFixture(t *testing.T) *runFixture {
 		}
 	}
 	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
+	f.edit = func(string) error { t.Error("editor opened"); return nil }
 	return f
 }
 
@@ -103,11 +106,11 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 	}
 	var stdout, stderr bytes.Buffer
 	env := Env{
-		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
+		Stdin: strings.NewReader(f.stdin), Stdout: &stdout, Stderr: &stderr,
 		Dir:         f.repo,
 		Interactive: func() bool { return f.interactive },
 		LookPath:    exec.LookPath,
-		Edit:        func(string) error { t.Fatal("editor opened"); return nil },
+		Edit:        f.edit,
 		GOOS:        runtime.GOOS,
 		Version:     "test",
 		Getenv:      os.Getenv,

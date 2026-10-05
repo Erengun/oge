@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -52,7 +53,9 @@ func colorAllowed(getenv func(string) string) bool {
 	return getenv("NO_COLOR") == ""
 }
 
-func (u *tui) gate(gatePrompt) (string, error)        { return "", errNotBuilt }
+func (u *tui) gate(context.Context, gate.Request) (gate.Decision, error) {
+	return gate.Decision{}, errNotBuilt
+}
 func (u *tui) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 
 // show runs the Run on its own goroutine and the live view on this one.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
@@ -72,11 +73,16 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	defer cancel()
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
-	res, err := selectView(env, f, t, frozen).show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
-		return run.Start(ctx, run.Params{
+	v := selectView(env, f, t, frozen)
+	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
+		p := run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 			State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: observe,
-		})
+		}
+		if !f.unattended {
+			p.Gates = viewPort{v}
+		}
+		return run.Start(ctx, p)
 	})
 	if errors.Is(err, errForced) {
 		proc.KillAll()
@@ -120,20 +126,14 @@ type view interface {
 	// errForced without waiting once in is forced. A view that takes
 	// Ctrl-C as a key passes it to in.
 	show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error)
-	// gate and hostRequest are where a Gate (#43) and an agent's Host
-	// request (#45) will be answered. Neither is built yet; whatever answers
-	// them never offers a default choice (ADR-0015).
-	gate(g gatePrompt) (string, error)
+	// gate is where a Gate waits for the human's decision (ADR-0015), and
+	// hostRequest where an agent's Host request (#45) will be answered;
+	// they stay separate ports. Neither ever offers a default choice.
+	gate(ctx context.Context, r gate.Request) (gate.Decision, error)
 	hostRequest(h hostPrompt) (string, error)
 }
 
 type startFunc func(ctx context.Context, observe func(run.Event)) (*run.Result, error)
-
-// gatePrompt is a Gate waiting for a human decision.
-type gatePrompt struct {
-	Name    string
-	Choices []string // full words; there is no default
-}
 
 // hostPrompt is an agent's Host request, such as a permission to run a tool.
 type hostPrompt struct {
@@ -148,7 +148,8 @@ var errNotBuilt = errors.New("not built yet")
 // otherwise: without a TTY, on a terminal that can't move the cursor
 // (TERM empty or dumb), with --plain, or with -v/-vv (ADR-0022).
 func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view {
-	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen}
+	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen,
+		input: &lines{in: env.Stdin}, edit: env.Edit}
 	// TODO(#79-decision): --unattended on a terminal still draws the live
 	// view; unattended means "never prompt", and the view doesn't.
 	// TODO(#79-decision): an empty TERM gets plain lines too. Windows
@@ -168,9 +169,13 @@ type renderer struct {
 	w       io.Writer
 	verbose bool
 	frozen  *pipeline.Frozen
+	input   *lines             // what the human types at a Gate
+	edit    func(string) error // $EDITOR, for a Gate reason
+	intr    *interrupts
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
+	r.intr = in
 	e := runAsync(ctx, start, r.observe, nil)
 	select {
 	case e := <-e:
@@ -214,7 +219,6 @@ func runAsync(ctx context.Context, start startFunc, observe func(run.Event), aft
 	return done
 }
 
-func (r *renderer) gate(gatePrompt) (string, error)        { return "", errNotBuilt }
 func (r *renderer) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 
 func (r *renderer) p(format string, a ...any) { fmt.Fprintf(r.w, format+"\n", a...) }
