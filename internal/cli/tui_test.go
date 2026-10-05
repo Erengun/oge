@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -206,18 +205,23 @@ func TestTUINoColor(t *testing.T) {
 func TestTUICtrlCCancelsTheRunAndWaitsForItsEnd(t *testing.T) {
 	h := newTUIHarness(t, false, 80)
 	cancelled := 0
-	h.m.cancel = func() { cancelled++ }
+	in := newInterrupts(func() { cancelled++ })
+	h.m.interrupt = in.interrupt
 	h.working()
-	for range 2 {
-		if _, cmd := h.m.Update(ctrlKey('c')); cmd != nil {
-			t.Fatal("ctrl+c quit the view before the Run ended")
-		}
+	if _, cmd := h.m.Update(ctrlKey('c')); cmd != nil {
+		t.Fatal("ctrl+c quit the view before the Run ended")
 	}
 	if cancelled != 1 {
 		t.Errorf("cancel called %d times", cancelled)
 	}
-	if got := h.m.render(); !strings.Contains(got, "cancelling…") {
+	if got := h.m.render(); !strings.Contains(got, "cancelling… ctrl+c again to stop now") {
 		t.Errorf("no cancelling hint:\n%s", got)
+	}
+	h.m.Update(ctrlKey('c'))
+	select {
+	case <-in.forced:
+	default:
+		t.Error("a second ctrl+c didn't force the stop")
 	}
 }
 
@@ -238,23 +242,6 @@ func TestTUIQueueNeverBlocksTheRun(t *testing.T) {
 	if got := len(q.wait().(batchMsg)); got != 10000 {
 		t.Errorf("drained %d messages", got)
 	}
-}
-
-// show restores order on every exit path: the Run's panic comes back on
-// the caller's goroutine only after the view has stopped.
-func TestTUIShowReRaisesARunPanicAfterTheViewStops(t *testing.T) {
-	h := newTUIHarness(t, false, 80)
-	var out bytes.Buffer
-	u := &tui{in: strings.NewReader(""), out: &out, stderr: &out, plain: &renderer{w: &out, frozen: h.f}, m: h.m}
-	defer func() {
-		if r := recover(); r == nil || !strings.Contains(r.(string), "boom") {
-			t.Errorf("recovered %v", r)
-		}
-	}()
-	u.show(context.Background(), func() {}, func(context.Context, func(run.Event)) (*run.Result, error) {
-		panic("boom")
-	})
-	t.Error("show returned after a panic")
 }
 
 func TestSelectView(t *testing.T) {

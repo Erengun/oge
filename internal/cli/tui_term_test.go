@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -20,6 +21,8 @@ import (
 type vt struct {
 	lines    [][]rune
 	row, col int
+	modes    map[string]rune // private mode: its last 'h' or 'l'
+	kitty    int             // keyboard enhancements pushed and not popped
 }
 
 func (t *vt) line() []rune {
@@ -78,8 +81,23 @@ func (t *vt) write(b []byte) {
 }
 
 func (t *vt) csi(params string, final rune) {
-	if strings.ContainsAny(params, "?<>=$") {
-		return // private modes and queries
+	switch {
+	case strings.HasPrefix(params, "?") && (final == 'h' || final == 'l'):
+		if t.modes == nil {
+			t.modes = map[string]rune{}
+		}
+		for _, m := range strings.Split(params[1:], ";") {
+			t.modes[m] = final
+		}
+		return
+	case strings.HasPrefix(params, ">") && final == 'u':
+		t.kitty++
+		return
+	case strings.HasPrefix(params, "<") && final == 'u':
+		t.kitty--
+		return
+	case strings.ContainsAny(params, "?<>=$"):
+		return // other private sequences and queries
 	}
 	n := 1
 	if params != "" && !strings.Contains(params, ";") {
@@ -143,7 +161,7 @@ func shrinkCase(t *testing.T, grow []int) {
 	m.still = true // so the cursor rests below the frame when it shrinks
 	u := &tui{in: strings.NewReader(""), out: &out, stderr: &out, plain: &renderer{w: &out, frozen: h.f}, m: m}
 	pause := func() { time.Sleep(250 * time.Millisecond) }
-	res, err := u.show(context.Background(), func() {}, func(_ context.Context, observe func(run.Event)) (*run.Result, error) {
+	res, err := u.show(context.Background(), newInterrupts(func() {}), func(_ context.Context, observe func(run.Event)) (*run.Result, error) {
 		observe(run.Event{Kind: run.EvStarted, Result: h.res})
 		observe(run.Event{Kind: run.EvPreflight, Result: h.res})
 		pause()
@@ -172,5 +190,86 @@ func shrinkCase(t *testing.T, grow []int) {
 		if n := strings.Count(got, once); n != 1 {
 			t.Errorf("%q is on the screen %d times:\n%s\n%q", once, n, got, out.String())
 		}
+	}
+}
+
+// assertRestored fails unless the terminal is back as a shell expects it:
+// cursor shown, every other private mode reset, no keyboard enhancement
+// left pushed.
+func (t *vt) assertRestored(tb testing.TB) {
+	tb.Helper()
+	for m, v := range t.modes {
+		want := 'l'
+		if m == "25" {
+			want = 'h'
+		}
+		if v != want {
+			tb.Errorf("private mode ?%s left %c", m, v)
+		}
+	}
+	if t.kitty > 0 {
+		tb.Errorf("%d keyboard enhancements left pushed", t.kitty)
+	}
+}
+
+// A Run panic, or a forced stop, restores the terminal before show
+// returns.
+func TestTUIRestoresTheTerminalOnEveryExit(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		start startFunc
+		force bool
+	}{
+		{"panic", func(context.Context, func(run.Event)) (*run.Result, error) {
+			time.Sleep(200 * time.Millisecond)
+			panic("boom")
+		}, false},
+		{"forced", func(context.Context, func(run.Event)) (*run.Result, error) {
+			select {} // a Run that never stops
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newTUIHarness(t, false, 80)
+			var out bytes.Buffer
+			u := &tui{in: strings.NewReader(""), out: &out, stderr: &bytes.Buffer{}, plain: &renderer{w: &out, frozen: h.f}, m: h.m}
+			in := newInterrupts(func() {})
+			if c.force {
+				time.AfterFunc(300*time.Millisecond, func() { in.interrupt(); in.interrupt() })
+			}
+			returned := make(chan any, 1)
+			go func() {
+				defer func() { returned <- recover() }()
+				_, err := u.show(context.Background(), in, c.start)
+				if !errors.Is(err, errForced) {
+					t.Errorf("show returned %v", err)
+				}
+			}()
+			select {
+			case p := <-returned:
+				if c.force == (p != nil) {
+					t.Errorf("recovered %v", p)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("show never returned")
+			}
+			var screen vt
+			screen.write(out.Bytes())
+			if len(screen.modes) == 0 {
+				t.Fatal("the view never set a mode, so this test checks nothing")
+			}
+			screen.assertRestored(t)
+		})
+	}
+}
+
+// The plain view stops waiting once forced.
+func TestPlainViewForcedStopReturnsWithoutTheRun(t *testing.T) {
+	in := newInterrupts(func() {})
+	in.interrupt()
+	in.interrupt()
+	r := &renderer{w: &bytes.Buffer{}}
+	_, err := r.show(context.Background(), in, func(context.Context, func(run.Event)) (*run.Result, error) { select {} })
+	if !errors.Is(err, errForced) {
+		t.Errorf("show returned %v", err)
 	}
 }

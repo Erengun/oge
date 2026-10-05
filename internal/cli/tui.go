@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
-	"runtime/debug"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -61,35 +58,18 @@ func (u *tui) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 // show runs the Run on its own goroutine and the live view on this one.
 // The Run reports progress into a queue, so a slow terminal never holds it
 // up. Whatever ends the Run, the view has restored the terminal before
-// show returns, and a panic in the Run is re-raised only after that.
-func (u *tui) show(ctx context.Context, cancel context.CancelFunc, start startFunc) (*run.Result, error) {
-	// Bubble Tea's own signal handler would end the view before the
-	// summary; SIGTERM cancels the Run instead, like SIGINT does.
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM)
-	defer stop()
-
+// show returns, and a panic in the Run is re-raised only after that. A
+// forced stop kills the view (which restores the terminal too) and returns
+// without waiting for the Run.
+func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
 	q := &queue{wake: make(chan struct{}, 1)}
-	u.m.queue, u.m.cancel = q, cancel
+	u.m.queue, u.m.interrupt = q, in.interrupt
+	done := runAsync(ctx, start, func(ev run.Event) { q.push(progressOf(ev, u.m.frozen, time.Now())) }, func(e ended) {
+		q.push(doneMsg{at: time.Now(), res: e.res, failed: e.err != nil || e.panicked != nil})
+	})
 
-	type ended struct {
-		res      *run.Result
-		err      error
-		panicked any
-		stack    []byte
-	}
-	done := make(chan ended, 1)
-	go func() {
-		var e ended
-		defer func() {
-			if p := recover(); p != nil {
-				e.panicked, e.stack = p, debug.Stack()
-			}
-			q.push(doneMsg{at: time.Now(), res: e.res, failed: e.err != nil || e.panicked != nil})
-			done <- e
-		}()
-		e.res, e.err = start(ctx, func(ev run.Event) { q.push(progressOf(ev, u.m.frozen, time.Now())) })
-	}()
-
+	// Bubble Tea's own signal handler would end the view before the
+	// summary; startRun's interrupts take SIGINT and SIGTERM instead.
 	out, opts := u.out, []tea.ProgramOption{tea.WithFPS(tuiFPS), tea.WithoutSignalHandler()}
 	if !sized(out) {
 		// A terminal that reports no size would get an empty frame, so it
@@ -99,10 +79,30 @@ func (u *tui) show(ctx context.Context, cancel context.CancelFunc, start startFu
 	}
 	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
 	p := tea.NewProgram(u.m, opts...)
-	if _, err := p.Run(); err != nil {
+	viewDone := make(chan struct{})
+	defer close(viewDone)
+	go func() {
+		select {
+		case <-in.forced:
+			p.Kill()
+		case <-viewDone:
+		}
+	}()
+	_, err := p.Run()
+	select {
+	case <-in.forced:
+		return nil, errForced
+	default:
+	}
+	if err != nil {
 		fmt.Fprintf(u.stderr, "oge: the live view stopped (%v); the Run goes on, and its summary follows\n", err)
 	}
-	e := <-done
+	var e ended
+	select {
+	case e = <-done:
+	case <-in.forced:
+		return nil, errForced
+	}
 	if e.panicked != nil {
 		panic(fmt.Sprintf("%v\n\n%s", e.panicked, e.stack))
 	}
@@ -237,7 +237,7 @@ type model struct {
 	now           func() time.Time
 	st            styles
 	queue         *queue
-	cancel        context.CancelFunc
+	interrupt     func()
 }
 
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
@@ -299,11 +299,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+o":
 			m.expanded = !m.expanded
 		case "ctrl+c":
-			// Ctrl-C cancels the Run, which then ends and shows its
-			// summary; the view quits only after that.
-			if !m.cancelling && m.cancel != nil {
-				m.cancelling = true
-				m.cancel()
+			// The first Ctrl-C cancels the Run, which then ends and shows
+			// its summary; the view quits only after that. A second one
+			// stops Öge without waiting.
+			m.cancelling = true
+			if m.interrupt != nil {
+				m.interrupt()
 			}
 		}
 	}
@@ -413,7 +414,7 @@ func (m *model) render() string {
 		add("")
 		hint := "ctrl+c to cancel"
 		if m.cancelling {
-			hint = "cancelling…"
+			hint = "cancelling… ctrl+c again to stop now"
 		}
 		add(st.dim(hint))
 	}

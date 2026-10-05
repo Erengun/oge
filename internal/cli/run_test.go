@@ -397,16 +397,21 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 }
 
 // A Run cancelled during its Check stops with no Verdict, in both views:
-// the Check killed by the cancel is not a fail.
+// the Check killed by the cancel is not a fail. SIGTERM cancels like
+// Ctrl-C, rather than killing Öge and orphaning its children.
 func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
-	for _, tty := range []bool{false, true} {
-		t.Run(fmt.Sprintf("tty=%v", tty), func(t *testing.T) {
+	for _, c := range []struct {
+		tty bool
+		sig string
+	}{{false, "INT"}, {true, "INT"}, {false, "TERM"}} {
+		tty := c.tty
+		t.Run(fmt.Sprintf("tty=%v,SIG%s", tty, c.sig), func(t *testing.T) {
 			f := newRunFixture(t)
 			f.interactive = tty
 			t.Setenv("TERM", "xterm-256color")
 			// The Check interrupts this process, as Ctrl-C would, then
 			// would take far longer than the test.
-			slow := fmt.Sprintf("sh -c 'kill -INT %d; exec sleep 30'", os.Getpid())
+			slow := fmt.Sprintf("sh -c 'kill -%s %d; exec sleep 30'", c.sig, os.Getpid())
 			args := []string{"fix Add", "--fast", "--agent", "fake", "--check", slow}
 			if !tty {
 				args = append(args, "--unattended")

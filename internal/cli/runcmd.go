@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
+	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/proc"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -63,18 +65,24 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 		return ExitInternal
 	}
 
-	// TODO(#40-decision): Ctrl-C cancels the context, which interrupts the
-	// Attempt; ADR-0012's Checkpoint and interrupted status come later.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	ctx, cancel := context.WithCancel(ctx)
+	// TODO(#40-decision): Ctrl-C or SIGTERM cancels the context, which
+	// interrupts the Attempt; ADR-0012's Checkpoint and interrupted status
+	// come later. A second one stops Öge without waiting.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	res, err := selectView(env, f, t, frozen).show(ctx, cancel, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
+	in := newInterrupts(cancel)
+	defer in.watch(os.Interrupt, syscall.SIGTERM)()
+	res, err := selectView(env, f, t, frozen).show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		return run.Start(ctx, run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 			State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: observe,
 		})
 	})
+	if errors.Is(err, errForced) {
+		proc.KillAll()
+		fmt.Fprintln(env.Stderr, "oge: stopped without waiting for the Run to end; its agent and Check processes were killed")
+		return ExitInterrupted
+	}
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal
@@ -100,9 +108,10 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // (ADR-0022).
 type view interface {
 	// show runs start with an observe callback for its progress, shows the
-	// Result's summary, and returns what start returned. cancel cancels
-	// ctx, for a view that takes Ctrl-C as a key.
-	show(ctx context.Context, cancel context.CancelFunc, start startFunc) (*run.Result, error)
+	// Result's summary, and returns what start returned. It returns
+	// errForced without waiting once in is forced. A view that takes
+	// Ctrl-C as a key passes it to in.
+	show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error)
 	// gate and hostRequest are where a Gate (#43) and an agent's Host
 	// request (#45) will be answered. Neither is built yet; whatever answers
 	// them never offers a default choice (ADR-0015).
@@ -153,12 +162,48 @@ type renderer struct {
 	frozen  *pipeline.Frozen
 }
 
-func (r *renderer) show(ctx context.Context, _ context.CancelFunc, start startFunc) (*run.Result, error) {
-	res, err := start(ctx, r.observe)
-	if err == nil {
-		r.summary(res)
+func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
+	e := runAsync(ctx, start, r.observe, nil)
+	select {
+	case e := <-e:
+		if e.panicked != nil {
+			panic(fmt.Sprintf("%v\n\n%s", e.panicked, e.stack))
+		}
+		if e.err == nil {
+			r.summary(e.res)
+		}
+		return e.res, e.err
+	case <-in.forced:
+		return nil, errForced
 	}
-	return res, err
+}
+
+// ended is how start returned, or the panic it raised.
+type ended struct {
+	res      *run.Result
+	err      error
+	panicked any
+	stack    []byte
+}
+
+// runAsync runs start on its own goroutine, so a view can stop waiting for
+// it. after, when set, runs once start has returned or panicked.
+func runAsync(ctx context.Context, start startFunc, observe func(run.Event), after func(ended)) <-chan ended {
+	done := make(chan ended, 1)
+	go func() {
+		var e ended
+		defer func() {
+			if p := recover(); p != nil {
+				e.panicked, e.stack = p, debug.Stack()
+			}
+			if after != nil {
+				after(e)
+			}
+			done <- e
+		}()
+		e.res, e.err = start(ctx, observe)
+	}()
+	return done
 }
 
 func (r *renderer) gate(gatePrompt) (string, error)        { return "", errNotBuilt }
