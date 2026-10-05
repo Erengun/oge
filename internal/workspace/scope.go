@@ -550,7 +550,7 @@ func (r *RunRepo) diff(rel string, before, after []byte, hasBefore, hasAfter boo
 			return nil, err
 		}
 	}
-	cmd := exec.Command("git", "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "--", a, b)
+	cmd := exec.Command("git", "diff", "--no-index", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "--", a, b)
 	cmd.Dir = tmp
 	cmd.Env = append(scrubGitEnv(os.Environ()), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
 	out, err := cmd.Output()

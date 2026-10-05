@@ -411,22 +411,19 @@ loop:
 	if err != nil {
 		return nil, err
 	}
-	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
 	// The scope check runs after every Attempt whose agent ran, failed or
 	// not, and before the Candidate is committed.
 	if err := enforceScope(l, blobs, repo, a, snap, ws, protected); err != nil {
 		return nil, err
 	}
 	if a.Failure == "" {
-		c, err := repo.CommitCandidate(ws, snap, "refs/oge/candidates/c1", "Candidate c1 ("+a.ID+")")
-		if err != nil {
+		if err := commitCandidate(l, repo, a, snap, ws, protected); err != nil {
 			return nil, err
 		}
-		a.Candidate = c
-		if a.Changed, err = repo.ChangedFiles(snap, c); err != nil {
-			return nil, err
-		}
-		ended["candidate"] = c
+	}
+	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
+	if a.Candidate != "" {
+		ended["candidate"] = a.Candidate
 	}
 	return a, l.Append(RecAttemptEnded, ended)
 }

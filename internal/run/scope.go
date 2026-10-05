@@ -1,12 +1,14 @@
 package run
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/workspace"
 )
 
@@ -18,6 +20,8 @@ const (
 	// RecTamperEvent is one write to a protected path by the role being
 	// judged. It stays in the Ledger whatever happens next.
 	RecTamperEvent = "TamperEvent"
+	// RecScopeReverted says whether the planned reverts were made.
+	RecScopeReverted = "ScopeReverted"
 )
 
 // Protected classes of the implementer's protected set.
@@ -65,43 +69,120 @@ func implementerScope(m *oracle.Manifest, f *pipeline.Frozen) func(string) strin
 
 // enforceScope compares the Workspace with the Snapshot once the agent's
 // process tree is gone, records what is outside the Write scope, then
-// reverts it. The records come first (ADR-0012).
+// reverts it (ADR-0012: the plan is recorded first). A comparison or
+// revert that the Workspace's content defeats fails the Attempt, not Öge;
+// every Tamper event found reaches the Ledger either way.
 func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo, a *Attempt, snap, ws string,
 	protected func(string) string) error {
 	s, err := repo.CheckScope(ws, snap, workspace.ScopeRules{Protected: protected, Put: blobs.Put})
 	if err != nil {
-		return err
-	}
-	reverted := s.Reverts
-	if reverted == nil {
-		reverted = []workspace.Revert{}
+		a.Failure = failAttempt(a.Failure, "scope_check_failed: "+err.Error())
+		return nil
 	}
 	// TODO(#44): an adapter that enforces paths natively reports them, and
 	// those paths are native-enforced. The fake enforces nothing.
 	if err := l.Append(RecScopeObserved, map[string]any{
-		"attempt": a.ID, "role": "implementer", "compared": s.Compared, "reverted": reverted,
-		"tamper": s.Tamper(), "enforcement": workspace.RevertOnly,
+		"attempt": a.ID, "role": "implementer", "state": "planned", "compared": s.Compared,
+		"reverted": nonNil(s.Reverts), "tamper": s.Tamper(), "enforcement": workspace.RevertOnly,
 	}); err != nil {
 		return err
 	}
-	n := 0
-	for _, r := range s.Reverts {
+	applyErr := s.Apply()
+	done := map[string]any{"attempt": a.ID, "reverted": applyErr == nil}
+	if applyErr != nil {
+		done["error"] = applyErr.Error()
+	}
+	if err := l.Append(RecScopeReverted, done); err != nil {
+		return err
+	}
+	if err := recordTamper(l, a, s.Reverts, applyErr == nil, false); err != nil {
+		return err
+	}
+	a.Reverted = s.Reverts
+	if applyErr != nil {
+		a.Failure = failAttempt(a.Failure, "revert_failed: "+applyErr.Error())
+	}
+	return nil
+}
+
+// commitCandidate commits the reverted Workspace as the Attempt's
+// Candidate. Protected paths and escaping links come from the Snapshot by
+// construction, so a write that raced the comparison can't reach the
+// Candidate; one that did is recorded before the Candidate's ref is set.
+func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap, ws string, protected func(string) string) error {
+	c, late, err := repo.CommitScoped(ws, snap, "Candidate c1 ("+a.ID+")", protected)
+	var addErr *workspace.AddError
+	if errors.As(err, &addErr) {
+		a.Failure = failAttempt(a.Failure, "candidate_commit_failed: "+addErr.Error())
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(late) > 0 {
+		if err := l.Append(RecScopeObserved, map[string]any{
+			"attempt": a.ID, "role": "implementer", "state": "late", "reverted": late,
+			"tamper": countTamper(late), "enforcement": workspace.RevertOnly,
+		}); err != nil {
+			return err
+		}
+		if err := recordTamper(l, a, late, true, true); err != nil {
+			return err
+		}
+		a.Reverted = append(a.Reverted, late...)
+	}
+	if err := repo.SetRef("refs/oge/candidates/c1", c); err != nil {
+		return err
+	}
+	a.Candidate = c
+	a.Changed, err = repo.ChangedFiles(snap, c)
+	return err
+}
+
+// recordTamper writes one TamperEvent per protected path among rs.
+func recordTamper(l *ledger.Ledger, a *Attempt, rs []workspace.Revert, reverted, late bool) error {
+	n := a.Tamper()
+	for _, r := range rs {
 		if !r.Tamper {
 			continue
 		}
 		n++
-		if err := l.Append(RecTamperEvent, map[string]any{
+		rec := map[string]any{
 			"id": fmt.Sprintf("%s/tamper-%d", a.ID, n), "attempt": a.ID, "path": r.Path, "class": r.Class,
-			"change": r.Change, "before": r.Before, "after": r.After, "reverted": true, "acknowledged": false,
-		}); err != nil {
+			"change": r.Change, "before": r.Before, "after": r.After, "reverted": reverted, "acknowledged": false,
+		}
+		if late {
+			rec["late"] = true // written after the comparison; kept out of the Candidate's commit
+		}
+		if err := l.Append(RecTamperEvent, rec); err != nil {
 			return err
 		}
 	}
-	if err := s.Apply(); err != nil {
-		return err
-	}
-	a.Reverted = s.Reverts
 	return nil
+}
+
+func failAttempt(prev, why string) string {
+	if prev != "" {
+		return prev
+	}
+	return string(redact.Redact([]byte(why)))
+}
+
+func nonNil(rs []workspace.Revert) []workspace.Revert {
+	if rs == nil {
+		return []workspace.Revert{}
+	}
+	return rs
+}
+
+func countTamper(rs []workspace.Revert) int {
+	n := 0
+	for _, r := range rs {
+		if r.Tamper {
+			n++
+		}
+	}
+	return n
 }
 
 // Tamper counts the Attempt's Tamper events.

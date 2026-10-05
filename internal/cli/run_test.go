@@ -168,7 +168,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
-	run.RecAttemptStarting, run.RecProcessStarted, run.RecScopeObserved, run.RecAttemptEnded,
+	run.RecAttemptStarting, run.RecProcessStarted, run.RecScopeObserved, run.RecScopeReverted, run.RecAttemptEnded,
 	run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
@@ -242,7 +242,7 @@ func TestRunRejectsWhenTheOracleFails(t *testing.T) {
 	}
 	f.assertUntouched(t)
 	// The rewritten test is reverted and recorded before the Attempt ends.
-	tamperOrder := strings.Replace(strings.Join(wantOrder, ","), run.RecScopeObserved, run.RecScopeObserved+","+run.RecTamperEvent, 1)
+	tamperOrder := strings.Replace(strings.Join(wantOrder, ","), run.RecScopeReverted, run.RecScopeReverted+","+run.RecTamperEvent, 1)
 	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != tamperOrder {
 		t.Errorf("Ledger order:\n got %s\nwant %s", got, tamperOrder)
 	}

@@ -236,7 +236,7 @@ func (r *RunRepo) TakeSnapshot(root, dir string) (commit string, info SnapshotIn
 	if err != nil {
 		return "", info, err
 	}
-	commit, err = r.commitDir(dir, "", "Snapshot "+info.String(), true)
+	commit, err = r.commitDir(dir, "", "Snapshot "+info.String(), true, nil)
 	if err != nil {
 		return "", info, err
 	}
@@ -323,7 +323,7 @@ func describe(root string) (SnapshotInfo, error) {
 // CommitCandidate commits the Workspace dir as a Candidate on top of
 // parent, starting from parent's index so tracked-but-ignored files stay.
 func (r *RunRepo) CommitCandidate(dir, parent, ref, message string) (string, error) {
-	commit, err := r.commitDir(dir, parent, message, false)
+	commit, err := r.commitDir(dir, parent, message, false, nil)
 	if err != nil {
 		return "", err
 	}
@@ -335,8 +335,9 @@ func (r *RunRepo) CommitCandidate(dir, parent, ref, message string) (string, err
 
 // commitDir commits dir's contents with a private index. force adds every
 // file (the Snapshot copy is already filtered); otherwise the Workspace's
-// .gitignore applies on top of parent's tree.
-func (r *RunRepo) commitDir(dir, parent, message string, force bool) (string, error) {
+// .gitignore applies on top of parent's tree. fix, when set, may change
+// the index before its tree is written.
+func (r *RunRepo) commitDir(dir, parent, message string, force bool, fix func(index string) error) (string, error) {
 	idx, err := os.CreateTemp(r.Dir, "index-*")
 	if err != nil {
 		return "", err
@@ -355,7 +356,12 @@ func (r *RunRepo) commitDir(dir, parent, message string, force bool) (string, er
 	}
 	args = append(args, "--", ".", ":(exclude)"+ledger.WorkspaceMarker, ":(exclude,glob)**/.git")
 	if _, err := r.git(dir, idx.Name(), nil, args...); err != nil {
-		return "", err
+		return "", &AddError{err}
+	}
+	if fix != nil {
+		if err := fix(idx.Name()); err != nil {
+			return "", err
+		}
 	}
 	tree, err := r.git(dir, idx.Name(), nil, "write-tree")
 	if err != nil {
@@ -480,3 +486,10 @@ func scrubGitEnv(env []string) []string {
 	}
 	return out
 }
+
+// AddError is git failing to add a Workspace's files, which the Workspace's
+// content can cause (an unreadable file, say).
+type AddError struct{ Err error }
+
+func (e *AddError) Error() string { return e.Err.Error() }
+func (e *AddError) Unwrap() error { return e.Err }
