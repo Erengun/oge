@@ -11,13 +11,23 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR supersedes its running CI; main and nightly
+# runs always finish.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   STATICCHECK_VERSION: v0.8.1
   GOVULNCHECK_VERSION: v1.8.0
   GORELEASER_VERSION: v2.18.2
+  # The e2e packages, sharded across the e2e and race jobs. The test job
+  # runs every other package.
+  E2E_PACKAGES: ./internal/cli ./cmd/oge
 
 jobs:
-  # Blocking. Validates ADR-0001's cgo-free build invariant.
+  # Blocking. Validates ADR-0001's cgo-free build invariant, together with
+  # the e2e shards, which run the same way.
   test:
     runs-on: ubuntu-latest
     env:
@@ -27,17 +37,86 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-${{ hashFiles('go.sum') }}-
       - run: scripts/ci-no-live-agents.sh
       - name: gofmt
         run: test -z "$(gofmt -l . | tee /dev/stderr)"
       - run: go vet ./...
-      - run: go test -timeout 30m ./...
+      - name: go test (all but the e2e packages)
+        run: |
+          pkgs=$(go list ./... | grep -vxF -f <(go list $E2E_PACKAGES))
+          go test -timeout 30m $pkgs
       - run: go run honnef.co/go/tools/cmd/staticcheck@"$STATICCHECK_VERSION" ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@"$GOVULNCHECK_VERSION" ./...
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+
+  # Blocking. The e2e packages, no cgo, split by test name (scripts/ci-shard.sh).
+  e2e:
+    name: e2e (${{ matrix.dir }} ${{ matrix.shard }}/${{ matrix.total }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dir: internal/cli, shard: 1, total: 4 }
+          - { dir: internal/cli, shard: 2, total: 4 }
+          - { dir: internal/cli, shard: 3, total: 4 }
+          - { dir: internal/cli, shard: 4, total: 4 }
+          - { dir: cmd/oge, shard: 1, total: 3 }
+          - { dir: cmd/oge, shard: 2, total: 3 }
+          - { dir: cmd/oge, shard: 3, total: 3 }
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-e2e-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-e2e-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-
+            go-test-${{ hashFiles('go.sum') }}-
+      - run: scripts/ci-no-live-agents.sh
+      - name: go test (shard)
+        run: go test -timeout 30m -v "$(scripts/ci-shard.sh ${{ matrix.dir }} ${{ matrix.shard }} ${{ matrix.total }})" ./${{ matrix.dir }}
+      - if: github.event_name == 'push' && matrix.shard == 1
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-e2e-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   # Race detection needs cgo; testing only, never for release binaries.
+  # PRs race every non-e2e package plus one internal/cli shard; main pushes
+  # and nightly race everything (ADR-0017). cmd/oge's e2e tests exec
+  # binaries built without -race, so they race only the test harness.
   race:
+    name: race (${{ matrix.dir }} ${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"dir":"rest","shard":1,"total":1},{"dir":"internal/cli","shard":1,"total":4}]' || '[{"dir":"rest","shard":1,"total":1},{"dir":"internal/cli","shard":1,"total":4},{"dir":"internal/cli","shard":2,"total":4},{"dir":"internal/cli","shard":3,"total":4},{"dir":"internal/cli","shard":4,"total":4},{"dir":"cmd/oge","shard":1,"total":1}]') }}
     env:
       CGO_ENABLED: "1"
     steps:
@@ -45,8 +124,32 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-race-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-
+            go-race-rest-${{ hashFiles('go.sum') }}-
       - run: scripts/ci-no-live-agents.sh
-      - run: go test -race -timeout 30m ./...
+      - name: go test -race (shard)
+        run: |
+          if [ "${{ matrix.dir }}" = rest ]; then
+            pkgs=$(go list ./... | grep -vxF -f <(go list $E2E_PACKAGES))
+            go test -race -timeout 30m $pkgs
+          else
+            go test -race -timeout 30m -v "$(scripts/ci-shard.sh ${{ matrix.dir }} ${{ matrix.shard }} ${{ matrix.total }})" ./${{ matrix.dir }}
+          fi
+      - if: github.event_name == 'push' && matrix.shard == 1
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   # Blocking, Windows included.
   cross-build:

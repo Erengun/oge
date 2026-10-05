@@ -32,6 +32,7 @@ status: accepted
 - **Release binaries are `CGO_ENABLED=0`, and race testing is a cgo exception.**
   - A no-cgo job runs test, vet, staticcheck and govulncheck. It is what validates ADR-0001's build invariant.
   - A separate Ubuntu job runs `CGO_ENABLED=1 go test -race`, for testing only.
+  - Amended by [#99](https://github.com/Erengun/oge/issues/99): the no-cgo tests and the race job are sharded across parallel jobs. On PRs the race job covers every non-e2e package plus one `internal/cli` shard; main pushes and nightly race everything.
   - The cross-build matrix (linux, darwin, windows × amd64/arm64) is `CGO_ENABLED=0` and blocking, Windows included.
 - **Windows cross-builds but refuses execution in the MVP.**
   - `oge run` and every other command that needs execution or isolation semantics exits 2 on Windows.
