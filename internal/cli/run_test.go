@@ -510,3 +510,46 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 		})
 	}
 }
+
+// A Run that Öge couldn't clean up after (a forced stop, a crash) leaves
+// its cache seed and Check directories; the next Run sweeps them, but
+// never a live Run's, nor any Run's Ledger.
+func TestRunSweepsLeftoverCachesOfDeadRuns(t *testing.T) {
+	f := newRunFixture(t)
+	runs := filepath.Join(f.state, "private", "runs")
+	mk := func(id, pid string) {
+		for _, p := range []string{"cache-seed/seed/gocache/ab/x-d", "checks/1/gocache/y", "ledger.jsonl"} {
+			writeFile(t, filepath.Join(runs, id, p), []byte("x"))
+		}
+		if err := os.Chmod(filepath.Join(runs, id, "cache-seed", "seed", "gocache", "ab"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		if pid != "" {
+			writeFile(t, filepath.Join(runs, id, "live.pid"), []byte(pid))
+		}
+	}
+	mk("20200101T000000-dead01", "")
+	mk("20200101T000000-dead02", "999999999")
+	mk("20200101T000000-live01", fmt.Sprint(os.Getpid()))
+	defer oracle.RemoveAll(filepath.Join(runs, "20200101T000000-live01"))
+	if code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended"); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, id := range []string{"20200101T000000-dead01", "20200101T000000-dead02"} {
+		for _, p := range []string{"cache-seed", "checks"} {
+			if _, err := os.Stat(filepath.Join(runs, id, p)); err == nil {
+				t.Errorf("%s/%s of a dead Run was left", id, p)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(runs, id, "ledger.jsonl")); err != nil {
+			t.Errorf("the sweep removed %s's Ledger: %v", id, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runs, "20200101T000000-live01", "cache-seed")); err != nil {
+		t.Errorf("the sweep removed a live Run's seed: %v", err)
+	}
+	others, _ := filepath.Glob(filepath.Join(runs, "*", "live.pid"))
+	if len(others) != 1 {
+		t.Errorf("live.pid files after the Run: %v; want only the live Run's", others)
+	}
+}

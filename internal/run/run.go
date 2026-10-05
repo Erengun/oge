@@ -169,6 +169,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := os.MkdirAll(res.Dir, 0o700); err != nil {
 		return nil, err
 	}
+	release, err := markLive(res.Dir)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	sweepDeadRuns(filepath.Dir(res.Dir), res.Dir)
 	defer oracle.RemoveAll(workDir) // Workspaces are disposable
 	l, err := ledger.Create(res.Dir)
 	if err != nil {
