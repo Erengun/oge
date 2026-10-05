@@ -386,6 +386,9 @@ func authorize(env Env, r *delivery.Run, c delivery.Choice) int {
 // appliedLine is apply's one confirmation line, and what it held back.
 func appliedLine(r *delivery.Run, a *delivery.Applied) string {
 	line := appliedPlan(r, a.Plan)
+	if a.Plan.Writes() == 0 && a.Plan.Already == 0 && len(a.Held.Left) > 0 {
+		line = fmt.Sprintf("Nothing of Candidate %s of Run %s was applied: everything it changes is held back.", delivery.Short(r.Candidate), r.ID)
+	}
 	if left := a.Held.LeftLine(); left != "" {
 		line += "\n" + left + "."
 	}
