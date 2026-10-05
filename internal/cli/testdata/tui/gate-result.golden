@@ -1,0 +1,21 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+✓ preflight  ok · 0.4s
+✓ implement  fake · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+✓ check      go test -json ./... · 1 ran · 0 failed · pass · 1.2s
+
+  Result gate
+  Öge's Check passed on the Candidate.
+  Candidate 6d1231d · Attempt implement#1 · Oracle v0 · Verdicts #1
+
+  Decide whether to take it.
+    t  take       end the Run Accepted
+    s  send back  return it to the implementer, with an optional note
+    reject        end the Run Rejected (type the word and a reason)
+    q  quit       end the Run Cancelled
+
+  > ▏
+  There is no default: type a choice and press Enter
+
+ctrl+c to cancel

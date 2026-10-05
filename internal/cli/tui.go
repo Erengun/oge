@@ -13,7 +13,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/agent"
-	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -53,9 +52,6 @@ func colorAllowed(getenv func(string) string) bool {
 	return getenv("NO_COLOR") == ""
 }
 
-func (u *tui) gate(context.Context, gate.Request) (gate.Decision, error) {
-	return gate.Decision{}, errNotBuilt
-}
 func (u *tui) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 
 // show runs the Run on its own goroutine and the live view on this one.
@@ -185,6 +181,10 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		m.stage = ev.Attempt.Stage
 	case run.EvCheck:
 		m.stage = "check"
+	case run.EvSendBack:
+		m.stage, m.text = "send back", sendBackText(ev)
+	case run.EvDecided:
+		m.stage, m.text = "decision", decidedText(ev)
 	}
 	switch ev.Kind {
 	case run.EvStarted:
@@ -225,6 +225,7 @@ type stage struct {
 	sub        []string
 	state      stageState
 	timed      bool
+	mark       string // a note's mark, in place of ✓
 	start, end time.Time
 }
 
@@ -250,6 +251,7 @@ type model struct {
 	st            styles
 	queue         *queue
 	interrupt     func()
+	gate          *gateState // an open Gate, waiting for the human
 }
 
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
@@ -262,13 +264,18 @@ func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) 
 		}
 		m.stages = append(m.stages, stage{name: s.Name, text: s.Agent})
 	}
-	var checks []string
-	for _, c := range f.Checks {
-		checks = append(checks, c.Run)
-	}
-	m.stages = append(m.stages, stage{name: "check", text: strings.Join(checks, " · ")})
+	m.stages = append(m.stages, stage{name: "check", text: m.checkText()})
 	m.stages[0].state, m.stages[0].start = running, now()
 	return m
+}
+
+// checkText is the Check's line before it runs: its commands.
+func (m *model) checkText() string {
+	var checks []string
+	for _, c := range m.frozen.Checks {
+		checks = append(checks, c.Run)
+	}
+	return strings.Join(checks, " · ")
 }
 
 func (m *model) Init() tea.Cmd {
@@ -302,11 +309,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.finished {
 			return m, nil
 		}
-		m.spin++
+		if m.gate == nil {
+			m.spin++
+		}
 		return m, tick()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tea.KeyPressMsg:
+		if m.gate != nil && m.gateKey(msg) {
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+o":
 			m.expanded = !m.expanded
@@ -332,6 +344,11 @@ func (m *model) apply(msg tea.Msg) bool {
 			m.head = msg.head
 		case run.EvPreflight, run.EvAttempt, run.EvCheck:
 			m.finish(msg)
+		case run.EvDecided:
+			m.note(msg)
+		case run.EvSendBack:
+			m.note(msg)
+			m.again()
 		case run.EvAgent:
 			if msg.stage != "" {
 				if i := m.index(msg.stage); m.stages[i].state == pending {
@@ -346,7 +363,10 @@ func (m *model) apply(msg tea.Msg) bool {
 				}
 			}
 		}
+	case gateMsg:
+		m.gate = &gateState{req: msg.req, reply: msg.reply}
 	case doneMsg:
+		m.gate = nil
 		if m.cur < len(m.stages) && m.stages[m.cur].state == running {
 			s := &m.stages[m.cur]
 			s.state, s.end = failed, msg.at
@@ -360,11 +380,11 @@ func (m *model) apply(msg tea.Msg) bool {
 	return false
 }
 
-// index is the position of the stage named name. A stage the frozen graph
-// didn't list goes in before the Check.
+// index is the position of the latest stage named name. A stage the
+// frozen graph didn't list goes in before the Check.
 func (m *model) index(name string) int {
-	for i, s := range m.stages {
-		if s.name == name {
+	for i := len(m.stages) - 1; i >= 0; i-- {
+		if m.stages[i].name == name {
 			return i
 		}
 	}
@@ -453,8 +473,11 @@ func (m *model) render() string {
 			}
 		default:
 			mark := st.ok("✓")
-			if s.state == failed {
+			switch {
+			case s.state == failed:
 				mark = st.bad("✗")
+			case s.mark != "":
+				mark = st.accent(s.mark)
 			}
 			line := mark + " " + name + " " + s.text
 			if !s.timed {
@@ -466,6 +489,7 @@ func (m *model) render() string {
 			}
 		}
 	}
+	lines = append(lines, m.gateLines()...)
 	if !m.finished {
 		add("")
 		hint := "ctrl+c to cancel"

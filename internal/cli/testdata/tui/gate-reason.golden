@@ -1,0 +1,20 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+✓ preflight  ok · 0.4s
+✓ implement  fake · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+✗ check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1) · 1.2s
+
+  bound-exhaustion Gate
+  The Check failed and the send-back limit (3) is used up.
+  Candidate 6d1231d · Attempt implement#4 · Oracle v0 · Verdicts #1 #2 #3 #4
+
+  Decide.
+    s  send back  one more send-back past the limit, with the failure output (needs a reason)
+    reject        end the Run Rejected (type the word and a reason)
+    q  quit       end the Run Cancelled
+
+  reject · reason: ▏
+  Enter to record it · ctrl+c goes back to the Gate
+
+ctrl+c to cancel

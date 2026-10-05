@@ -38,21 +38,16 @@ func decidedText(ev run.Event) string {
 }
 
 // gateScreen is an open Gate: what happened, what is pinned, what is
-// needed and the choices. There is no default.
+// needed and the choices. There is no default. The Check it follows is
+// the line just above it, in both views.
 func gateScreen(r gate.Request) []string {
-	lines := []string{gateTitle(r.Name), clean(r.What)}
-	if r.Check != nil {
-		for _, l := range checkLines(r.Check) {
-			lines = append(lines, "  "+l)
-		}
-	}
-	lines = append(lines, pinsLine(r.Pins), "", clean(r.Need))
+	lines := []string{gateTitle(r.Name), clean(r.What), pinsLine(r.Pins), "", clean(r.Need)}
 	for _, c := range r.Choices {
 		key := c.Word
 		if c.Key != "" {
 			key = c.Key + "  " + c.Word
 		}
-		lines = append(lines, fmt.Sprintf("  %-13s %s", key, c.Says))
+		lines = append(lines, strings.TrimRight(fmt.Sprintf("  %-13s %s", key, c.Says), " "))
 	}
 	return lines
 }
