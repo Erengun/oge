@@ -63,6 +63,9 @@ type Params struct {
 	State   *ledger.StateRoot
 	Version string
 	Getenv  func(string) string
+	// CheckGoCache, when set, is the GOCACHE Checks share. Only tests set
+	// it; see cli.Env.CheckGoCache.
+	CheckGoCache string
 	// Observe receives progress as it happens, for rendering.
 	Observe func(Event)
 }
@@ -221,7 +224,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 
-	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv}
+	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, GoCache: p.CheckGoCache}
 	pre := map[string]any{"checks": []string{"submodules", "lfs", "unmerged", "operation_in_progress"}}
 	if f.Setup.Run != "" {
 		e, err := setupOnSnapshot(ctx, runner, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "preflight"))

@@ -70,7 +70,7 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	r := &renderer{w: env.Stdout, verbose: f.verbose, frozen: frozen}
 	res, err := run.Start(ctx, run.Params{
 		Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
-		State: state, Version: env.Version, Getenv: env.Getenv, Observe: r.observe,
+		State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: r.observe,
 	})
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)

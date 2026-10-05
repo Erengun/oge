@@ -175,3 +175,12 @@ func hasKey(probs []Problem, key string) bool {
 	}
 	return false
 }
+
+func TestPassEnvCannotOverrideCheckPrivateVariables(t *testing.T) {
+	for _, name := range []string{"HOME", "TMPDIR", "GOCACHE", "GOPATH", "GOMODCACHE", "GOTOOLCHAIN", "GOWORK", "XDG_CACHE_HOME"} {
+		_, probs := Load([]byte("schema = 1\n[project]\npass_env = [\"GOFLAGS\", \"" + name + "\"]\n"))
+		if len(probs) != 1 || probs[0].Key != "project.pass_env[1]" || !strings.Contains(probs[0].Msg, name) {
+			t.Errorf("%s: problems = %v", name, probs)
+		}
+	}
+}

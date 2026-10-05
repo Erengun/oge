@@ -15,6 +15,9 @@ import (
 // release binary can never reach the fake adapter (ADR-0017).
 var testAgents map[string]agent.Adapter
 
+// testCheckGoCache is set only in test builds, from OGE_TEST_SHARED_GOCACHE.
+var testCheckGoCache string
+
 // version is stamped at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
@@ -26,6 +29,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	env := cli.ProcessEnv(resolvedVersion())
 	env.Stdout, env.Stderr = stdout, stderr
 	env.Agents = testAgents
+	env.CheckGoCache = testCheckGoCache
 	return cli.Main(env, args)
 }
 

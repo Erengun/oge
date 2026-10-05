@@ -46,6 +46,10 @@ type Env struct {
 	// builds register none until the Claude adapter (#44) exists; test
 	// builds register the scripted fake (ADR-0017).
 	Agents map[string]agent.Adapter
+	// CheckGoCache, when set, is a GOCACHE every Check shares instead of a
+	// private one. Only tests set it (in-process, or OGE_TEST_SHARED_GOCACHE
+	// in -tags ogetest builds); release builds always use a private cache.
+	CheckGoCache string
 }
 
 // ProcessEnv is the Env of the running process.

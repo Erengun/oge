@@ -108,10 +108,21 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		Version:     "test",
 		Getenv:      os.Getenv,
 		Agents:      map[string]agent.Adapter{fake.Name: fake.New(path)},
+		// A shared GOCACHE keeps these tests fast; real Runs never share.
+		CheckGoCache: hostGoCache,
 	}
 	code := Main(env, args)
 	return code, stdout.String(), stderr.String()
 }
+
+// hostGoCache is the developer's GOCACHE, read before any test swaps HOME.
+var hostGoCache = func() string {
+	out, err := exec.Command("go", "env", "GOCACHE").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}()
 
 // assertUntouched checks the user's checkout was never written.
 func (f *runFixture) assertUntouched(t *testing.T) {

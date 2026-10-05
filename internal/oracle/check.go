@@ -38,6 +38,9 @@ type Runner struct {
 	Blobs   *ledger.Blobs
 	PassEnv []string // variable names exposed to commands (project.pass_env)
 	Getenv  func(string) string
+	// GoCache, when set, replaces the private GOCACHE. Only test builds
+	// set it, to keep the e2e tests fast (see cli.Env.CheckGoCache).
+	GoCache string
 }
 
 // Execution is the command-execution Evidence Öge records (ADR-0011).
@@ -78,13 +81,13 @@ func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]stri
 	argv := []string{"/bin/sh", "-c", line}
 	e := Execution{Run: line, Argv: argv, Cwd: dir, Redaction: redact.Rules()}
 	vars := map[string]string{}
-	for k, v := range env {
-		vars[k] = v
-	}
 	for _, name := range r.PassEnv {
 		if v := r.Getenv(name); v != "" {
 			vars[name] = v
 		}
+	}
+	for k, v := range env { // the fixed variables always win
+		vars[k] = v
 	}
 	var envList []string
 	for k, v := range vars {
@@ -257,7 +260,10 @@ func (r *Runner) Prepare(root string) (string, map[string]string, error) {
 	env := map[string]string{
 		"PATH": r.Getenv("PATH"), "HOME": dirs["home"], "TMPDIR": dirs["tmp"],
 		"GOCACHE": dirs["gocache"], "GOPATH": dirs["gopath"], "GOMODCACHE": filepath.Join(dirs["gopath"], "pkg", "mod"),
-		"GOTOOLCHAIN": "local", "XDG_CACHE_HOME": filepath.Join(dirs["home"], ".cache"),
+		"GOTOOLCHAIN": "local", "GOWORK": "off", "XDG_CACHE_HOME": filepath.Join(dirs["home"], ".cache"),
+	}
+	if r.GoCache != "" {
+		env["GOCACHE"] = r.GoCache
 	}
 	return dirs["tree"], env, nil
 }
