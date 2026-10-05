@@ -127,6 +127,34 @@ func TestWarmStepRunsNoRepositoryCode(t *testing.T) {
 	}
 }
 
+// A seed path go can't quote leaves the no-link wrapper unset. An empty
+// -toolexec would mean no wrapper at all, so the warm step must then skip
+// its vet leg, not link and run the Snapshot's tests: the Run still goes
+// on, and no repository code runs.
+func TestWarmStepWithoutItsWrapperRunsNoRepositoryCode(t *testing.T) {
+	r := newCacheRunner(t)
+	marker := t.TempDir()
+	r.PassEnv = []string{"OGE_TEST_MARKER"}
+	r.Getenv = func(k string) string {
+		if k == "OGE_TEST_MARKER" {
+			return marker
+		}
+		return os.Getenv(k)
+	}
+	dir := filepath.Join(t.TempDir(), `it's "quoted"`, "seed")
+	seed, _, err := r.NewSeed(context.Background(), markerFixture, "snap", "", dir)
+	if err != nil {
+		t.Fatalf("NewSeed with an unquotable path: %v; want the Run to go on", err)
+	}
+	defer seed.Close()
+	if warm, err := seed.Wait(); err != nil || warm == nil || !warm.Pass {
+		t.Fatalf("warm step = %+v, %v; want a passing execution", warm, err)
+	}
+	if left, _ := os.ReadDir(marker); len(left) != 0 {
+		t.Fatalf("the warm step ran repository code without its wrapper: it left %v", left)
+	}
+}
+
 // go splits its -toolexec value into words itself, so a wrapper path with
 // a space or a quote is quoted for go.
 func TestToolexecValueQuotesForGo(t *testing.T) {

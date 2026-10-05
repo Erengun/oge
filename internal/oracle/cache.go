@@ -33,7 +33,10 @@ const (
 // every module dependency, so a Check vets only the project's own changed
 // packages (#112). Its toolexec wrapper (nolinkScript, named by
 // warmToolexecEnv) refuses every link, so no test binary is ever made and
-// nothing can run; the -run pattern is a second guard. Every refused link
+// nothing can run. The wrapper is the only guard: an empty -toolexec means
+// no wrapper, and -run '^$' would not stop a linked test binary's init or
+// TestMain, so ${...:?} aborts this leg (a subshell) when the wrapper isn't set (as when
+// its path can't be quoted for go). Every refused link
 // fails its package, so this leg's output and status are discarded. The
 // cache keys don't depend on the wrapper: Go hashes a tool by its version
 // line, which the wrapper passes through.
@@ -52,7 +55,7 @@ const (
 // It runs niced, on about half the cores, so it doesn't slow the
 // implementer it overlaps.
 var warmCommand = fmt.Sprintf(`nice -n 10 go list -p %[1]d -e -export -deps -test -f '{{if .Error}}{{.ImportPath}}: {{.Error}}{{end}}' ./...; s=$?; `+
-	`nice -n 10 go test -p %[1]d -run '^$' -toolexec "$%[2]s" ./... >/dev/null 2>&1; exit $s`,
+	`(nice -n 10 go test -p %[1]d -run '^$' -toolexec "${%[2]s:?}" ./...) >/dev/null 2>&1; exit $s`,
 	max(1, runtime.NumCPU()/2), warmToolexecEnv)
 
 // warmToolexecEnv names the warm step's go test -toolexec value.
@@ -63,7 +66,7 @@ const warmToolexecEnv = "OGE_WARM_TOOLEXEC"
 // tool for it to key the cache).
 const nolinkScript = `case "$1" in
 */link | */link.exe)
-	if [ "$2" != -V=full ]; then
+	if [ $# -ne 2 ] || [ "$2" != -V=full ]; then
 		echo "oge warm step: linking refused" >&2
 		exit 1
 	fi ;;
@@ -197,10 +200,10 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 	if err := os.WriteFile(nolink, []byte(nolinkScript), 0o400); err != nil {
 		return fail(nil, err)
 	}
-	toolexec, err := toolexecValue(nolink)
-	if err != nil {
-		return fail(nil, err)
-	}
+	// A path go can't quote leaves the wrapper unset: the warm step then
+	// skips its vet leg (warmCommand) and Checks vet the standard library
+	// themselves, which is slower but no less safe.
+	toolexec, _ := toolexecValue(nolink)
 	if err := repo.Checkout(snapshot, dir); err != nil {
 		return fail(nil, err)
 	}
@@ -226,7 +229,9 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 		defer RemoveAll(work)
 		if hasModule {
 			env["GOPROXY"] = "off" // the warm step never fetches
-			env[warmToolexecEnv] = toolexec
+			if toolexec != "" {
+				env[warmToolexecEnv] = toolexec
+			}
 			e, _, err := r.Exec(wctx, warmCommand, dir, env, 10*time.Minute, 64<<10)
 			s.warm, s.err = &e, err
 		}
