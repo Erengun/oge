@@ -61,7 +61,7 @@ One execution of one Pipeline for one Task, against a copy of the Pipeline resol
 _Avoid_: Job, session, task (for the execution)
 
 **Role kind**:
-One of the trust-bearing kinds of work that Öge itself defines (planner, implementer, verifier, reviewer; later challenger, decider, advisor). Write scope, Briefing rules, session reuse and the allowed Exits attach to the kind; a name chosen by a pipeline author never confers them.
+One of the trust-bearing kinds of work that Öge itself defines (planner, implementer, verifier, reviewer; later challenger, decider, advisor). Write scope, Briefing rules, session reuse and the allowed Exits attach to the kind; a name chosen by a pipeline author never confers them. In the product UI, the verifier's work is labelled **QA**. The label may grow to cover more verification activity later, but the Role kind stays precise.
 _Avoid_: Persona, agent type, custom role (as a trust boundary)
 
 **Stage**:
