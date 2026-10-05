@@ -33,6 +33,13 @@ func Preflight(root string) ([]string, error) {
 		return nil, err
 	}
 	for _, f := range files {
+		if out, err := linkLeavesTree(root, f); err != nil {
+			return nil, err
+		} else if out {
+			why = append(why, f+" is a symlink that points outside the repository (absolute or through ..), which Öge doesn't copy; make it relative and inside the repository, or remove it")
+		}
+	}
+	for _, f := range files {
 		base := filepath.Base(filepath.FromSlash(f))
 		if f == ".gitmodules" && !contains(why, "submodules") {
 			why = append(why, "the repository has submodules, which Öge doesn't support yet")
@@ -67,6 +74,46 @@ func Preflight(root string) ([]string, error) {
 		}
 	}
 	return why, nil
+}
+
+// linkLeavesTree reports whether the Snapshot path rel under root is a
+// symlink whose target is absolute or resolves outside root. A relative,
+// dangling link is judged by its text alone.
+func linkLeavesTree(root, rel string) (bool, error) {
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	fi, err := os.Lstat(p)
+	if os.IsNotExist(err) || (err == nil && fi.Mode()&os.ModeSymlink == 0) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	target, err := os.Readlink(p)
+	if err != nil {
+		return false, err
+	}
+	if filepath.IsAbs(target) {
+		return true, nil
+	}
+	if outside(filepath.Join(filepath.Dir(filepath.FromSlash(rel)), target)) {
+		return true, nil
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false, nil // dangling: the text above stayed inside
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false, err
+	}
+	r, err := filepath.Rel(realRoot, resolved)
+	return err != nil || outside(r), nil
+}
+
+// outside reports whether a cleaned relative path climbs out of its base.
+func outside(rel string) bool {
+	rel = filepath.Clean(rel)
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func contains(list []string, sub string) bool {
@@ -169,7 +216,7 @@ func (r *RunRepo) TakeSnapshot(root, dir string) (commit string, info SnapshotIn
 		return "", info, err
 	}
 	for _, p := range paths {
-		if err := copyPath(filepath.Join(root, filepath.FromSlash(p)), filepath.Join(dir, filepath.FromSlash(p))); err != nil {
+		if err := copyPath(filepath.Join(root, filepath.FromSlash(p)), filepath.Join(dir, filepath.FromSlash(p)), filepath.FromSlash(p)); err != nil {
 			return "", info, err
 		}
 	}
@@ -192,7 +239,7 @@ func (r *RunRepo) TakeSnapshot(root, dir string) (commit string, info SnapshotIn
 
 // copyPath copies one Snapshot path, keeping the exec bit and copying a
 // symlink as a symlink. A path deleted from the working tree is skipped.
-func copyPath(src, dst string) error {
+func copyPath(src, dst, rel string) error {
 	fi, err := os.Lstat(src)
 	if os.IsNotExist(err) {
 		return nil
@@ -208,6 +255,11 @@ func copyPath(src, dst string) error {
 		target, err := os.Readlink(src)
 		if err != nil {
 			return err
+		}
+		// Preflight refused links that leave the tree; this catches one
+		// made since.
+		if filepath.IsAbs(target) || outside(filepath.Join(filepath.Dir(rel), target)) {
+			return fmt.Errorf("%s is a symlink that points outside the repository", filepath.ToSlash(rel))
 		}
 		return os.Symlink(target, dst)
 	case fi.Mode().IsRegular():

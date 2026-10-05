@@ -141,3 +141,42 @@ func TestPreflightRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestPreflightRefusesSymlinksThatLeaveTheTree(t *testing.T) {
+	for name, c := range map[string]struct {
+		link, target string
+		refused      bool
+	}{
+		"absolute":           {"abs", "/etc", true},
+		"escapes":            {"sub/up", "../../outside", true},
+		"escapes via a link": {"sub/dot", "../self/..", true},
+		"relative, in tree":  {"sub/a", "../a.txt", false},
+		"relative, dangling": {"sub/gone", "missing.txt", false},
+		"tracked, in tree":   {"tracked", "a.txt", false},
+		"tracked, absolute":  {"tracked-abs", "/tmp", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := newRepo(t)
+			if err := os.Symlink(".", filepath.Join(repo, "self")); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(repo, filepath.FromSlash(c.link))
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			if err := os.Symlink(c.target, p); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(c.link, "tracked") {
+				gitT(t, repo, "add", "-A")
+				gitT(t, repo, "commit", "-q", "-m", "link")
+			}
+			why, err := Preflight(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := contains(why, c.link+" is a symlink")
+			if got != c.refused {
+				t.Errorf("refused = %v, want %v: %q", got, c.refused, why)
+			}
+		})
+	}
+}

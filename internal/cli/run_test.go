@@ -369,3 +369,14 @@ func TestRunOverlayNeverWritesThroughASymlink(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
+
+func TestRunPreflightRefusesASymlinkOutOfTheRepository(t *testing.T) {
+	f := newRunFixture(t)
+	if err := os.Symlink(filepath.Dir(f.repo), filepath.Join(f.repo, "up")); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitRefused || !strings.Contains(errOut, "up is a symlink that points outside the repository") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+}
