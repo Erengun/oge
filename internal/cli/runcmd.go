@@ -92,6 +92,14 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 		return ExitOK
 	case run.Rejected:
 		return ExitRejected
+	case run.Infeasible:
+		return ExitInfeasible
+	case run.Overridden:
+		return ExitOverridden
+	case run.Cancelled:
+		return ExitCancelled
+	case run.Parked:
+		return ExitParked
 	case run.Refused:
 		fmt.Fprintln(env.Stderr, "oge: Preflight refused this Run")
 		for _, w := range res.Why {
@@ -221,15 +229,19 @@ func (r *renderer) observe(ev run.Event) {
 		if !r.verbose {
 			return
 		}
-		if step, ok := agentStep(ev.Agent); ok {
+		if step, ok := agentStep(ev.Agent, ev.Attempt.Cause); ok {
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
 	case run.EvAttempt:
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
+	case run.EvSendBack:
+		r.p("%-10s %s", "send back", sendBackText(ev))
+	case run.EvDecided:
+		r.p("%-10s %s", "decision", decidedText(ev))
 	case run.EvCheck:
 		res := ev.Result
 		if r.verbose {
-			r.p("[check #1] Candidate %s · Oracle v%d · fresh Check directory", res.Candidate[:7], res.Oracle)
+			r.p("[check #%d] Candidate %s · Oracle v%d · fresh Check directory", res.Checks, res.Candidate[:7], res.Oracle)
 		}
 		for _, l := range checkLines(ev.Check) {
 			r.p("%-10s %s", "check", l)
@@ -259,9 +271,12 @@ func preflightText(f *pipeline.Frozen) string {
 
 // agentStep is one agent event as a line of activity; ok is false for
 // events that show nothing.
-func agentStep(e agent.Event) (string, bool) {
+func agentStep(e agent.Event, cause string) (string, bool) {
 	switch e.Kind {
 	case agent.SessionOpened:
+		if cause == "send_back" {
+			return "started (cause: send_back) · fresh Session · Workspace from the Candidate sent back", true
+		}
 		return "started (cause: first) · fresh Session · Workspace from Snapshot", true
 	case agent.Claim:
 		return fmt.Sprintf("%q", clean(e.Text)), true
@@ -329,7 +344,9 @@ func commandLine(e oracle.Execution) string {
 
 func (r *renderer) summary(res *run.Result) {
 	switch res.Outcome {
-	case run.Accepted, run.Rejected:
+	case run.Parked:
+		r.parkedSummary(res)
+	case run.Accepted, run.Rejected, run.Cancelled, run.Overridden, run.Infeasible:
 		head := strings.ToUpper(string(res.Outcome))
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))

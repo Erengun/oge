@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -223,26 +224,90 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	}
 }
 
-func TestRunRejectsWhenTheOracleFails(t *testing.T) {
+// sendBackLimit sets the fixture's send-back limit.
+func (f *runFixture) sendBackLimit(t *testing.T, n int) {
+	t.Helper()
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig+fmt.Sprintf("[pipelines.default.limits]\nsend_backs = %d\n", n)))
+	gitIn(t, f.repo, "-c", "core.hooksPath="+os.DevNull, "commit", "-q", "-am", "limit send-backs")
+	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
+}
+
+// fixOnSendBack cheats on the first turn and fixes Add once a send-back
+// turn hands it the Check's failure output.
+const fixOnSendBack = `case "$OGE_FAKE_TURN" in
+*"Add(2, 3) != 5"*) ;;
+*) echo "making the test pass"; printf 'package fx\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {}\n' > add_test.go; exit 0 ;;
+esac
+` + fixScript
+
+func TestRunSendsAFailingCandidateBackWithTheFailureOutput(t *testing.T) {
 	f := newRunFixture(t)
-	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "-v")
-	if code != ExitRejected {
+	code, out, errOut := f.run(t, fixOnSendBack, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{
-		`[implement #1 fake] "making the test pass"`,
-		"[implement #1 fake] Exit: done   (Claim)",
 		"check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1)",
-		"[verdict] FAIL",
-		"REJECTED   Candidate ",
+		"send back  1 of 3 · the Candidate goes back to the implementer with the failure output",
+		"check      go test -json ./... · 1 ran · 0 failed · pass",
+		"ACCEPTED   Candidate ",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
 	}
 	f.assertUntouched(t)
-	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(wantOrder, ",") {
-		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(wantOrder, ","))
+	recs, err := ledger.Replay(f.onlyRun(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var causes []string
+	for _, r := range recs {
+		if r.Type == run.RecAttemptStarting {
+			var d struct{ Attempt, Cause string }
+			if err := json.Unmarshal(r.Data, &d); err != nil {
+				t.Fatal(err)
+			}
+			causes = append(causes, d.Attempt+" "+d.Cause)
+		}
+	}
+	if got := strings.Join(causes, ", "); got != "implement#1 first, implement#2 send_back" {
+		t.Errorf("Attempts: %s", got)
+	}
+}
+
+// Unattended, a fail Verdict with the send-back limit used up opens the
+// mandatory bound-exhaustion Gate, and the Run parks there: a park is
+// never turned into Rejected (ADR-0008).
+func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
+	f := newRunFixture(t)
+	f.sendBackLimit(t, 1)
+	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "-v")
+	if code != ExitParked {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		`[implement #1 fake] "making the test pass"`,
+		"check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1)",
+		"[verdict] FAIL",
+		"send back  1 of 1 · ",
+		"[implement #2 fake] started (cause: send_back)",
+		"PARKED     at the bound-exhaustion Gate · Candidate ",
+		"The Check failed and the send-back limit (1) is used up.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "REJECTED") {
+		t.Errorf("a park was shown as Rejected:\n%s", out)
+	}
+	f.assertUntouched(t)
+	want := append(append([]string{}, wantOrder[:len(wantOrder)-1]...),
+		run.RecAttemptStarting, run.RecProcessStarted, run.RecAttemptEnded,
+		run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecGateOpened, run.RecRunParked)
+	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(want, ",") {
+		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(want, ","))
 	}
 }
 
@@ -318,11 +383,11 @@ func TestRunSetupCannotRewriteTheOracle(t *testing.T) {
 	f := newRunFixture(t)
 	// Setup is Candidate-controlled; it runs before the overlay, so a
 	// setup that replaces the Oracle's test changes nothing.
-	cfg := fxConfig + "[setup]\nrun = \"sh setup.sh\"\n"
+	cfg := fxConfig + "[setup]\nrun = \"sh setup.sh\"\n[pipelines.default.limits]\nsend_backs = 0\n"
 	writeFile(t, filepath.Join(f.repo, "setup.sh"), []byte("printf 'package fx\\n\\nimport \"testing\"\\n\\nfunc TestAdd(t *testing.T) {}\\n' > add_test.go\n"))
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
 	code, out, errOut := f.run(t, "echo 'nothing to do'\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected || !strings.Contains(out, "1 failed: TestAdd") {
+	if code != ExitParked || !strings.Contains(out, "1 failed: TestAdd") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -364,11 +429,12 @@ func TestRunOverlayNeverWritesThroughASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := "rm -rf sub && ln -s '" + outside + "' sub\n" + fixScript
+	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if _, err := os.Lstat(filepath.Join(outside, "x_test.go")); err == nil {
 		t.Error("the overlay wrote an Oracle test outside the Check directory")
 	}
-	if code != ExitRejected || !strings.Contains(out, "Oracle path sub/x_test.go is blocked by a symlink in the Candidate") {
+	if code != ExitParked || !strings.Contains(out, "Oracle path sub/x_test.go is blocked by a symlink in the Candidate") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -390,8 +456,9 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {\n\tif X() != 1 {\n\t\tt.Fatal(\"X() != 1\")\n\t}\n}\n"))
 	// A nested module drops sub out of ./..., so TestX never runs.
 	script := fixScript + "printf 'module sub\\n\\ngo 1.22\\n' > sub/go.mod\n"
+	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
+	if code != ExitParked || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
