@@ -182,3 +182,47 @@ func TestHeldOutFailuresTrustAttestation(t *testing.T) {
 		t.Errorf("a forged PASS frame counted: %v", got)
 	}
 }
+
+// A package whose build fails while it holds held-out tests is a
+// conflict, not a held-out failure: nobody can tell whose fault it is
+// (#46 re-review R1).
+func TestHeldOutBuildConflicts(t *testing.T) {
+	m := &Manifest{HeldOut: []HeldOut{
+		{Test: TestID{"fx", "TestNeg"}, Criteria: []string{"AC-1"}},
+		{Test: TestID{"fx/sub", "TestSub"}},
+	}}
+	out := `{"Action":"fail","Package":"fx","FailedBuild":"fx.test"}
+{"Action":"fail","Package":"fx/sub","Test":"TestSub"}
+`
+	rep := ParseGoTestJSON([]byte(out))
+	r := &Result{Commands: []Execution{{Report: &rep}}}
+	if got := m.HeldOutBuildConflicts(r); !reflect.DeepEqual(got, []string{"fx"}) {
+		t.Errorf("conflicts %v", got)
+	}
+	var failing []string
+	for _, h := range m.HeldOutFailures(r) {
+		failing = append(failing, h.Test.String())
+	}
+	if !reflect.DeepEqual(failing, []string{"fx/sub.TestSub"}) {
+		t.Errorf("failures %v: a test in a package that didn't build isn't QA's finding", failing)
+	}
+}
+
+// A top-level var whose initializer calls a function runs before every
+// test in its package, as init does (#46 re-review R2).
+func TestScreenRejectsInitializingVars(t *testing.T) {
+	hdr := "package fx\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n"
+	for src, bad := range map[string]bool{
+		hdr + "var x = setup()\n":                     true,
+		hdr + "var y = func() int { return 1 }()\n":   true,
+		hdr + "var a, b = 1, f(2)\n":                  true,
+		hdr + "var z = 3\n":                           false,
+		hdr + "var w = []int{1, 2}\n":                 false,
+		hdr + "var f = func() int { return 1 }\n":     false, // not called
+		hdr + "func g() { var v = setup(); _ = v }\n": false, // not top level
+	} {
+		if got := screen([]byte(src)) != ""; got != bad {
+			t.Errorf("screen(%q) rejects = %v, want %v", src[len(hdr):], got, bad)
+		}
+	}
+}

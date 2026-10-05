@@ -500,3 +500,29 @@ EOF
 		t.Errorf("stdout:\n%s", out)
 	}
 }
+
+// QA's additions are built against the Candidate the Check uses,
+// Ambiguous files included, not against QA's own view (#46 re-review R1):
+// a held-out file that clashes with a file QA never saw is left out.
+func TestStandardQAsAdditionIsBuiltAgainstTheWholeCandidate(t *testing.T) {
+	f := newRunFixture(t)
+	impl := `printf 'package fx\n\nfunc helperX() int { return 1 }\n' > extra.go
+` + fixScript
+	verifier := `cat > x_test.go <<'EOF'
+package fx
+
+import "testing"
+
+func helperX() int { return 2 }
+
+func TestHelperX(t *testing.T) { _ = helperX() }
+EOF
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, impl), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitOK || strings.Contains(out, "send back") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 1 addition left out · 1 file withheld") {
+		t.Errorf("stdout:\n%s", out)
+	}
+}

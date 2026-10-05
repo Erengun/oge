@@ -17,6 +17,7 @@ import (
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/workspace"
 )
 
 // Outcomes and statuses a Gate can end a Run with.
@@ -301,6 +302,13 @@ func (w *walk) open(ctx context.Context, r gate.Request) (gate.Decision, error) 
 // ones only as a count plus criterion ids (ADR-0009).
 // TODO(#44): Öge's Briefing builder takes this over.
 func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision, m *oracle.Manifest) string {
+	return sendBackTurnFrom(cr, blobs, d, m, nil)
+}
+
+// sendBackTurnFrom is sendBackTurn where candidate lists the Candidate's
+// Go sources: a held-out helper whose name they (or the visible Oracle)
+// also use is a common name, and doesn't hide visible output.
+func sendBackTurnFrom(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision, m *oracle.Manifest, candidate func() []string) string {
 	var b strings.Builder
 	b.WriteString("\n\n---\nÖge sent your Candidate back.")
 	if d != nil {
@@ -311,7 +319,7 @@ func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision, m *o
 	}
 	if cr != nil && !cr.Pass {
 		b.WriteString("\nÖge's Check failed on it:\n")
-		b.WriteString(failureOutput(cr, blobs, newHeldOutFilter(m, cr, blobs)))
+		b.WriteString(failureOutput(cr, blobs, newHeldOutFilter(m, cr, blobs, candidate)))
 	}
 	return b.String()
 }
@@ -322,12 +330,14 @@ type heldOutFilter struct {
 	names   map[string]bool // held-out tests' names
 	words   *regexp.Regexp  // names and file base names a line must not mention
 	failing [][]string      // each failing held-out test's criterion ids
-	dropped bool            // some output was withheld
+	// conflicts are packages holding held-out tests that didn't build.
+	conflicts []string
+	dropped   bool // some output was withheld
 }
 
 // newHeldOutFilter is nil when the Oracle has no held-out tests, so a
 // Fast-mode send-back is exactly what it was.
-func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs) *heldOutFilter {
+func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs, candidate func() []string) *heldOutFilter {
 	if m == nil || len(m.HeldOut) == 0 {
 		return nil
 	}
@@ -338,8 +348,31 @@ func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs
 		files[path.Base(h.File)] = true
 	}
 	var alts []string
-	// Every function a held-out file declares: a helper's name in a stack
-	// trace names held-out source too.
+	// What the implementer can already see: the visible Oracle and the
+	// Candidate. A held-out helper named like anything there is a common
+	// name, and filtering it would hide visible failures.
+	var seen []string
+	for _, t := range m.Tests {
+		if !t.HeldOut {
+			if src, err := blobs.Get(t.Blob); err == nil {
+				seen = append(seen, string(src))
+			}
+		}
+	}
+	if candidate != nil {
+		seen = append(seen, candidate()...)
+	}
+	common := func(name string) bool {
+		re := regexp.MustCompile(`(^|[^\pL\pN_])` + regexp.QuoteMeta(name) + `($|[^\pL\pN_])`)
+		for _, s := range seen {
+			if re.MatchString(s) {
+				return true
+			}
+		}
+		return false
+	}
+	// Every held-out-only function a held-out file declares: its name in
+	// a stack trace names held-out source too.
 	for _, t := range m.Tests {
 		if !t.HeldOut {
 			continue
@@ -347,7 +380,9 @@ func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs
 		files[path.Base(t.Path)] = true
 		if src, err := blobs.Get(t.Blob); err == nil {
 			for _, n := range oracle.FuncNames(src) {
-				alts = append(alts, regexp.QuoteMeta(n))
+				if f.names[n] || !common(n) {
+					alts = append(alts, regexp.QuoteMeta(n))
+				}
 			}
 		}
 	}
@@ -363,6 +398,7 @@ func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs
 	for _, h := range m.HeldOutFailures(cr) {
 		f.failing = append(f.failing, h.Criteria)
 	}
+	f.conflicts = m.HeldOutBuildConflicts(cr)
 	return f
 }
 
@@ -477,6 +513,13 @@ func failureOutput(cr *oracle.Result, blobs *ledger.Blobs, hf *heldOutFilter) st
 	if hf != nil && len(hf.failing) > 0 {
 		b.WriteString("- " + briefing.HeldOutFeedback(hf.failing) + "\n")
 	}
+	if hf != nil {
+		// Neither side is to blame without the other's source: say so,
+		// neutrally (#46).
+		for _, p := range hf.conflicts {
+			b.WriteString("- Your change conflicts with a held-out test in package " + p + " (names withheld).\n")
+		}
+	}
 	if hf != nil && hf.dropped {
 		b.WriteString("- Some output names held-out tests, so Öge left it out.\n")
 	}
@@ -495,4 +538,23 @@ func goTestOutput(raw []byte) []byte {
 		}
 	}
 	return out.Bytes()
+}
+
+// goSources lists commit's Go files' contents, read when first needed.
+func goSources(repo *workspace.RunRepo, commit string) func() []string {
+	return func() []string {
+		files, err := repo.Files(commit)
+		if err != nil {
+			return nil
+		}
+		var out []string
+		for _, p := range files {
+			if strings.HasSuffix(p, ".go") {
+				if b, ok, err := repo.Show(commit, p); err == nil && ok {
+					out = append(out, string(b))
+				}
+			}
+		}
+		return out
+	}
 }

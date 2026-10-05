@@ -97,18 +97,22 @@ func pluralOf(n int, one, many string) string {
 }
 
 // issueLines are "QA found N issues" and a line per issue, from the
-// failing held-out tests' names and first messages.
-func issueLines(issues []string) []string {
-	if len(issues) == 0 {
-		return nil
-	}
-	lines := []string{"QA found " + pluralOf(len(issues), "issue", "issues")}
-	for i, s := range issues {
-		if i == maxIssues {
-			lines = append(lines, fmt.Sprintf("· and %d more", len(issues)-maxIssues))
-			break
+// failing held-out tests' names and first messages, then a neutral line
+// per package whose held-out tests no longer build: that is no QA finding.
+func issueLines(issues, conflicts []string) []string {
+	var lines []string
+	if len(issues) > 0 {
+		lines = append(lines, "QA found "+pluralOf(len(issues), "issue", "issues"))
+		for i, s := range issues {
+			if i == maxIssues {
+				lines = append(lines, fmt.Sprintf("· and %d more", len(issues)-maxIssues))
+				break
+			}
+			lines = append(lines, "· "+shortLine(clean(s), 100))
 		}
-		lines = append(lines, "· "+shortLine(clean(s), 100))
+	}
+	for _, p := range conflicts {
+		lines = append(lines, clean("held-out test no longer builds against the Candidate (package "+p+")"))
 	}
 	return lines
 }

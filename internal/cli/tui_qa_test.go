@@ -103,3 +103,26 @@ func TestTUIQAFindsIssuesAndRepairs(t *testing.T) {
 		Commands: []oracle.Execution{{Run: "go test -json ./...", DurationMs: 1000, Pass: true, Report: &oracle.Report{Ran: 3}}}}})
 	golden(t, "qa-accepted", h.end(run.Accepted))
 }
+
+// A held-out test that stops building is not a QA finding.
+func TestIssueLinesNameBuildConflictsNeutrally(t *testing.T) {
+	got := strings.Join(issueLines(nil, []string{"fx"}), "\n")
+	if got != "held-out test no longer builds against the Candidate (package fx)" {
+		t.Errorf("got %q", got)
+	}
+	if got := strings.Join(issueLines([]string{"TestA: boom"}, []string{"fx"}), "\n"); !strings.HasPrefix(got, "QA found 1 issue\n· TestA: boom\nheld-out test no longer builds") {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A command whose report claims a pass while attestation says otherwise
+// never shows a bare "pass" (#46 re-review).
+func TestCheckLineShowsTheAttestationOverAForgedReport(t *testing.T) {
+	c := &oracle.Result{Why: "Oracle tests not attested passing (1): fx.TestAdd never ran; the report claims pass",
+		Missing:  []string{"fx.TestAdd never ran; the report claims pass"},
+		Commands: []oracle.Execution{{Run: "go test -json ./...", Pass: true, DurationMs: 900, Report: &oracle.Report{Ran: 1}}}}
+	got := checkLines(c)
+	if !strings.Contains(got[0], "the report claims a pass; attestation: fx.TestAdd never ran") || strings.HasSuffix(strings.TrimSpace(strings.Split(got[0], " · 9")[0]), "· pass") {
+		t.Errorf("got %q", got)
+	}
+}

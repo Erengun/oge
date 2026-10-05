@@ -176,11 +176,13 @@ func (q *qaStage) review(ctx context.Context, w *walk, res *Result, cand *Attemp
 	if len(next.Added) > 0 {
 		// QA's own defects never reach the Oracle: a file that breaks its
 		// package's build would fail every later Check (#46 review H1).
+		// It is built against the Candidate the Check uses, Ambiguous
+		// files included, never QA's narrower view.
 		rr := *q.runner
 		if q.seed != nil {
 			rr.Seed = q.seed
 		}
-		broken, err := rr.Unbuildable(ctx, q.repo, q.m, next, view, f.Setup.Run, filepath.Join(q.runDir, "checks", fmt.Sprintf("qa-%d", q.n)))
+		broken, err := rr.Unbuildable(ctx, q.repo, q.m, next, cand.Candidate, f.Setup.Run, filepath.Join(q.runDir, "checks", fmt.Sprintf("qa-%d", q.n)))
 		if err != nil {
 			return step{}, err
 		}

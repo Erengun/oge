@@ -120,6 +120,9 @@ type Event struct {
 	// name and first failure message. For the human's terminal only: the
 	// implementer never gets them (ADR-0009).
 	Issues []string
+	// Conflicts are packages whose held-out tests no longer build against
+	// the Candidate: no one's finding, shown neutrally.
+	Conflicts []string
 }
 
 // Attempt is one execution of a Stage.
@@ -471,7 +474,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		w.check = check
 		ev := Event{Kind: EvCheck, Result: res, Check: cr}
 		if qa != nil {
-			ev.Issues = issues(m, cr, blobs)
+			ev.Issues, ev.Conflicts = issues(m, cr, blobs), m.HeldOutBuildConflicts(cr)
 		}
 		p.Observe(ev)
 
@@ -500,7 +503,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		w.sendBacks++
 		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks, Decision: d})
 		next = attemptSpec{n: next.n + 1, cause: "send_back", start: a.Candidate,
-			extra: sendBackTurn(cr, blobs, d, m), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
+			extra: sendBackTurnFrom(cr, blobs, d, m, goSources(repo, a.Candidate)), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
 		if err := repo.Checkout(a.Candidate, next.ws); err != nil {
 			return nil, err
 		}

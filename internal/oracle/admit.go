@@ -14,19 +14,20 @@ import (
 const buildTimeout = 2 * time.Minute
 
 // Unbuildable lists the files next adds to parent that break their
-// package's build on view: QA's own defects, which would fail every later
-// Check whatever the implementer did (#46). Each added file is built with
+// package's build on candidate, the exact tree the Check uses (Ambiguous
+// files included): QA's own defects, which would fail every later Check
+// whatever the implementer did (#46). Each added file is built with
 // the parent Oracle and the files admitted before it, compile-only
 // (`go test -count=1 -run ^$`). A package that doesn't build without the
 // addition can't judge it, so the addition is kept: the Check then fails
 // on the Candidate's own build. root is removed afterwards.
-func (r *Runner) Unbuildable(ctx context.Context, repo Repo, parent, next *Manifest, view, setup, root string) ([]Dropped, error) {
+func (r *Runner) Unbuildable(ctx context.Context, repo Repo, parent, next *Manifest, candidate, setup, root string) ([]Dropped, error) {
 	defer RemoveAll(root)
 	dir, env, _, err := r.prepareCheck(root)
 	if err != nil {
 		return nil, err
 	}
-	if err := repo.Checkout(view, dir); err != nil {
+	if err := repo.Checkout(candidate, dir); err != nil {
 		return nil, err
 	}
 	if setup != "" {
@@ -35,7 +36,7 @@ func (r *Runner) Unbuildable(ctx context.Context, repo Repo, parent, next *Manif
 			return nil, err // can't build anything: admit, the Check decides
 		}
 	}
-	// The parent Oracle in place of the view's test paths, as a Check
+	// The parent Oracle in place of the Candidate's test paths, as a Check
 	// lays it down (without attestation: nothing runs).
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {

@@ -222,7 +222,7 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Stop != "" || (ev.Attempt.Role != "verifier" && ev.Attempt.Exit != "done")
 	case run.EvCheck:
 		lines := checkLines(ev.Check)
-		lines = append(lines, issueLines(ev.Issues)...)
+		lines = append(lines, issueLines(ev.Issues, ev.Conflicts)...)
 		if len(lines) > 0 {
 			m.text, m.sub = lines[0], lines[1:]
 		}

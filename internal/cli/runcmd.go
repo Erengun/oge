@@ -273,7 +273,7 @@ func (r *renderer) observe(ev run.Event) {
 		for _, l := range checkLines(ev.Check) {
 			r.p("%-10s %s", "check", l)
 		}
-		for _, l := range issueLines(ev.Issues) {
+		for _, l := range issueLines(ev.Issues, ev.Conflicts) {
 			r.p("%-10s %s", "", l)
 		}
 		if r.verbose {
@@ -384,8 +384,19 @@ func checkLines(c *oracle.Result) []string {
 	if c.Setup != nil && !c.Setup.Pass {
 		lines = append(lines, clean(fmt.Sprintf("setup %q failed on the Candidate (%s)", c.Setup.Run, c.Setup.Why)))
 	}
+	// A report Candidate code can forge claimed a pass the attestation
+	// channel didn't confirm (ADR-0020): the line says so, not "pass".
+	forged := ""
+	if !c.Pass && len(c.Missing) > 0 && strings.HasPrefix(c.Why, "Oracle tests not attested") {
+		first, _, _ := strings.Cut(c.Missing[0], "; the report claims")
+		forged = "the report claims a pass; attestation: " + first
+	}
 	for _, e := range c.Commands {
-		lines = append(lines, commandLine(e))
+		l := commandLine(e)
+		if forged != "" && e.Pass {
+			l = strings.Replace(l, " · pass · ", " · "+clean(forged)+" · ", 1)
+		}
+		lines = append(lines, l)
 	}
 	if c.Why != "" {
 		lines = append(lines, clean(fmt.Sprintf("fail (%s)", c.Why)))

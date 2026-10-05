@@ -228,6 +228,45 @@ func (m *Manifest) Unmapped() int {
 // report at all (setup failed, an Oracle path was blocked) it names none:
 // the Check failed for a reason they don't show.
 func (m *Manifest) HeldOutFailures(r *Result) []HeldOut {
+	conflict := map[string]bool{}
+	for _, p := range m.HeldOutBuildConflicts(r) {
+		conflict[p] = true
+	}
+	var out []HeldOut
+	for _, h := range m.heldOutFailures(r) {
+		if !conflict[h.Test.Package] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// HeldOutBuildConflicts are the packages holding held-out tests whose
+// test binary didn't build in the Check: the Candidate and a held-out
+// test conflict, and neither can be blamed without the other's source.
+// Their held-out tests are left out of HeldOutFailures.
+func (m *Manifest) HeldOutBuildConflicts(r *Result) []string {
+	failed := map[string]bool{}
+	for _, e := range r.Commands {
+		if e.Report != nil {
+			for p := range e.Report.buildFailed {
+				failed[p] = true
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range m.HeldOut {
+		if p := h.Test.Package; failed[p] && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (m *Manifest) heldOutFailures(r *Result) []HeldOut {
 	if len(r.Tests) > 0 {
 		// The attestation channel decides, never a report (ADR-0020).
 		attested := map[TestID]string{}
@@ -305,10 +344,40 @@ func screen(src []byte) string {
 			return "QA's test file declares " + fn.Name.Name + ", which runs around every test in its package; left out"
 		}
 	}
+	for _, d := range f.Decls {
+		g, ok := d.(*ast.GenDecl)
+		if !ok || g.Tok != token.VAR {
+			continue
+		}
+		for _, sp := range g.Specs {
+			for _, v := range sp.(*ast.ValueSpec).Values {
+				if callsAnything(v) {
+					return "QA's test file initialises a package variable by calling a function, which runs before every test in its package; left out"
+				}
+			}
+		}
+	}
 	if len(testNames(src)) == 0 {
 		return "QA's file declares no TestXxx(*testing.T); left out"
 	}
 	return ""
+}
+
+// callsAnything reports whether evaluating e calls a function, a function
+// literal called in place included. A literal that isn't called runs
+// nothing.
+func callsAnything(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.CallExpr:
+			found = true
+		case *ast.FuncLit:
+			return false // its body runs only if something calls it
+		}
+		return !found
+	})
+	return found
 }
 
 // nestedModule reports whether dir is inside a module nested under the
