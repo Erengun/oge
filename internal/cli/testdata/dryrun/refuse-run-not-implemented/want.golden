@@ -1,4 +1,4 @@
 exit: 2
 --- stdout
 --- stderr
-oge: starting a Run isn't implemented yet; use --dry-run to see what it would do
+oge: running a Task with claude isn't implemented yet; use --dry-run to see what it would do

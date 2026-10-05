@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -24,6 +25,8 @@ const (
 	ExitOK       = 0
 	ExitInternal = 1
 	ExitRefused  = 2 // usage, config or Preflight refusal
+	ExitRejected = 3
+	ExitInfra    = 11 // Infrastructure stop
 )
 
 // Env is everything the CLI takes from its process, so tests can drive it.
@@ -38,6 +41,11 @@ type Env struct {
 	Edit    func(path string) error
 	GOOS    string
 	Version string
+	Getenv  func(string) string
+	// Agents are the adapters this build can run, by agent name. Release
+	// builds register none until the Claude adapter (#44) exists; test
+	// builds register the scripted fake (ADR-0017).
+	Agents map[string]agent.Adapter
 }
 
 // ProcessEnv is the Env of the running process.
@@ -51,6 +59,7 @@ func ProcessEnv(version string) Env {
 		Edit:        runEditor,
 		GOOS:        runtimeGOOS,
 		Version:     version,
+		Getenv:      os.Getenv,
 	}
 }
 
@@ -98,6 +107,7 @@ Run flags:
   --tests <glob>           add a test glob for this Run
   --output <glob>          add an output glob for this Run
   --unattended             never prompt
+  -v                       show the event stream
 `
 
 // Main runs oge with args (without the program name) and returns the exit
@@ -130,6 +140,7 @@ type runFlags struct {
 	taskFile   string
 	dryRun     bool
 	unattended bool
+	verbose    bool
 	o          pipeline.Overrides
 }
 
@@ -140,6 +151,7 @@ func parseRunFlags(args []string) (runFlags, []string, error) {
 	fs.StringVar(&f.taskFile, "task-file", "", "")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "")
 	fs.BoolVar(&f.unattended, "unattended", false, "")
+	fs.BoolVar(&f.verbose, "v", false, "")
 	fs.BoolVar(&f.o.Fast, "fast", false, "")
 	fs.BoolVar(&f.o.Blind, "blind", false, "")
 	fs.BoolVar(&f.o.Confirm, "confirm", false, "")
@@ -199,12 +211,16 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 
-	cfg, code := loadConfig(env, root, f, attended)
+	cfg, cfgData, code := loadConfig(env, root, f, attended)
 	if code != ExitOK {
 		return code
 	}
 	installed := installedAgents(env)
-	frozen, probs := pipeline.Resolve(cfg, f.o, installed)
+	var registered []string
+	for name := range env.Agents {
+		registered = append(registered, name)
+	}
+	frozen, probs := pipeline.Resolve(cfg, f.o, installed, registered...)
 	if len(probs) > 0 {
 		reportProblems(env, "this Run isn't valid", probs)
 		return ExitRefused
@@ -216,9 +232,7 @@ func runCommand(env Env, args []string) int {
 	}
 
 	if !f.dryRun {
-		// #40 starts the Run here.
-		fmt.Fprintln(env.Stderr, "oge: starting a Run isn't implemented yet; use --dry-run to see what it would do")
-		return ExitRefused
+		return startRun(env, f, root, t, frozen, cfgData)
 	}
 	renderDryRun(env.Stdout, t, frozen, cfg != nil)
 	return ExitOK
@@ -244,44 +258,44 @@ func reportProblems(env Env, what string, probs []pipeline.Problem) {
 // loadConfig reads .oge/oge.toml from the Snapshot. With none, it offers the
 // first-run proposal when attended; it returns a nil config when the CLI
 // flags alone must carry the Oracle.
-func loadConfig(env Env, root string, f runFlags, attended bool) (*pipeline.Config, int) {
+func loadConfig(env Env, root string, f runFlags, attended bool) (*pipeline.Config, []byte, int) {
 	sf, err := workspace.ReadSnapshotFile(root, pipeline.ConfigPath)
 	if errors.Is(err, workspace.ErrNotRegular) {
 		fmt.Fprintf(env.Stderr, "oge: %s must be a regular file, not a symlink or directory\n", pipeline.ConfigPath)
-		return nil, ExitRefused
+		return nil, nil, ExitRefused
 	}
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: reading %s from the Snapshot: %v\n", pipeline.ConfigPath, err)
-		return nil, ExitInternal
+		return nil, nil, ExitInternal
 	}
 	if sf.Ignored {
 		fmt.Fprintf(env.Stderr, "oge: %s exists but git ignores it, so it isn't part of the Snapshot; stop ignoring it\n", pipeline.ConfigPath)
-		return nil, ExitRefused
+		return nil, nil, ExitRefused
 	}
 	if !sf.InSnapshot {
 		if len(f.o.Checks) > 0 || len(f.o.Tests) > 0 {
-			return nil, ExitOK // flags-only Run; Resolve says what is missing
+			return nil, nil, ExitOK // flags-only Run; Resolve says what is missing
 		}
 		if !attended {
 			fmt.Fprintf(env.Stderr, "oge: no %s in this repository, and no terminal to review a proposed one.\n"+
 				"  Run oge in a terminal to review and save a proposal, write %s yourself,\n"+
 				"  or pass --check <command> and --tests <glob> for this Run.\n", pipeline.ConfigPath, pipeline.ConfigPath)
-			return nil, ExitRefused
+			return nil, nil, ExitRefused
 		}
 		if code := firstRun(env, root); code != ExitOK {
-			return nil, code
+			return nil, nil, code
 		}
 		if sf, err = workspace.ReadSnapshotFile(root, pipeline.ConfigPath); err != nil || !sf.InSnapshot {
 			fmt.Fprintf(env.Stderr, "oge: the saved %s isn't in the Snapshot (is it ignored by git?)\n", pipeline.ConfigPath)
-			return nil, ExitRefused
+			return nil, nil, ExitRefused
 		}
 	}
 	cfg, probs := pipeline.Load(sf.Data)
 	if len(probs) > 0 {
 		reportProblems(env, pipeline.ConfigPath+" isn't valid", probs)
-		return nil, ExitRefused
+		return nil, nil, ExitRefused
 	}
-	return cfg, ExitOK
+	return cfg, sf.Data, ExitOK
 }
 
 // firstRun shows the detected config and saves it only on an explicit yes

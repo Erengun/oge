@@ -148,7 +148,7 @@ func InitRunRepo(dir string) (*RunRepo, error) {
 	}
 	for _, kv := range [][2]string{
 		{"core.hooksPath", os.DevNull}, {"core.fsmonitor", "false"},
-		{"core.autocrlf", "false"}, {"core.symlinks", "true"}, {"gc.auto", "0"},
+		{"core.autocrlf", "false"}, {"core.fsync", "committed"}, {"core.symlinks", "true"}, {"gc.auto", "0"},
 	} {
 		if _, err := r.git("", "", nil, "config", kv[0], kv[1]); err != nil {
 			return nil, err

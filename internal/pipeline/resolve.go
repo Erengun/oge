@@ -135,8 +135,9 @@ type Weakening struct {
 // Resolve applies built-in defaults and CLI overrides to a project config
 // (nil when the Snapshot has none), validates the result as `oge run` would,
 // and compiles the frozen graph. installed lists the KnownAgents found on
-// PATH, used only when nothing is bound.
-func Resolve(cfg *Config, o Overrides, installed []string) (*Frozen, []Problem) {
+// PATH, used only when nothing is bound. registered names agents a test
+// build adds beyond KnownAgents.
+func Resolve(cfg *Config, o Overrides, installed []string, registered ...string) (*Frozen, []Problem) {
 	src := FromProject
 	if cfg == nil {
 		cfg = &Config{Schema: SchemaVersion}
@@ -234,7 +235,8 @@ func Resolve(cfg *Config, o Overrides, installed []string) (*Frozen, []Problem) 
 	default:
 		f.Stages = []Stage{impl, ver}
 	}
-	probs = append(probs, bind(f.Stages, o)...)
+	known := func(a string) bool { return knownAgent(a) || oneOf(a, registered...) }
+	probs = append(probs, bind(f.Stages, o, known)...)
 	if f.Mode != "" {
 		probs = append(probs, defaultBindings(f.Stages, installed)...)
 	}
@@ -302,7 +304,7 @@ func inferReport(run string) string {
 }
 
 // bind applies --agent and the Role-kind aliases.
-func bind(stages []Stage, o Overrides) []Problem {
+func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	var probs []Problem
 	boundBy := map[string]string{}
 	set := func(flag, stage, spec string) {
