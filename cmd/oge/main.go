@@ -7,8 +7,13 @@ import (
 	"os"
 	"runtime/debug"
 
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/cli"
 )
+
+// testAgents is populated only in test builds (-tags ogetest), so the
+// release binary can never reach the fake adapter (ADR-0017).
+var testAgents map[string]agent.Adapter
 
 // version is stamped at build time with -ldflags "-X main.version=...".
 var version = "dev"
@@ -20,6 +25,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	env := cli.ProcessEnv(resolvedVersion())
 	env.Stdout, env.Stderr = stdout, stderr
+	env.Agents = testAgents
 	return cli.Main(env, args)
 }
 
