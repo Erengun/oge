@@ -107,7 +107,7 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		GOOS:        runtime.GOOS,
 		Version:     "test",
 		Getenv:      os.Getenv,
-		Agents:      map[string]agent.Adapter{fake.Name: fake.New(path)},
+		Agents:      map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
 		// A shared GOCACHE keeps these tests fast; real Runs never share.
 		CheckGoCache: hostGoCache,
 	}
@@ -169,9 +169,14 @@ var wantOrder = []string{
 	run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
+// writeAheadScript fails the Attempt unless the Ledger already records it
+// as starting while the agent runs (ADR-0012).
+const writeAheadScript = `grep '"type":"AttemptStarting"' "$OGE_TEST_STATE"/private/runs/*/ledger.jsonl | grep -q '"attempt":"implement#1"' || exit 9
+`
+
 func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	f := newRunFixture(t)
-	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	code, out, errOut := f.run(t, writeAheadScript+fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}

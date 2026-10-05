@@ -29,6 +29,9 @@ const Name = "fake"
 // Adapter runs Script for every Session.
 type Adapter struct {
 	Script string // path to a shell script
+	// Env is added to the script's environment; tests use it to hand the
+	// script paths to inspect.
+	Env []string
 }
 
 // New returns an adapter that runs script.
@@ -44,7 +47,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	}
 	cmd := exec.Command("/bin/sh", "-c", wrapper, "oge-fake", a.Script)
 	cmd.Dir = spec.Workspace
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}, a.Env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
