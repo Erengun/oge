@@ -3,12 +3,11 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
 
 ✓ preflight  ok · 0.4s
 ⠸ implement  fake · 3.8s
-  ⎿ started (cause: first) · fresh Session · Workspace from Snapshot
-    "reading add.go"
-    "Add ignores its arguments and returns 0"
-    "running go test ./..."
-    "TestAdd fails: Add(2, 3) != 5"
-    "fixing Add in add.go[2J"
+  ⎿ reading add.go
+    Add ignores its arguments and returns 0
+    running go test ./...
+    TestAdd fails: Add(2, 3) != 5
+    fixing Add in add.go[2J
     ctrl+o to collapse
 · check      go test -json ./...
 

@@ -343,3 +343,22 @@ func TestElapsed(t *testing.T) {
 		}
 	}
 }
+
+// The default view's activity is what the agent says it's doing. Session,
+// cause and Exit bookkeeping is -v vocabulary (ADR-0019 #8).
+func TestTUIActivityShowsOnlyClaims(t *testing.T) {
+	h := newTUIHarness(t, false, 120)
+	h.working()
+	h.agent(agent.Event{Kind: agent.Warning, Text: "slow disk"})
+	h.agent(agent.Event{Kind: agent.TurnSettled, Exit: "done"})
+	h.m.expanded = true
+	got := h.m.render()
+	for _, leak := range []string{"started (cause", "fresh Session", "Workspace from Snapshot", "Exit: done", "(Claim)", "warning:"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("the activity shows %q:\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "reading add.go") {
+		t.Errorf("the activity lacks the Claims:\n%s", got)
+	}
+}

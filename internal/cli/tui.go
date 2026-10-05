@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -179,7 +180,11 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	case run.EvPreflight:
 		m.text = preflightText(f)
 	case run.EvAgent:
-		m.step, _ = agentStep(ev.Agent)
+		// Only what the agent says it's doing; the Session and Exit
+		// bookkeeping stays in -v (ADR-0019).
+		if ev.Agent.Kind == agent.Claim {
+			m.step = clean(ev.Agent.Text)
+		}
 	case run.EvAttempt:
 		m.text = attemptText(ev.Attempt)
 		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Exit != "done"
