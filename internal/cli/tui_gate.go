@@ -117,14 +117,19 @@ func (m *model) gateLines() []string {
 		return nil
 	}
 	st := m.st
-	screen := gateScreen(g.req)
+	// What is needed is the attention line, right above the choices
+	// (ADR-0022).
+	screen := gateLinesWith(g.req, st.bold(clean(gate.Attention(&g.req))))
 	out := []string{"", "  " + st.bold(screen[0])}
-	for _, l := range screen[1:] {
-		if l == "" {
+	for i, l := range screen[1:] {
+		switch {
+		case l == "":
 			out = append(out, "")
-			continue
+		case i == 3: // the attention line
+			out = append(out, l)
+		default:
+			out = append(out, "  "+l)
 		}
-		out = append(out, "  "+l)
 	}
 	out = append(out, "")
 	if g.choice != nil {

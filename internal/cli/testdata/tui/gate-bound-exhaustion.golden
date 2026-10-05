@@ -9,7 +9,7 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
   The Check failed and the send-back limit (3) is used up.
   Candidate 6d1231d · Attempt implement#4 · Oracle v0 · Verdicts #1 #2 #3 #4
 
-  Decide.
+ATTENTION NEEDED: Decide what happens to the Candidate.
     s  send back  one more send-back past the limit, with the failure output (needs a reason)
     reject        end the Run Rejected (type the word and a reason)
     q  quit       end the Run Cancelled

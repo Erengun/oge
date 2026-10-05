@@ -9,7 +9,7 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
   Öge's Check passed on the Candidate.
   Candidate 6d1231d · Attempt implement#1 · Oracle v0 · Verdicts #1
 
-  Decide whether to take it.
+ATTENTION NEEDED: Decide whether to take it.
     t  take       end the Run Accepted
     s  send back  return it to the implementer, with an optional note
     reject        end the Run Rejected (type the word and a reason)

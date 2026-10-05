@@ -185,3 +185,19 @@ func TestTUICtrlCAtTheChoiceCancelsAndClosesTheGate(t *testing.T) {
 		t.Errorf("cancelled %d\n%s", cancelled, h.m.render())
 	}
 }
+
+// The attention line says whether the Run needs the human (ADR-0022).
+func TestTUIAttentionLine(t *testing.T) {
+	h := newTUIHarness(t, false, 100)
+	h.working()
+	if got := h.m.render(); !strings.Contains(got, "\nNothing needs you.\n") || strings.Contains(got, "ATTENTION") {
+		t.Errorf("happy path:\n%s", got)
+	}
+	h.implemented("")
+	h.checked(false)
+	h.openGate(boundExhaustionAt(h))
+	got := h.m.render()
+	if !strings.Contains(got, "\nATTENTION NEEDED: Decide what happens to the Candidate.\n    s  send back") || strings.Contains(got, "Nothing needs you") {
+		t.Errorf("at a Gate:\n%s", got)
+	}
+}

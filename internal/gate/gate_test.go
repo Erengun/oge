@@ -73,3 +73,15 @@ func TestScriptedPortRefusesWhatTheGateDoesntOffer(t *testing.T) {
 		t.Errorf("an empty script decided: %v", err)
 	}
 }
+
+// The live view's attention line comes from the Gate state (ADR-0022).
+func TestAttention(t *testing.T) {
+	if got := Attention(nil); got != "Nothing needs you." {
+		t.Errorf("no Gate open: %q", got)
+	}
+	r := resultGate()
+	r.Need = "Decide whether to take it."
+	if got := Attention(&r); got != "ATTENTION NEEDED: Decide whether to take it." {
+		t.Errorf("Result gate open: %q", got)
+	}
+}

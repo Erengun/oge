@@ -140,3 +140,13 @@ func (s *Scripted) Decide(_ context.Context, r Request) (Decision, error) {
 	}
 	return Decision{}, fmt.Errorf("the %s Gate doesn't offer %q", r.Name, d.Choice)
 }
+
+// Attention is the line that says whether the Run needs the human: with
+// no Gate open, nothing does (ADR-0022).
+// TODO(#45): an open Host request needs the human too.
+func Attention(open *Request) string {
+	if open == nil {
+		return "Nothing needs you."
+	}
+	return "ATTENTION NEEDED: " + open.Need
+}

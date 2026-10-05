@@ -41,7 +41,13 @@ func decidedText(ev run.Event) string {
 // needed and the choices. There is no default. The Check it follows is
 // the line just above it, in both views.
 func gateScreen(r gate.Request) []string {
-	lines := []string{gateTitle(r.Name), clean(r.What), pinsLine(r.Pins), "", clean(r.Need)}
+	return gateLinesWith(r, clean(r.Need))
+}
+
+// gateLinesWith is the Gate's screen with need as the line that says
+// what is needed, just above the choices.
+func gateLinesWith(r gate.Request, need string) []string {
+	lines := []string{gateTitle(r.Name), clean(r.What), pinsLine(r.Pins), "", need}
 	for _, c := range r.Choices {
 		key := c.Word
 		if c.Key != "" {

@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -501,6 +502,9 @@ func (m *model) render() string {
 	lines = append(lines, m.gateLines()...)
 	if !m.finished {
 		add("")
+		if m.gate == nil {
+			add(gate.Attention(nil))
+		}
 		hint := "ctrl+c to cancel"
 		if m.cancelling {
 			hint = "cancelling… ctrl+c again to stop now"

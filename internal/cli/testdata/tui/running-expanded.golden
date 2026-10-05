@@ -11,4 +11,5 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
     ctrl+o to collapse
 · check      go test -json ./...
 
+Nothing needs you.
 ctrl+c to cancel

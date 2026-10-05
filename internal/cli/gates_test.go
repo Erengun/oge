@@ -248,7 +248,7 @@ func (s *syncBuf) waitFor(t *testing.T, text string) {
 
 func boundExhaustionRequest() gate.Request {
 	return gate.Request{
-		Name: "bound-exhaustion", What: "The Check failed and the send-back limit (3) is used up.", Need: "Decide.",
+		Name: "bound-exhaustion", What: "The Check failed and the send-back limit (3) is used up.", Need: "Decide what happens to the Candidate.",
 		Pins: gate.Pins{Gate: "gate.bound_exhaustion", Attempt: "implement#4", Candidate: "6d1231d9f00d", Verdicts: []int{1, 2, 3, 4}},
 		Choices: []gate.Choice{
 			{Word: "send back", Key: "s", Reason: true}, gate.Choices["reject"], gate.Choices["quit"],
