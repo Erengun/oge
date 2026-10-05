@@ -33,7 +33,7 @@ status: accepted
   - A no-cgo job runs test, vet, staticcheck and govulncheck. It is what validates ADR-0001's build invariant.
   - A separate Ubuntu job runs `CGO_ENABLED=1 go test -race`, for testing only.
   - The cross-build matrix (linux, darwin, windows × amd64/arm64) is `CGO_ENABLED=0` and blocking, Windows included.
-  - *Amendment (#99, CI cost):* the no-cgo checks and the six cross-builds run as one job, since each job pays its own setup. macOS runs on main pushes and on demand, not on PRs, and there is no nightly schedule. Docs-only changes skip CI, and a newer push cancels the run it supersedes.
+  - *Amendment (#99, CI wall time):* the e2e packages run split across parallel jobs, both no-cgo and `-race`. The no-cgo checks, DCO and the six cross-builds share one job. macOS runs on main pushes and on demand, not on PRs, and there is no nightly schedule. Docs-only changes skip CI.
 - **Windows cross-builds but refuses execution in the MVP.**
   - `oge run` and every other command that needs execution or isolation semantics exits 2 on Windows.
   - `oge doctor` still runs there. It reports that Windows is unsupported for MVP execution and which capabilities are unavailable.

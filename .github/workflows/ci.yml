@@ -1,7 +1,8 @@
 name: ci
 
-# Public repo: standard runners are free, so jobs run in parallel for wall
-# time. macOS stays off PRs (slow queues); docs-only changes skip CI.
+# Tuned for wall time: the slow e2e packages are split across parallel jobs
+# (scripts/ci-shard.sh), so a PR is green in a few minutes. Docs-only changes
+# skip CI. No schedule: main pushes cover what nightly did.
 on:
   push:
     branches: [main]
@@ -23,19 +24,24 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR cancels the run it supersedes; main runs every commit.
+# A newer push to the same PR supersedes its running CI; main runs always
+# finish.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   STATICCHECK_VERSION: v0.8.1
   GOVULNCHECK_VERSION: v1.8.0
   GORELEASER_VERSION: v2.18.2
+  # The e2e packages, sharded across the e2e and race jobs. The test job
+  # runs every other package.
+  E2E_PACKAGES: ./internal/cli ./cmd/oge
 
 jobs:
-  # Blocking. The no-cgo job validates ADR-0001's build invariant, cross-builds
-  # every release target (Windows included), and checks DCO and the release config.
+  # Blocking. Validates ADR-0001's cgo-free build invariant, together with
+  # the e2e shards, which run the same way. Also checks DCO and cross-builds
+  # every release target, Windows included.
   test:
     runs-on: ubuntu-latest
     env:
@@ -49,15 +55,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # Its own key: setup-go's shared key is saved by whichever job finishes
-      # first, so the no-cgo build cache would otherwise never be kept.
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
-          restore-keys: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-test-${{ hashFiles('go.sum') }}-
       - name: dco
         if: github.event_name == 'pull_request'
         run: scripts/ci-dco.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
@@ -71,17 +75,78 @@ jobs:
             echo "== $target"
             GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/oge
           done
-      - run: go test -timeout 30m ./...
+      - name: go test (all but the e2e packages)
+        run: |
+          pkgs=$(go list ./... | grep -vxF -f <(go list $E2E_PACKAGES))
+          go test -timeout 30m $pkgs
       - run: go run honnef.co/go/tools/cmd/staticcheck@"$STATICCHECK_VERSION" ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@"$GOVULNCHECK_VERSION" ./...
-      - uses: goreleaser/goreleaser-action@v7
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v6
         with:
-          version: ${{ env.GORELEASER_VERSION }}
-          args: check
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+
+  # Blocking. The e2e packages, no cgo, split by test name (scripts/ci-shard.sh).
+  e2e:
+    name: e2e (${{ matrix.dir }} ${{ matrix.shard }}/${{ matrix.total }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dir: internal/cli, shard: 1, total: 3 }
+          - { dir: internal/cli, shard: 2, total: 3 }
+          - { dir: internal/cli, shard: 3, total: 3 }
+          - { dir: cmd/oge, shard: 1, total: 2 }
+          - { dir: cmd/oge, shard: 2, total: 2 }
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-e2e-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-e2e-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-
+            go-test-${{ hashFiles('go.sum') }}-
+      - run: scripts/ci-no-live-agents.sh
+      - name: go test (shard)
+        run: go test -timeout 30m "$(scripts/ci-shard.sh ${{ matrix.dir }} ${{ matrix.shard }} ${{ matrix.total }})" ./${{ matrix.dir }}
+      - if: github.event_name == 'push' && matrix.shard == 1
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-e2e-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   # Race detection needs cgo; testing only, never for release binaries.
+  # Every package, sharded like e2e. cmd/oge's e2e tests exec binaries built
+  # without -race, so they race only the test harness.
   race:
+    name: race (${{ matrix.dir == 'rest' && 'non-e2e' || format('{0} {1}/{2}', matrix.dir, matrix.shard, matrix.total) }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dir: rest, shard: 1, total: 1 }
+          - { dir: internal/cli, shard: 1, total: 4 }
+          - { dir: internal/cli, shard: 2, total: 4 }
+          - { dir: internal/cli, shard: 3, total: 4 }
+          - { dir: internal/cli, shard: 4, total: 4 }
+          - { dir: cmd/oge, shard: 1, total: 2 }
+          - { dir: cmd/oge, shard: 2, total: 2 }
     env:
       CGO_ENABLED: "1"
     steps:
@@ -89,10 +154,34 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-race-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-
+            go-race-rest-${{ hashFiles('go.sum') }}-
       - run: scripts/ci-no-live-agents.sh
-      - run: go test -race -timeout 30m ./...
+      - name: go test -race (shard)
+        run: |
+          if [ "${{ matrix.dir }}" = rest ]; then
+            pkgs=$(go list ./... | grep -vxF -f <(go list $E2E_PACKAGES))
+            go test -race -timeout 30m $pkgs
+          else
+            go test -race -timeout 30m "$(scripts/ci-shard.sh ${{ matrix.dir }} ${{ matrix.shard }} ${{ matrix.total }})" ./${{ matrix.dir }}
+          fi
+      - if: github.event_name == 'push' && matrix.shard == 1
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ matrix.dir }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
-  # Runtime behaviour on macOS: main pushes and on demand.
+  # Runtime behaviour on macOS: main pushes and on demand (macOS queues are slow).
   macos:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
@@ -121,7 +210,7 @@ jobs:
         run: scripts/ci-no-live-agents.sh
       - run: go test -timeout 30m ./...
 
-  # Builds a release snapshot. Nothing is published.
+  # Validates the release config and builds a snapshot. Nothing is published.
   goreleaser:
     runs-on: ubuntu-latest
     steps:
@@ -134,4 +223,9 @@ jobs:
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: ${{ env.GORELEASER_VERSION }}
+          args: check
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
           args: release --snapshot --clean
+
