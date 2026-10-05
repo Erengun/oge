@@ -1,0 +1,492 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"runtime/debug"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/task"
+	"golang.org/x/term"
+)
+
+// tui is the live view of a Run on an interactive terminal (ADR-0022). It
+// draws inline, never on the alternate screen, so its last frame and the
+// summary stay in the scrollback.
+type tui struct {
+	in     io.Reader
+	out    io.Writer
+	stderr io.Writer
+	plain  *renderer // prints the summary once the live view has gone
+	m      *model
+}
+
+const (
+	tuiFPS       = 15
+	tickInterval = 100 * time.Millisecond
+	// recentSteps is how much agent activity shows collapsed.
+	// TODO(#79-decision): four lines, like a compact tool-output preview.
+	recentSteps = 4
+	// keptSteps bounds the activity a Run keeps for the expanded view.
+	keptSteps = 500
+)
+
+func newTUI(env Env, t task.Task, f *pipeline.Frozen, plain *renderer) *tui {
+	return &tui{
+		in: env.Stdin, out: env.Stdout, stderr: env.Stderr, plain: plain,
+		m: newModel(t, f, newStyles(colorAllowed(env.Getenv)), time.Now),
+	}
+}
+
+// colorAllowed honours NO_COLOR (https://no-color.org) and TERM=dumb.
+func colorAllowed(getenv func(string) string) bool {
+	return getenv("NO_COLOR") == "" && getenv("TERM") != "dumb"
+}
+
+func (u *tui) gate(gatePrompt) (string, error)        { return "", errNotBuilt }
+func (u *tui) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
+
+// show runs the Run on its own goroutine and the live view on this one.
+// The Run reports progress into a queue, so a slow terminal never holds it
+// up. Whatever ends the Run, the view has restored the terminal before
+// show returns, and a panic in the Run is re-raised only after that.
+func (u *tui) show(ctx context.Context, cancel context.CancelFunc, start startFunc) (*run.Result, error) {
+	// Bubble Tea's own signal handler would end the view before the
+	// summary; SIGTERM cancels the Run instead, like SIGINT does.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM)
+	defer stop()
+
+	q := &queue{wake: make(chan struct{}, 1)}
+	u.m.queue, u.m.cancel = q, cancel
+
+	type ended struct {
+		res      *run.Result
+		err      error
+		panicked any
+		stack    []byte
+	}
+	done := make(chan ended, 1)
+	go func() {
+		var e ended
+		defer func() {
+			if p := recover(); p != nil {
+				e.panicked, e.stack = p, debug.Stack()
+			}
+			q.push(doneMsg{at: time.Now(), res: e.res, failed: e.err != nil || e.panicked != nil})
+			done <- e
+		}()
+		e.res, e.err = start(ctx, func(ev run.Event) { q.push(progressOf(ev, u.m.frozen, time.Now())) })
+	}()
+
+	out, opts := u.out, []tea.ProgramOption{tea.WithFPS(tuiFPS), tea.WithoutSignalHandler()}
+	if f, ok := out.(*os.File); ok {
+		// A terminal that reports no size would get an empty frame, so it
+		// is drawn as a plain writer at 80x24 instead.
+		if w, h, err := term.GetSize(int(f.Fd())); err != nil || w <= 0 || h <= 0 {
+			out = struct{ io.Writer }{f}
+			opts = append(opts, tea.WithWindowSize(80, 24))
+		}
+	}
+	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
+	p := tea.NewProgram(u.m, opts...)
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(u.stderr, "oge: the live view stopped (%v); the Run goes on, and its summary follows\n", err)
+	}
+	e := <-done
+	if e.panicked != nil {
+		panic(fmt.Sprintf("%v\n\n%s", e.panicked, e.stack))
+	}
+	if e.err == nil {
+		u.plain.summary(e.res)
+	}
+	return e.res, e.err
+}
+
+// queue carries progress from the Run to the view without blocking the
+// Run. The view drains everything queued at once.
+type queue struct {
+	mu   sync.Mutex
+	msgs []tea.Msg
+	wake chan struct{}
+}
+
+func (q *queue) push(m tea.Msg) {
+	q.mu.Lock()
+	q.msgs = append(q.msgs, m)
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (q *queue) wait() tea.Msg {
+	<-q.wake
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	msgs := q.msgs
+	q.msgs = nil
+	return batchMsg(msgs)
+}
+
+type (
+	batchMsg []tea.Msg
+	tickMsg  time.Time
+	// progressMsg is a run.Event already turned into text, on the Run's
+	// goroutine: the view never reads the Run's live Result.
+	progressMsg struct {
+		at   time.Time
+		kind run.EventKind
+		head string   // EvStarted: the Run line
+		text string   // a finished stage's line, as plain mode prints it
+		sub  []string // further lines under it
+		fail bool
+		// timed: the lines carry their own durations (Check commands).
+		timed bool
+		step  string // EvAgent: one line of activity
+	}
+	doneMsg struct {
+		at     time.Time
+		res    *run.Result
+		failed bool // Öge itself failed; the Result is nil
+	}
+)
+
+func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
+	m := progressMsg{at: at, kind: ev.Kind}
+	switch ev.Kind {
+	case run.EvStarted:
+		m.head = startedLine(ev.Result, f)
+	case run.EvPreflight:
+		m.text = preflightText(f)
+	case run.EvAgent:
+		m.step, _ = agentStep(ev.Agent)
+	case run.EvAttempt:
+		m.text = attemptText(ev.Attempt)
+		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Exit != "done"
+	case run.EvCheck:
+		lines := checkLines(ev.Check)
+		if len(lines) > 0 {
+			m.text, m.sub = lines[0], lines[1:]
+		}
+		m.fail, m.timed = !ev.Check.Pass, true
+	}
+	return m
+}
+
+type stageState int
+
+const (
+	pending stageState = iota
+	running
+	passed
+	failed
+)
+
+type stage struct {
+	name       string
+	text       string // shown while pending or running, until the line arrives
+	sub        []string
+	state      stageState
+	timed      bool
+	start, end time.Time
+}
+
+// model is the TUI's state. It changes only in Update and is drawn only
+// by View, so tests drive it with messages and compare frames.
+type model struct {
+	title  string
+	head   string
+	frozen *pipeline.Frozen
+	stages []stage
+	cur    int
+	steps  []string
+	more   int // steps dropped beyond keptSteps
+
+	expanded   bool
+	cancelling bool
+	finished   bool
+
+	width, height int
+	spin          int
+	now           func() time.Time
+	st            styles
+	queue         *queue
+	cancel        context.CancelFunc
+}
+
+func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
+	m := &model{title: clean(t.Title), frozen: f, st: st, now: now}
+	m.head = fmt.Sprintf("%s mode", f.Mode)
+	m.stages = append(m.stages, stage{name: "preflight"})
+	for _, s := range f.Stages {
+		if f.Mode == pipeline.Fast && s.Role != "implementer" {
+			continue
+		}
+		m.stages = append(m.stages, stage{name: s.Name, text: s.Agent})
+	}
+	var checks []string
+	for _, c := range f.Checks {
+		checks = append(checks, c.Run)
+	}
+	m.stages = append(m.stages, stage{name: "check", text: strings.Join(checks, " · ")})
+	m.stages[0].state, m.stages[0].start = running, now()
+	return m
+}
+
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(m.waitCmd(), tick())
+}
+
+func (m *model) waitCmd() tea.Cmd {
+	if m.queue == nil {
+		return nil
+	}
+	return m.queue.wait
+}
+
+func tick() tea.Cmd {
+	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case batchMsg:
+		for _, one := range msg {
+			if m.apply(one) {
+				return m, tea.Quit
+			}
+		}
+		return m, m.waitCmd()
+	case tickMsg:
+		if m.finished {
+			return m, nil
+		}
+		m.spin++
+		return m, tick()
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+o":
+			m.expanded = !m.expanded
+		case "ctrl+c":
+			// Ctrl-C cancels the Run, which then ends and shows its
+			// summary; the view quits only after that.
+			if !m.cancelling && m.cancel != nil {
+				m.cancelling = true
+				m.cancel()
+			}
+		}
+	}
+	return m, nil
+}
+
+// apply takes one message from the Run; it reports whether the Run ended.
+func (m *model) apply(msg tea.Msg) bool {
+	switch msg := msg.(type) {
+	case progressMsg:
+		switch msg.kind {
+		case run.EvStarted:
+			m.head = msg.head
+		case run.EvPreflight, run.EvAttempt, run.EvCheck:
+			m.finish(msg)
+		case run.EvAgent:
+			if msg.step != "" {
+				m.steps = append(m.steps, msg.step)
+				if len(m.steps) > keptSteps {
+					m.steps = m.steps[1:]
+					m.more++
+				}
+			}
+		}
+	case doneMsg:
+		if m.cur < len(m.stages) && m.stages[m.cur].state == running {
+			s := &m.stages[m.cur]
+			s.state, s.end = failed, msg.at
+			if msg.res != nil && msg.res.Outcome == run.Refused {
+				s.text = "refused"
+			}
+		}
+		m.finished = true
+		return true
+	}
+	return false
+}
+
+// finish ends the running stage with its line, and starts the next one
+// unless this one failed.
+func (m *model) finish(msg progressMsg) {
+	if m.cur >= len(m.stages) {
+		return
+	}
+	at := msg.at
+	s := &m.stages[m.cur]
+	s.text, s.sub, s.timed, s.end = msg.text, msg.sub, msg.timed, at
+	s.state = passed
+	if msg.fail {
+		s.state = failed
+		return
+	}
+	m.steps, m.more = nil, 0
+	m.cur++
+	if m.cur < len(m.stages) {
+		m.stages[m.cur].state, m.stages[m.cur].start = running, at
+	}
+}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m *model) View() tea.View { return tea.NewView(m.render()) }
+
+// render is the screen as text.
+func (m *model) render() string {
+	st := m.st
+	var lines []string
+	add := func(s string) { lines = append(lines, s) }
+
+	add(st.bold(m.title))
+	add(st.dim(m.head))
+	add("")
+	for i, s := range m.stages {
+		name := fmt.Sprintf("%-10s", s.name)
+		switch s.state {
+		case pending:
+			text := s.text
+			if m.finished {
+				text = "not run"
+			}
+			add(st.dim("· " + strings.TrimRight(name+" "+text, " ")))
+		case running:
+			line := st.accent(spinnerFrames[m.spin%len(spinnerFrames)]) + " " + name + " "
+			if s.text != "" {
+				line += s.text + " · "
+			}
+			add(line + st.dim(elapsed(m.now().Sub(s.start))))
+			if i == m.cur {
+				lines = append(lines, m.activity(len(lines))...)
+			}
+		default:
+			mark := st.ok("✓")
+			if s.state == failed {
+				mark = st.bad("✗")
+			}
+			line := mark + " " + name + " " + s.text
+			if !s.timed {
+				line += st.dim(" · " + elapsed(s.end.Sub(s.start)))
+			}
+			add(line)
+			for _, l := range s.sub {
+				add("  " + fmt.Sprintf("%-10s", "") + " " + l)
+			}
+		}
+	}
+	if !m.finished {
+		add("")
+		hint := "ctrl+c to cancel"
+		if m.cancelling {
+			hint = "cancelling…"
+		}
+		add(st.dim(hint))
+	}
+
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(ansi.Truncate(l, width, "…"))
+		b.WriteByte('\n')
+	}
+	// The renderer erases the line the cursor ends on when it stops, so the
+	// frame ends with an empty one.
+	return b.String()
+}
+
+// activity is the agent's recent steps under the running stage: the last
+// few, or with ctrl+o every one that fits on the screen. used is how many
+// lines the frame has above it.
+func (m *model) activity(used int) []string {
+	steps := m.steps
+	if len(steps) == 0 {
+		return nil
+	}
+	st := m.st
+	limit := recentSteps
+	if m.expanded {
+		limit = len(steps)
+		if m.height > 0 {
+			// Leave room for the stages below, the hint and the footer.
+			room := m.height - used - (len(m.stages) - m.cur) - 4
+			limit = max(min(limit, room), recentSteps)
+		}
+	}
+	hidden := m.more
+	if len(steps) > limit {
+		hidden += len(steps) - limit
+		steps = steps[len(steps)-limit:]
+	}
+	var out []string
+	for i, s := range steps {
+		prefix := "    "
+		if i == 0 {
+			prefix = "  ⎿ "
+		}
+		out = append(out, st.dim(prefix+s))
+	}
+	switch {
+	case hidden > 0 && !m.expanded:
+		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · ctrl+o to expand", hidden)))
+	case hidden > 0:
+		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · ctrl+o to collapse", hidden)))
+	case m.expanded:
+		out = append(out, st.dim("    ctrl+o to collapse"))
+	}
+	return out
+}
+
+// elapsed is 0.4s, 12.3s, then 1m05s.
+func elapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Round(100*time.Millisecond).Seconds())
+	}
+	d = d.Round(time.Second)
+	return fmt.Sprintf("%dm%02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
+}
+
+// styles paint text; without colour each is the identity, so a NO_COLOR
+// frame holds no escape sequences at all.
+type styles struct {
+	bold, dim, accent, ok, bad func(string) string
+}
+
+func newStyles(color bool) styles {
+	if !color {
+		id := func(s string) string { return s }
+		return styles{id, id, id, id, id}
+	}
+	// The 16 basic colours: the user's palette decides the exact shades.
+	style := func(s lipgloss.Style) func(string) string { return func(t string) string { return s.Render(t) } }
+	return styles{
+		bold:   style(lipgloss.NewStyle().Bold(true)),
+		dim:    style(lipgloss.NewStyle().Faint(true)),
+		accent: style(lipgloss.NewStyle().Foreground(lipgloss.Magenta)),
+		ok:     style(lipgloss.NewStyle().Foreground(lipgloss.Green)),
+		bad:    style(lipgloss.NewStyle().Foreground(lipgloss.Red)),
+	}
+}

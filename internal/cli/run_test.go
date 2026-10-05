@@ -44,6 +44,8 @@ printf 'package fx\n\nimport "testing"\n\nfunc TestAdd(t *testing.T) {}\n' > add
 type runFixture struct {
 	repo, state, hookMarker string
 	statusBefore            string
+	// interactive mocks a terminal at stdin and stdout.
+	interactive bool
 }
 
 func newRunFixture(t *testing.T) *runFixture {
@@ -101,7 +103,7 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 	env := Env{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
 		Dir:         f.repo,
-		Interactive: func() bool { return false },
+		Interactive: func() bool { return f.interactive },
 		LookPath:    exec.LookPath,
 		Edit:        func(string) error { t.Fatal("editor opened"); return nil },
 		GOOS:        runtime.GOOS,

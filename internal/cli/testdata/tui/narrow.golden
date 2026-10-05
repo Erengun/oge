@@ -1,0 +1,13 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode …
+
+✓ preflight  ok · 0.4s
+⠸ implement  fake · 3.8s
+  ⎿ "Add ignores its arguments and retu…
+    "running go test ./..."
+    "TestAdd fails: Add(2, 3) != 5"
+    "fixing Add in add.go[2J"
+    +2 earlier · ctrl+o to expand
+· check      go test -json ./...
+
+ctrl+c to cancel

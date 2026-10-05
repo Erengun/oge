@@ -67,16 +67,18 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	// Attempt; ADR-0012's Checkpoint and interrupted status come later.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	r := &renderer{w: env.Stdout, verbose: f.verbose, frozen: frozen}
-	res, err := run.Start(ctx, run.Params{
-		Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
-		State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: r.observe,
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	res, err := selectView(env, f, t, frozen).show(ctx, cancel, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
+		return run.Start(ctx, run.Params{
+			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
+			State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: observe,
+		})
 	})
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal
 	}
-	r.summary(res)
 	switch res.Outcome {
 	case run.Accepted:
 		return ExitOK
@@ -93,79 +95,159 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	}
 }
 
-// renderer prints one line per stage, then the summary; -v adds the event
-// stream (ADR-0019).
+// view shows a Run as it happens. Both views read only Öge's normalised
+// events and the Result, so the TUI reaches nothing plain mode can't
+// (ADR-0022).
+type view interface {
+	// show runs start with an observe callback for its progress, shows the
+	// Result's summary, and returns what start returned. cancel cancels
+	// ctx, for a view that takes Ctrl-C as a key.
+	show(ctx context.Context, cancel context.CancelFunc, start startFunc) (*run.Result, error)
+	// gate and hostRequest are where a Gate (#43) and an agent's Host
+	// request (#45) will be answered. Neither is built yet; whatever answers
+	// them never offers a default choice (ADR-0015).
+	gate(g gatePrompt) (string, error)
+	hostRequest(h hostPrompt) (string, error)
+}
+
+type startFunc func(ctx context.Context, observe func(run.Event)) (*run.Result, error)
+
+// gatePrompt is a Gate waiting for a human decision.
+type gatePrompt struct {
+	Name    string
+	Choices []string // full words; there is no default
+}
+
+// hostPrompt is an agent's Host request, such as a permission to run a tool.
+type hostPrompt struct {
+	Attempt string
+	What    string
+	Choices []string // full words; there is no default
+}
+
+var errNotBuilt = errors.New("not built yet")
+
+// selectView picks the live TUI on an interactive terminal, and plain lines
+// otherwise: without a TTY, with --plain, or with -v/-vv (ADR-0022).
+func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view {
+	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen}
+	if f.plain || plain.verbose || !env.Interactive() {
+		return plain
+	}
+	return newTUI(env, t, frozen, plain)
+}
+
+// renderer is the plain view. It prints one line per stage, then the
+// summary; -v adds the event stream (ADR-0019).
 type renderer struct {
 	w       io.Writer
 	verbose bool
 	frozen  *pipeline.Frozen
 }
 
+func (r *renderer) show(ctx context.Context, _ context.CancelFunc, start startFunc) (*run.Result, error) {
+	res, err := start(ctx, r.observe)
+	if err == nil {
+		r.summary(res)
+	}
+	return res, err
+}
+
+func (r *renderer) gate(gatePrompt) (string, error)        { return "", errNotBuilt }
+func (r *renderer) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
+
 func (r *renderer) p(format string, a ...any) { fmt.Fprintf(r.w, format+"\n", a...) }
 
 func (r *renderer) observe(ev run.Event) {
 	switch ev.Kind {
 	case run.EvStarted:
-		res := ev.Result
-		r.p("Run %s · %s mode · %s", res.ID, r.frozen.Mode, res.Source)
+		r.p("%s", startedLine(ev.Result, r.frozen))
 	case run.EvPreflight:
-		line := "ok"
-		if r.frozen.Setup.Run != "" {
-			line = fmt.Sprintf("ok · setup %q passed on the Snapshot", r.frozen.Setup.Run)
-		}
-		r.p("%-10s %s", "preflight", line)
+		r.p("%-10s %s", "preflight", preflightText(r.frozen))
 	case run.EvAgent:
 		if !r.verbose {
 			return
 		}
-		tag := fmt.Sprintf("[%s %s]", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent)
-		switch e := ev.Agent; e.Kind {
-		case agent.SessionOpened:
-			r.p("%s started (cause: first) · fresh Session · Workspace from Snapshot", tag)
-		case agent.Claim:
-			r.p("%s %q", tag, clean(e.Text))
-		case agent.Warning:
-			r.p("%s warning: %s", tag, clean(e.Text))
-		case agent.TurnSettled:
-			if e.Failure != "" {
-				r.p("%s Attempt failure: %s", tag, clean(e.Failure))
-			} else {
-				r.p("%s Exit: %s   (Claim)", tag, clean(e.Exit))
-			}
+		if step, ok := agentStep(ev.Agent); ok {
+			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
 	case run.EvAttempt:
-		a := ev.Attempt
-		switch {
-		case a.Failure != "":
-			r.p("%-10s %s · Attempt failed: %s", a.Stage, a.Agent, clean(a.Failure))
-		case a.Candidate == "":
-			r.p("%-10s %s · Exit %s", a.Stage, a.Agent, clean(a.Exit))
-		default:
-			r.p("%-10s %s · Exit %s · Candidate %s · %s", a.Stage, a.Agent, clean(a.Exit), a.Candidate[:7], files(len(a.Changed)))
-		}
+		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
 	case run.EvCheck:
 		res := ev.Result
 		if r.verbose {
 			r.p("[check #1] Candidate %s · Oracle v%d · fresh Check directory", res.Candidate[:7], res.Oracle)
 		}
-		c := ev.Check
-		if c.Setup != nil && !c.Setup.Pass {
-			r.p("%-10s setup %q failed on the Candidate (%s)", "check", c.Setup.Run, c.Setup.Why)
-		}
-		for _, e := range c.Commands {
-			r.p("%-10s %s", "check", commandLine(e))
-		}
-		if c.Why != "" {
-			r.p("%-10s fail (%s)", "check", c.Why)
+		for _, l := range checkLines(ev.Check) {
+			r.p("%-10s %s", "check", l)
 		}
 		if r.verbose {
 			verdict := "FAIL"
-			if c.Pass {
+			if ev.Check.Pass {
 				verdict = "PASS"
 			}
 			r.p("[verdict] %s   (Candidate %s, Oracle v%d)", verdict, res.Candidate[:7], res.Oracle)
 		}
 	}
+}
+
+// The line texts below are shared by both views.
+
+func startedLine(res *run.Result, f *pipeline.Frozen) string {
+	return fmt.Sprintf("Run %s · %s mode · %s", res.ID, f.Mode, res.Source)
+}
+
+func preflightText(f *pipeline.Frozen) string {
+	if f.Setup.Run != "" {
+		return fmt.Sprintf("ok · setup %q passed on the Snapshot", f.Setup.Run)
+	}
+	return "ok"
+}
+
+// agentStep is one agent event as a line of activity; ok is false for
+// events that show nothing.
+func agentStep(e agent.Event) (string, bool) {
+	switch e.Kind {
+	case agent.SessionOpened:
+		return "started (cause: first) · fresh Session · Workspace from Snapshot", true
+	case agent.Claim:
+		return fmt.Sprintf("%q", clean(e.Text)), true
+	case agent.Warning:
+		return "warning: " + clean(e.Text), true
+	case agent.TurnSettled:
+		if e.Failure != "" {
+			return "Attempt failure: " + clean(e.Failure), true
+		}
+		return "Exit: " + clean(e.Exit) + "   (Claim)", true
+	}
+	return "", false
+}
+
+func attemptText(a *run.Attempt) string {
+	switch {
+	case a.Failure != "":
+		return fmt.Sprintf("%s · Attempt failed: %s", a.Agent, clean(a.Failure))
+	case a.Candidate == "":
+		return fmt.Sprintf("%s · Exit %s", a.Agent, clean(a.Exit))
+	default:
+		return fmt.Sprintf("%s · Exit %s · Candidate %s · %s", a.Agent, clean(a.Exit), a.Candidate[:7], files(len(a.Changed)))
+	}
+}
+
+// checkLines are a Check's lines: a failed setup, each command, and why
+// the Check failed when no command shows it.
+func checkLines(c *oracle.Result) []string {
+	var lines []string
+	if c.Setup != nil && !c.Setup.Pass {
+		lines = append(lines, fmt.Sprintf("setup %q failed on the Candidate (%s)", c.Setup.Run, c.Setup.Why))
+	}
+	for _, e := range c.Commands {
+		lines = append(lines, commandLine(e))
+	}
+	if c.Why != "" {
+		lines = append(lines, fmt.Sprintf("fail (%s)", c.Why))
+	}
+	return lines
 }
 
 func commandLine(e oracle.Execution) string {
