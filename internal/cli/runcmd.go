@@ -247,13 +247,13 @@ func attemptText(a *run.Attempt) string {
 func checkLines(c *oracle.Result) []string {
 	var lines []string
 	if c.Setup != nil && !c.Setup.Pass {
-		lines = append(lines, fmt.Sprintf("setup %q failed on the Candidate (%s)", c.Setup.Run, c.Setup.Why))
+		lines = append(lines, clean(fmt.Sprintf("setup %q failed on the Candidate (%s)", c.Setup.Run, c.Setup.Why)))
 	}
 	for _, e := range c.Commands {
 		lines = append(lines, commandLine(e))
 	}
 	if c.Why != "" {
-		lines = append(lines, fmt.Sprintf("fail (%s)", c.Why))
+		lines = append(lines, clean(fmt.Sprintf("fail (%s)", c.Why)))
 	}
 	return lines
 }
@@ -278,7 +278,8 @@ func commandLine(e oracle.Execution) string {
 		parts = append(parts, "fail ("+e.Why+")")
 	}
 	parts = append(parts, (time.Duration(e.DurationMs) * time.Millisecond).Round(100*time.Millisecond).String())
-	return strings.Join(parts, " · ")
+	// Test names come from the Candidate's own test output.
+	return clean(strings.Join(parts, " · "))
 }
 
 func (r *renderer) summary(res *run.Result) {
@@ -306,12 +307,14 @@ func files(n int) string {
 	return fmt.Sprintf("%d files changed", n)
 }
 
-// clean redacts agent-provided text and drops control characters before
-// it reaches the terminal.
+// clean redacts agent- or Candidate-provided text and drops control
+// characters before it reaches the terminal: C0, DEL and the C1 range,
+// where U+009B is a CSI and U+009D an OSC to some terminals. Invalid UTF-8
+// becomes U+FFFD.
 func clean(s string) string {
 	s = string(redact.Redact([]byte(s)))
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
 		}
 		return r
