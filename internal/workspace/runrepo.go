@@ -350,6 +350,21 @@ func (r *RunRepo) Show(commit, path string) (data []byte, ok bool, err error) {
 	return b, err == nil, err
 }
 
+// Files lists every file path in commit.
+func (r *RunRepo) Files(commit string) ([]string, error) {
+	out, err := r.git("", "", nil, "ls-tree", "-r", "-z", "--name-only", commit)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, nil
+}
+
 // Remotes lists the Run repository's remotes (there must be none).
 func (r *RunRepo) Remotes() (string, error) {
 	out, err := r.git("", "", nil, "remote")
