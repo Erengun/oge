@@ -184,6 +184,9 @@ const (
 	SnapshotRef = "refs/oge/snapshot"
 )
 
+// ByteExactAttributes switches off every content-changing git attribute.
+const ByteExactAttributes = "* -text -eol -ident -working-tree-encoding -filter -diff -merge\n"
+
 // InitRunRepo creates the Run repository at dir.
 func InitRunRepo(dir string) (*RunRepo, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -200,6 +203,15 @@ func InitRunRepo(dir string) (*RunRepo, error) {
 		if _, err := r.git("", "", nil, "config", kv[0], kv[1]); err != nil {
 			return nil, err
 		}
+	}
+	// Every git operation on the Run repository is byte-exact: no
+	// .gitattributes in a Snapshot or Workspace may convert, filter or
+	// re-encode content (info/attributes takes precedence over them).
+	if err := os.MkdirAll(filepath.Join(dir, "info"), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "info", "attributes"), []byte(ByteExactAttributes), 0o600); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
