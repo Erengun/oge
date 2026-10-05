@@ -67,40 +67,18 @@ func Excluded(p string) bool {
 // paths keep the Snapshot's version and other new files are left out; both
 // are returned as withheld.
 func (r *RunRepo) PromotedView(snap, candidate string, promotedNew func(path string) bool) (string, []Withheld, error) {
-	before, err := r.entries(snap)
-	if err != nil {
-		return "", nil, err
-	}
-	after, err := r.entries(candidate)
-	if err != nil {
-		return "", nil, err
-	}
-	changed, err := r.ChangedFiles(snap, candidate)
+	promoted, withheld, err := r.Classify(snap, candidate, promotedNew)
 	if err != nil {
 		return "", nil, err
 	}
 	var info bytes.Buffer
-	var withheld []Withheld
-	for _, p := range changed {
-		_, inSnap := before[p]
-		a, inCand := after[p]
-		switch {
-		case Excluded(p):
-			if inCand {
-				withheld = append(withheld, Withheld{p, ClassExcluded, a.oid})
-			}
-			continue
-		case !inSnap && !promotedNew(p):
-			withheld = append(withheld, Withheld{p, ClassAmbiguous, a.oid})
-			continue
-		}
-		if inCand {
-			fmt.Fprintf(&info, "%s %s\t%s\x00", a.mode, a.oid, p)
+	for _, c := range promoted {
+		if c.NewMode != "" {
+			fmt.Fprintf(&info, "%s %s\t%s\x00", c.NewMode, c.NewOID, c.Path)
 		} else {
-			fmt.Fprintf(&info, "0 %s\t%s\x00", strings.Repeat("0", 40), p)
+			fmt.Fprintf(&info, "0 %s\t%s\x00", strings.Repeat("0", 40), c.Path)
 		}
 	}
-	sort.Slice(withheld, func(i, j int) bool { return withheld[i].Path < withheld[j].Path })
 	idx := filepath.Join(r.Dir, "index-view-"+candidate[:12])
 	defer os.Remove(idx)
 	if _, err := r.git("", idx, nil, "read-tree", snap); err != nil {
@@ -121,6 +99,78 @@ func (r *RunRepo) PromotedView(snap, candidate string, promotedNew func(path str
 		return "", nil, err
 	}
 	return strings.TrimSpace(string(out)), withheld, nil
+}
+
+// Classify sorts candidate's changes since snap (ADR-0009): the Promoted
+// ones, and the withheld ones, Excluded or Ambiguous, in path order. A new
+// file is Promoted only when promotedNew accepts it: the output and test
+// globs, or a human's promotion. Nothing else decides it, not its
+// directory, its extension or how important it looks.
+func (r *RunRepo) Classify(snap, candidate string, promotedNew func(path string) bool) ([]Change, []Withheld, error) {
+	before, err := r.entries(snap)
+	if err != nil {
+		return nil, nil, err
+	}
+	after, err := r.entries(candidate)
+	if err != nil {
+		return nil, nil, err
+	}
+	changed, err := r.ChangedFiles(snap, candidate)
+	if err != nil {
+		return nil, nil, err
+	}
+	var promoted []Change
+	var withheld []Withheld
+	for _, p := range changed {
+		_, inSnap := before[p]
+		a, inCand := after[p]
+		switch {
+		case Excluded(p):
+			if inCand {
+				withheld = append(withheld, Withheld{p, ClassExcluded, a.oid})
+			}
+			continue
+		case !inSnap && !promotedNew(p):
+			withheld = append(withheld, Withheld{p, ClassAmbiguous, a.oid})
+			continue
+		}
+		c := Change{Path: p}
+		if inCand {
+			c.NewMode, c.NewOID = a.mode, a.oid
+		}
+		promoted = append(promoted, c)
+	}
+	sort.Slice(withheld, func(i, j int) bool { return withheld[i].Path < withheld[j].Path })
+	return promoted, withheld, nil
+}
+
+// Resolve commits an Ambiguous-file resolution on top of candidate: the
+// same tree without drop. Every resolution is a new Candidate, a promotion
+// too, whose tree is unchanged (ADR-0013).
+func (r *RunRepo) Resolve(candidate string, drop []string, message string) (string, error) {
+	idx := filepath.Join(r.Dir, "index-resolve-"+candidate[:12])
+	defer os.Remove(idx)
+	if _, err := r.git("", idx, nil, "read-tree", candidate); err != nil {
+		return "", err
+	}
+	if len(drop) > 0 {
+		var info bytes.Buffer
+		for _, p := range drop {
+			fmt.Fprintf(&info, "0 %s\t%s\x00", strings.Repeat("0", 40), p)
+		}
+		if _, err := r.git("", idx, &info, "update-index", "-z", "--index-info"); err != nil {
+			return "", err
+		}
+	}
+	tree, err := r.git("", idx, nil, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	out, err := r.git("", "", nil, "commit-tree", "--no-gpg-sign", strings.TrimSpace(string(tree)), "-p", candidate, "-m", message)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 type treeEntry struct{ mode, oid string }

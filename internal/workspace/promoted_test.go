@@ -85,3 +85,49 @@ func matchGlob(g, p string) bool {
 	ok, _ := filepath.Match(g, p)
 	return ok
 }
+
+// A resolution is a new Candidate: a drop leaves the files out, a
+// promotion keeps the tree as it was.
+func TestResolveMakesANewCandidate(t *testing.T) {
+	repo := newRepo(t)
+	state := t.TempDir()
+	r, err := InitRunRepo(filepath.Join(state, "repo.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := filepath.Join(state, "ws")
+	snap, _, err := r.TakeSnapshot(repo, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(ws, "docs/debug.md"), "notes\n")
+	write(t, filepath.Join(ws, "helper.go"), "package x\n")
+	cand, err := r.CommitCandidate(ws, snap, "refs/oge/candidates/c1", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, err := r.Resolve(cand, []string{"docs/debug.md"}, "drop docs/debug.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted, err := r.Resolve(dropped, nil, "promote helper.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropped == cand || promoted == dropped {
+		t.Fatal("a resolution kept its Candidate")
+	}
+	for c, want := range map[string]string{dropped: ".gitignore a.txt helper.go", promoted: ".gitignore a.txt helper.go"} {
+		files, _ := r.Files(c)
+		if got := strings.Join(files, " "); got != want {
+			t.Errorf("%s: %s, want %s", c[:7], got, want)
+		}
+	}
+	if out := gitT(t, filepath.Join(state, "repo.git"), "log", "--format=%P", "-1", promoted); strings.TrimSpace(out) != dropped {
+		t.Errorf("parent %q, want %s", out, dropped)
+	}
+	_, withheld, err := r.Classify(snap, promoted, func(p string) bool { return p == "helper.go" })
+	if err != nil || len(withheld) != 0 {
+		t.Errorf("withheld %v %v", withheld, err)
+	}
+}

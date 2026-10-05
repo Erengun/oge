@@ -272,6 +272,8 @@ func (r *renderer) observe(ev run.Event) {
 		r.p("%-10s %s", "send back", sendBackText(ev, r.frozen))
 	case run.EvDecided:
 		r.p("%-10s %s", "decision", decidedText(ev))
+	case run.EvResolved:
+		r.p("%-10s %s", "resolved", resolvedText(ev))
 	case run.EvCheck:
 		res := ev.Result
 		if r.verbose {

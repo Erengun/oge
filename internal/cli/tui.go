@@ -173,6 +173,7 @@ type (
 		// timed: the lines carry their own durations (Check commands).
 		timed bool
 		step  string // EvAgent: one line of activity
+		next  string // EvResolved: where the walk goes
 	}
 	doneMsg struct {
 		at     time.Time
@@ -194,6 +195,8 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		m.stage, m.text = "send back", sendBackText(ev, f)
 	case run.EvDecided:
 		m.stage, m.text = "decision", decidedText(ev)
+	case run.EvResolved:
+		m.stage, m.text, m.next = "resolved", resolvedText(ev), ev.Next
 	}
 	switch ev.Kind {
 	case run.EvStarted:
@@ -379,6 +382,9 @@ func (m *model) apply(msg tea.Msg) bool {
 		case run.EvSendBack:
 			m.note(msg)
 			m.again()
+		case run.EvResolved:
+			m.note(msg)
+			m.resolved(msg.next)
 		case run.EvAgent, run.EvNotice:
 			if msg.stage != "" {
 				if i := m.index(msg.stage); m.stages[i].state == pending {

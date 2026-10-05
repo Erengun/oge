@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
@@ -50,7 +52,15 @@ func decidedText(ev run.Event) string {
 	if ev.Decision.Note != "" {
 		s += " · note: " + ev.Decision.Note
 	}
-	return clean(s)
+	s = clean(s)
+	if len(ev.Decision.Files) > 0 {
+		var files []string
+		for _, f := range ev.Decision.Files {
+			files = append(files, shownPath(f))
+		}
+		s += " · " + strings.Join(files, ", ")
+	}
+	return s
 }
 
 // gateScreen is an open Gate: what happened, what is pinned, what is
@@ -67,16 +77,39 @@ func gateLinesWith(r gate.Request, need string) []string {
 	for _, d := range r.Detail {
 		lines = append(lines, "  "+clean(d))
 	}
+	for i, f := range r.Files {
+		lines = append(lines, fmt.Sprintf("  %d  %s", i+1, shownPath(f)))
+	}
 	lines = append(lines, pinsLine(r.Pins), "", need)
+	choice := func(key, says string) {
+		lines = append(lines, strings.TrimRight(fmt.Sprintf("  %-13s %s", key, says), " "))
+	}
+	inspect := r.Inspect != nil
 	for _, c := range r.Choices {
+		if inspect && !c.Selects {
+			// Inspect goes with the batch choices; it decides nothing.
+			choice("i  inspect", inspectSays)
+			inspect = false
+		}
 		key := c.Word
 		if c.Key != "" {
 			key = c.Key + "  " + c.Word
 		}
-		lines = append(lines, strings.TrimRight(fmt.Sprintf("  %-13s %s", key, c.Says), " "))
+		choice(key, c.Says)
+	}
+	if inspect {
+		choice("i  inspect", inspectSays)
+	}
+	if len(r.Files) > 1 {
+		lines = append(lines, "  "+selectHint)
 	}
 	return lines
 }
+
+const (
+	inspectSays = "show a file: i <number> (decides nothing)"
+	selectHint  = "p or d alone covers every file; p 1 3 or d 2 covers only those."
+)
 
 func pinsLine(p gate.Pins) string {
 	var v []string
@@ -98,7 +131,8 @@ func (r *renderer) parkedSummary(res *run.Result) {
 	r.p("")
 	r.p("%-10s at the %s · Candidate %s · Oracle v%d · %s", "PARKED", gateTitle(gateLabel(res)), short(res.Candidate), res.Oracle, res.Duration.Round(100*time.Millisecond))
 	for _, w := range res.Why {
-		r.p("  %s", clean(w))
+		// It may name Candidate files: what hides text is escaped.
+		r.p("  %s", shownLine(w))
 	}
 	r.p("  Unattended Runs never decide a Gate; a human must (exit 10).")
 	r.observed(res)
@@ -109,8 +143,11 @@ func gateLabel(res *run.Result) string {
 	if res.Gate == "" {
 		return "?"
 	}
-	if res.Gate == "gate.result" {
+	switch res.Gate {
+	case "gate.result":
 		return "Result gate"
+	case "gate.ambiguous_file":
+		return "Ambiguous-file"
 	}
 	return strings.ReplaceAll(strings.TrimPrefix(res.Gate, "gate."), "_", "-")
 }
@@ -183,6 +220,16 @@ func (r *renderer) gate(ctx context.Context, req gate.Request) (gate.Decision, e
 		if err != nil {
 			return gate.Decision{}, err
 		}
+		if p, ok, err := req.InspectTarget(line); ok {
+			if err != nil {
+				r.p("  %s", clean(err.Error()))
+				continue
+			}
+			for _, l := range inspectLines(req, p, inspectMax) {
+				r.p("%s", l)
+			}
+			continue
+		}
 		c, text, ok := req.Match(line)
 		if !ok {
 			if msg := notAChoice(req, line); msg != "" {
@@ -200,6 +247,16 @@ func (r *renderer) gate(ctx context.Context, req gate.Request) (gate.Decision, e
 				continue
 			}
 		}
+		if c.Selects {
+			files, err := req.Select(text)
+			if err != nil {
+				r.p("  %s", clean(err.Error()))
+				continue
+			}
+			d, _ := c.Decide("")
+			d.Files = files
+			return d, nil
+		}
 		d, err := c.Decide(text)
 		if err != nil {
 			r.p("  %s", err)
@@ -207,6 +264,37 @@ func (r *renderer) gate(ctx context.Context, req gate.Request) (gate.Decision, e
 		}
 		return d, nil
 	}
+}
+
+// inspectMax bounds the lines an inspect view shows of a file.
+const inspectMax = 200
+
+// inspectLines are a file's content for the inspect view, made safe for
+// the terminal: at most max lines, each cleaned, and a binary file only
+// named. Candidate content never reaches the terminal raw.
+func inspectLines(req gate.Request, path string, max int) []string {
+	head := "── " + shownPath(path)
+	b, err := req.Inspect(path)
+	if err != nil {
+		return []string{head, "  can't show it: " + clean(err.Error())}
+	}
+	if bytes.IndexByte(b, 0) >= 0 || !utf8.Valid(b) {
+		return []string{head, fmt.Sprintf("  binary, %d bytes: not shown", len(b))}
+	}
+	text := strings.TrimSuffix(string(b), "\n")
+	all := strings.Split(text, "\n")
+	if text == "" {
+		all = nil
+	}
+	out := []string{fmt.Sprintf("%s · %s", head, pluralOf(len(all), "line", "lines"))}
+	for i, l := range all {
+		if i == max {
+			out = append(out, fmt.Sprintf("  … %d more lines not shown", len(all)-max))
+			break
+		}
+		out = append(out, "  "+shownLine(l))
+	}
+	return append(out, "── end of "+shownPath(path))
 }
 
 // reason reads c's reason or note. ok is false when Ctrl-C returned to

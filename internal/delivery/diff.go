@@ -62,12 +62,17 @@ func Clean(patch []byte) string {
 		if r == '\t' || r == '\n' {
 			return r
 		}
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || bidi(r) || invisible(r) {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || Hidden(r) {
 			return -1
 		}
 		return r
 	}, strings.ToValidUTF8(string(patch), "�"))
 }
+
+// Hidden reports the runes that make text read other than it is: the
+// bidirectional formatting characters and the invisible ones. Every view
+// of Candidate content leaves them out or shows them escaped.
+func Hidden(r rune) bool { return bidi(r) || invisible(r) }
 
 // bidi reports the bidirectional formatting characters: embeddings and
 // overrides (U+202A–U+202E), isolates (U+2066–U+2069) and the marks.
