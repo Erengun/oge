@@ -49,9 +49,9 @@ func newTUI(env Env, t task.Task, f *pipeline.Frozen, plain *renderer) *tui {
 	}
 }
 
-// colorAllowed honours NO_COLOR (https://no-color.org) and TERM=dumb.
+// colorAllowed honours NO_COLOR (https://no-color.org).
 func colorAllowed(getenv func(string) string) bool {
-	return getenv("NO_COLOR") == "" && getenv("TERM") != "dumb"
+	return getenv("NO_COLOR") == ""
 }
 
 func (u *tui) gate(gatePrompt) (string, error)        { return "", errNotBuilt }

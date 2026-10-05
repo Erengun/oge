@@ -194,10 +194,6 @@ func TestTUINoColor(t *testing.T) {
 	if colorAllowed(func(k string) string { return env[k] }) {
 		t.Error("NO_COLOR=1 allows colour")
 	}
-	env = map[string]string{"TERM": "dumb"}
-	if colorAllowed(func(k string) string { return env[k] }) {
-		t.Error("TERM=dumb allows colour")
-	}
 	h := newTUIHarness(t, false, 80)
 	h.working()
 	h.implemented("")
@@ -264,18 +260,26 @@ func TestTUIShowReRaisesARunPanicAfterTheViewStops(t *testing.T) {
 func TestSelectView(t *testing.T) {
 	f := &pipeline.Frozen{Mode: pipeline.Fast}
 	for _, c := range []struct {
-		name string
-		tty  bool
-		fl   runFlags
-		tui  bool
+		name, term string
+		tty        bool
+		fl         runFlags
+		tui        bool
 	}{
-		{"terminal", true, runFlags{}, true},
-		{"no terminal", false, runFlags{}, false},
-		{"--plain", true, runFlags{plain: true}, false},
-		{"-v", true, runFlags{verbose: true}, false},
-		{"-vv", true, runFlags{veryVerbose: true}, false},
+		{"terminal", "xterm-256color", true, runFlags{}, true},
+		{"no terminal", "xterm-256color", false, runFlags{}, false},
+		{"--plain", "xterm-256color", true, runFlags{plain: true}, false},
+		{"-v", "xterm-256color", true, runFlags{verbose: true}, false},
+		{"-vv", "xterm-256color", true, runFlags{veryVerbose: true}, false},
+		{"TERM=dumb", "dumb", true, runFlags{}, false},
+		{"TERM empty", "", true, runFlags{}, false},
 	} {
-		env := Env{Stdout: &bytes.Buffer{}, Interactive: func() bool { return c.tty }, Getenv: func(string) string { return "" }}
+		getenv := func(k string) string {
+			if k == "TERM" {
+				return c.term
+			}
+			return ""
+		}
+		env := Env{Stdout: &bytes.Buffer{}, Interactive: func() bool { return c.tty }, Getenv: getenv}
 		_, isTUI := selectView(env, c.fl, task.Task{}, f).(*tui)
 		if isTUI != c.tui {
 			t.Errorf("%s: TUI = %v", c.name, isTUI)

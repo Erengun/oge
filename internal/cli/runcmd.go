@@ -128,11 +128,17 @@ type hostPrompt struct {
 var errNotBuilt = errors.New("not built yet")
 
 // selectView picks the live TUI on an interactive terminal, and plain lines
-// otherwise: without a TTY, with --plain, or with -v/-vv (ADR-0022).
+// otherwise: without a TTY, on a terminal that can't move the cursor
+// (TERM empty or dumb), with --plain, or with -v/-vv (ADR-0022).
 func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view {
 	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen}
 	// TODO(#79-decision): --unattended on a terminal still draws the live
 	// view; unattended means "never prompt", and the view doesn't.
+	// TODO(#79-decision): an empty TERM gets plain lines too. Windows
+	// consoles set none, but Runs are refused on Windows for now.
+	if term := env.Getenv("TERM"); term == "" || term == "dumb" {
+		return plain
+	}
 	if f.plain || plain.verbose || !env.Interactive() {
 		return plain
 	}
