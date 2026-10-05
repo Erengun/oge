@@ -63,6 +63,10 @@ A determined hostile program running in the same process can still inspect memor
 
   - The comparison uses the same build environment and the same Oracle version.
   - An eligible test that starts on neither side (for example, an Oracle `TestMain` that runs nothing, or a runner that closes inherited descriptors) is an Oracle-validity or Infrastructure stop, never a Candidate failure.
+- **Subtests and Examples.**
+  - A subtest the report shows skipping on the Candidate cannot pass if it ran on the Snapshot control. The report is trusted only in that direction.
+  - Subtests whose case table comes from Candidate code are out of scope: they are a question of Oracle quality, and attestation covers only the protected test that runs them.
+  - Each Example with an output comment attests through a generated test. That test runs the Example, captures and compares its output the way `go test` does, and only then attests.
 - **Evaluation.** The forged-report exploit becomes an evaluation fixture now (#58), to measure whether real coding agents discover or use this path.
 
 ## Consequences

@@ -64,6 +64,52 @@ func TestRunExampleOracle(t *testing.T) {
 			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 		}
 	})
+	// The example returns, and once go test has restored stdout, before
+	// it compares the output, a Candidate goroutine exits 0.
+	t.Run("exit before the comparison", func(t *testing.T) {
+		f := newRunFixture(t)
+		f.sendBackLimit(t, 0)
+		if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(f.repo, "example_test.go"), []byte(exampleTest))
+		script := `cat > add.go <<'EOF'
+package fx
+
+import (
+	"os"
+	"runtime"
+	"syscall"
+)
+
+func Add(a, b int) int {
+	out := os.Stdout
+	go func() {
+		for os.Stdout == out { // go test restores stdout, then compares
+			runtime.Gosched()
+		}
+		syscall.Exit(0)
+	}()
+	return 0
+}
+EOF
+`
+		code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+		if !neverAccepted(code, out) || !strings.Contains(out, "fx.ExampleAdd started but never finished") {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+		}
+	})
+	t.Run("unordered", func(t *testing.T) {
+		f := newRunFixture(t)
+		if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(f.repo, "example_test.go"), []byte("package fx_test\n\nimport (\n\t\"fmt\"\n\n\t\"fx\"\n)\n\nfunc ExampleAdd() {\n\tfmt.Println(fx.Add(2, 3))\n\tfmt.Println(\"x\")\n\t// Unordered output:\n\t// x\n\t// 5\n}\n"))
+		code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+		if code != ExitOK {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+		}
+	})
 	t.Run("fixed", func(t *testing.T) {
 		f := newRunFixture(t)
 		if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {

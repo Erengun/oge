@@ -287,11 +287,9 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 	if err != nil {
 		return nil, err
 	}
-	goflags := ""
-	if named(r.PassEnv, "GOFLAGS") {
-		goflags = r.Getenv("GOFLAGS")
+	if len(m.Expected) > 0 {
+		att.ctx = buildContext(m, r.checkBuildEnv(ctx, env))
 	}
-	att.ctx = buildContext(m, goflags)
 	if blocked, err := r.overlay(m, dir, att); err != nil {
 		return nil, err
 	} else if blocked != "" {
@@ -361,15 +359,6 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 func hasGoTests(m *Manifest) bool {
 	for _, f := range m.Tests {
 		if strings.HasSuffix(f.Path, "_test.go") && goPackageDir(path.Dir(f.Path)) {
-			return true
-		}
-	}
-	return false
-}
-
-func named(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
 			return true
 		}
 	}

@@ -3,6 +3,7 @@ package oracle
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -280,7 +281,13 @@ func TestJudgeSubtestSkips(t *testing.T) {
 }
 
 func TestExcludedByTheBuildContext(t *testing.T) {
-	ctx := buildContext(&Manifest{Commands: []Command{{Run: "go test -tags=wanted,also ./..."}}}, "")
+	ctx := buildContext(&Manifest{Commands: []Command{{Run: "go test -tags=wanted ./..."}}}, buildEnv{GOFLAGS: "-tags 'also spaced'"})
+	if !reflect.DeepEqual(ctx.BuildTags, []string{"also", "spaced", "wanted"}) {
+		t.Errorf("tags %v", ctx.BuildTags)
+	}
+	if c := buildContext(&Manifest{}, buildEnv{GOOS: "plan9", GOARCH: "386", CGO_ENABLED: "0"}); c.GOOS != "plan9" || c.GOARCH != "386" || c.CgoEnabled {
+		t.Errorf("the Check environment's platform wasn't used: %s/%s cgo %v", c.GOOS, c.GOARCH, c.CgoEnabled)
+	}
 	other := map[string]string{"darwin": "linux"}[ctx.GOOS]
 	if other == "" {
 		other = "darwin"
