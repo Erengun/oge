@@ -125,3 +125,18 @@ func TestReleaseBinaryRefusesARealRun(t *testing.T) {
 		t.Fatalf("exit %d, stderr: %s", code, errOut)
 	}
 }
+
+// A fixed Candidate whose Attempt also rewrote the Oracle's test parks,
+// exit 10, until the Tamper event is acknowledged.
+func TestBinaryRunTamperParksExitsTen(t *testing.T) {
+	repo, env := runFixture(t)
+	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n"+
+		"printf 'package fx\\n' > add_test.go\n")
+	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != 10 || !strings.Contains(out, "1 protected test change reverted: add_test.go") || !strings.Contains(out, "PARKED") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(filepath.Join(repo, "add_test.go")); string(b) != addTest {
+		t.Errorf("the user's add_test.go was written: %q", b)
+	}
+}
