@@ -24,6 +24,9 @@ const (
 // Authorize refuses a delivery the Run's outcome doesn't allow: Accepted
 // with no flag, Overridden only with --overridden, Rejected only with
 // --rejected. A flag that names another outcome is refused too.
+// TODO(#48): unresolved Ambiguous files in a non-Accepted Candidate need
+// an explicit include or exclude here (ADR-0015); Ambiguous files don't
+// exist until #48.
 func Authorize(r *Run, flag string) error {
 	switch {
 	case r.Candidate == "":

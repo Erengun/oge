@@ -35,7 +35,15 @@ func afterRun(env Env, f runFlags, v view, root string, res *run.Result) int {
 		return applyCommand(env, r, root, "")
 	}
 	if _, live := v.(*tui); live {
-		newActionBar(env, r, root, func() { plainOf(v).summary(res) }).run()
+		var bar *actionBar
+		bar = newActionBar(env, r, root, func() {
+			// Once applied, the summary no longer says nothing was written.
+			p := plainOf(v)
+			p.applying = bar.applied
+			p.summary(res)
+		})
+		fmt.Fprintln(env.Stdout)
+		bar.run()
 		return ExitOK
 	}
 	fmt.Fprintf(env.Stdout, "%-10s oge apply %s · oge diff %s · oge branch %s\n", "next", r.ID, r.ID, r.ID)
