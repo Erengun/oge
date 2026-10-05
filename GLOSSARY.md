@@ -234,6 +234,10 @@ _Avoid_: Feature flag, agent version (as a proxy)
 A request from an agent that needs an answer from outside the agent, such as a permission to act or a question to the user, with a typed set of allowed responses; answered by the user or, later, a decider. Every answer records who gave it.
 _Avoid_: Permission prompt (too narrow), approval (when a question is meant)
 
+**Supervision**:
+What Öge does across a Run on the human's behalf: routing each agent operation through the Launch profile's policy (and, post-MVP, the Decider), sending work back for repair, escalating real ambiguity to the human, and stopping at trust boundaries. It is a product concept, not a Role kind. Authority stays with Öge, and only Evidence accepts. "Supervisor" may label the TUI panel that summarises it.
+_Avoid_: Supervisor agent, auto mode, orchestration
+
 **Decider**:
 A Role kind with no Stage that answers an agent's approval Host requests while work is happening, in the human's place; the agent doing the work never grants itself permission. A decider only authorises actions: it never creates Evidence, issues a Verdict, resolves a Gate or accepts a Candidate.
 _Avoid_: Approver, auto mode, policy engine

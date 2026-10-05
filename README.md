@@ -1,8 +1,8 @@
 # Öge
 
-**Your coding agent says it's done. Öge checks.**
+**Öge makes delegation actually feel like delegation.**
 
-Öge independently checks coding-agent work instead of letting the same agent grade its own homework.
+Öge is the supervision layer for coding agents. AI made coding fast, and supervision became the bottleneck. Give Öge the task: it runs your coding agent, checks the result itself, and interrupts you only for decisions that actually need you.
 
 > **Status: pre-alpha.** Nothing works yet except `oge --version`. Follow [milestone M1](https://github.com/Erengun/oge/milestone/1) for the first usable version.
 
