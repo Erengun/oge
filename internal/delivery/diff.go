@@ -62,12 +62,35 @@ func Clean(patch []byte) string {
 		if r == '\t' || r == '\n' {
 			return r
 		}
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || bidi(r) || invisible(r) {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || Hidden(r) {
 			return -1
 		}
 		return r
 	}, strings.ToValidUTF8(string(patch), "�"))
 }
+
+// Shown makes one line of text safe to show on a terminal or in a
+// document: invalid UTF-8 becomes U+FFFD, control characters (C0, DEL,
+// C1, newlines included) go, and the Hidden runes are written as <U+XXXX>
+// where they stand, so a Trojan Source name or line reads as it is.
+func Shown(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToValidUTF8(s, "\uFFFD") {
+		switch {
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+		case Hidden(r):
+			fmt.Fprintf(&b, "<U+%04X>", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// Hidden reports the runes that make text read other than it is: the
+// bidirectional formatting characters and the invisible ones. Every view
+// of Candidate content leaves them out or shows them escaped.
+func Hidden(r rune) bool { return bidi(r) || invisible(r) }
 
 // bidi reports the bidirectional formatting characters: embeddings and
 // overrides (U+202A–U+202E), isolates (U+2066–U+2069) and the marks.

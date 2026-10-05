@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -51,9 +52,17 @@ type Receipt struct {
 	Task    string `json:"task"`
 	Outcome string `json:"outcome"`
 	// Headline is the outcome as the Receipt's first line says it.
+	// Headline, Why, Found and NotCovered mark the values in them (val),
+	// for the renderings; the JSON drops the marks.
 	Headline string `json:"headline"`
 	// Why are the Run's own reasons for a stop, park or refusal.
 	Why []string `json:"why,omitempty"`
+	// Unresolved are the Ambiguous files a Run that isn't Accepted ended
+	// with: no one promoted or dropped them (#97).
+	Unresolved []string `json:"unresolved_ambiguous,omitempty"`
+	// LedgerUnreadable says where the Ledger stopped being readable, when a
+	// torn last line cut it short; the Receipt is of the records before.
+	LedgerUnreadable string `json:"ledger_unreadable,omitempty"`
 	// WaitingAt is the Gate a parked Run waits at.
 	WaitingAt  string     `json:"waiting_at,omitempty"`
 	Candidate  *Candidate `json:"candidate,omitempty"`
@@ -118,8 +127,10 @@ type Check struct {
 }
 
 // FailingTest is an expected test the Check didn't see pass.
+// A held-out test is named by its criteria only, never by name: a
+// Receipt may reach a PR, and a later agent session (ADR-0009).
 type FailingTest struct {
-	Test     string   `json:"test"`
+	Test     string   `json:"test,omitempty"`
 	HeldOut  bool     `json:"held_out"`
 	Criteria []string `json:"criteria,omitempty"`
 }
@@ -175,6 +186,8 @@ type Decision struct {
 	Choice string `json:"choice"`
 	Reason string `json:"reason,omitempty"`
 	Note   string `json:"note,omitempty"`
+	// Files are the files an Ambiguous-file decision promoted or dropped.
+	Files []string `json:"files,omitempty"`
 }
 
 // Supervised is what Öge handled on the human's behalf (positioning:
@@ -254,12 +267,23 @@ func (s runSource) Changed(from, to string) ([]string, error) { return s.repo.Ch
 // Build reads the Receipt of the Run in runDir.
 func Build(runDir string) (*Receipt, error) {
 	recs, head, err := ledger.ReplayHead(runDir)
-	if err != nil {
+	torn := ""
+	switch {
+	case err != nil && (len(recs) == 0 || errors.Is(err, ledger.ErrBrokenChain)):
+		// A broken chain isn't a torn write: the Ledger was changed.
 		return nil, fmt.Errorf("reading the Run's Ledger: %w", err)
+	case err != nil:
+		// A torn last line (a crash mid-write): the records before it stand.
+		torn = fmt.Sprintf("the Ledger is unreadable after record %d (%v); this Receipt is of the records before it", len(recs)-1, err)
 	}
 	blobs, _ := ledger.OpenBlobs(runDir)
 	src := runSource{blobs: blobs, repo: &workspace.RunRepo{Dir: filepath.Join(runDir, "repo.git")}}
-	return FromRecords(recs, head, src), nil
+	r := FromRecords(recs, head, src)
+	if torn != "" {
+		r.LedgerUnreadable = clean(torn)
+		r.NotCovered = append([]string{r.LedgerUnreadable}, r.NotCovered...)
+	}
+	return r, nil
 }
 
 // The record shapes a Receipt reads, as run, gate and delivery write them.
@@ -323,15 +347,21 @@ type (
 		Pins                        gate.Pins
 		Actor, Choice, Reason, Note string
 		TamperIDs                   []string `json:"tamper_ids"`
+		Files                       []string
+	}
+	ambiguousResolved struct {
+		Choice, Candidate string
+		Files             []string
 	}
 	gateOpened struct {
 		Pins gate.Pins
 	}
 	runEnded struct {
-		Outcome   string
-		Why       []string
-		Candidate string
-		Gate      string
+		Outcome    string
+		Why        []string
+		Candidate  string
+		Gate       string
+		Unresolved []string
 	}
 	deliveryRec struct {
 		Kind, Flag, Branch string
@@ -362,7 +392,9 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		attempts  []attemptEnded
 		tamperIdx = map[string]int{}
 		openAt    *time.Time
-		abandoned string // the Gate a human was asked at and never answered
+		abandoned string              // the Gate a human was asked at and never answered
+		resolved  = map[string]bool{} // Ambiguous files promoted or dropped
+		resolvedC string              // the Candidate the last resolution made
 		qa        QA
 		qaSeen    bool
 	)
@@ -477,7 +509,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				}
 			case "session":
 				if d.Envelope == "warn" {
-					r.Scope.Degraded = append(r.Scope.Degraded, fmt.Sprintf("%s's startup envelope check warned (%s)", stageOf(stages, d.Attempt), clean(d.Attempt)))
+					r.Scope.Degraded = append(r.Scope.Degraded, fmt.Sprintf("%s's startup envelope check warned (%s)", stageOf(stages, d.Attempt), val(clean(d.Attempt))))
 				}
 			case "oracle_additions_dropped":
 				var dropped []json.RawMessage
@@ -491,7 +523,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				continue
 			}
 			if d.Enforcement == workspace.Degraded {
-				r.Scope.Degraded = append(r.Scope.Degraded, fmt.Sprintf("Write scope enforcement was Degraded (%s)", clean(d.Attempt)))
+				r.Scope.Degraded = append(r.Scope.Degraded, fmt.Sprintf("Write scope enforcement was Degraded (%s)", val(clean(d.Attempt))))
 			}
 			for _, rv := range d.Reverted {
 				if rv.Tamper {
@@ -551,7 +583,11 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				continue
 			}
 			abandoned = ""
-			r.Decisions = append(r.Decisions, Decision{Gate: d.Pins.Gate, Actor: d.Actor, Choice: clean(d.Choice), Reason: clean(d.Reason), Note: clean(d.Note)})
+			dec := Decision{Gate: d.Pins.Gate, Actor: d.Actor, Choice: clean(d.Choice), Reason: clean(d.Reason), Note: clean(d.Note)}
+			for _, f := range d.Files {
+				dec.Files = append(dec.Files, clean(f))
+			}
+			r.Decisions = append(r.Decisions, dec)
 			if d.Choice == "acknowledge" {
 				for _, id := range d.TamperIDs {
 					if i, ok := tamperIdx[id]; ok {
@@ -582,6 +618,16 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			var d runEnded
 			get(rec.Data, &d)
 			ended, endedAt = &d, rec.At
+		case run.RecAmbiguousResolved:
+			var d ambiguousResolved
+			if get(rec.Data, &d) {
+				for _, f := range d.Files {
+					resolved[clean(f)] = true
+				}
+				if d.Candidate != "" {
+					resolvedC = d.Candidate
+				}
+			}
 		case delivery.RecDelivery:
 			var d deliveryRec
 			if get(rec.Data, &d) {
@@ -592,6 +638,24 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 	if r.Mode == "" && frozen != nil {
 		r.Mode = string(frozen.Mode)
 	}
+	if ended != nil && ended.Outcome != string(run.Accepted) {
+		for _, f := range ended.Unresolved {
+			r.Unresolved = append(r.Unresolved, clean(f))
+		}
+	}
+	// A file the review promoted or dropped, or one listed as unresolved,
+	// isn't one QA silently never saw.
+	var never []string
+	unresolved := map[string]bool{}
+	for _, f := range r.Unresolved {
+		unresolved[f] = true
+	}
+	for _, f := range qa.Ambiguous {
+		if !resolved[f] && !unresolved[f] {
+			never = append(never, f)
+		}
+	}
+	qa.Ambiguous = never
 	if qaSeen {
 		r.QA = &qa
 	}
@@ -612,6 +676,9 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		if a.Candidate != "" {
 			cand = a.Candidate
 		}
+	}
+	if resolvedC != "" {
+		cand = resolvedC
 	}
 	if ended != nil && ended.Candidate != "" {
 		cand = ended.Candidate
@@ -678,7 +745,15 @@ func fillCheck(c *Check, res *oracle.Result, m *oracle.Manifest) {
 			if isHeld {
 				c.HeldOutFailed++
 			}
-			c.Failing = append(c.Failing, FailingTest{Test: clean(t.TestID.String()), HeldOut: isHeld, Criteria: h.Criteria})
+			ft := FailingTest{HeldOut: isHeld}
+			if isHeld {
+				for _, id := range h.Criteria {
+					ft.Criteria = append(ft.Criteria, clean(id))
+				}
+			} else {
+				ft.Test = clean(t.TestID.String())
+			}
+			c.Failing = append(c.Failing, ft)
 		}
 	}
 	for _, e := range res.Commands {
@@ -706,6 +781,20 @@ func (r *Receipt) last() *Check {
 	return &r.Checks[len(r.Checks)-1]
 }
 
+// final is the latest Check on the Run's final Candidate, or nil when no
+// Check judged it (a send-back, then a stop before its Check).
+func (r *Receipt) final() *Check {
+	if r.Candidate == nil {
+		return r.last()
+	}
+	for i := len(r.Checks) - 1; i >= 0; i-- {
+		if r.Checks[i].Candidate == r.Candidate.Commit {
+			return &r.Checks[i]
+		}
+	}
+	return nil
+}
+
 // outcome sets the Outcome, Headline and Why from how the Run ended.
 func (r *Receipt) outcome(e *runEnded, abandoned string) {
 	if e == nil {
@@ -713,7 +802,7 @@ func (r *Receipt) outcome(e *runEnded, abandoned string) {
 		return
 	}
 	for _, w := range e.Why {
-		r.Why = append(r.Why, clean(w))
+		r.Why = append(r.Why, val(clean(w)))
 	}
 	r.Outcome = e.Outcome
 	decided := r.lastDecision()
@@ -727,7 +816,7 @@ func (r *Receipt) outcome(e *runEnded, abandoned string) {
 		if decided != nil {
 			reason = decided.Reason
 		}
-		r.Headline = fmt.Sprintf("! Taken without passing evidence (reason: %s)", orNone(reason))
+		r.Headline = fmt.Sprintf("! Taken without passing evidence (reason: %s)", val(orNone(reason)))
 	case run.Cancelled:
 		r.Headline = "■ Cancelled"
 		if decided != nil {
@@ -738,6 +827,7 @@ func (r *Receipt) outcome(e *runEnded, abandoned string) {
 	case run.Parked:
 		r.WaitingAt = e.Gate
 		r.Headline = "… Waiting for you: the " + GateTitle(e.Gate)
+		r.Why = append(r.Why, "Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)")
 	case run.InfrastructureStop:
 		verdict := false
 		for _, c := range r.Checks {
@@ -762,7 +852,7 @@ func (r *Receipt) outcome(e *runEnded, abandoned string) {
 	case run.Refused:
 		r.Headline = "■ Refused"
 	default:
-		r.Headline = clean(e.Outcome)
+		r.Headline = val(clean(e.Outcome))
 	}
 }
 
@@ -784,7 +874,7 @@ func (r *Receipt) lastDecision() *Decision {
 // then who rejected it.
 func (r *Receipt) rejectedWhy(d *Decision) string {
 	var parts []string
-	if c := r.last(); c != nil && c.Verdict == "fail" {
+	if c := r.final(); c != nil && c.Verdict == "fail" {
 		s := failureText(c, "still failing")
 		if r.Supervised.SentBack > 0 {
 			s += " after " + plural(r.Supervised.SentBack, "send-back", "send-backs")
@@ -811,11 +901,11 @@ func failureText(c *Check, verb string) string {
 	case c.Failed > 0:
 		return plural(c.Failed, "test", "tests") + " " + verb + " (" + names(c.Failing) + ")"
 	case c.Why != "":
-		return "the Check " + verb + " (" + c.Why + ")"
+		return "the Check " + verb + " (" + val(c.Why) + ")"
 	}
 	for _, e := range c.Commands {
 		if !e.Pass {
-			return fmt.Sprintf("%s %s (%s)", e.Run, verb, orNone(e.Why))
+			return fmt.Sprintf("%s %s (%s)", val(e.Run), verb, val(orNone(e.Why)))
 		}
 	}
 	return "the Check " + verb
@@ -828,7 +918,7 @@ func criteria(fs []FailingTest) string {
 		for _, c := range f.Criteria {
 			if !seen[c] {
 				seen[c] = true
-				ids = append(ids, clean(c))
+				ids = append(ids, c)
 			}
 		}
 	}
@@ -836,6 +926,9 @@ func criteria(fs []FailingTest) string {
 		return ""
 	}
 	sort.Strings(ids)
+	for i := range ids {
+		ids[i] = val(ids[i])
+	}
 	return " (" + strings.Join(ids, ", ") + ")"
 }
 
@@ -846,7 +939,7 @@ func names(fs []FailingTest) string {
 			n = append(n, "…")
 			break
 		}
-		n = append(n, f.Test)
+		n = append(n, val(f.Test))
 	}
 	return strings.Join(n, ", ")
 }
@@ -882,7 +975,7 @@ func (r *Receipt) claim(attempts []attemptEnded, src Source) {
 			r.Found = append(r.Found, fmt.Sprintf("Check #%d failed on its Candidate %s: %s", c.Number, short(a.Candidate), failureText(c, "failing")))
 		}
 		if len(paths) > 0 {
-			r.Found = append(r.Found, fmt.Sprintf("%s reverted: %s", plural(len(paths), "protected-file change", "protected-file changes"), strings.Join(paths, ", ")))
+			r.Found = append(r.Found, fmt.Sprintf("%s reverted: %s", plural(len(paths), "protected-file change", "protected-file changes"), vals(paths, ", ")))
 		}
 		if after := len(attempts) - 1 - i; after > 0 {
 			s := "→ sent back to the implementer"
@@ -922,10 +1015,8 @@ func finalMessage(src Source, blob string) string {
 
 // observationNotCovered is the Not covered lines an Observation adds.
 // Records later tickets add land here.
-// TODO(#97): Ambiguous-file resolutions are Gate decisions, which the
-// Receipt already lists; an Ambiguous-file outcome the Evidence doesn't
-// cover (a dropped or promoted file nobody reviewed) adds its line here,
-// keyed by its Observation kind.
+// Ambiguous-file resolutions (#97) are Gate decisions, listed with their
+// files; files left unresolved come from RunEnded.unresolved.
 // TODO(#63-decision): "held_out_viewed" is the kind an inspect view that
 // shows held-out source to a human records; none is built yet.
 func observationNotCovered(kind string, raw json.RawMessage) []string {
@@ -955,12 +1046,15 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 			nc = append(nc, fmt.Sprintf("%s QA never saw (no output glob matches): %s", plural(n, "new file", "new files"), list(r.QA.Ambiguous)))
 		}
 	}
-	if c := r.last(); c != nil {
+	if n := len(r.Unresolved); n > 0 {
+		nc = append(nc, fmt.Sprintf("%s no output glob covers, never promoted or dropped: %s", plural(n, "new file", "new files"), list(r.Unresolved)))
+	}
+	if c := r.final(); c != nil {
 		if n := len(c.Skipped); n > 0 {
 			nc = append(nc, fmt.Sprintf("Oracle tests skipped on the Snapshot and the Candidate (%d): %s", n, list(c.Skipped)))
 		}
 		if n := len(c.NotBuilt); n > 0 {
-			nc = append(nc, fmt.Sprintf("Oracle test files this machine doesn't build (%d): %s", n, strings.Join(c.NotBuilt, "; ")))
+			nc = append(nc, fmt.Sprintf("Oracle test files this machine doesn't build (%d): %s", n, vals(c.NotBuilt, "; ")))
 		}
 	}
 	if f != nil {
@@ -969,7 +1063,7 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 			if w.Source == pipeline.FromProject {
 				src = pipeline.ConfigPath
 			}
-			nc = append(nc, fmt.Sprintf("trust-weakening option in effect: %s (from %s)", clean(w.Option), clean(src)))
+			nc = append(nc, fmt.Sprintf("trust-weakening option in effect: %s (from %s)", val(clean(w.Option)), val(clean(src))))
 		}
 	}
 	for _, d := range r.Scope.Degraded {
@@ -992,12 +1086,40 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 	r.NotCovered = nc
 }
 
+// list names at most five values, each marked as a value.
 func list(items []string) string {
 	if len(items) > 5 {
-		return strings.Join(items[:5], ", ") + fmt.Sprintf(" and %d more", len(items)-5)
+		return vals(items[:5], ", ") + fmt.Sprintf(" and %d more", len(items)-5)
 	}
-	return strings.Join(items, ", ")
+	return vals(items, ", ")
 }
+
+// Values in a line (a path, a test name, the agent's words, a reason)
+// are marked so a rendering can tell them from Öge's own words: Text
+// drops the marks, Markdown puts each value in a code span, so none can
+// add a link, a mention or markup. clean drops C0 characters, so no value
+// can hold a mark itself.
+const (
+	valOpen  = "\x0e"
+	valClose = "\x0f"
+)
+
+func val(s string) string {
+	if s == "" {
+		return ""
+	}
+	return valOpen + s + valClose
+}
+
+func vals(items []string, sep string) string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = val(it)
+	}
+	return strings.Join(out, sep)
+}
+
+var unmark = strings.NewReplacer(valOpen, "", valClose, "")
 
 func plural(n int, one, many string) string {
 	if n == 1 {
@@ -1021,6 +1143,8 @@ func GateTitle(node string) string {
 		return "Gate"
 	case "gate.result":
 		return "Result gate"
+	case "gate.ambiguous_file":
+		return "Ambiguous-file Gate"
 	}
 	return clean(strings.ReplaceAll(strings.TrimPrefix(node, "gate."), "_", "-")) + " Gate"
 }

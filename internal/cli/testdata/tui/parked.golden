@@ -9,6 +9,7 @@ Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
 ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Fast mode
 Result        … Waiting for you: the tamper Gate
               Öge's Check passed, but an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged before the Run can be Accepted.
+              Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)
 Task          fix Add
 Agent claimed "fixing Add in add.go" (Claim, implement#1)
 Öge found     1 protected-file change reverted: add_test.go

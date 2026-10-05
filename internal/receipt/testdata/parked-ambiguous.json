@@ -4,17 +4,23 @@
   "mode": "Fast",
   "task": "fix Add",
   "outcome": "Parked",
-  "headline": "… Waiting for you: the bound-exhaustion Gate",
+  "headline": "… Waiting for you: the Ambiguous-file Gate",
   "why": [
-    "The Check failed and the send-back limit (0) is used up.",
+    "2 new files were not covered by the declared output/test globs:",
     "Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)"
   ],
-  "waiting_at": "gate.bound_exhaustion",
+  "unresolved_ambiguous": [
+    "docs/debug.md",
+    "tmp/result.json"
+  ],
+  "waiting_at": "gate.ambiguous_file",
   "candidate": {
     "commit": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
-    "files_changed": 1,
+    "files_changed": 3,
     "files": [
-      "add.go"
+      "add.go",
+      "docs/debug.md",
+      "tmp/result.json"
     ]
   },
   "oracle_version": 0,
@@ -23,22 +29,15 @@
       "check": 1,
       "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
       "oracle_version": 0,
-      "verdict": "fail",
-      "tests_passed": 0,
-      "tests_failed": 1,
+      "verdict": "pass",
+      "tests_passed": 1,
+      "tests_failed": 0,
       "held_out": 0,
       "held_out_failed": 0,
-      "failing": [
-        {
-          "test": "fx.TestAdd",
-          "held_out": false
-        }
-      ],
       "commands": [
         {
           "run": "go test -json ./...",
-          "pass": false,
-          "why": "exit 1",
+          "pass": true,
           "duration_ms": 1000
         }
       ],
@@ -57,8 +56,8 @@
   },
   "decisions": [],
   "supervision": {
-    "approved_automatically": 18,
-    "denied": 2,
+    "approved_automatically": 0,
+    "denied": 0,
     "cancelled": 0,
     "sent_back": 0,
     "human_interruptions": 0
@@ -81,19 +80,11 @@
     ],
     "human_attention_ms": 0
   },
-  "claim": {
-    "label": "Claim",
-    "attempt": "implement#1",
-    "exit": "done",
-    "text": "Done. All tests pass."
-  },
-  "oge_found": [
-    "Check #1 failed on its Candidate 6d1231d: 1 test failing (fx.TestAdd)"
-  ],
   "not_covered": [
     "No independent tests (fast mode): no QA and no held-out tests",
+    "2 new files no output glob covers, never promoted or dropped: docs/debug.md, tmp/result.json",
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "6945697f03bae0801215884ec8b301971b8dff6ee3c681a02e7e9c169730b6b7"
+  "ledger_head": "6117c954e1e70d1daf774d41c97fd53c7bd0ba810dcc95723c51118e6a8d6668"
 }

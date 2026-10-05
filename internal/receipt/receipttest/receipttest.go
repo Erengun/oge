@@ -231,6 +231,25 @@ func (b *Builder) Gate(node string, from, to time.Duration, choice, reason strin
 	b.Add(to, run.RecGateDecided, rec)
 }
 
+// Resolve records one Ambiguous-file decision at the review: the Gate,
+// the human's choice of files, and the new Candidate it made.
+func (b *Builder) Resolve(from, to time.Duration, choice string, files []string, fromCand, cand string) {
+	pins := map[string]any{"gate": "gate.ambiguous_file", "attempt": "implement#1", "candidate": fromCand, "files": files}
+	b.Add(from, run.RecGateOpened, map[string]any{"pins": pins, "choices": []string{"promote", "drop"}})
+	b.Add(to, run.RecGateDecided, map[string]any{"pins": pins, "actor": "human", "choice": choice, "files": files})
+	b.Add(to, run.RecAmbiguousResolved, map[string]any{"choice": choice, "files": files, "from": fromCand, "candidate": cand, "attempt": "implement#1"})
+	b.changed[Snapshot+".."+cand] = b.changed[Snapshot+".."+fromCand]
+}
+
+// Unresolved records a Run's end with Ambiguous files nobody resolved.
+func (b *Builder) Unresolved(d time.Duration, o run.Outcome, gate string, files []string, why ...string) {
+	if o == run.Parked {
+		b.Add(d, run.RecRunParked, map[string]any{"gate": gate, "why": why, "unresolved": files})
+		return
+	}
+	b.Add(d, run.RecRunEnded, map[string]any{"outcome": o, "why": why, "unresolved": files})
+}
+
 // End records RunEnded with outcome at d.
 func (b *Builder) End(d time.Duration, o run.Outcome, candidate string, why ...string) {
 	b.Add(d, run.RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": candidate})
@@ -387,6 +406,50 @@ func Scenarios() []Scenario {
 		{"not-ended", func() *Builder {
 			b := New(pipeline.Standard)
 			b.Add(500*ms, run.RecAttemptStarting, map[string]any{"attempt": "implement#1", "stage": "implement", "role": "implementer", "cause": "first"})
+			return b
+		}},
+		{"interrupted-after-send-back", func() *Builder {
+			// The Check failed C1; the send-back made C2, and the Run was
+			// cancelled before any Check judged it.
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.Attempt(Attempt{ID: "implement#2", Cause: "send_back", From: 7300 * ms, To: 11 * time.Second, Candidate: C2, Changed: []string{"add.go"}, Failure: "interrupted"})
+			b.End(11100*ms, run.InfrastructureStop, C2, "interrupted: the Run was cancelled")
+			return b
+		}},
+		{"rejected-unchecked", func() *Builder {
+			// Rejected at the Ambiguous-file review of C2 before its Check.
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.Attempt(Attempt{ID: "implement#2", Cause: "send_back", From: 7300 * ms, To: 11 * time.Second, Candidate: C2, Changed: []string{"add.go", "notes.md"}, Exit: "done"})
+			b.Gate("gate.ambiguous_file", 11100*ms, 15*time.Second, "reject", "not this approach")
+			b.End(15100*ms, run.Rejected, C2)
+			return b
+		}},
+		{"accepted-ambiguous-resolved", func() *Builder {
+			// Standard: QA's view left out two new files; the review dropped
+			// one and promoted the other, and the final Check passed.
+			b := New(pipeline.Standard)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 4 * time.Second, Candidate: C1, Changed: []string{"add.go", "NOTES.md", "tools/gen.go"}, Exit: "done"})
+			b.Attempt(Attempt{ID: "verify#1", Role: "verifier", Stage: "verify", From: 4100 * ms, To: 9 * time.Second, Exit: "no_additions",
+				Withheld: []workspace.Withheld{{Path: "NOTES.md", Class: workspace.ClassAmbiguous}, {Path: "tools/gen.go", Class: workspace.ClassAmbiguous}}})
+			b.Check(1, C1, 0, 9200*ms, 13*time.Second, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.Resolve(13100*ms, 20*time.Second, "drop", []string{"NOTES.md"}, C1, C2)
+			const c3 = "9f00d6d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b"
+			b.Resolve(20100*ms, 24*time.Second, "promote", []string{"tools/gen.go"}, C2, c3)
+			b.Attempt(Attempt{ID: "verify#2", Role: "verifier", Stage: "verify", Cause: "send_back", From: 24100 * ms, To: 28 * time.Second, Exit: "no_additions"})
+			b.Check(2, c3, 0, 28100*ms, 31*time.Second, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(31100*ms, run.Accepted, c3)
+			return b
+		}},
+		{"parked-ambiguous", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 6100 * ms, Candidate: C1, Changed: []string{"add.go", "docs/debug.md", "tmp/result.json"}, Exit: "done"})
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.Gate("gate.ambiguous_file", 7300*ms, 0, "", "")
+			b.Unresolved(7400*ms, run.Parked, "gate.ambiguous_file", []string{"docs/debug.md", "tmp/result.json"}, "2 new files were not covered by the declared output/test globs:")
 			return b
 		}},
 		{"accepted-delivered", func() *Builder {

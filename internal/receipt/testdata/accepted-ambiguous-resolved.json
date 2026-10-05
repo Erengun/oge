@@ -6,36 +6,29 @@
   "outcome": "Accepted",
   "headline": "✓ Accepted",
   "candidate": {
-    "commit": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
-    "files_changed": 1,
+    "commit": "9f00d6d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b",
+    "files_changed": 3,
     "files": [
-      "add.go"
+      "add.go",
+      "NOTES.md",
+      "tools/gen.go"
     ]
   },
-  "oracle_version": 1,
+  "oracle_version": 0,
   "checks": [
     {
       "check": 1,
       "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
-      "oracle_version": 1,
-      "verdict": "fail",
+      "oracle_version": 0,
+      "verdict": "pass",
       "tests_passed": 1,
-      "tests_failed": 1,
-      "held_out": 1,
-      "held_out_failed": 1,
-      "failing": [
-        {
-          "held_out": true,
-          "criteria": [
-            "AC-2"
-          ]
-        }
-      ],
+      "tests_failed": 0,
+      "held_out": 0,
+      "held_out_failed": 0,
       "commands": [
         {
           "run": "go test -json ./...",
-          "pass": false,
-          "why": "exit 1",
+          "pass": true,
           "duration_ms": 3800
         }
       ],
@@ -46,28 +39,28 @@
     },
     {
       "check": 2,
-      "candidate": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
-      "oracle_version": 1,
+      "candidate": "9f00d6d1e2f3a4b5c6d7e8f90a1b2c3d4e5f6a7b",
+      "oracle_version": 0,
       "verdict": "pass",
-      "tests_passed": 2,
+      "tests_passed": 1,
       "tests_failed": 0,
-      "held_out": 1,
+      "held_out": 0,
       "held_out_failed": 0,
       "commands": [
         {
           "run": "go test -json ./...",
           "pass": true,
-          "duration_ms": 3900
+          "duration_ms": 2900
         }
       ],
-      "visible_ms": 3900,
+      "visible_ms": 2900,
       "cache": "seeded-clone",
       "cache_materialise_ms": 210,
       "uncontained": true
     }
   ],
   "qa": {
-    "held_out_added": 1,
+    "held_out_added": 0,
     "unmapped": 0,
     "additions_left_out": 0,
     "attempts": 2
@@ -79,16 +72,33 @@
     "reverted": [],
     "qa_discarded": []
   },
-  "decisions": [],
+  "decisions": [
+    {
+      "gate": "gate.ambiguous_file",
+      "actor": "human",
+      "choice": "drop",
+      "files": [
+        "NOTES.md"
+      ]
+    },
+    {
+      "gate": "gate.ambiguous_file",
+      "actor": "human",
+      "choice": "promote",
+      "files": [
+        "tools/gen.go"
+      ]
+    }
+  ],
   "supervision": {
-    "approved_automatically": 18,
+    "approved_automatically": 0,
     "denied": 0,
     "cancelled": 0,
-    "sent_back": 1,
-    "human_interruptions": 0
+    "sent_back": 0,
+    "human_interruptions": 2
   },
   "time": {
-    "total_ms": 28100,
+    "total_ms": 31100,
     "stages": [
       {
         "stage": "preflight",
@@ -96,7 +106,7 @@
       },
       {
         "stage": "implement",
-        "ms": 10400
+        "ms": 3500
       },
       {
         "stage": "QA",
@@ -104,24 +114,15 @@
       },
       {
         "stage": "Check",
-        "ms": 7680
+        "ms": 6680
       }
     ],
-    "human_attention_ms": 0
+    "human_attention_ms": 10800
   },
-  "claim": {
-    "label": "Claim",
-    "attempt": "implement#1",
-    "exit": "done",
-    "text": "Done. All tests pass."
-  },
-  "oge_found": [
-    "Check #1 failed on its Candidate 6d1231d: 1 held-out test failing (AC-2)",
-    "→ sent back to the implementer; the Candidate it then made was Accepted"
-  ],
   "not_covered": [
+    "QA added no held-out tests",
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "f1fc932663037836fbfe25fccae70e400e2ba6f34350f7e362cb04a9f06f01b4"
+  "ledger_head": "45dd1fe2ab6bc5c31ba6fe11486338e603b6df8eb087baa8f0a7b614f129beeb"
 }

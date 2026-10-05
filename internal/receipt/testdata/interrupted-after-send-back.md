@@ -1,21 +1,20 @@
-### Öge Receipt: … Waiting for you: the bound-exhaustion Gate
+### Öge Receipt: ■ Interrupted (Infrastructure stop): the Run was cancelled
 
 Run 20261005T090000-a1b2c3 · Fast mode
 
 | | |
 |---|---|
-| | ` The Check failed and the send-back limit (0) is used up. ` |
-| | Unattended Runs never decide a Gate: run oge attended to decide it (exit 10) |
 | **Task** | ` fix Add ` |
 | **Agent claimed** | _"` Done. All tests pass. `" (Claim, ` implement#1 `)_ |
 | **Öge found** | ` Check #1 ` failed on its Candidate 6d1231d: 1 test failing (` fx.TestAdd `) |
-| **Candidate** | 6d1231d · 1 file changed · Oracle v0 |
-| **Checks** | ` Check #1 ` failed: 1 test failing (` fx.TestAdd `) · 0 of 1 Oracle tests attested passing |
+| | → sent back to the implementer |
+| **Candidate** | 5a1bd80 · 1 file changed · Oracle v0 |
+| **Checks** | no Check on this Candidate (` Check #1 ` failed on 6d1231d) |
 | **Protected** | no test changes kept |
 | **Scope** | no out-of-scope changes |
-| **Handled** | 18 operations approved automatically · 2 denied · Human interruptions: 0 |
-| **Time** | 7.4s · preflight 400ms · implement 5.6s · Check 1s · your attention 0s |
-| **Ledger** | head 6945697f03ba · identifies this Receipt; not tamper-proof |
+| **Handled** | 18 operations approved automatically · 2 denied · 1 sent back to the implementer · Human interruptions: 0 |
+| **Time** | 11.1s · preflight 400ms · implement 9.3s · Check 1s · your attention 0s |
+| **Ledger** | head 94b1782b5b14 · identifies this Receipt; not tamper-proof |
 
 **Not covered**
 
@@ -28,6 +27,6 @@ Run 20261005T090000-a1b2c3 · Fast mode
   - command · ` go test -json ./... ` · fail (` exit 1 `) · 1s
   - not attested passing: ` fx.TestAdd ` (visible)
 - Files changed: ` add.go `
-- Ledger head ` 6945697f03bae0801215884ec8b301971b8dff6ee3c681a02e7e9c169730b6b7 ` (identifies this Receipt; not tamper-proof)
+- Ledger head ` 94b1782b5b147334ff863b709fc721294035e060401efa362ca430100e6fa495 ` (identifies this Receipt; not tamper-proof)
 
 </details>

@@ -3,18 +3,14 @@
   "run": "20261005T090000-a1b2c3",
   "mode": "Fast",
   "task": "fix Add",
-  "outcome": "Parked",
-  "headline": "… Waiting for you: the bound-exhaustion Gate",
-  "why": [
-    "The Check failed and the send-back limit (0) is used up.",
-    "Unattended Runs never decide a Gate: run oge attended to decide it (exit 10)"
-  ],
-  "waiting_at": "gate.bound_exhaustion",
+  "outcome": "Rejected",
+  "headline": "✗ Not accepted: you chose \"reject\" at the Ambiguous-file Gate",
   "candidate": {
-    "commit": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
-    "files_changed": 1,
+    "commit": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
+    "files_changed": 2,
     "files": [
-      "add.go"
+      "add.go",
+      "notes.md"
     ]
   },
   "oracle_version": 0,
@@ -55,16 +51,23 @@
     "reverted": [],
     "qa_discarded": []
   },
-  "decisions": [],
+  "decisions": [
+    {
+      "gate": "gate.ambiguous_file",
+      "actor": "human",
+      "choice": "reject",
+      "reason": "not this approach"
+    }
+  ],
   "supervision": {
     "approved_automatically": 18,
     "denied": 2,
     "cancelled": 0,
-    "sent_back": 0,
-    "human_interruptions": 0
+    "sent_back": 1,
+    "human_interruptions": 1
   },
   "time": {
-    "total_ms": 7400,
+    "total_ms": 15100,
     "stages": [
       {
         "stage": "preflight",
@@ -72,14 +75,14 @@
       },
       {
         "stage": "implement",
-        "ms": 5600
+        "ms": 9300
       },
       {
         "stage": "Check",
         "ms": 990
       }
     ],
-    "human_attention_ms": 0
+    "human_attention_ms": 3900
   },
   "claim": {
     "label": "Claim",
@@ -88,12 +91,13 @@
     "text": "Done. All tests pass."
   },
   "oge_found": [
-    "Check #1 failed on its Candidate 6d1231d: 1 test failing (fx.TestAdd)"
+    "Check #1 failed on its Candidate 6d1231d: 1 test failing (fx.TestAdd)",
+    "→ sent back to the implementer"
   ],
   "not_covered": [
     "No independent tests (fast mode): no QA and no held-out tests",
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "6945697f03bae0801215884ec8b301971b8dff6ee3c681a02e7e9c169730b6b7"
+  "ledger_head": "1405042d333e47aefb63dfc2873692bbaa7d43ea4ff5f1cc867b0c8aaf8b4161"
 }

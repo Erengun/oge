@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -85,5 +86,19 @@ func TestControlCharactersNeverReachTheTerminal(t *testing.T) {
 			h.send(run.Event{Kind: run.EvCheck, Check: check, Result: res})
 		}
 		assertInert(t, "tui stages", h.m.render())
+	}
+}
+
+// clean escapes every character that makes text read other than it is,
+// and drops invalid UTF-8, in every line the terminal shows.
+func TestCleanEscapesBidiAndInvisibleRunes(t *testing.T) {
+	for _, r := range []rune{0x202a, 0x202e, 0x2066, 0x2069, 0x200e, 0x200f, 0x061c, 0x200b, 0x200c, 0x200d, 0x2028, 0x2029, 0xfeff} {
+		got := clean("a" + string(r) + "b")
+		if want := fmt.Sprintf("a<U+%04X>b", r); got != want {
+			t.Errorf("clean(%U) = %q, want %q", r, got, want)
+		}
+	}
+	if got := clean("a\xffb"); got != "a�b" {
+		t.Errorf("invalid UTF-8: %q", got)
 	}
 }

@@ -1,13 +1,16 @@
 package receipt
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/run"
 )
@@ -88,22 +91,31 @@ func (r *Receipt) Lines() []Line {
 		add("", w, Plain)
 	}
 	if r.Task != "" {
-		add("Task", r.Task, Plain)
+		add("Task", val(r.Task), Plain)
 	}
 	if r.Claim != nil {
 		text := "(no final message) · Exit " + r.Claim.Exit
 		if r.Claim.Text != "" {
-			text = fmt.Sprintf("%q", r.Claim.Text)
+			text = `"` + val(r.Claim.Text) + `"`
 		}
-		add("Agent claimed", text+" (Claim, "+r.Claim.Attempt+")", Dim)
+		add("Agent claimed", text+" (Claim, "+val(r.Claim.Attempt)+")", Dim)
 		more("Öge found", r.Found, Plain)
 	}
 	if c := r.Candidate; c != nil {
 		add("Candidate", fmt.Sprintf("%s · %s · Oracle v%d", short(c.Commit), plural(c.FilesChanged, "file changed", "files changed"), r.Oracle), Plain)
 	}
-	if c := r.last(); c != nil {
+	switch c, last := r.final(), r.last(); {
+	case c != nil:
 		add("Checks", checkText(c, len(r.Checks)), Plain)
-	} else {
+	case last != nil:
+		// The Run ended on a Candidate no Check judged: the last Check's
+		// Verdict is another Candidate's.
+		v := map[string]string{"pass": "passed", "fail": "failed"}[last.Verdict]
+		if v == "" {
+			v = "reached no Verdict"
+		}
+		add("Checks", fmt.Sprintf("no Check on this Candidate (Check #%d %s on %s)", last.Number, v, short(last.Candidate)), Plain)
+	default:
 		add("Checks", "none ran", Plain)
 	}
 	if q := r.QA; q != nil && r.Mode != "Fast" {
@@ -115,11 +127,14 @@ func (r *Receipt) Lines() []Line {
 		var ds []string
 		for _, d := range r.Decisions {
 			s := fmt.Sprintf("%s at the %s", d.Choice, GateTitle(d.Gate))
+			if len(d.Files) > 0 {
+				s += ": " + list(d.Files)
+			}
 			if d.Reason != "" {
-				s += " · reason: " + d.Reason
+				s += " · reason: " + val(d.Reason)
 			}
 			if d.Note != "" {
-				s += " · note: " + d.Note
+				s += " · note: " + val(d.Note)
 			}
 			ds = append(ds, s)
 		}
@@ -135,8 +150,10 @@ func (r *Receipt) Lines() []Line {
 	}
 	add("Time", r.Time.text(), Plain)
 	var obs []string
-	obs = append(obs, r.Observed...)
-	if c := r.last(); c != nil && c.Stray > 0 {
+	for _, o := range r.Observed {
+		obs = append(obs, val(o))
+	}
+	if c := r.final(); c != nil && c.Stray > 0 {
 		obs = append(obs, fmt.Sprintf("%d stray lines on the attestation channel", c.Stray))
 	}
 	if len(obs) > 0 {
@@ -176,7 +193,7 @@ func checkText(c *Check, n int) string {
 	default:
 		s = fmt.Sprintf("Check #%d reached no Verdict", c.Number)
 		if c.Infra != "" {
-			s += " (" + c.Infra + ")"
+			s += " (" + val(c.Infra) + ")"
 		}
 	}
 	if total := c.Passed + c.Failed; total > 0 {
@@ -283,12 +300,12 @@ func (d Delivery) text() string {
 	case "apply":
 		s = "applied to your working tree (" + plural(d.Files, "file", "files") + ")"
 	case "branch":
-		s = "branch " + d.Branch + " created"
+		s = "branch " + val(d.Branch) + " created"
 	default:
 		s = d.Kind
 	}
 	if d.Flag != "" {
-		s += " with " + d.Flag
+		s += " with " + val(d.Flag)
 	}
 	return s
 }
@@ -311,7 +328,7 @@ func (r *Receipt) Text(p Paint) string {
 		if i == 0 {
 			label = apply(p.Bold, label)
 		}
-		text := l.Text
+		text := unmark.Replace(l.Text)
 		switch l.Tone {
 		case Good:
 			text = apply(p.Good, text)
@@ -332,12 +349,15 @@ func (r *Receipt) Text(p Paint) string {
 }
 
 // Markdown is the Receipt for a PR or an issue: the same lines, then the
-// full Evidence in a collapsible section.
+// full Evidence in a collapsible section. Every value from the Ledger is a
+// code span, so a Claim, test name or path can't link, mention, reference
+// an issue or add markup; held-out tests are named by criteria only
+// (ADR-0009): a PR description can reach a later agent session.
 func (r *Receipt) Markdown() string {
 	var b strings.Builder
 	ls := r.Lines()
-	fmt.Fprintf(&b, "### Öge Receipt: %s\n\n", md(r.Headline))
-	fmt.Fprintf(&b, "%s\n\n", md(ls[0].Text))
+	fmt.Fprintf(&b, "### Öge Receipt: %s\n\n", mdText(r.Headline, false))
+	fmt.Fprintf(&b, "%s\n\n", mdText(ls[0].Text, false))
 	var notCovered []string
 	label := ""
 	b.WriteString("| | |\n|---|---|\n")
@@ -349,7 +369,7 @@ func (r *Receipt) Markdown() string {
 			notCovered = append(notCovered, l.Text)
 			continue
 		}
-		text := md(l.Text)
+		text := mdText(l.Text, true)
 		if label == "Agent claimed" {
 			text = "_" + text + "_"
 		}
@@ -361,7 +381,7 @@ func (r *Receipt) Markdown() string {
 	}
 	b.WriteString("\n**Not covered**\n\n")
 	for _, n := range notCovered {
-		fmt.Fprintf(&b, "- %s\n", md(n))
+		fmt.Fprintf(&b, "- %s\n", mdText(n, false))
 	}
 	b.WriteString("\n<details><summary>Full evidence</summary>\n\n")
 	for _, c := range r.Checks {
@@ -369,11 +389,11 @@ func (r *Receipt) Markdown() string {
 		if v == "" {
 			v = "no Verdict"
 		}
-		fmt.Fprintf(&b, "- Check #%d on `%s` · Oracle v%d · %s · cache %s", c.Number, short(c.Candidate), c.Oracle, v, md(orNone(c.Cache)))
+		line := fmt.Sprintf("Check #%d on %s · Oracle v%d · %s · cache %s", c.Number, val(short(c.Candidate)), c.Oracle, v, val(orNone(c.Cache)))
 		if c.CacheWhy != "" {
-			fmt.Fprintf(&b, " (%s)", md(c.CacheWhy))
+			line += " (" + val(c.CacheWhy) + ")"
 		}
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "- %s\n", mdText(line, false))
 		for _, e := range c.Commands {
 			part := e.Part
 			if part == "" {
@@ -381,33 +401,92 @@ func (r *Receipt) Markdown() string {
 			}
 			res := "pass"
 			if !e.Pass {
-				res = "fail (" + orNone(e.Why) + ")"
+				res = "fail (" + val(orNone(e.Why)) + ")"
 			}
-			fmt.Fprintf(&b, "  - %s · %s · %s · %s\n", part, md(e.Run), md(res), dur(e.Ms))
+			fmt.Fprintf(&b, "  - %s\n", mdText(fmt.Sprintf("%s · %s · %s · %s", part, val(e.Run), res, dur(e.Ms)), false))
 		}
 		for _, f := range c.Failing {
-			kind := "visible"
+			s := "not attested passing: " + val(f.Test) + " (visible)"
 			if f.HeldOut {
-				kind = "held-out"
+				s = "not attested passing: a held-out test" + criteria([]FailingTest{f})
 			}
-			fmt.Fprintf(&b, "  - not attested passing: %s (%s)%s\n", md(f.Test), kind, md(criteria([]FailingTest{f})))
+			fmt.Fprintf(&b, "  - %s\n", mdText(s, false))
 		}
 	}
 	if c := r.Candidate; c != nil && len(c.Files) > 0 {
-		fmt.Fprintf(&b, "- Files changed: %s\n", md(strings.Join(c.Files, ", ")))
+		fmt.Fprintf(&b, "- Files changed: %s\n", mdText(vals(c.Files, ", "), false))
 	}
-	fmt.Fprintf(&b, "- Ledger head `%s` (identifies this Receipt; not tamper-proof)\n", r.LedgerHead)
+	fmt.Fprintf(&b, "- Ledger head %s (identifies this Receipt; not tamper-proof)\n", code(r.LedgerHead, false))
 	b.WriteString("\n</details>\n")
 	return b.String()
 }
 
-// md escapes text for a Markdown table cell or list item, so neither the
-// Task nor the agent's Claim can add markup, links or HTML.
+// refs are what GitHub would read as an issue reference in Öge's own
+// words: "#12", "implement#1".
+var refs = regexp.MustCompile(`(?:Check )?\S*#\d+`)
+
+// mdText renders a line for Markdown: Öge's words escaped, anything GitHub
+// would read as an issue reference in a code span, and each marked value a
+// code span. In a table cell a pipe is escaped, even in a code span.
+func mdText(s string, cell bool) string {
+	var b strings.Builder
+	for {
+		i := strings.Index(s, valOpen)
+		if i < 0 {
+			break
+		}
+		j := strings.Index(s[i:], valClose)
+		if j < 0 {
+			break
+		}
+		b.WriteString(mdWords(s[:i], cell))
+		b.WriteString(code(s[i+len(valOpen):i+j], cell))
+		s = s[i+j+len(valClose):]
+	}
+	b.WriteString(mdWords(unmark.Replace(s), cell))
+	return b.String()
+}
+
+func mdWords(s string, cell bool) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range refs.FindAllStringIndex(s, -1) {
+		b.WriteString(md(s[last:m[0]]))
+		b.WriteString(code(s[m[0]:m[1]], cell))
+		last = m[1]
+	}
+	b.WriteString(md(s[last:]))
+	return b.String()
+}
+
+// code is s as a code span whose fence is longer than any run of
+// backticks in it, padded so a leading or trailing backtick stays text.
+func code(s string, cell bool) string {
+	if s == "" {
+		return ""
+	}
+	run, longest := 0, 0
+	for _, c := range s {
+		if c == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	if cell {
+		s = strings.ReplaceAll(s, "|", `\|`)
+	}
+	fence := strings.Repeat("`", longest+1)
+	return fence + " " + s + " " + fence
+}
+
+// md escapes Öge's own words for Markdown.
 func md(s string) string {
 	var b strings.Builder
 	for _, c := range s {
 		switch c {
-		case '\\', '`', '*', '_', '[', ']', '<', '>', '|', '~':
+		case '\\', '`', '*', '_', '[', ']', '<', '>', '|', '~', '@':
 			b.WriteByte('\\')
 		case '&':
 			b.WriteString("&amp;")
@@ -420,23 +499,41 @@ func md(s string) string {
 
 // JSON is the Receipt as the versioned --json document (schema 1).
 func (r *Receipt) JSON() ([]byte, error) {
-	b, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // <U+202E> reads as written; JSON isn't HTML
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(r); err != nil {
 		return nil, err
 	}
-	return append(b, '\n'), nil
+	return unmarkJSON(buf.Bytes()), nil
 }
 
-// clean redacts text from the Ledger and drops control characters before
-// it reaches a terminal or a document: C0, DEL and the C1 range.
-func clean(s string) string {
-	s = string(redact.Redact([]byte(s)))
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
-			return -1
+// unmarkJSON drops the value marks, which JSON encodes as \u000e and
+// \u000f, stepping over every other escape so an escaped backslash
+// followed by "u000e" in a value stays as it is.
+func unmarkJSON(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); i++ {
+		if b[i] != '\\' || i+1 >= len(b) {
+			out = append(out, b[i])
+			continue
 		}
-		return r
-	}, s)
+		if s := string(b[i:min(i+6, len(b))]); s == `\u000e` || s == `\u000f` {
+			i += 5
+			continue
+		}
+		out = append(out, b[i], b[i+1])
+		i++
+	}
+	return out
+}
+
+// clean redacts text from the Ledger and makes it safe to show
+// (delivery.Shown): control characters dropped, bidirectional and
+// invisible runes escaped as <U+XXXX>, invalid UTF-8 as U+FFFD.
+func clean(s string) string {
+	return delivery.Shown(string(redact.Redact([]byte(s))))
 }
 
 func truncate(s string, n int) string {

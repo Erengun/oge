@@ -4,8 +4,8 @@ Run 20261005T090000-a1b2c3 · Fast mode
 
 | | |
 |---|---|
-| | the implementer Attempt failed: timeout |
-| **Task** | fix Add |
+| | ` the implementer Attempt failed: timeout ` |
+| **Task** | ` fix Add ` |
 | **Checks** | none ran |
 | **Protected** | no test changes kept |
 | **Scope** | no out-of-scope changes |
@@ -20,6 +20,6 @@ Run 20261005T090000-a1b2c3 · Fast mode
 
 <details><summary>Full evidence</summary>
 
-- Ledger head `c8142d849fe9b2cc616736349cd49a0206ef35d8b71747f70a76d261cb847a88` (identifies this Receipt; not tamper-proof)
+- Ledger head ` c8142d849fe9b2cc616736349cd49a0206ef35d8b71747f70a76d261cb847a88 ` (identifies this Receipt; not tamper-proof)
 
 </details>

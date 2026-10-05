@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
@@ -276,6 +277,8 @@ func (r *renderer) observe(ev run.Event) {
 		r.p("%-10s %s", "send back", sendBackText(ev, r.frozen))
 	case run.EvDecided:
 		r.p("%-10s %s", "decision", decidedText(ev))
+	case run.EvResolved:
+		r.p("%-10s %s", "resolved", resolvedText(ev))
 	case run.EvCheck:
 		res := ev.Result
 		if r.verbose {
@@ -481,16 +484,10 @@ func files(n int) string {
 	return fmt.Sprintf("%d files changed", n)
 }
 
-// clean redacts agent- or Candidate-provided text and drops control
-// characters before it reaches the terminal: C0, DEL and the C1 range,
-// where U+009B is a CSI and U+009D an OSC to some terminals. Invalid UTF-8
-// becomes U+FFFD.
+// clean redacts agent- or Candidate-provided text and makes it safe for
+// the terminal (delivery.Shown): control characters dropped, C1 included
+// (U+009B is a CSI and U+009D an OSC to some terminals), bidirectional and
+// invisible runes escaped, invalid UTF-8 as U+FFFD.
 func clean(s string) string {
-	s = string(redact.Redact([]byte(s)))
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
-			return -1
-		}
-		return r
-	}, s)
+	return delivery.Shown(string(redact.Redact([]byte(s))))
 }

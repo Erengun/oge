@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "run": "20261005T090000-a1b2c3",
-  "mode": "Standard",
+  "mode": "Fast",
   "task": "fix Add",
-  "outcome": "Accepted",
-  "headline": "✓ Accepted",
+  "outcome": "Interrupted",
+  "headline": "■ Interrupted (Infrastructure stop): the Run was cancelled",
   "candidate": {
     "commit": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
     "files_changed": 1,
@@ -12,23 +12,21 @@
       "add.go"
     ]
   },
-  "oracle_version": 1,
+  "oracle_version": 0,
   "checks": [
     {
       "check": 1,
       "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
-      "oracle_version": 1,
+      "oracle_version": 0,
       "verdict": "fail",
-      "tests_passed": 1,
+      "tests_passed": 0,
       "tests_failed": 1,
-      "held_out": 1,
-      "held_out_failed": 1,
+      "held_out": 0,
+      "held_out_failed": 0,
       "failing": [
         {
-          "held_out": true,
-          "criteria": [
-            "AC-2"
-          ]
+          "test": "fx.TestAdd",
+          "held_out": false
         }
       ],
       "commands": [
@@ -36,42 +34,15 @@
           "run": "go test -json ./...",
           "pass": false,
           "why": "exit 1",
-          "duration_ms": 3800
+          "duration_ms": 1000
         }
       ],
-      "visible_ms": 3800,
-      "cache": "seeded-clone",
-      "cache_materialise_ms": 210,
-      "uncontained": true
-    },
-    {
-      "check": 2,
-      "candidate": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
-      "oracle_version": 1,
-      "verdict": "pass",
-      "tests_passed": 2,
-      "tests_failed": 0,
-      "held_out": 1,
-      "held_out_failed": 0,
-      "commands": [
-        {
-          "run": "go test -json ./...",
-          "pass": true,
-          "duration_ms": 3900
-        }
-      ],
-      "visible_ms": 3900,
+      "visible_ms": 1000,
       "cache": "seeded-clone",
       "cache_materialise_ms": 210,
       "uncontained": true
     }
   ],
-  "qa": {
-    "held_out_added": 1,
-    "unmapped": 0,
-    "additions_left_out": 0,
-    "attempts": 2
-  },
   "protected": {
     "reverted": []
   },
@@ -82,13 +53,13 @@
   "decisions": [],
   "supervision": {
     "approved_automatically": 18,
-    "denied": 0,
+    "denied": 2,
     "cancelled": 0,
     "sent_back": 1,
     "human_interruptions": 0
   },
   "time": {
-    "total_ms": 28100,
+    "total_ms": 11100,
     "stages": [
       {
         "stage": "preflight",
@@ -96,15 +67,11 @@
       },
       {
         "stage": "implement",
-        "ms": 10400
-      },
-      {
-        "stage": "QA",
-        "ms": 8800
+        "ms": 9300
       },
       {
         "stage": "Check",
-        "ms": 7680
+        "ms": 990
       }
     ],
     "human_attention_ms": 0
@@ -116,12 +83,13 @@
     "text": "Done. All tests pass."
   },
   "oge_found": [
-    "Check #1 failed on its Candidate 6d1231d: 1 held-out test failing (AC-2)",
-    "→ sent back to the implementer; the Candidate it then made was Accepted"
+    "Check #1 failed on its Candidate 6d1231d: 1 test failing (fx.TestAdd)",
+    "→ sent back to the implementer"
   ],
   "not_covered": [
+    "No independent tests (fast mode): no QA and no held-out tests",
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "f1fc932663037836fbfe25fccae70e400e2ba6f34350f7e362cb04a9f06f01b4"
+  "ledger_head": "94b1782b5b147334ff863b709fc721294035e060401efa362ca430100e6fa495"
 }

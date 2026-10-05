@@ -4,7 +4,7 @@ Run 20261005T090000-a1b2c3 · Standard mode
 
 | | |
 |---|---|
-| **Task** | fix Add |
+| **Task** | ` fix Add ` |
 | **Checks** | none ran |
 | **Protected** | no test changes kept |
 | **Scope** | no out-of-scope changes |
@@ -18,6 +18,6 @@ Run 20261005T090000-a1b2c3 · Standard mode
 
 <details><summary>Full evidence</summary>
 
-- Ledger head `e67fdc31c615141bb1726c2c1d6ae3c91c3035742dfa033cbfcbc878b0993a99` (identifies this Receipt; not tamper-proof)
+- Ledger head ` e67fdc31c615141bb1726c2c1d6ae3c91c3035742dfa033cbfcbc878b0993a99 ` (identifies this Receipt; not tamper-proof)
 
 </details>

@@ -101,6 +101,7 @@ const (
 	EvSendBack                   // the Candidate goes back to the implementer; Decision is set when a Gate sent it
 	EvDecided                    // a Gate decision is recorded
 	EvNotice                     // something the user is told once, in Notice
+	EvResolved                   // the Ambiguous-file review resolved every file; Next is where the walk goes
 )
 
 // Event is one progress event.
@@ -123,6 +124,8 @@ type Event struct {
 	// Conflicts are packages whose held-out tests no longer build against
 	// the Candidate: no one's finding, shown neutrally.
 	Conflicts []string
+	// EvResolved: "verify" or "check".
+	Next string
 }
 
 // Attempt is one execution of a Stage.
@@ -180,6 +183,11 @@ type Result struct {
 	Tripwires []string
 	// Friction is the Run's policy friction, summed over its Attempts.
 	Friction *agent.Friction
+	// Resolutions are the Ambiguous-file review's promotes and drops.
+	Resolutions []Resolution
+	// Unresolved are the Ambiguous files a Run that isn't Accepted ended
+	// with: in its Candidate, never promoted or dropped.
+	Unresolved []string
 }
 
 // gateHeldOutConflict is where a Run parks when QA's held-out test no
@@ -266,11 +274,19 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	var w *walk // the walk of the graph, once it starts
 	end := func(o Outcome, why ...string) (*Result, error) {
 		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
+		if o != Accepted && w != nil {
+			res.Unresolved = w.ambiguousPaths()
+		}
 		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": res.Candidate}
 		if o == Parked {
 			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
+		}
+		if len(res.Unresolved) > 0 {
+			// The Receipt's Not covered line (#63).
+			data["unresolved"] = res.Unresolved
 		}
 		if err := l.Append(rec, data); err != nil {
 			return nil, err
@@ -369,7 +385,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	defer control.Stop()
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
-	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
+	w = &walk{p: p, l: l, g: f.Graph, limits: f.Limits, repo: repo, snap: snap, promoted: map[string]bool{}}
 	// The implementer's protected set is Oracle v0's: held-out tests never
 	// enter its Workspace (ADR-0009).
 	scope := implementerScope(m, f)
@@ -379,40 +395,47 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, seed: seed, runDir: res.Dir}
 	}
 	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
+	var a *Attempt
+	// resume is where an Ambiguous-file review sends the walk: "verify" or
+	// "check", from the resolved Candidate, with no implementer Attempt.
+	resume := ""
 	for check := 1; ; check++ {
-		w.attempts++
-		a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
-		if err != nil {
-			return nil, err
+		if resume == "" {
+			w.attempts++
+			var err error
+			a, err = implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
+			if err != nil {
+				return nil, err
+			}
+			res.Attempt = a
+			res.Friction = agent.SumFriction(res.Friction, a.Friction)
+			p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
+			if a.Stop != "" {
+				return end(InfrastructureStop, a.Stop)
+			}
+			if a.Failure != "" {
+				// TODO(#40-decision): an Attempt failure should retry on its
+				// budget and then reach the bound-exhaustion Gate (ADR-0012);
+				// with neither built yet the Run stops with no Verdict.
+				return end(InfrastructureStop, "the implementer Attempt failed: "+a.Failure)
+			}
+			if a.Exit != "done" {
+				// TODO(#50): other Exits (e.g. infeasible) route to the
+				// infeasible Gate; until then the Run stops with no Verdict.
+				return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
+			}
+			res.Candidate = a.Candidate
+			if err := recordTripwires(l, repo, res, a); err != nil {
+				return nil, err
+			}
+			// A Tamper event stays unacknowledged for the rest of the Run,
+			// whatever later Attempts do (ADR-0019 #2).
+			w.addTamper(a)
 		}
-		res.Attempt = a
-		res.Friction = agent.SumFriction(res.Friction, a.Friction)
-		p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
-		if a.Stop != "" {
-			return end(InfrastructureStop, a.Stop)
-		}
-		if a.Failure != "" {
-			// TODO(#40-decision): an Attempt failure should retry on its
-			// budget and then reach the bound-exhaustion Gate (ADR-0012);
-			// with neither built yet the Run stops with no Verdict.
-			return end(InfrastructureStop, "the implementer Attempt failed: "+a.Failure)
-		}
-		if a.Exit != "done" {
-			// TODO(#50): other Exits (e.g. infeasible) route to the
-			// infeasible Gate; until then the Run stops with no Verdict.
-			return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
-		}
-		res.Candidate = a.Candidate
-		if err := recordTripwires(l, repo, res, a); err != nil {
-			return nil, err
-		}
-		// A Tamper event stays unacknowledged for the rest of the Run,
-		// whatever later Attempts do (ADR-0019 #2).
-		w.addTamper(a)
 
 		// QA: a fresh verifier on the Promoted view of the Candidate adds
 		// held-out tests to a new Oracle version (ADR-0009, ADR-0010).
-		if qa != nil {
+		if qa != nil && resume != "check" {
 			s, err := qa.review(ctx, w, res, a)
 			if err != nil {
 				return nil, err
@@ -424,6 +447,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			m, mBlob = qa.m, qa.mBlob
 			res.Oracle = m.Version
 		}
+		resume = ""
 
 		// The Check, from the cache seed once it is warm. A cancelled Run
 		// never reaches a Verdict: the Check it killed didn't fail.
@@ -501,10 +525,15 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return end(Parked, why...)
 		}
 
-		// TODO(#47, #48): failing own tests and Ambiguous files become
-		// conditions here.
+		// Ambiguous files: the Candidate's new files no glob covers and no
+		// human has promoted. Accepted needs none (ADR-0013).
+		if err := w.classify(a.Candidate); err != nil {
+			return nil, err
+		}
+		// TODO(#47): failing own tests become a condition here.
 		holds := func(c string) bool {
-			return c == "verdict:"+verdict || (c == "tamper_event" && len(w.unacknowledged()) > 0)
+			return c == "verdict:"+verdict || (c == "tamper_event" && len(w.unacknowledged()) > 0) ||
+				(c == "ambiguous_files" && len(w.ambiguous) > 0)
 		}
 		e, ok := f.Graph.Route("check", holds, w.exhausted)
 		if !ok {
@@ -515,11 +544,25 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		res.Gate, res.Decision = s.gate, s.decision
+		if s.candidate != "" {
+			res.Candidate = s.candidate
+		}
+		res.Resolutions = w.resolved
 		if s.stop != "" {
 			return end(s.stop, s.why...)
 		}
 		if s.edge.To == "end" {
 			return end(Outcome(s.edge.Outcome))
+		}
+		if s.edge.To == "verify" || s.edge.To == "check" {
+			// Every Ambiguous file is resolved: a fresh QA pass if a file
+			// was promoted (cause: user request, ADR-0013), then the final
+			// Check, on exactly the resolved Candidate.
+			r := *a
+			r.Candidate, r.Cause = s.candidate, "user_request"
+			a, resume = &r, s.edge.To
+			p.Observe(Event{Kind: EvResolved, Result: res, Next: s.edge.To})
+			continue
 		}
 		d := s.decision
 		// A send-back Attempt, from the Candidate it sends back.

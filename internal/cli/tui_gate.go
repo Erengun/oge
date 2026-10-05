@@ -27,6 +27,9 @@ type gateState struct {
 	// recording: the decision went to the Run, which hasn't recorded it
 	// yet. The Gate stays until it has (ADR-0015).
 	recording bool
+	// inspect, when set, is a file's content shown in place of the Gate
+	// until esc or Enter.
+	inspect []string
 }
 
 // gate opens r in the live view and waits for the human, or for ctx.
@@ -60,6 +63,14 @@ func (m *model) gateKey(k tea.KeyPressMsg) (ok bool) {
 	if g.recording {
 		return k.String() != "ctrl+c"
 	}
+	if g.inspect != nil {
+		switch k.String() {
+		case "esc", "enter", "q":
+			g.inspect = nil
+			return true
+		}
+		return k.String() != "ctrl+c"
+	}
 	switch k.String() {
 	case "ctrl+c", "esc":
 		if g.choice != nil {
@@ -87,6 +98,19 @@ func (m *model) gateEnter() {
 	g := m.gate
 	text := g.input
 	if g.choice == nil {
+		if p, ok, err := g.req.InspectTarget(text); ok {
+			g.input, g.msg = "", ""
+			if err != nil {
+				g.msg = clean(err.Error())
+				return
+			}
+			limit := inspectMax
+			if m.height > 0 {
+				limit = max(m.height-8, 3)
+			}
+			g.inspect = inspectLines(g.req, p, limit)
+			return
+		}
 		c, rest, ok := g.req.Match(text)
 		if !ok {
 			// Enter alone does nothing.
@@ -94,6 +118,19 @@ func (m *model) gateEnter() {
 			if g.msg != "" {
 				g.input = ""
 			}
+			return
+		}
+		if c.Selects {
+			files, err := g.req.Select(rest)
+			if err != nil {
+				g.msg, g.input = clean(err.Error()), ""
+				return
+			}
+			d, _ := c.Decide("")
+			d.Files = files
+			g.choice = &c
+			g.reply <- d
+			g.recording, g.input, g.msg = true, "", ""
 			return
 		}
 		if rest == "" && (c.Reason || c.Note) {
@@ -126,6 +163,13 @@ func (m *model) gateLines() []string {
 		return nil
 	}
 	st := m.st
+	if g.inspect != nil {
+		out := []string{"", "  " + st.bold(gateTitle(g.req.Name)) + st.dim(" · inspect")}
+		for _, l := range g.inspect {
+			out = append(out, "  "+l)
+		}
+		return append(out, "", st.bold(clean(gate.Attention(&g.req))), st.dim("  esc or Enter returns to the Gate · this decides nothing"))
+	}
 	// What is needed is the attention line, right above the choices
 	// (ADR-0022).
 	attn := st.bold(clean(gate.Attention(&g.req)))
@@ -186,6 +230,22 @@ func (m *model) again() {
 	}
 	m.stages = append(m.stages, stage{name: "check", text: m.checkText()})
 	m.cur = len(m.stages)
+	for j := range m.stages {
+		if m.stages[j].state == pending {
+			m.begin(j, at)
+			break
+		}
+	}
+}
+
+// resolved lists what runs once the Ambiguous-file review is done: QA
+// again if a file was promoted, then the final Check, the first running.
+func (m *model) resolved(next string) {
+	at := m.now()
+	for _, s := range resolvedStages(m.frozen, next) {
+		m.stages = append(m.stages, m.stageFor(s))
+	}
+	m.stages = append(m.stages, stage{name: "check", text: m.checkText()})
 	for j := range m.stages {
 		if m.stages[j].state == pending {
 			m.begin(j, at)

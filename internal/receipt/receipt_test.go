@@ -3,6 +3,7 @@ package receipt_test
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"github.com/erengun/oge/internal/receipt"
 	"github.com/erengun/oge/internal/receipt/receipttest"
 	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/workspace"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -101,10 +103,10 @@ func TestReceiptNeverUsesConfidenceLanguage(t *testing.T) {
 func TestReceiptOverriddenIsNeverSuccess(t *testing.T) {
 	r := scenario(t, "overridden").Receipt()
 	text := r.Text(receipt.Colors(true))
-	if strings.Contains(text, "✓") || !strings.Contains(r.Headline, "Taken without passing evidence (reason: the flaky test is wrong)") {
+	if strings.Contains(text, "✓") || !strings.Contains(unmarked(r.Headline), "Taken without passing evidence (reason: the flaky test is wrong)") {
 		t.Errorf("Overridden reads as success:\n%s", text)
 	}
-	if !strings.Contains(text, receipt.Colors(true).Warn(r.Headline)) {
+	if !strings.Contains(text, receipt.Colors(true).Warn(unmarked(r.Headline))) {
 		t.Errorf("Overridden isn't in the warning colour:\n%q", text)
 	}
 }
@@ -271,21 +273,152 @@ func TestBuildReadsTheRunDirectory(t *testing.T) {
 }
 
 // What the agent said can't drive the terminal or add Markdown: control
-// characters are dropped, and markup is escaped.
+// characters are dropped, and in Markdown every value is a code span, so
+// nothing in it can link, mention, reference an issue or add markup.
 func TestReceiptSanitisesAgentText(t *testing.T) {
+	const bad = "done \x1b]8;;http://x\x07 [click](http://evil) <img src=x> | ok @Erengun https://evil.example/x www.evil.com #12 `tick` ``two``"
 	b := receipttest.New(pipeline.Fast)
 	b.Attempt(receipttest.Attempt{ID: "implement#1", From: time.Second, To: 2 * time.Second, Candidate: receipttest.C1, Exit: "done",
-		Claims: []string{"done \x1b]8;;http://x\x07 [click](http://evil) <img src=x> | ok"}})
-	b.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "TestAdd", Attested: "fail"}}, nil)
-	b.Park(5*time.Second, "gate.bound_exhaustion")
+		Claims: []string{bad}, Changed: []string{"@Erengun/www.evil.com.go"}})
+	b.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "TestA_@Erengun_#12_https://evil.example/x", Attested: "fail"}}, nil)
+	b.Park(5*time.Second, "gate.bound_exhaustion", "why @Erengun #12")
 	r := b.Receipt()
-	if text := r.Text(receipt.Paint{}); strings.ContainsAny(text, "\x1b\x07") {
+	if text := r.Text(receipt.Paint{}); strings.ContainsAny(text, "\x1b\x07\x0e\x0f") {
 		t.Errorf("control characters reached the terminal: %q", text)
 	}
 	md := r.Markdown()
-	for _, bad := range []string{`\[click\]\(`, `<img`, `\| ok`} {
-		if regexp.MustCompile(`(^|[^\\])` + bad).MatchString(md) {
-			t.Errorf("Markdown has %q unescaped:\n%s", bad, md)
+	outside := withoutCodeSpans(md)
+	for _, danger := range []string{"@Erengun", "https://", "www.", "#12", "[click]", "<img", "http://evil", "tick"} {
+		if strings.Contains(outside, danger) {
+			t.Errorf("Markdown has %q outside a code span:\n%s\n--- outside code spans:\n%s", danger, md, outside)
 		}
+	}
+	for _, line := range strings.Split(md, "\n") {
+		if strings.HasPrefix(line, "|") && strings.Count(strings.ReplaceAll(line, `\|`, ""), "|") != 3 {
+			t.Errorf("a value broke the table: %q", line)
+		}
+	}
+	if !strings.Contains(md, "@Erengun") {
+		t.Errorf("the Claim is gone:\n%s", md)
+	}
+}
+
+// withoutCodeSpans is md with every code span removed (CommonMark: a run
+// of n backticks closes at the next run of exactly n).
+func withoutCodeSpans(md string) string {
+	var b strings.Builder
+	for i := 0; i < len(md); {
+		if md[i] != '`' {
+			b.WriteByte(md[i])
+			i++
+			continue
+		}
+		n := 0
+		for i+n < len(md) && md[i+n] == '`' {
+			n++
+		}
+		fence := strings.Repeat("`", n)
+		j := i + n
+		closed := -1
+		for k := j; k < len(md); {
+			if md[k] != '`' {
+				k++
+				continue
+			}
+			m := 0
+			for k+m < len(md) && md[k+m] == '`' {
+				m++
+			}
+			if m == n {
+				closed = k
+				break
+			}
+			k += m
+		}
+		if closed < 0 {
+			b.WriteString(fence)
+			i = j
+			continue
+		}
+		i = closed + n
+	}
+	return b.String()
+}
+
+// Every character that makes text read other than it is shows escaped in
+// each rendering, never as itself.
+func TestReceiptEscapesBidiAndInvisibleRunes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		r    rune
+	}{
+		{"embedding", 0x202a}, {"override", 0x202e}, {"isolate", 0x2066}, {"pop isolate", 0x2069},
+		{"LRM", 0x200e}, {"RLM", 0x200f}, {"ALM", 0x061c}, {"zero-width space", 0x200b}, {"ZWJ", 0x200d},
+		{"line separator", 0x2028}, {"paragraph separator", 0x2029}, {"BOM", 0xfeff},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hidden := "a" + string(c.r) + "b"
+			b := receipttest.New(pipeline.Fast)
+			b.Attempt(receipttest.Attempt{ID: "implement#1", From: time.Second, To: 2 * time.Second, Candidate: receipttest.C1, Exit: "done",
+				Claims: []string{hidden}, Reverted: []workspace.Revert{{Path: "x" + hidden + "_test.go", Change: "modified", Class: run.ClassOracleTest, Tamper: true}}})
+			b.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "Test" + hidden, Attested: "fail"}}, nil)
+			b.End(5*time.Second, run.Rejected, receipttest.C1, "why "+hidden)
+			r := b.Receipt()
+			js, _ := r.JSON()
+			want := fmt.Sprintf("<U+%04X>", c.r)
+			for name, out := range map[string]string{"text": r.Text(receipt.Paint{}), "md": r.Markdown(), "json": string(js)} {
+				if strings.ContainsRune(out, c.r) || !strings.Contains(out, "a"+want+"b") {
+					t.Errorf("%s: %q isn't escaped:\n%s", name, c.r, out)
+				}
+			}
+		})
+	}
+}
+
+// unmarked is a model string without its value marks.
+func unmarked(s string) string { return strings.NewReplacer("\x0e", "", "\x0f", "").Replace(s) }
+
+// A torn last line (a crash mid-write) leaves the records before it: the
+// Receipt is of those, and says where the Ledger stopped. A broken chain
+// is refused.
+func TestBuildFromATornLedger(t *testing.T) {
+	dir := t.TempDir()
+	if err := scenario(t, "accepted-fast").WriteRun(dir); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ledger.LedgerFile)
+	good, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, append(append([]byte(nil), good...), `{"format":1,"seq":`...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := receipt.Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Outcome != "Accepted" || !strings.Contains(r.Text(receipt.Paint{}), "the Ledger is unreadable after record ") {
+		t.Errorf("torn tail:\n%s", r.Text(receipt.Paint{}))
+	}
+	broken := strings.Replace(string(good), `"seq":2,`, `"seq":7,`, 1)
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receipt.Build(dir); err == nil {
+		t.Error("a broken chain built a Receipt")
+	}
+}
+
+// The JSON drops only Öge's own value marks: a value holding the text
+// "\u000e" keeps it.
+func TestReceiptJSONKeepsEscapedText(t *testing.T) {
+	b := receipttest.New(pipeline.Fast)
+	b.Attempt(receipttest.Attempt{ID: "implement#1", From: time.Second, To: 2 * time.Second, Candidate: receipttest.C1, Exit: "done", Claims: []string{`say \u000e and \u000f`}})
+	b.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "TestAdd", Attested: "fail"}}, nil)
+	b.End(5*time.Second, run.Rejected, receipttest.C1, `why \u000e`)
+	m := field(t, b.Receipt())
+	if got := m["claim"].(map[string]any)["text"]; got != `say \u000e and \u000f` {
+		t.Errorf("claim text %q", got)
+	}
+	if got := m["why"].([]any)[0]; got != `why \u000e` {
+		t.Errorf("why %q", got)
 	}
 }
