@@ -177,7 +177,7 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	switch ev.Kind {
 	case run.EvPreflight:
 		m.stage = "preflight"
-	case run.EvAgent, run.EvAttempt:
+	case run.EvAgent, run.EvAttempt, run.EvNotice:
 		m.stage = ev.Attempt.Stage
 	case run.EvCheck:
 		m.stage = "check"
@@ -191,6 +191,8 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		// Only what the agent says it's doing; the Session and Exit
 		// bookkeeping stays in -v (ADR-0019).
 		m.step, _ = activityStep(ev.Agent)
+	case run.EvNotice:
+		m.step = "note: " + clean(ev.Notice)
 	case run.EvAttempt:
 		m.text = attemptText(ev.Attempt)
 		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Stop != "" || ev.Attempt.Exit != "done"
@@ -326,7 +328,7 @@ func (m *model) apply(msg tea.Msg) bool {
 			m.head = msg.head
 		case run.EvPreflight, run.EvAttempt, run.EvCheck:
 			m.finish(msg)
-		case run.EvAgent:
+		case run.EvAgent, run.EvNotice:
 			if msg.stage != "" {
 				if i := m.index(msg.stage); m.stages[i].state == pending {
 					m.begin(i, msg.at)

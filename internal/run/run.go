@@ -84,6 +84,7 @@ const (
 	EvAgent                      // an agent's normalised event during an Attempt
 	EvAttempt                    // an Attempt ended
 	EvCheck                      // a Check ended with a Verdict
+	EvNotice                     // something the user is told once, in Notice
 )
 
 // Event is one progress event.
@@ -93,6 +94,7 @@ type Event struct {
 	Agent   agent.Event
 	Attempt *Attempt
 	Check   *oracle.Result
+	Notice  string
 }
 
 // Attempt is one execution of a Stage.
@@ -413,11 +415,18 @@ loop:
 			case agent.SessionOpened:
 				if ev.Session != nil {
 					// An environment and capability observation (ADR-0011).
-					if err := l.Append(RecObservation, map[string]any{"attempt": a.ID, "kind": "session",
+					obs := map[string]any{"attempt": a.ID, "kind": "session",
 						"agent_version": ev.Session.AgentVersion, "capabilities": ev.Session.Capabilities,
 						"launch_profile": ev.Session.Profile, "envelope": ev.Session.Envelope, "auth_source": ev.Session.AuthSource,
-						"since_launch_ms": time.Since(launched).Milliseconds()}); err != nil {
+						"since_launch_ms": time.Since(launched).Milliseconds()}
+					if r := ev.Session.Residue; r != nil {
+						obs["residue"] = r
+					}
+					if err := l.Append(RecObservation, obs); err != nil {
 						return nil, err
+					}
+					if note := residueNotice(p.State.Private, stage.Agent, ev.Session.Residue); note != "" {
+						p.Observe(Event{Kind: EvNotice, Attempt: a, Notice: note})
 					}
 				}
 			case agent.HostRequest:
@@ -430,11 +439,15 @@ loop:
 				break loop
 			}
 		case <-timeout.C:
+			// Nothing read after this counts: a late result can't clear
+			// the failure. Close ends the process on its own deadlines.
 			_ = sess.Interrupt()
 			a.Failure = "timeout"
+			break loop
 		case <-ctx.Done():
 			_ = sess.Interrupt()
 			a.Failure = "interrupted"
+			break loop
 		}
 	}
 	if !settled && a.Failure == "" {
@@ -477,6 +490,43 @@ loop:
 		ended["candidate"] = c
 	}
 	return a, l.Append(RecAttemptEnded, ended)
+}
+
+// residueNotice is what to tell the user about an agent's startup residue:
+// the first time it appears, and whenever it changes, never on every Run
+// (#44). The last-seen residue is kept in the state root, where doctor
+// can report it.
+func residueNotice(private, agentName string, r *agent.Residue) string {
+	path := filepath.Join(private, "agents", agentName+".residue.json")
+	var last struct{ Fingerprint string }
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, &last)
+	}
+	fp := ""
+	if r != nil {
+		fp = r.Fingerprint
+	}
+	if fp == last.Fingerprint {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+		b, _ := json.Marshal(map[string]any{"fingerprint": fp, "residue": r, "seen": time.Now().UTC()})
+		_ = os.WriteFile(path, b, 0o600)
+	}
+	if r == nil {
+		return agentName + " no longer loads any startup residue"
+	}
+	var parts []string
+	for _, x := range []struct {
+		n    int
+		what string
+	}{{len(r.Plugins), "plugins"}, {len(r.Skills), "skills"}, {len(r.Agents), "subagents"}} {
+		if x.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", x.n, x.what))
+		}
+	}
+	return fmt.Sprintf("%s still loads %s when isolated; they can't run a tool Öge doesn't answer. Recorded; shown again only if it changes",
+		agentName, strings.Join(parts, ", "))
 }
 
 // visible reports whether an agent event shows as activity in the views:

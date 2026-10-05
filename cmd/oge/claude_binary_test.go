@@ -15,13 +15,16 @@ import (
 // reads add.go, edits it through Öge's PreToolUse hook (the edit is applied
 // only if Öge allows it, and only when fix is set), tries a command Öge
 // doesn't pre-authorise, and finishes with Exit: done.
-func claudeSession(fix bool) string {
+func claudeSession(fix bool) string { return claudeSessionWith(fix, `[]`) }
+
+// claudeSessionWith is claudeSession with system/init reporting skills.
+func claudeSessionWith(fix bool, skills string) string {
 	frames := []string{
 		`{"dir": "meta", "argv": ["claude"]}`,
 		`{"dir": "in", "msg": {"type": "control_request", "request_id": "req_1", "request": {"subtype": "initialize"}}}`,
 		`{"dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "req_1", "response": {"account": "<redacted>"}}}}`,
 		`{"dir": "in", "msg": {"type": "user"}}`,
-		`{"dir": "out", "msg": {"type": "system", "subtype": "init", "cwd": "/home/user/project", "session_id": "s-1", "tools": ["Bash", "Edit", "Glob", "Grep", "Read", "Write"], "mcp_servers": [], "model": "claude-haiku-4-5", "permissionMode": "default", "apiKeySource": "none", "claude_code_version": "2.1.289", "output_style": "default", "plugins": [], "skills": [], "capabilities": ["interrupt_receipt_v1"]}}`,
+		`{"dir": "out", "msg": {"type": "system", "subtype": "init", "cwd": "/home/user/project", "session_id": "s-1", "tools": ["Bash", "Edit", "Glob", "Grep", "Read", "Write"], "mcp_servers": [], "model": "claude-haiku-4-5", "permissionMode": "default", "apiKeySource": "none", "claude_code_version": "2.1.289", "output_style": "default", "plugins": [], "skills": `+skills+`, "capabilities": ["interrupt_receipt_v1"]}}`,
 		`{"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "message": {"content": [{"type": "text", "text": "Add ignores its arguments.\nFixing it."}]}}}`,
 		`{"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_1", "name": "Edit", "input": {"file_path": "/home/user/project/add.go", "old_string": "return 0", "new_string": "return a + b"}}]}}}`,
 		`{"dir": "out", "msg": {"type": "control_request", "request_id": "h1", "request": {"subtype": "hook_callback", "callback_id": "oge_pre_tool_use", "input": {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "/home/user/project/add.go", "old_string": "return 0", "new_string": "return a + b"}, "tool_use_id": "toolu_1"}}}}`,
@@ -133,4 +136,32 @@ func findLedger(t *testing.T, env []string) string {
 		t.Fatal("no Ledger under HOME")
 	}
 	return found
+}
+
+// Residue an isolated launch can't remove is shown once, when it first
+// appears and when it changes, never on every Run (#44).
+func TestBinaryClaudeResidueIsShownOnce(t *testing.T) {
+	repo, env := runFixture(t)
+	runWith := func(skills string) string {
+		t.Helper()
+		e := withFakeClaude(t, append([]string{}, env...), claudeSessionWith(true, skills))
+		code, out, errOut := runExe(t, testBinary, repo, e, "fix Add", "--fast", "--agent", "claude", "--unattended")
+		if code != 0 {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+		}
+		return out
+	}
+	const note = "note       claude still loads"
+	if out := runWith(`["deep-research", "design"]`); !strings.Contains(out, note+" 2 skills when isolated") {
+		t.Errorf("first Run doesn't show the residue:\n%s", out)
+	}
+	if out := runWith(`["design", "deep-research"]`); strings.Contains(out, "note ") {
+		t.Errorf("unchanged residue shown again:\n%s", out)
+	}
+	if out := runWith(`["design"]`); !strings.Contains(out, note+" 1 skills") {
+		t.Errorf("changed residue not shown:\n%s", out)
+	}
+	if l := findLedger(t, env); !strings.Contains(l, `"residue":{"Plugins":[],"Skills":["`) {
+		t.Error("the residue isn't in the session Observation")
+	}
 }

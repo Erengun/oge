@@ -29,7 +29,8 @@ func Implementer(t task.Task, checks []string) string {
 		fmt.Fprintf(&b, "- When you finish, Öge runs the project's Checks on your changes: %s. Their result decides the outcome, not your report.\n", strings.Join(q, ", "))
 	}
 	b.WriteString("- " + Assumptions + "\n")
-	b.WriteString("- No one approves requests during this Run. Reading, editing and writing files here, the Check commands, and simple build, vet, test, format, list and diff commands are allowed; anything else is denied.\n")
+	b.WriteString("- No one approves requests during this Run. Reading, editing and writing files here, the Check commands, and simple build, vet, test, format, list, find and git diff/status commands are allowed; anything else is denied.\n")
+	b.WriteString("- Run each command on its own from the current directory: no cd, &&, pipes, redirection or shell globs.\n")
 	b.WriteString("- End your final message with the line `Exit: done`. If the Task can't be done as asked, end it with `Exit: infeasible` and say why.\n")
 	return b.String()
 }

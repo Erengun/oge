@@ -224,6 +224,8 @@ func (r *renderer) observe(ev run.Event) {
 		if step, ok := agentStep(ev.Agent); ok {
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
+	case run.EvNotice:
+		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
 	case run.EvCheck:
