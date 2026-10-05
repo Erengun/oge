@@ -220,6 +220,7 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 	attended := env.Interactive() && !f.unattended
+	f.o.Unattended = f.unattended
 
 	root, err := workspace.RepoRoot(env.Dir)
 	if err != nil {

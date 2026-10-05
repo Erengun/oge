@@ -8,7 +8,7 @@ import (
 )
 
 // GraphFormat versions the compiled graph's encoding, and so its hash.
-const GraphFormat = 1
+const GraphFormat = 2
 
 // Node kinds.
 const (
@@ -20,6 +20,12 @@ const (
 
 // Graph is the compiled, static graph a Run freezes and walks. Agent output
 // can never add a node or edge or raise a bound (ADR-0007).
+//
+// Edges leaving a node are listed in precedence order, and a walk takes
+// the first one whose condition holds (see Route). So the check node's
+// overlapping Verdict edges resolve as: a fail Verdict, then failing
+// Implementer-authored tests, then the end-of-run review (tamper before
+// Ambiguous files), then the Result gate or the end.
 type Graph struct {
 	Nodes []Node `json:"nodes"`
 	Edges []Edge `json:"edges"`
@@ -35,14 +41,21 @@ type Node struct {
 	Trigger   string `json:"trigger,omitempty"`   // Gate: when it fires
 }
 
-// Edge is labelled from a closed set (an Exit, a Verdict, or a limit being
-// exhausted) and may carry the name of the limit that bounds it.
+// Edge is labelled from a closed set (an Exit, a Verdict, a limit being
+// exhausted, or a Gate choice) and may carry the name of the limit that
+// bounds it. A condition joined with "+" holds when every part does;
+// "limit:<name>" holds when that limit is used up. An edge into the end
+// names the Outcome the Run ends with.
 type Edge struct {
-	From  string `json:"from"`
-	To    string `json:"to"`
-	On    string `json:"on"`
-	Bound string `json:"bound,omitempty"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	On      string `json:"on"`
+	Bound   string `json:"bound,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
 }
+
+// ChoicePrefix starts a Gate choice edge's label.
+const ChoicePrefix = "choice:"
 
 // Compile builds the fixed built-in graph for a mode, inserting the
 // mandatory Gates where their triggers can fire (ADR-0013, ADR-0016,
@@ -50,7 +63,12 @@ type Edge struct {
 func Compile(mode Mode, resultGate bool) Graph {
 	var g Graph
 	node := func(n Node) { g.Nodes = append(g.Nodes, n) }
-	edge := func(from, to, on, bound string) { g.Edges = append(g.Edges, Edge{from, to, on, bound}) }
+	edge := func(from, to, on, bound string) {
+		g.Edges = append(g.Edges, Edge{From: from, To: to, On: on, Bound: bound})
+	}
+	end := func(from, on, outcome string) {
+		g.Edges = append(g.Edges, Edge{From: from, To: "end", On: on, Outcome: outcome})
+	}
 
 	hasVerifier := mode != Fast
 
@@ -102,21 +120,106 @@ func Compile(mode Mode, resultGate bool) Graph {
 		edge("verify", "gate.infeasible", "exit:conflicts_with_oracle", "")
 		edge("verify", "gate.oracle_growth", "limit:oracle_growth", "")
 	}
+	// The check node's edges, in precedence order (see Graph).
 	edge("check", "implement", "verdict:fail", "send_backs")
-	edge("check", "gate.bound_exhaustion", "limit:send_backs", "")
+	edge("check", "gate.bound_exhaustion", "verdict:fail+limit:send_backs", "")
 	// Failing Implementer-authored tests go back for repair on the same
 	// budget; the Gate fires only when it is exhausted (ADR-0019).
-	edge("check", "implement", "own_tests:fail", "send_backs")
-	edge("check", "gate.own_test_failure", "limit:send_backs+own_tests:fail", "")
+	edge("check", "implement", "verdict:pass+own_tests:fail", "send_backs")
+	edge("check", "gate.own_test_failure", "verdict:pass+own_tests:fail+limit:send_backs", "")
 	// The end-of-run review, before a pass can end the Run.
 	edge("check", "gate.tamper", "verdict:pass+tamper_event", "")
 	edge("check", "gate.ambiguous_file", "verdict:pass+ambiguous_files", "")
 	if resultGate {
 		edge("check", "gate.result", "verdict:pass", "")
 	} else {
-		edge("check", "end", "verdict:pass", "")
+		end("check", "verdict:pass", "Accepted")
+	}
+
+	// Gate choices: closed sets of existing terms (ADR-0008). Every Gate
+	// can end the Run Rejected or Cancelled.
+	// TODO(#49 and the Oracle-growth ticket): the tamper acknowledgement
+	// and the Oracle-growth choices (admit, remove <test>, freeze) arrive
+	// with their Gates.
+	choice := func(gate, word, to, bound string) { edge(gate, to, ChoicePrefix+word, bound) }
+	afterPromote := "check"
+	if hasVerifier {
+		afterPromote = "verify" // a fresh verifier Attempt first (ADR-0013)
+	}
+	for _, n := range g.Nodes {
+		if n.Kind != KindGate {
+			continue
+		}
+		switch n.ID {
+		case "gate.result":
+			end(n.ID, ChoicePrefix+"take", "Accepted")
+			choice(n.ID, "send back", "implement", "send_backs")
+		case "gate.bound_exhaustion":
+			// A send back past the limit is the human's decision, one at a
+			// time; the next fail comes back here.
+			choice(n.ID, "send back", "implement", "")
+		case "gate.own_test_failure":
+			choice(n.ID, "send back", "implement", "")
+			end(n.ID, ChoicePrefix+"override", "Overridden")
+		case "gate.ambiguous_file":
+			choice(n.ID, "promote", afterPromote, "")
+			choice(n.ID, "drop", "check", "")
+		case "gate.infeasible":
+			end(n.ID, ChoicePrefix+"infeasible", "Infeasible")
+			choice(n.ID, "send back", "implement", "send_backs")
+		}
+		end(n.ID, ChoicePrefix+"reject", "Rejected")
+		end(n.ID, ChoicePrefix+"quit", "Cancelled")
 	}
 	return g
+}
+
+// Route is the edge a walk takes from a node: the first, in precedence
+// order, whose condition holds. A bounded edge is passed over once its
+// bound is used up, and its "limit:" edge then holds. Choice edges are
+// never routed; a decision takes them (see Choice).
+func (g Graph) Route(from string, holds, exhausted func(string) bool) (Edge, bool) {
+	for _, e := range g.Edges {
+		if e.From != from || strings.HasPrefix(e.On, ChoicePrefix) {
+			continue
+		}
+		if e.Bound != "" && exhausted(e.Bound) {
+			continue
+		}
+		ok := true
+		for _, c := range strings.Split(e.On, "+") {
+			if name, isLimit := strings.CutPrefix(c, "limit:"); isLimit {
+				ok = ok && exhausted(name)
+			} else {
+				ok = ok && holds(c)
+			}
+		}
+		if ok {
+			return e, true
+		}
+	}
+	return Edge{}, false
+}
+
+// Choices are a Gate's choice words, in graph order.
+func (g Graph) Choices(gate string) []string {
+	var words []string
+	for _, e := range g.Edges {
+		if w, ok := strings.CutPrefix(e.On, ChoicePrefix); ok && e.From == gate {
+			words = append(words, w)
+		}
+	}
+	return words
+}
+
+// Choice is the edge a decision for word takes from a Gate.
+func (g Graph) Choice(gate, word string) (Edge, bool) {
+	for _, e := range g.Edges {
+		if e.From == gate && e.On == ChoicePrefix+word {
+			return e, true
+		}
+	}
+	return Edge{}, false
 }
 
 // Hash is the compiled graph's identity together with the limits that bound

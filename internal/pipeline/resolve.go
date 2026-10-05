@@ -88,6 +88,8 @@ type Overrides struct {
 	Blind     bool
 	Confirm   bool
 	Require   []string
+	// Unattended removes the optional Gates (ADR-0008).
+	Unattended bool
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
@@ -242,7 +244,7 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	}
 
 	// Gates and limits.
-	f.ResultGate = o.Confirm || (p.Gates.Result != nil && *p.Gates.Result)
+	f.ResultGate = !o.Unattended && (o.Confirm || (p.Gates.Result != nil && *p.Gates.Result))
 	f.Limits = resolveLimits(p.Limits)
 
 	// Trust-weakening options: from the project file only (there is no user
