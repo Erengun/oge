@@ -102,9 +102,9 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		}
 		return answer(p.path(str("file_path"), false), "it reads outside the Workspace", "")
 	case "Glob":
-		return answer(worst(p.path(str("path"), false), p.pattern(str("pattern"))), "it searches outside the Workspace", "")
+		return answer(worst(p.path(str("path"), false), p.pattern(str("pattern"), str("path"))), "it searches outside the Workspace", "")
 	case "Grep":
-		return answer(worst(p.path(str("path"), false), p.pattern(str("glob"))), "it searches outside the Workspace", "")
+		return answer(worst(p.path(str("path"), false), p.pattern(str("glob"), str("path"))), "it searches outside the Workspace", "")
 	case "Edit", "Write", "NotebookEdit":
 		path := str("file_path")
 		if tool == "NotebookEdit" {
@@ -172,8 +172,11 @@ func (p *policy) pathFrom(cwd, path string, write bool) verdict {
 	return vOK
 }
 
-// pattern classifies a Glob pattern or a Grep glob filter.
-func (p *policy) pattern(pat string) verdict {
+// pattern classifies a Glob pattern or a Grep glob filter, relative to
+// base (the tool's path; empty is the Workspace). Its fixed prefix, and
+// whatever its first wildcard part matches now, must resolve inside the
+// Workspace, symlinks followed.
+func (p *policy) pattern(pat, base string) verdict {
 	if pat == "" {
 		return vOK
 	}
@@ -181,13 +184,43 @@ func (p *policy) pattern(pat string) verdict {
 		strings.Contains(pat, "\\") || driveLetter(pat) || filepath.VolumeName(pat) != "" {
 		return vOutside
 	}
-	if !filepath.IsAbs(pat) {
-		return vOK
+	dir := p.ws[0]
+	if base != "" {
+		if filepath.IsAbs(base) {
+			dir = filepath.Clean(base)
+		} else {
+			dir = filepath.Join(dir, base)
+		}
 	}
-	// An absolute pattern must be inside up to its first wildcard.
-	fixed := pat
-	if i := strings.IndexAny(pat, "*?[{"); i >= 0 {
-		fixed = filepath.Dir(pat[:i] + "x")
+	if filepath.IsAbs(pat) {
+		dir, pat = string(filepath.Separator), strings.TrimPrefix(filepath.ToSlash(pat), "/")
+	}
+	parts := strings.Split(filepath.ToSlash(pat), "/")
+	fixed := dir
+	for i, c := range parts {
+		if !strings.ContainsAny(c, "*?[{") {
+			if i == len(parts)-1 {
+				break // the last part names files, not a directory to enter
+			}
+			fixed = filepath.Join(fixed, c)
+			continue
+		}
+		if v := p.path(fixed, false); v != vOK {
+			return v
+		}
+		if c == "**" || i == len(parts)-1 {
+			return vOK
+		}
+		matches, err := filepath.Glob(filepath.Join(fixed, c))
+		if err != nil {
+			return vGrey
+		}
+		for _, m := range matches {
+			if v := p.path(m, false); v != vOK {
+				return v
+			}
+		}
+		return vOK
 	}
 	return p.path(fixed, false)
 }

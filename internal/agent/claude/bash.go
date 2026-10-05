@@ -22,6 +22,11 @@ type shape struct {
 	patterns map[string]bool
 	// valueOK checks a value flag's value.
 	valueOK func(flag, val string) bool
+	// attached: value flags take their value only as --flag=value. git's
+	// --unified[=<n>], --color[=<when>] and --untracked-files[=<mode>]
+	// have optional values, so git reads a separate next word as its own
+	// option, not as the value.
+	attached bool
 }
 
 func set(s ...string) map[string]bool {
@@ -78,14 +83,21 @@ var bashShapes = map[string]shape{
 	"git diff": {
 		bools: set("--stat", "--name-only", "--name-status", "--cached", "--staged", "--no-color", "--numstat",
 			"--shortstat", "--no-ext-diff", "--patch", "-p", "--minimal", "--"),
-		boolRe:  regexp.MustCompile(`^-U[0-9]+$`),
-		vals:    set("--unified", "--color"),
-		valueOK: func(flag, val string) bool { return flag != "--color" || val == "never" },
+		boolRe:   regexp.MustCompile(`^-U[0-9]+$`), // -U<n> only with the number attached
+		vals:     set("--unified", "--color"),
+		attached: true,
+		valueOK: func(flag, val string) bool {
+			if flag == "--unified" {
+				return digits.MatchString(val)
+			}
+			return val == "never"
+		},
 	},
 	"git status": {
-		bools:   set("-s", "--short", "--porcelain", "-b", "--branch", "-uno", "-unormal", "-uall", "--"),
-		vals:    set("--untracked-files"),
-		valueOK: func(_, val string) bool { return val == "no" || val == "normal" || val == "all" },
+		bools:    set("-s", "--short", "--porcelain", "-b", "--branch", "-uno", "-unormal", "-uall", "--"),
+		vals:     set("--untracked-files"),
+		attached: true,
+		valueOK:  func(_, val string) bool { return val == "no" || val == "normal" || val == "all" },
 	},
 }
 
@@ -146,7 +158,7 @@ func (p *policy) shape(sh shape, args []word) verdict {
 			flags[flag] = true
 		case sh.vals[flag] || sh.paths[flag]:
 			if !hasVal {
-				if i+1 >= len(args) {
+				if sh.attached || i+1 >= len(args) {
 					return vGrey
 				}
 				i++

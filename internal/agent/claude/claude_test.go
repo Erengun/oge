@@ -259,7 +259,8 @@ func TestLaunchProfileArgvAndEnv(t *testing.T) {
 	if gb, _ := json.Marshal(got); string(gb) != func() string { b, _ := json.Marshal(wantS); return string(b) }() {
 		t.Errorf("settings\n got %s\nwant %s", gb, ws)
 	}
-	for _, s := range []string{".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".docker/config.json", ".kube"} {
+	for _, s := range []string{".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".docker/config.json", ".kube",
+		".git-credentials", ".config/gcloud", ".azure", ".npmrc", ".pypirc", ".cargo/credentials", ".terraform.d"} {
 		if !oneOf(s, homeSecrets) {
 			t.Errorf("%s isn't denied", s)
 		}
@@ -805,6 +806,8 @@ func TestPolicy(t *testing.T) {
 	os.Symlink("/etc", filepath.Join(ws, "escape"))
 	os.Symlink("/etc/hosts", filepath.Join(ws, "hosts"))
 	os.Symlink(filepath.Join(ws, "pkg"), filepath.Join(ws, "inner"))
+	os.Symlink("/etc", filepath.Join(ws, "etcdir"))
+	os.Symlink(private, filepath.Join(ws, "priv"))
 	p := newPolicy(agent.LaunchSpec{Workspace: ws, DenyRead: []string{private}, CheckCommands: []string{"make check"}}, "abc")
 	const (
 		allow   = "allow"
@@ -833,6 +836,15 @@ func TestPolicy(t *testing.T) {
 		{"Glob", `{"pattern":"/etc/*"}`, outside},
 		{"Glob", fp("pattern", ws+"/pkg/*.go"), allow},
 		{"Glob", `{"pattern":"*.go","path":"/"}`, outside},
+		// A relative pattern's fixed prefix, or its first wildcard part,
+		// can be a symlink out.
+		{"Glob", `{"pattern":"etcdir/*"}`, outside},
+		{"Glob", `{"pattern":"etc?ir/*"}`, outside},
+		{"Glob", `{"pattern":"pri?/*"}`, outside},
+		{"Glob", `{"pattern":"pkg/*.go"}`, allow},
+		{"Grep", `{"pattern":"x","glob":"etcdir/**"}`, outside},
+		{"Grep", `{"pattern":"x","glob":"pri?/**"}`, outside},
+		{"Grep", `{"pattern":"x","glob":"*.go"}`, allow},
 		{"Grep", `{"pattern":"Add"}`, allow},
 		{"Grep", `{"pattern":"Add","path":"/"}`, outside},
 		{"Grep", `{"pattern":"Add","glob":"../**/*.go"}`, outside},
@@ -915,6 +927,20 @@ func TestPolicy(t *testing.T) {
 		{"Bash", bash("git diff --stat -- pkg"), allow},
 		{"Bash", bash("git diff -U3 --no-color"), allow},
 		{"Bash", bash("git diff --output=x"), grey},
+		// Optional-argument flags only in their attached form: git reads a
+		// separate next word as its own option.
+		{"Bash", bash("git diff --unified=3"), allow},
+		{"Bash", bash("git diff --unified --output=.git/config"), grey},
+		{"Bash", bash("git diff --unified --output=add_test.go"), grey},
+		{"Bash", bash("git diff --unified --ext-diff"), grey},
+		{"Bash", bash("git diff --unified --textconv"), grey},
+		{"Bash", bash("git diff --unified 3"), grey},
+		{"Bash", bash("git diff --color --output=x"), grey},
+		{"Bash", bash("git diff --color=never"), allow},
+		{"Bash", bash("git diff -U --output=x"), grey},
+		{"Bash", bash("git diff -U 3"), grey},
+		{"Bash", bash("git status --untracked-files --output=x"), grey},
+		{"Bash", bash("git status --untracked-files=no"), allow},
 		{"Bash", bash("git diff --ext-diff"), grey},
 		{"Bash", bash("git diff --no-index /etc/hosts pkg/a.go"), grey},
 		{"Bash", bash("git -c core.pager=evil diff"), grey},

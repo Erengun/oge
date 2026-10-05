@@ -52,6 +52,7 @@ var setEnv = []string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY", "GOCACHE", "GIT_OPTIONA
 // toolchains read parts of it.
 var homeSecrets = []string{
 	".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".docker/config.json", ".kube",
+	".git-credentials", ".config/gcloud", ".azure", ".npmrc", ".pypirc", ".cargo/credentials", ".terraform.d",
 	".claude", ".claude.json", ".codex",
 }
 
