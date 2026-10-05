@@ -153,6 +153,12 @@ func (b *actionBar) run() {
 			clear()
 			return
 		}
+		// A lone q or Enter is a keypress even inside a paste that never
+		// ended: the human can always leave.
+		if n == 1 && keys.paste && (buf[0] == 'q' || buf[0] == '\r' || buf[0] == '\n') {
+			clear()
+			return
+		}
 		got := keys.feed(buf[:n])
 		if keys.interrupted {
 			clear()
@@ -188,12 +194,17 @@ type keyParser struct {
 	state       int // 0 plain, 1 after ESC, 2 in CSI, 3 after SS3
 	params      []byte
 	paste       bool
-	interrupted bool // Ctrl-C or Ctrl-D outside a paste
+	interrupted bool // Ctrl-C or Ctrl-D, in any state
 }
 
 func (k *keyParser) feed(b []byte) []byte {
 	var keys []byte
 	for _, c := range b {
+		if c == 0x03 || c == 0x04 {
+			// Ctrl-C and Ctrl-D interrupt from any state.
+			k.interrupted = true
+			return keys
+		}
 		switch k.state {
 		case 1:
 			switch c {
@@ -223,8 +234,6 @@ func (k *keyParser) feed(b []byte) []byte {
 			case c == 0x1b:
 				k.state = 1
 			case k.paste:
-			case c == 0x03 || c == 0x04:
-				k.interrupted = true
 			default:
 				keys = append(keys, c)
 			}

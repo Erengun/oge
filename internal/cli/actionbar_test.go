@@ -121,3 +121,19 @@ func TestActionBarIgnoresEscapeSequencesAndPastes(t *testing.T) {
 		t.Errorf("a after an arrow key: %v", *did)
 	}
 }
+
+// Ctrl-C and Ctrl-D leave from any parser state, and a lone q or Enter
+// leaves even inside a paste that never ended.
+func TestActionBarLeavesFromAnyState(t *testing.T) {
+	for _, chunks := range [][]string{
+		{"\x1b", "\x03"}, {"\x1b[", "\x04"}, {"\x1bO", "\x03"}, {"\x1b[200~xx", "\x03"},
+		{"\x1b[200~xx", "q"}, {"\x1b[200~xx", "\r"}, {"\x1b[200~xx\x03"},
+	} {
+		b, _, did := barChunks(append(chunks, "a", "x"), false)
+		b.run()
+		left := b.in.(*chunkReader).chunks
+		if len(*did) != 0 || len(left) != 2 {
+			t.Errorf("%q: did %v, left unread %q", chunks, *did, left)
+		}
+	}
+}

@@ -73,8 +73,8 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 			if err != nil {
 				return nil, err
 			}
-			if linkLeaves(c.Path, string(target)) {
-				return nil, refuse("%s: a symlink to %s, outside the repository, which Öge doesn't deliver", c.Path, target)
+			if why := badLink(c.Path, string(target)); why != "" {
+				return nil, refuse("%s", why)
 			}
 		}
 	}
@@ -168,7 +168,7 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 		return nil, err
 	}
 	// Objects only: no ref, no FETCH_HEAD, no hooks.
-	if _, err := g.run("", "", "fetch", "-q", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", sc.root, "refs/heads/oge"); err != nil {
+	if _, err := g.run("", "", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "fetch", "-q", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", sc.root, "refs/heads/oge"); err != nil {
 		return nil, err
 	}
 	if err := record(r, map[string]any{"kind": "branch", "candidate": r.Candidate, "outcome": r.Outcome, "flag": flag,
@@ -272,8 +272,16 @@ func scratchRepo(g *userGit, dir string) (*userGit, error) {
 	if err := os.WriteFile(filepath.Join(dir, "info", "attributes"), []byte(attrs+"* -filter\n"), 0o600); err != nil {
 		return nil, err
 	}
-	for _, key := range []string{"core.autocrlf", "core.eol", "core.safecrlf", "core.checkRoundtripEncoding"} {
-		if v, err := g.run("", "", "config", "--get", key); err == nil {
+	// What else shapes the user's git add: their end-of-line settings,
+	// a repository-local attributes file (its filters still count only
+	// in the refusal check; "* -filter" above outranks it) and whether
+	// the exec bit is tracked.
+	for _, key := range []string{"core.autocrlf", "core.eol", "core.safecrlf", "core.checkRoundtripEncoding", "core.attributesFile", "core.fileMode"} {
+		get := []string{"config", "--get", key}
+		if key == "core.attributesFile" {
+			get = []string{"config", "--type=path", "--get", key} // ~ expanded
+		}
+		if v, err := g.run("", "", get...); err == nil {
 			if _, err := sc.run("", "", "config", key, strings.TrimSpace(v)); err != nil {
 				return nil, err
 			}

@@ -142,9 +142,11 @@ func PlanApply(r *Run, target string) (*Plan, error) {
 		if err != nil {
 			return nil, err
 		}
-		if theirs.mode == "120000" && linkLeaves(c.Path, string(theirs.data)) {
-			p.Conflicts = append(p.Conflicts, fmt.Sprintf("%s: a symlink to %s, outside the repository, which Öge doesn't deliver", c.Path, theirs.data))
-			continue
+		if theirs.mode == "120000" {
+			if why := badLink(c.Path, string(theirs.data)); why != "" {
+				p.Conflicts = append(p.Conflicts, why)
+				continue
+			}
 		}
 		ours, err := treeState(target, c.Path)
 		if err != nil {
@@ -387,9 +389,15 @@ func tempName(full string) string {
 // sweepTemps removes what a write killed before its rename (SIGKILL,
 // power loss) left beside full.
 func sweepTemps(full string) {
-	leftovers, _ := filepath.Glob(globEscape(tempPrefix(full)) + "*")
+	prefix := tempPrefix(full)
+	leftovers, _ := filepath.Glob(globEscape(prefix) + "*")
 	for _, l := range leftovers {
-		if fi, err := os.Lstat(l); err == nil && !fi.IsDir() {
+		// Only names of exactly Öge's shape: the prefix and 12 hex digits.
+		suffix := strings.TrimPrefix(l, prefix)
+		if _, err := hex.DecodeString(suffix); err != nil || len(suffix) != 12 || strings.ToLower(suffix) != suffix {
+			continue
+		}
+		if fi, err := os.Lstat(l); err == nil && fi.Mode().IsRegular() || err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			_ = os.Remove(l)
 		}
 	}
@@ -403,6 +411,30 @@ func globEscape(s string) string {
 	return r.Replace(s)
 }
 
+// badLink says why a Candidate symlink at rel to target is never
+// delivered: it leaves the repository, or points into git's own
+// directory. It is "" for a link Öge delivers.
+func badLink(rel, target string) string {
+	switch {
+	case linkLeaves(rel, target):
+		return fmt.Sprintf("%s: a symlink to %s, outside the repository, which Öge doesn't deliver", rel, target)
+	case linkIntoGit(rel, target):
+		return fmt.Sprintf("%s: a symlink to %s, into .git, which Öge doesn't deliver", rel, target)
+	}
+	return ""
+}
+
+// linkIntoGit reports whether the link's target resolves under a .git
+// directory, any case.
+func linkIntoGit(rel, target string) bool {
+	for _, part := range strings.Split(path.Clean(path.Join(path.Dir(rel), target)), "/") {
+		if strings.EqualFold(part, ".git") {
+			return true
+		}
+	}
+	return false
+}
+
 // linkLeaves reports whether a symlink at rel with target escapes the
 // tree: absolute, or climbing out through "..". The Snapshot never copies
 // such a link (ADR-0010), and delivery never writes one.
@@ -414,6 +446,8 @@ func linkLeaves(rel, target string) bool {
 	return p == ".." || strings.HasPrefix(p, "../")
 }
 
+func gitlink(c workspace.Change) bool { return c.NewMode == "160000" || c.OldMode == "160000" }
+
 // candidateChanges is what the Candidate changes since the Snapshot,
 // refusing what delivery can't carry.
 func candidateChanges(r *Run) ([]workspace.Change, error) {
@@ -422,7 +456,7 @@ func candidateChanges(r *Run) ([]workspace.Change, error) {
 		return nil, err
 	}
 	for _, c := range changes {
-		if c.NewMode == "160000" || c.OldMode == "160000" {
+		if gitlink(c) {
 			return nil, refuse("%s is a submodule (a nested repository) in Candidate %s, which Öge doesn't deliver", c.Path, Short(r.Candidate))
 		}
 	}

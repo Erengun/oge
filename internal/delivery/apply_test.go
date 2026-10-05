@@ -162,7 +162,9 @@ func TestApplyWritesSymlinksWithoutTouchingNeighbours(t *testing.T) {
 		os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
 	})
 	os.WriteFile(filepath.Join(user, "link.oge-tmp"), []byte("mine"), 0o644)
-	os.WriteFile(filepath.Join(user, ".a.txt.oge-123456"), []byte("left over"), 0o600)
+	os.WriteFile(filepath.Join(user, ".a.txt.oge-0123456789ab"), []byte("left over"), 0o600)
+	// A user file that only looks like one is never swept.
+	os.WriteFile(filepath.Join(user, ".a.txt.oge-notes"), []byte("mine"), 0o600)
 	p, err := PlanApply(r, user)
 	if err != nil || len(p.Conflicts) > 0 {
 		t.Fatal(err, p.Conflicts)
@@ -176,8 +178,11 @@ func TestApplyWritesSymlinksWithoutTouchingNeighbours(t *testing.T) {
 	if target, err := os.Readlink(filepath.Join(user, "link")); err != nil || target != "a.txt" {
 		t.Errorf("link -> %q %v", target, err)
 	}
-	if _, err := os.Lstat(filepath.Join(user, ".a.txt.oge-123456")); !os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(user, ".a.txt.oge-0123456789ab")); !os.IsNotExist(err) {
 		t.Errorf("the leftover temp file stayed: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(user, ".a.txt.oge-notes")); err != nil || string(b) != "mine" {
+		t.Errorf("a user file was swept: %q %v", b, err)
 	}
 }
 
@@ -203,7 +208,33 @@ func TestDeliveryRefusesAGitlink(t *testing.T) {
 	if _, err := PlanApply(r, user); !IsRefused(err) || !strings.Contains(err.Error(), "sub is a submodule") {
 		t.Errorf("PlanApply: %v", err)
 	}
-	if _, err := Diff(r); !IsRefused(err) || !strings.Contains(err.Error(), "sub is a submodule") {
-		t.Errorf("Diff: %v", err)
+	// oge diff still shows it, marked.
+	if d, err := Diff(r); err != nil || !strings.Contains(string(d), "+Subproject commit ") ||
+		!strings.Contains(string(d), "# Öge: sub is a submodule (gitlink); oge apply and oge branch refuse it") {
+		t.Errorf("Diff: %v\n%s", err, d)
+	}
+}
+
+// A Candidate symlink into .git is never delivered.
+func TestPlanApplyRefusesSymlinksIntoGit(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"d/a.txt": "a\n"}, func(ws string) {
+		os.Symlink(".git/config", filepath.Join(ws, "x"))
+		os.Symlink("../.GIT/hooks", filepath.Join(ws, "d", "y"))
+	})
+	p, err := PlanApply(r, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(p.Conflicts, "\n")
+	for _, want := range []string{"x: a symlink to .git/config, into .git", "d/y: a symlink to ../.GIT/hooks, into .git"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("conflicts lack %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestCleanDropsInvisibleCharacters(t *testing.T) {
+	if got := Clean([]byte("a\u200bb\u200cc\u200dd\u2028e\u2029f\ufeffg\u202eh\u2066i\n")); got != "abcdefghi\n" {
+		t.Errorf("Clean = %q", got)
 	}
 }

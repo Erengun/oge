@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 )
 
@@ -14,12 +15,22 @@ func Diff(r *Run) ([]byte, error) {
 		return nil, refuse("Run %s has no Candidate yet", r.ID)
 	}
 	repo := r.repo()
-	changes, err := candidateChanges(r)
+	changes, err := repo.Changes(r.Snapshot, r.Candidate)
 	if err != nil {
 		return nil, err
 	}
 	var out bytes.Buffer
 	for _, c := range changes {
+		if gitlink(c) {
+			// Shown, and marked: apply and branch refuse it.
+			fmt.Fprintf(&out, "# Öge: %s is a submodule (gitlink); oge apply and oge branch refuse it\n", c.Path)
+			patch, err := repo.PathDiff(r.Snapshot, r.Candidate, c.Path, true)
+			if err != nil {
+				return nil, err
+			}
+			out.Write(patch)
+			continue
+		}
 		text := true
 		for _, oid := range []string{c.OldOID, c.NewOID} {
 			if oid == "" {
@@ -51,7 +62,7 @@ func Clean(patch []byte) string {
 		if r == '\t' || r == '\n' {
 			return r
 		}
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || bidi(r) {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || bidi(r) || invisible(r) {
 			return -1
 		}
 		return r
@@ -62,4 +73,10 @@ func Clean(patch []byte) string {
 // overrides (U+202A–U+202E), isolates (U+2066–U+2069) and the marks.
 func bidi(r rune) bool {
 	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0x200e || r == 0x200f || r == 0x061c
+}
+
+// invisible reports the zero-width characters and line separators that
+// hide text or break lines unseen: U+200B–U+200D, U+2028, U+2029, U+FEFF.
+func invisible(r rune) bool {
+	return (r >= 0x200b && r <= 0x200d) || r == 0x2028 || r == 0x2029 || r == 0xfeff
 }

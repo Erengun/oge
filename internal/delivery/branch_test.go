@@ -132,3 +132,118 @@ func TestBranchRefusesWhenAUserCleanFilterApplies(t *testing.T) {
 		})
 	}
 }
+
+// commitUser commits the fixture's user repository, so the Snapshot's
+// HEAD is that commit.
+func commitUser(t *testing.T, user string, r *Run) {
+	t.Helper()
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "base"}} {
+		if out, err := userGitOut(t, user, args...); err != nil {
+			t.Fatal(err, out)
+		}
+	}
+	out, _ := userGitOut(t, user, "rev-parse", "HEAD")
+	r.Head = strings.TrimSpace(out)
+}
+
+// The user's filters count wherever they are set: info/attributes, and a
+// repository-local core.attributesFile.
+func TestBranchRefusesFiltersFromInfoAttributesAndAttributesFile(t *testing.T) {
+	for _, where := range []string{"info", "attributesFile"} {
+		t.Run(where, func(t *testing.T) {
+			user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+				os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
+			})
+			branchable(t, r)
+			userGitOut(t, user, "config", "filter.keep.clean", "cat")
+			if where == "info" {
+				os.MkdirAll(filepath.Join(user, ".git", "info"), 0o755)
+				os.WriteFile(filepath.Join(user, ".git", "info", "attributes"), []byte("*.txt filter=keep\n"), 0o644)
+			} else {
+				af := filepath.Join(t.TempDir(), "attrs")
+				os.WriteFile(af, []byte("*.txt filter=keep\n"), 0o644)
+				userGitOut(t, user, "config", "core.attributesFile", af)
+			}
+			if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "for a.txt without executing user-configured filters") {
+				t.Fatalf("Branch: %v", err)
+			}
+		})
+	}
+}
+
+// A repository-local core.attributesFile's eol rules normalise the
+// branch's blobs as the user's git add would.
+func TestBranchHonoursALocalAttributesFile(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\r\nB\r\n"), 0o644)
+	})
+	branchable(t, r)
+	af := filepath.Join(t.TempDir(), "attrs")
+	os.WriteFile(af, []byte("*.txt text\n"), 0o644)
+	userGitOut(t, user, "config", "core.attributesFile", af)
+	b, err := Branch(r, user, "taken", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := userGitOut(t, user, "cat-file", "blob", b.Commit+":a.txt"); out != "A\nB\n" {
+		t.Errorf("a.txt on the branch: %q", out)
+	}
+}
+
+// core.fileMode=false: an exec bit the Candidate flips isn't committed,
+// as the user's git add wouldn't commit it.
+func TestBranchHonoursFileModeFalse(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.sh": "a\n"}, func(ws string) {
+		os.WriteFile(filepath.Join(ws, "a.sh"), []byte("A\n"), 0o755)
+		os.Chmod(filepath.Join(ws, "a.sh"), 0o755)
+	})
+	branchable(t, r)
+	commitUser(t, user, r)
+	userGitOut(t, user, "config", "core.fileMode", "false")
+	b, err := Branch(r, user, "taken", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := userGitOut(t, user, "ls-tree", b.Commit, "a.sh"); !strings.HasPrefix(out, "100644 ") {
+		t.Errorf("a.sh on the branch: %q", out)
+	}
+}
+
+// Fetching the branch's objects only copies them: no auto maintenance
+// or gc runs in the user's repository.
+func TestBranchFetchRunsNoHousekeeping(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
+	})
+	branchable(t, r)
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "log")
+	os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := Branch(r, user, "taken", ""); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	var fetch string
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.Contains(l, " fetch ") {
+			fetch = l
+		}
+	}
+	if !strings.Contains(fetch, "maintenance.auto=false") || !strings.Contains(fetch, "gc.auto=0") {
+		t.Errorf("fetch: %q", fetch)
+	}
+}
+
+func TestBranchRefusesSymlinksIntoGit(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.Symlink(".git/config", filepath.Join(ws, "x"))
+	})
+	branchable(t, r)
+	if _, err := Branch(r, user, "taken", ""); !IsRefused(err) || !strings.Contains(err.Error(), "x: a symlink to .git/config, into .git") {
+		t.Errorf("Branch: %v", err)
+	}
+}
