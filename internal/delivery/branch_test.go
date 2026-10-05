@@ -149,7 +149,7 @@ func TestBranchRefusesWhenAUserCleanFilterApplies(t *testing.T) {
 // HEAD is that commit.
 func commitUser(t *testing.T, user string, r *Run) {
 	t.Helper()
-	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "base"}} {
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "base"}} {
 		if out, err := userGitOut(t, user, args...); err != nil {
 			t.Fatal(err, out)
 		}

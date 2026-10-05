@@ -108,7 +108,7 @@ func TestPlanApplyRefusesPathsThatFoldEqual(t *testing.T) {
 	// Built with plumbing: a case-insensitive filesystem can't make it.
 	gd := filepath.Join(r.Dir, "repo.git")
 	gitc := func(stdin string, args ...string) string {
-		cmd := exec.Command("git", append([]string{"--git-dir=" + gd}, args...)...)
+		cmd := exec.Command("git", append([]string{"--git-dir=" + gd, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
 		cmd.Stdin = strings.NewReader(stdin)
 		out, err := cmd.Output()
 		if err != nil {
