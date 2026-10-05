@@ -316,7 +316,6 @@ func ledgerText(t *testing.T, runDir string) string {
 	return string(b)
 }
 
-
 // A held-out file that doesn't compile is QA's defect: it is left out,
 // and the implementer never hears of it (#46 review H1).
 func TestStandardQAsUncompilableTestIsLeftOut(t *testing.T) {
