@@ -1,0 +1,27 @@
+exit: 0
+--- stdout
+Dry run: nothing was started.
+
+Task       fix it
+Criteria   none
+
+Mode       Fast: implementer, then Öge's Check. No independent verifier and no held-out tests
+Config     .oge/oge.toml from the Snapshot, schema 1
+Pipeline   default (frozen, compiled graph 483ddcae57aa)
+           implement ─▶ Check
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
+  implement  claude         network off   (installed)
+  Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)
+  tests      **/*_test.go  testdata/**
+  output     internal/**/*.go
+  setup      go mod download   network on
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · Stage 60m active, idle 10m
+
+! No acceptance criteria found in the Task.
+!   Send-back feedback can name no criteria. Add a "## Acceptance criteria" list to fix this.
+
+! Trust-weakening options in effect
+!   setup network = on       from .oge/oge.toml   (setup = "go mod download")
+
+Valid. A Run would start from here.
+--- stderr

@@ -1,0 +1,22 @@
+schema = 1
+
+[project]
+test_globs = ["**/*_test.go"]
+
+[[check.commands]]
+run    = "go test -json ./..."
+report = "go-test-json"
+
+[pipelines.default]
+verify = "before"
+gates  = { result = false }
+
+[pipelines.default.limits]
+retries      = 1
+stage_timeout = "30m"
+
+[pipelines.default.stages.implement]
+role  = "implementer"
+agent = "claude"
+model = "opus"
+network = "on"

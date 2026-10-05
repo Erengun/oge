@@ -3,11 +3,11 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"io"
 	"os"
 	"runtime/debug"
+
+	"github.com/erengun/oge/internal/cli"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=...".
@@ -18,21 +18,9 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("oge", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	showVersion := fs.Bool("version", false, "print the version and exit")
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		return 2
-	}
-	if *showVersion {
-		fmt.Fprintf(stdout, "oge %s\n", resolvedVersion())
-		return 0
-	}
-	fmt.Fprintln(stderr, "oge: nothing to do yet; only --version is implemented")
-	return 2
+	env := cli.ProcessEnv(resolvedVersion())
+	env.Stdout, env.Stderr = stdout, stderr
+	return cli.Main(env, args)
 }
 
 func resolvedVersion() string {

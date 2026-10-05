@@ -1,0 +1,28 @@
+exit: 0
+--- stdout
+Dry run: nothing was started.
+
+Task       add a --json flag
+Criteria   none
+
+Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check
+Config     .oge/oge.toml from the Snapshot, schema 1
+Pipeline   default (frozen, compiled graph bdd50e039d65)
+           verify (before) ─▶ implement ─▶ Check ─▶ [Result gate]
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
+  verify     claude:opus    network off   fresh Session every Attempt   (inherits implement)
+  implement  claude:opus    network on   (project)
+  Check      go test -json ./...   go-test-json · timeout 10m · network off   (project)
+  tests      **/*_test.go
+  output     docs/**
+  limits     retries 1/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 30m active, idle 10m
+
+! No acceptance criteria found in the Task.
+!   Held-out tests will be reported as unmapped, and send-back feedback can name no criteria.
+!   Add a "## Acceptance criteria" list to fix this.
+
+! Trust-weakening options in effect
+!   implement network = on   from .oge/oge.toml
+
+Valid. A Run would start from here.
+--- stderr

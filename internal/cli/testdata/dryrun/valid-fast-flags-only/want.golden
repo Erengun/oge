@@ -1,0 +1,23 @@
+exit: 0
+--- stdout
+Dry run: nothing was started.
+
+Task       fix the flaky test
+Criteria   none
+
+Mode       Fast: implementer, then Öge's Check. No independent verifier and no held-out tests
+Config     none in the Snapshot; CLI flags only
+Pipeline   default (frozen, compiled graph 483ddcae57aa)
+           implement ─▶ Check
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
+  implement  claude         network off   (installed)
+  Check      make test   no report · timeout 10m · network off   (cli)
+  tests      tests/**
+  output     none: every new file is Ambiguous until you decide
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · Stage 60m active, idle 10m
+
+! No acceptance criteria found in the Task.
+!   Send-back feedback can name no criteria. Add a "## Acceptance criteria" list to fix this.
+
+Valid. A Run would start from here.
+--- stderr

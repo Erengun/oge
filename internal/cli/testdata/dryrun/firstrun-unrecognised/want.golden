@@ -1,0 +1,16 @@
+exit: 2
+--- stdout
+--- stderr
+oge: no .oge/oge.toml, and Öge doesn't recognise this project's toolchain (only Go so far).
+  Write .oge/oge.toml with at least:
+
+    schema = 1
+
+    [project]
+    test_globs = ["<glob matching your test files>"]
+
+    [[check.commands]]
+    run    = "<command that runs your tests>"
+    report = "junit"   # or "go-test-json"
+
+  or pass --check <command> and --tests <glob> for this Run.

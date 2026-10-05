@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: no Task. Give it as an argument (oge "fix the login bug"), with --task-file <path>, or --task-file - for stdin.

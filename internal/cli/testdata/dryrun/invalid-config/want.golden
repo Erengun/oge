@@ -1,0 +1,19 @@
+exit: 2
+--- stdout
+--- stderr
+oge: .oge/oge.toml isn't valid
+  check.commands[0].run: looks like a credential or credential-store setting; Öge never takes credentials in config (ADR-0006). To expose a variable to Checks, put its name (never its value) in project.pass_env
+  project.pass_env[0]: looks like a credential or credential-store setting; Öge never takes credentials in config (ADR-0006). To expose a variable to Checks, put its name (never its value) in project.pass_env
+  colour: unknown key
+  pipelines.default.gates.tamper: the tamper Gate is mandatory and can't be configured or removed (ADR-0008)
+  pipelines.default.gates.review: unknown Gate; only the Result gate can be configured (gates.result)
+  pipelines.default.stages.implement.api_key: looks like a credential or credential-store setting; Öge never takes credentials in config (ADR-0006). To expose a variable to Checks, put its name (never its value) in project.pass_env
+  pipelines.default.stages.verify.session_reuse: a verifier always gets a fresh Session without user-global instructions; it must not inherit the implementer's context (ADR-0013)
+  pipelines.default.stages.review: the Stage list is fixed: implement and verify; custom Stages aren't supported
+  pipelines.other: only the built-in default Pipeline exists
+  project.pass_env[0]: must be a variable name, never a value (ADR-0006)
+  check.commands[0].timeout: not a positive duration such as "10m" or "90s"
+  pipelines.default.verify: must be "after" or "before"
+  pipelines.default.stages.implement.role: unknown Role kind; Stage implement has the fixed Role kind implementer
+  pipelines.default.stages.verify.role: Stage verify has the fixed Role kind verifier
+  pipelines.default.stages.verify.network: a verifier never gets network; judged roles are always off (ADR-0013)

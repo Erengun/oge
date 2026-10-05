@@ -1,0 +1,5 @@
+[project]
+test_globs = ["x"]
+[[check.commands]]
+run = "go test -json ./..."
+report = "go-test-json"

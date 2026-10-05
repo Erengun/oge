@@ -1,0 +1,6 @@
+exit: 2
+--- stdout
+--- stderr
+oge: no .oge/oge.toml in this repository, and no terminal to review a proposed one.
+  Run oge in a terminal to review and save a proposal, write .oge/oge.toml yourself,
+  or pass --check <command> and --tests <glob> for this Run.

@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  --agent: no agent bound and none installed; install one of claude, codex, or bind with --agent

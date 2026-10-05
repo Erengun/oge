@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: not inside a git repository; Öge runs on a Snapshot of one

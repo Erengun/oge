@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: status isn't implemented yet
