@@ -241,14 +241,13 @@ func (w *walk) open(ctx context.Context, r gate.Request) (gate.Decision, error) 
 	return d, nil
 }
 
-// sendBackTurn is the implementer's turn after a send-back: the Task, then
+// sendBackTurn is what a send-back adds to the implementer's Briefing:
 // why the Candidate came back.
 // TODO(#44): Öge's Briefing builder takes this over. In Fast mode the
 // whole Oracle is visible, so its failure output may reach the
 // implementer; held-out output never may.
-func sendBackTurn(task string, cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision) string {
+func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision) string {
 	var b strings.Builder
-	b.WriteString(task)
 	b.WriteString("\n\n---\nÖge sent your Candidate back.")
 	if d != nil {
 		text := d.Reason + d.Note

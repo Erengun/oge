@@ -61,3 +61,12 @@ func Group(cmd *exec.Cmd) int {
 	}
 	return group(cmd)
 }
+
+// Terminate sends SIGTERM to cmd's process group, so its processes can end
+// cleanly before a Kill; where groups aren't supported it kills the
+// process.
+func Terminate(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		termGroup(cmd)
+	}
+}

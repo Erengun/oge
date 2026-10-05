@@ -121,6 +121,8 @@ It never shows hundreds of lines of agent thought by default. See [ADR-0022](adr
 
 ## Naming
 
+- **QA** is the user-facing label for verification, review and repair activity (`● QA · Fresh Claude · reviewing`). **Verifier** stays the internal, trust-bearing Role kind in ADRs, the glossary and Evidence. The QA concept may grow later (runtime checks, browser testing, several checks) while the roles underneath stay precise. QA must never claim more than the Verifier and Checks actually did.
+
 - **Receipt** is the user-facing end-of-run artifact (`oge receipt`, `--md`, `--json`).
 - **Verdict** keeps its internal meaning: one Check's pass/fail. Never "Öge Verdict" for the artifact.
 - The Receipt's claim-versus-evidence block is headed **"Öge found"**. "Caught by Öge" is not product language because it implies intent. It's fine if users adopt it themselves.

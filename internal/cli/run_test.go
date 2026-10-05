@@ -172,7 +172,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
-	run.RecAttemptStarting, run.RecProcessStarted, run.RecAttemptEnded,
+	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
 	run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
@@ -313,7 +313,7 @@ func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
 	}
 	f.assertUntouched(t)
 	want := append(append([]string{}, wantOrder[:len(wantOrder)-1]...),
-		run.RecAttemptStarting, run.RecProcessStarted, run.RecAttemptEnded,
+		run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
 		run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecGateOpened, run.RecRunParked)
 	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(want, ",") {
 		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(want, ","))
@@ -507,5 +507,18 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The implementer's Workspace is a git checkout of the Snapshot: git
+// status starts clean there, and the .git never reaches the Candidate.
+func TestRunWorkspaceHasAGitCheckoutOfTheSnapshot(t *testing.T) {
+	f := newRunFixture(t)
+	script := `test -d .git && test -z "$(git status --porcelain)" || exit 7
+` + fixScript + `git diff --name-only | grep -qx add.go || exit 8
+`
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(out, "· 1 file changed") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
