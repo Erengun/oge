@@ -26,9 +26,9 @@ var testAttempt = &Attempt{ID: "implement#1", Candidate: "6d1231d9f00d"}
 // Edges the graph holds but the walk can't take yet stop the Run as an
 // Infrastructure stop with no Attempt, never an internal error.
 func TestUnbuiltPathsStopTheRun(t *testing.T) {
-	// A Gate with no wording yet (e.g. Ambiguous-file, #48).
+	// A Gate with no wording yet (e.g. infeasible, #50).
 	w := testWalk(t, pipeline.Compile(pipeline.Fast, false), &gate.Scripted{})
-	s, err := w.follow(context.Background(), pipeline.Edge{From: "check", To: "gate.ambiguous_file"}, testAttempt, 0, &oracle.Result{Pass: true}, nil)
+	s, err := w.follow(context.Background(), pipeline.Edge{From: "implement", To: "gate.infeasible"}, testAttempt, 0, &oracle.Result{Pass: true}, nil)
 	if err != nil || s.stop != InfrastructureStop || !strings.Contains(strings.Join(s.why, " "), "isn't built yet") {
 		t.Errorf("unwritten Gate: %+v %v", s, err)
 	}

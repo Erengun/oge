@@ -84,10 +84,9 @@ type qaStage struct {
 func (q *qaStage) review(ctx context.Context, w *walk, res *Result, cand *Attempt) (step, error) {
 	q.n++
 	f := q.p.Frozen
-	promotedNew := func(p string) bool {
-		return oracle.MatchAny(f.Project.OutputGlobs, p) || oracle.MatchAny(f.Project.TestGlobs, p)
-	}
-	view, withheld, err := q.repo.PromotedView(q.snap, cand.Candidate, promotedNew)
+	// The output and test globs, and the files a human promoted: one the
+	// last verifier never saw is in this one's view (ADR-0013).
+	view, withheld, err := q.repo.PromotedView(q.snap, cand.Candidate, w.promotedNew)
 	if err != nil {
 		return step{}, err
 	}

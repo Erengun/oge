@@ -1,0 +1,27 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
+
+✓ preflight  ok · 0.4s
+✓ implement  claude · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+✓ QA         Fresh Claude · Exit extended · +1 held-out · 2.9s
+✓ check      go test -json ./... · 1 ran · 0 failed · pass · 1.2s
+
+  Ambiguous-file Gate
+  3 new files were not covered by the declared output/test globs:
+    1  docs/debug.md
+    2  internal/foo/helper.go
+    3  tmp/result.json
+  Candidate 6d1231d · Attempt implement#1 · Oracle v1 · Verdicts #1
+
+ATTENTION NEEDED: 3 new files need a decision
+    p  promote    promote the selected files, or all: they join the Candidate, …
+    d  drop       drop the selected files, or all: they leave the Candidate, th…
+    i  inspect    show a file's content: i <number>; this decides nothing
+    reject        end the Run Rejected (type the word and a reason)
+    q  quit       end the Run Cancelled
+    p or d alone covers every file; p 1 3 or d 2 covers only those.
+
+  > ▏
+  There is no default: type a choice and press Enter
+
+ctrl+c to cancel

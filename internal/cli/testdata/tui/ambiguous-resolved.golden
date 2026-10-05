@@ -1,0 +1,15 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
+
+✓ preflight  ok · 0.4s
+✓ implement  claude · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+✓ QA         Fresh Claude · Exit extended · +1 held-out · 2.9s
+✓ check      go test -json ./... · 1 ran · 0 failed · pass · 1.2s
+• decision   promote · recorded at the Ambiguous-file Gate · internal/foo/helpe…
+• decision   drop · recorded at the Ambiguous-file Gate · docs/debug.md, tmp/re…
+• resolved   1 promoted · 2 dropped · Candidate 9f00d6d · QA reviews the promot…
+⠸ QA         Fresh Claude · reviewing · 0.0s
+· check      go test -json ./...
+
+Nothing needs you.
+ctrl+c to cancel

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,7 @@ func TestTUIBoundExhaustionGate(t *testing.T) {
 	h.typeLine("the test can't pass as written")
 	select {
 	case d := <-reply:
-		if d != (gate.Decision{Choice: "reject", Reason: "the test can't pass as written"}) {
+		if !reflect.DeepEqual(d, gate.Decision{Choice: "reject", Reason: "the test can't pass as written"}) {
 			t.Fatalf("decided %+v", d)
 		}
 	default:

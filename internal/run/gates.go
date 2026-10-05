@@ -85,6 +85,15 @@ func gateSpecs(l pipeline.Limits) map[string]gateSpec {
 			},
 			extends: map[string]string{"send back": "send_backs"},
 		},
+		// What and need are worded for its files (ambiguousRequest).
+		gateAmbiguous: {
+			says: map[string]string{
+				"promote": "selected/all join the Candidate: fresh QA, then the final Check",
+				"drop":    "selected/all leave the Candidate, then the final Check",
+				"reject":  "end the Run Rejected (type the word and a reason)",
+				"quit":    "end the Run Cancelled",
+			},
+		},
 	}
 }
 
@@ -99,6 +108,13 @@ type walk struct {
 	tamper    []tamperEvent // Tamper events so far
 	acked     int           // how many of them are acknowledged
 	check     int           // the latest Check: the Verdict a Gate shows
+
+	// The Ambiguous-file review's state (ambiguous.go).
+	repo      *workspace.RunRepo
+	snap      string
+	promoted  map[string]bool      // new files a human promoted this Run
+	ambiguous []workspace.Withheld // the latest Candidate's Ambiguous files
+	resolved  []Resolution         // every promote and drop so far
 }
 
 // tamperEvent is one Tamper event as a Gate shows it.
@@ -147,6 +163,13 @@ func (w *walk) request(node string, a *Attempt, oracleVersion int, cr *oracle.Re
 		Name: gateName(w.g, node), What: spec.what, Need: spec.need, Check: cr,
 		Pins: gate.Pins{Gate: node, Attempt: a.ID, Candidate: a.Candidate, Oracle: oracleVersion, Verdicts: []int{w.check}},
 	}
+	if node == gateAmbiguous {
+		w.ambiguousRequest(&r, a.Candidate)
+		if e, _ := w.g.Choice(node, "promote"); e.To == "check" {
+			// No verifier: a promoted file goes straight to the final Check.
+			spec.says["promote"] = "selected/all join the Candidate, then the final Check"
+		}
+	}
 	if node == "gate.tamper" {
 		for _, t := range w.unacknowledged() {
 			r.Detail = append(r.Detail, fmt.Sprintf("reverted: %s (%s)", t.path, t.change))
@@ -189,6 +212,9 @@ type step struct {
 	decision *gate.Decision
 	stop     Outcome // set when the Run stops here
 	why      []string
+	// candidate is the Candidate an Ambiguous-file review left: the walk
+	// goes on from it.
+	candidate string
 }
 
 // follow takes e through every Gate it reaches until it comes to the end
@@ -207,6 +233,11 @@ func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVe
 			e = next
 			continue
 		}
+		if e.To == gateAmbiguous {
+			// The review returns the promote or drop edge to the walk,
+			// which goes on from the resolved Candidate.
+			return w.review(ctx, a, oracleVersion, cr)
+		}
 		r, err := w.request(e.To, a, oracleVersion, cr)
 		var nb errNotBuilt
 		if errors.As(err, &nb) {
@@ -218,21 +249,12 @@ func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVe
 			return s, err
 		}
 		s.gate = e.To
-		d, err := w.open(ctx, r)
-		switch {
-		case errors.Is(err, errParked):
-			return step{gate: e.To, stop: Parked, why: []string{r.What}}, nil
-		case ctx.Err() != nil, errors.Is(err, gate.ErrNoDecision):
-			why := interrupted
-			if ctx.Err() == nil {
-				why = fmt.Sprintf("the %s Gate got no decision: the terminal closed", r.Name)
-			}
-			if err := w.l.Append(RecGateAbandoned, map[string]any{"pins": r.Pins, "why": why}); err != nil {
-				return s, err
-			}
-			return step{gate: e.To, stop: InfrastructureStop, why: []string{why}}, nil
-		case err != nil:
+		d, stop, err := w.decide(ctx, e.To, r)
+		if err != nil {
 			return s, err
+		}
+		if stop != nil {
+			return *stop, nil
 		}
 		s.decision = &d
 		next, ok := w.g.Choice(e.To, d.Choice)
@@ -243,6 +265,30 @@ func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVe
 	}
 	s.edge = e
 	return s, nil
+}
+
+// decide opens r at node and waits for its decision. With nobody to
+// decide, it returns the step the Run stops at: parked, or abandoned.
+func (w *walk) decide(ctx context.Context, node string, r gate.Request) (gate.Decision, *step, error) {
+	d, err := w.open(ctx, r)
+	switch {
+	case errors.Is(err, errParked):
+		why := r.What
+		if len(r.Files) > 0 {
+			why = r.Need + ": " + strings.Join(r.Files, ", ")
+		}
+		return d, &step{gate: node, stop: Parked, why: []string{why}}, nil
+	case ctx.Err() != nil, errors.Is(err, gate.ErrNoDecision):
+		why := interrupted
+		if ctx.Err() == nil {
+			why = fmt.Sprintf("the %s Gate got no decision: the terminal closed", r.Name)
+		}
+		if err := w.l.Append(RecGateAbandoned, map[string]any{"pins": r.Pins, "why": why}); err != nil {
+			return d, nil, err
+		}
+		return d, &step{gate: node, stop: InfrastructureStop, why: []string{why}}, nil
+	}
+	return d, nil, err
 }
 
 func gateName(g pipeline.Graph, node string) string {
@@ -275,9 +321,15 @@ func (w *walk) open(ctx context.Context, r gate.Request) (gate.Decision, error) 
 	if err != nil {
 		return d, err
 	}
+	if err := checkSelection(r, d); err != nil {
+		return gate.Decision{}, err
+	}
 	// Pinned and durable before it takes effect; the actor is a kind,
 	// never an identity (ADR-0006).
 	rec := map[string]any{"pins": r.Pins, "actor": "human", "choice": d.Choice, "reason": d.Reason, "note": d.Note}
+	if len(d.Files) > 0 {
+		rec["files"] = d.Files
+	}
 	if d.Choice == "acknowledge" {
 		// Written before it takes effect: only then do the events count
 		// as acknowledged.

@@ -37,6 +37,10 @@ type Choice struct {
 	// Extends names the limit this choice extends by one at this Gate;
 	// an extension is typed in full with a reason (ADR-0008).
 	Extends string
+	// Selects marks a batch choice over the Gate's Files: alone it covers
+	// every file, and its key or word may be followed by a selection
+	// ("p 1 3").
+	Selects bool
 	Says    string // what it does, for the screen
 }
 
@@ -46,8 +50,8 @@ var Choices = map[string]Choice{
 	"take":       {Word: "take", Key: "t"},
 	"send back":  {Word: "send back", Key: "s", Note: true},
 	"quit":       {Word: "quit", Key: "q"},
-	"promote":    {Word: "promote", Key: "p"},
-	"drop":       {Word: "drop", Key: "d"},
+	"promote":    {Word: "promote", Key: "p", Selects: true},
+	"drop":       {Word: "drop", Key: "d", Selects: true},
 	"reject":     {Word: "reject", Reason: true},
 	"override":   {Word: "override", Reason: true},
 	"infeasible": {Word: "infeasible", Reason: true},
@@ -64,6 +68,8 @@ type Pins struct {
 	Oracle    int      `json:"oracle_version"`
 	Verdicts  []int    `json:"verdicts"` // the Checks whose Verdicts were shown
 	Tamper    []string `json:"tamper,omitempty"`
+	// Files are the files a batch Gate showed, still to be decided.
+	Files []string `json:"files,omitempty"`
 }
 
 // Request is an open Gate.
@@ -75,6 +81,12 @@ type Request struct {
 	Check   *oracle.Result
 	Pins    Pins
 	Choices []Choice
+	// Files are what a batch Gate decides on, numbered from 1 on screen:
+	// the Ambiguous files still unresolved.
+	Files []string
+	// Inspect, when set, returns a file's content for an inspect view.
+	// Inspecting decides nothing.
+	Inspect func(path string) ([]byte, error)
 }
 
 // Decision is what the human chose.
@@ -82,6 +94,8 @@ type Decision struct {
 	Choice string `json:"choice"`
 	Reason string `json:"reason,omitempty"`
 	Note   string `json:"note,omitempty"`
+	// Files are the files a batch choice covers.
+	Files []string `json:"files,omitempty"`
 	// Extends is the limit the decision extended, once recorded.
 	Extends string `json:"-"`
 }
@@ -97,6 +111,9 @@ func (r Request) Match(line string) (c Choice, rest string, ok bool) {
 	for _, c := range r.Choices {
 		if c.Key != "" && line == c.Key {
 			return c, "", true
+		}
+		if after, found := strings.CutPrefix(line, c.Key+" "); found && c.Selects {
+			return c, strings.TrimSpace(after), true
 		}
 		if line == c.Word {
 			return c, "", true
@@ -124,6 +141,80 @@ func (c Choice) Decide(text string) (Decision, error) {
 	return d, nil
 }
 
+// Select resolves a batch choice's selection against the Gate's Files:
+// file numbers or paths separated by spaces or commas, and nothing for
+// every file. It refuses anything that names no file shown.
+func (r Request) Select(text string) ([]string, error) {
+	fields := strings.FieldsFunc(text, func(c rune) bool { return c == ' ' || c == ',' || c == '\t' })
+	if len(fields) == 0 {
+		return append([]string(nil), r.Files...), nil
+	}
+	picked := map[string]bool{}
+	for _, f := range fields {
+		p, ok := r.file(f)
+		if !ok {
+			return nil, fmt.Errorf("%q isn't one of the files shown", f)
+		}
+		picked[p] = true
+	}
+	var out []string
+	for _, p := range r.Files {
+		if picked[p] {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// file is the file a number from 1 or a path names.
+func (r Request) file(s string) (string, bool) {
+	var n int
+	if _, err := fmt.Sscanf(s, "%d", &n); err == nil && fmt.Sprint(n) == s {
+		if n >= 1 && n <= len(r.Files) {
+			return r.Files[n-1], true
+		}
+		return "", false
+	}
+	for _, p := range r.Files {
+		if p == s {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// InspectTarget is the file an inspect line ("i 2", "inspect docs/a.md")
+// names. ok is false for a line that isn't an inspect; err says why one
+// names no file shown.
+func (r Request) InspectTarget(line string) (path string, ok bool, err error) {
+	if r.Inspect == nil {
+		return "", false, nil
+	}
+	line = strings.TrimSpace(line)
+	var rest string
+	switch {
+	case line == "i" || line == "inspect":
+	case strings.HasPrefix(line, "i "):
+		rest = line[2:]
+	case strings.HasPrefix(line, "inspect "):
+		rest = line[len("inspect "):]
+	default:
+		return "", false, nil
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		if len(r.Files) == 1 {
+			return r.Files[0], true, nil
+		}
+		return "", true, fmt.Errorf("name the file to inspect: i 1 to i %d", len(r.Files))
+	}
+	p, found := r.file(rest)
+	if !found {
+		return "", true, fmt.Errorf("%q isn't one of the files shown", rest)
+	}
+	return p, true, nil
+}
+
 // Scripted is the Gate port for tests and scripts: it answers each Gate
 // with the next decision, and refuses one the Gate doesn't offer.
 type Scripted struct {
@@ -142,6 +233,9 @@ func (s *Scripted) Decide(_ context.Context, r Request) (Decision, error) {
 		if c.Word == d.Choice {
 			if c.Reason && strings.TrimSpace(d.Reason) == "" {
 				return Decision{}, fmt.Errorf("%s needs a reason", c.Word)
+			}
+			if c.Selects && len(d.Files) == 0 {
+				return Decision{}, fmt.Errorf("%s names no files", c.Word)
 			}
 			return d, nil
 		}

@@ -9,7 +9,6 @@ import (
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
-	"github.com/erengun/oge/internal/workspace"
 )
 
 // QA is the user-facing label for the verifier Stage (docs/positioning.md):
@@ -148,16 +147,8 @@ func notCovered(f *pipeline.Frozen, res *run.Result) string {
 		if q.UnmappedTotal > 0 {
 			parts = append(parts, pluralOf(q.UnmappedTotal, "held-out test names", "held-out tests name")+" no acceptance criterion")
 		}
-		ambiguous := 0
-		for _, w := range q.Withheld {
-			if w.Class == workspace.ClassAmbiguous {
-				ambiguous++
-			}
-		}
-		// TODO(#48): the Ambiguous-file gate resolves these before Accepted.
-		if ambiguous > 0 {
-			parts = append(parts, pluralOf(ambiguous, "new file", "new files")+" QA never saw (no output glob matches)")
-		}
+		// Ambiguous files never reach here unresolved: the Ambiguous-file
+		// review promotes or drops each one before Accepted (#97).
 	}
 	return strings.Join(append(parts, unconfined), " · ")
 }
