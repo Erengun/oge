@@ -2,7 +2,7 @@
 
 **Öge makes delegation actually feel like delegation.**
 
-AI made coding fast, and supervision became the bottleneck. Give Öge the task: it runs your coding agent, checks the result itself, and interrupts you only for decisions that actually need you.
+Öge is the supervision layer for coding agents. AI made coding fast, and supervision became the bottleneck. Give Öge the task: it runs your coding agent, checks the result itself, and interrupts you only for decisions that actually need you.
 
 > **Status: pre-alpha.** Nothing works yet except `oge --version`. Follow [milestone M1](https://github.com/Erengun/oge/milestone/1) for the first usable version.
 
