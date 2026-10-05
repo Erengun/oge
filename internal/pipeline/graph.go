@@ -138,9 +138,8 @@ func Compile(mode Mode, resultGate bool) Graph {
 
 	// Gate choices: closed sets of existing terms (ADR-0008). Every Gate
 	// can end the Run Rejected or Cancelled.
-	// TODO(#49 and the Oracle-growth ticket): the tamper acknowledgement
-	// and the Oracle-growth choices (admit, remove <test>, freeze) arrive
-	// with their Gates.
+	// TODO(#49): dismiss and the end-of-run batching. TODO(the
+	// Oracle-growth ticket): admit, remove <test>, freeze.
 	choice := func(gate, word, to, bound string) { edge(gate, to, ChoicePrefix+word, bound) }
 	afterPromote := "check"
 	if hasVerifier {
@@ -164,6 +163,10 @@ func Compile(mode Mode, resultGate bool) Graph {
 		case "gate.ambiguous_file":
 			choice(n.ID, "promote", afterPromote, "")
 			choice(n.ID, "drop", "check", "")
+		case "gate.tamper":
+			// Acknowledged, the same Verdict routes again from the check
+			// node: Accepted needs its normal edge (ADR-0019 #2).
+			choice(n.ID, "acknowledge", "check", "")
 		case "gate.infeasible":
 			end(n.ID, ChoicePrefix+"infeasible", "Infeasible")
 			choice(n.ID, "send back", "implement", "send_backs")

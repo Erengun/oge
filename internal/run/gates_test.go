@@ -28,7 +28,7 @@ var testAttempt = &Attempt{ID: "implement#1", Candidate: "6d1231d9f00d"}
 func TestUnbuiltPathsStopTheRun(t *testing.T) {
 	// A Gate with no wording yet (e.g. Ambiguous-file, #48).
 	w := testWalk(t, pipeline.Compile(pipeline.Fast, false), &gate.Scripted{})
-	s, err := w.follow(context.Background(), pipeline.Edge{From: "check", To: "gate.ambiguous_file"}, testAttempt, 0, &oracle.Result{Pass: true})
+	s, err := w.follow(context.Background(), pipeline.Edge{From: "check", To: "gate.ambiguous_file"}, testAttempt, 0, &oracle.Result{Pass: true}, nil)
 	if err != nil || s.stop != InfrastructureStop || !strings.Contains(strings.Join(s.why, " "), "isn't built yet") {
 		t.Errorf("unwritten Gate: %+v %v", s, err)
 	}
@@ -40,14 +40,13 @@ func TestUnbuiltPathsStopTheRun(t *testing.T) {
 		Edges: []pipeline.Edge{{From: "gate.result", To: "check", On: pipeline.ChoicePrefix + "take"}},
 	}
 	w = testWalk(t, g, &gate.Scripted{Decisions: []gate.Decision{{Choice: "take"}}})
-	s, err = w.follow(context.Background(), pipeline.Edge{From: "check", To: "gate.result"}, testAttempt, 0, &oracle.Result{Pass: true})
+	s, err = w.follow(context.Background(), pipeline.Edge{From: "check", To: "gate.result"}, testAttempt, 0, &oracle.Result{Pass: true}, nil)
 	if err != nil || s.stop != InfrastructureStop || !strings.Contains(strings.Join(s.why, " "), "isn't built yet") {
 		t.Errorf("unbuilt edge: %+v %v", s, err)
 	}
 }
 
-// The Tamper Gate offers no way to Accepted until #49's acknowledgement,
-// and its attention line says what happened (ADR-0022).
+// The Tamper Gate's acknowledge is typed in full with a reason, and its attention line says what happened (ADR-0022).
 func TestTamperGate(t *testing.T) {
 	w := testWalk(t, pipeline.Compile(pipeline.Fast, false), nil)
 	r, err := w.request("gate.tamper", testAttempt, 0, &oracle.Result{Pass: true})
@@ -57,8 +56,11 @@ func TestTamperGate(t *testing.T) {
 	var words []string
 	for _, c := range r.Choices {
 		words = append(words, c.Word)
+		if c.Word == "acknowledge" && (c.Key != "" || !c.Reason) {
+			t.Errorf("acknowledge: %+v", c)
+		}
 	}
-	if got := strings.Join(words, ","); got != "reject,quit" {
+	if got := strings.Join(words, ","); got != "acknowledge,reject,quit" {
 		t.Errorf("choices %s", got)
 	}
 	if got := gate.Attention(&r); got != "ATTENTION NEEDED: a protected file change was reverted" {

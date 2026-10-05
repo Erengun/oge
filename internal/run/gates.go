@@ -63,11 +63,12 @@ func gateSpecs(l pipeline.Limits) map[string]gateSpec {
 			what: "Öge's Check passed, but an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged before the Run can be Accepted.",
 			need: "a protected file change was reverted",
 			says: map[string]string{
-				"reject": "end the Run Rejected (type the word and a reason)",
-				"quit":   "end the Run Cancelled",
+				"acknowledge": "accept that the change was reverted; the passing Check then decides (type the word and a reason)",
+				"reject":      "end the Run Rejected (type the word and a reason)",
+				"quit":        "end the Run Cancelled",
 			},
-			// TODO(#49): the acknowledgement choices, and the Tamper events'
-			// ids in the pins.
+			// TODO(#49): dismiss, inspect views and batching with the
+			// Ambiguous-file review.
 		},
 		"gate.bound_exhaustion": {
 			what: fmt.Sprintf("The Check failed and the send-back limit (%d) is used up.", l.SendBacks),
@@ -89,10 +90,28 @@ type walk struct {
 	g         pipeline.Graph
 	limits    pipeline.Limits
 	sendBacks int
-	attempts  int // implementer Attempts so far
-	tamper    int // Tamper events so far, none acknowledged yet
-	check     int // the latest Check: the Verdict a Gate shows
+	attempts  int           // implementer Attempts so far
+	tamper    []tamperEvent // Tamper events so far
+	acked     int           // how many of them are acknowledged
+	check     int           // the latest Check: the Verdict a Gate shows
 }
+
+// tamperEvent is one Tamper event as a Gate shows it.
+type tamperEvent struct{ id, path, change string }
+
+// addTamper keeps a's Tamper events, with the ids recordTamper gave them.
+func (w *walk) addTamper(a *Attempt) {
+	n := 0
+	for _, r := range a.Reverted {
+		if r.Tamper {
+			n++
+			w.tamper = append(w.tamper, tamperEvent{fmt.Sprintf("%s/tamper-%d", a.ID, n), r.Path, r.Change})
+		}
+	}
+}
+
+// unacknowledged are the Tamper events no decision has acknowledged.
+func (w *walk) unacknowledged() []tamperEvent { return w.tamper[w.acked:] }
 
 // capped reports whether the Run's Attempt cap is reached. The cap is
 // hard: nothing extends it yet.
@@ -122,6 +141,12 @@ func (w *walk) request(node string, a *Attempt, oracleVersion int, cr *oracle.Re
 	r := gate.Request{
 		Name: gateName(w.g, node), What: spec.what, Need: spec.need, Check: cr,
 		Pins: gate.Pins{Gate: node, Attempt: a.ID, Candidate: a.Candidate, Oracle: oracleVersion, Verdicts: []int{w.check}},
+	}
+	if node == "gate.tamper" {
+		for _, t := range w.unacknowledged() {
+			r.Detail = append(r.Detail, fmt.Sprintf("reverted: %s (%s)", t.path, t.change))
+			r.Pins.Tamper = append(r.Pins.Tamper, t.id)
+		}
 	}
 	for _, word := range w.g.Choices(node) {
 		e, _ := w.g.Choice(node, word)
@@ -163,9 +188,20 @@ type step struct {
 
 // follow takes e through every Gate it reaches until it comes to the end
 // of the Run or back to the implementer.
-func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVersion int, cr *oracle.Result) (step, error) {
+// holds is the check node's conditions for the latest Verdict.
+func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVersion int, cr *oracle.Result, holds func(string) bool) (step, error) {
 	var s step
 	for e.To != "end" && e.To != "implement" {
+		if e.From == "gate.tamper" && e.To == "check" {
+			// Acknowledged: the same Verdict, on the same Candidate, takes
+			// the check node's edges again.
+			next, ok := w.g.Route("check", holds, w.exhausted)
+			if !ok {
+				return s, fmt.Errorf("the frozen graph has no edge for this Verdict")
+			}
+			e = next
+			continue
+		}
 		r, err := w.request(e.To, a, oracleVersion, cr)
 		var nb errNotBuilt
 		if errors.As(err, &nb) {
@@ -237,6 +273,12 @@ func (w *walk) open(ctx context.Context, r gate.Request) (gate.Decision, error) 
 	// Pinned and durable before it takes effect; the actor is a kind,
 	// never an identity (ADR-0006).
 	rec := map[string]any{"pins": r.Pins, "actor": "human", "choice": d.Choice, "reason": d.Reason, "note": d.Note}
+	if d.Choice == "acknowledge" {
+		// Written before it takes effect: only then do the events count
+		// as acknowledged.
+		rec["tamper_ids"] = r.Pins.Tamper
+		defer func() { w.acked = len(w.tamper) }()
+	}
 	for _, c := range r.Choices {
 		if c.Word == d.Choice && c.Extends != "" {
 			d.Extends = c.Extends

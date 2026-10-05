@@ -51,6 +51,8 @@ var Choices = map[string]Choice{
 	"reject":     {Word: "reject", Reason: true},
 	"override":   {Word: "override", Reason: true},
 	"infeasible": {Word: "infeasible", Reason: true},
+	// Acknowledging a Tamper event lets the Run be Accepted (ADR-0019 #2).
+	"acknowledge": {Word: "acknowledge", Reason: true},
 }
 
 // Pins are what a decision was shown, and so what it is pinned to
@@ -66,9 +68,10 @@ type Pins struct {
 
 // Request is an open Gate.
 type Request struct {
-	Name    string // its glossary name, e.g. "bound-exhaustion"
-	What    string // what happened
-	Need    string // what is needed from the human
+	Name    string   // its glossary name, e.g. "bound-exhaustion"
+	What    string   // what happened
+	Detail  []string // further lines about it, e.g. what was reverted
+	Need    string   // what is needed from the human
 	Check   *oracle.Result
 	Pins    Pins
 	Choices []Choice

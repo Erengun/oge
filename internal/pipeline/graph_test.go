@@ -82,6 +82,8 @@ func TestGateChoicesAndTheirOutcomes(t *testing.T) {
 		{"gate.own_test_failure", "override", "end", "Overridden"},
 		{"gate.ambiguous_file", "promote", "check", ""},
 		{"gate.infeasible", "infeasible", "end", "Infeasible"},
+		// The Verdict routes again once the Tamper events are acknowledged.
+		{"gate.tamper", "acknowledge", "check", ""},
 	} {
 		e, ok := g.Choice(c.gate, c.choice)
 		if !ok || e.To != c.to || e.Outcome != c.outcome {

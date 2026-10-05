@@ -349,7 +349,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		res.Candidate = a.Candidate
 		// A Tamper event stays unacknowledged for the rest of the Run,
 		// whatever later Attempts do (ADR-0019 #2).
-		w.tamper += a.Tamper()
+		w.addTamper(a)
 
 		// The Check, from the cache seed once it is warm. A cancelled Run
 		// never reaches a Verdict: the Check it killed didn't fail.
@@ -398,13 +398,13 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// TODO(#47, #48): failing own tests and Ambiguous files become
 		// conditions here.
 		holds := func(c string) bool {
-			return c == "verdict:"+verdict || (c == "tamper_event" && w.tamper > 0)
+			return c == "verdict:"+verdict || (c == "tamper_event" && len(w.unacknowledged()) > 0)
 		}
 		e, ok := f.Graph.Route("check", holds, w.exhausted)
 		if !ok {
 			return nil, fmt.Errorf("the frozen graph has no edge for this Verdict")
 		}
-		s, err := w.follow(ctx, e, a, m.Version, cr)
+		s, err := w.follow(ctx, e, a, m.Version, cr, holds)
 		if err != nil {
 			return nil, err
 		}

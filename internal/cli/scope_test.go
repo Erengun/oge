@@ -293,7 +293,8 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 	}{
 		{"unattended", "", []string{"--unattended"}, ExitParked, []string{"PARKED     at the tamper Gate · Candidate "}},
 		{"attended", "quit\n", []string{"--plain"}, ExitCancelled, []string{
-			"tamper Gate", "a protected file change was reverted",
+			"tamper Gate", "a protected file change was reverted", "  reverted: add_test.go (modified)",
+			"  acknowledge   ",
 			"  reject        end the Run Rejected", "  q  quit       end the Run Cancelled",
 			"decision   quit · recorded at the tamper Gate", "CANCELLED  Candidate ",
 		}},
@@ -312,8 +313,8 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 					t.Errorf("stdout lacks %q:\n%s", w, out)
 				}
 			}
-			if strings.Contains(out, "  t  take") || strings.Contains(out, "  acknowledge") {
-				t.Errorf("the Tamper Gate offered a way to Accepted:\n%s", out)
+			if strings.Contains(out, "  t  take") {
+				t.Errorf("the Tamper Gate offered take:\n%s", out)
 			}
 			dir := f.onlyRun(t)
 			for _, ref := range []string{"refs/oge/candidates/c1", "refs/oge/candidates/c2"} {
@@ -326,5 +327,43 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 				t.Errorf("Tamper events: %v", tampers)
 			}
 		})
+	}
+}
+
+// Acknowledging the Tamper events (full word, with a reason) lets the
+// passing Verdict on the current, reverted Candidate take its normal edge
+// to Accepted (ADR-0019 #2). The Ledger keeps the event and the decision.
+func TestRunAcknowledgedTamperIsAccepted(t *testing.T) {
+	f := newRunFixture(t)
+	f.attended("a\nack\nacknowledge\n\nmy edit to the test was a mistake\n")
+	code, out, errOut := f.run(t, tamperFix, "fix Add", "--fast", "--agent", "fake", "--plain")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, w := range []string{
+		"  reverted: add_test.go (modified)",
+		`type "acknowledge" in full`, "a reason is required for acknowledge",
+		"decision   acknowledge · recorded at the tamper Gate · reason: my edit to the test was a mistake",
+		"ACCEPTED   Candidate ",
+	} {
+		if !strings.Contains(out, w) {
+			t.Errorf("stdout lacks %q:\n%s", w, out)
+		}
+	}
+	if n := strings.Count(out, `type "acknowledge" in full`); n != 2 {
+		t.Errorf("a and ack: refused %d times", n)
+	}
+	dir := f.onlyRun(t)
+	got := strings.Join(recordTypes(t, dir), ",")
+	if !strings.Contains(got, run.RecTamperEvent) || !strings.HasSuffix(got, run.RecGateOpened+","+run.RecGateDecided+","+run.RecRunEnded) {
+		t.Errorf("Ledger order: %s", got)
+	}
+	d := records(t, dir, run.RecGateDecided)
+	ids, _ := d[0]["tamper_ids"].([]any)
+	if len(d) != 1 || d[0]["choice"] != "acknowledge" || len(ids) != 1 || ids[0] != "implement#1/tamper-1" {
+		t.Errorf("GateDecided: %v", d)
+	}
+	if got := candidateFile(t, dir, "add_test.go"); got != fxTest {
+		t.Errorf("the Accepted Candidate's test isn't the Snapshot's: %q", got)
 	}
 }
