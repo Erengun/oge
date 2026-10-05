@@ -50,6 +50,7 @@ const (
 	RecProcessStarted    = "ProcessStarted"
 	RecObservation       = "Observation"
 	RecAttemptEnded      = "AttemptEnded"
+	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
 	RecVerdict           = "Verdict"
@@ -68,9 +69,12 @@ type Params struct {
 	State   *ledger.StateRoot
 	Version string
 	Getenv  func(string) string
-	// CheckGoCache, when set, is the GOCACHE Checks share. Only tests set
-	// it; see cli.Env.CheckGoCache.
-	CheckGoCache string
+	// CacheSeedTemplate is a build cache the Run's seed starts from. Only
+	// tests set it; see cli.Env.CacheSeedTemplate.
+	CacheSeedTemplate string
+	// CacheWait bounds how long the Check waits for the seed's warm step
+	// (DefaultCacheWait when zero).
+	CacheWait time.Duration
 	// Observe receives progress as it happens, for rendering.
 	Observe func(Event)
 }
@@ -130,6 +134,13 @@ type Result struct {
 	Candidate string
 }
 
+// DefaultCacheWait bounds the Check's wait for the warm step: past it the
+// warm step is stopped and the Check starts from the partial seed, so a
+// large module with a fast agent never waits longer than a cold Check.
+// TODO(#74-decision): a fixed bound; make it a config key if projects
+// need another.
+const DefaultCacheWait = 30 * time.Second
+
 // interrupted is why a cancelled Run stopped.
 // TODO(#40-decision): ADR-0012's interrupted status and exit 130 come
 // later; until then a cancelled Run is an Infrastructure stop.
@@ -170,6 +181,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := os.MkdirAll(res.Dir, 0o700); err != nil {
 		return nil, err
 	}
+	release, err := markLive(res.Dir)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	sweepDeadRuns(filepath.Dir(res.Dir), res.Dir)
 	defer oracle.RemoveAll(workDir) // Workspaces are disposable
 	l, err := ledger.Create(res.Dir)
 	if err != nil {
@@ -246,13 +263,17 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 
-	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, GoCache: p.CheckGoCache}
+	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, SeedTemplate: p.CacheSeedTemplate}
 	pre := map[string]any{"checks": []string{"submodules", "lfs", "unmerged", "operation_in_progress"}}
-	if f.Setup.Run != "" {
-		e, err := setupOnSnapshot(ctx, runner, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "preflight"))
-		if err != nil {
-			return nil, err
-		}
+	// Setup runs on the Snapshot into the Run's cache seed, whose warm
+	// step then overlaps the implementer's Attempt (ADR-0021).
+	seed, setup, err := runner.NewSeed(ctx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
+	if err != nil {
+		return nil, err
+	}
+	defer seed.Close()
+	if setup != nil {
+		e := *setup
 		pre["setup"] = e
 		if ctx.Err() != nil {
 			if err := l.Append(RecPreflightObserved, pre); err != nil {
@@ -295,8 +316,20 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	res.Candidate = a.Candidate
 
-	// The Check. A cancelled Run never reaches a Verdict: the Check it
-	// killed didn't fail.
+	// The Check, from the cache seed once it is warm. A cancelled Run
+	// never reaches a Verdict: the Check it killed didn't fail.
+	if seed != nil {
+		limit := p.CacheWait
+		if limit <= 0 {
+			limit = DefaultCacheWait
+		}
+		w := seed.WaitFor(limit)
+		w.Error = string(redact.Redact([]byte(w.Error)))
+		if err := l.Append(RecCacheSeeded, w); err != nil {
+			return nil, err
+		}
+		runner.Seed = seed
+	}
 	if ctx.Err() != nil {
 		return end(InfrastructureStop, interrupted)
 	}
@@ -332,19 +365,6 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	// #40 asks. ADR-0007 reserves Rejected for a human and routes a fail
 	// Verdict to a send-back, then the bound-exhaustion Gate (#43).
 	return end(Rejected)
-}
-
-func setupOnSnapshot(ctx context.Context, r *oracle.Runner, repo *workspace.RunRepo, snap, setup, root string) (oracle.Execution, error) {
-	defer oracle.RemoveAll(root)
-	dir, env, err := r.Prepare(root)
-	if err != nil {
-		return oracle.Execution{}, err
-	}
-	if err := repo.Checkout(snap, dir); err != nil {
-		return oracle.Execution{}, err
-	}
-	e, _, err := r.Exec(ctx, setup, dir, env, 10*time.Minute, 1<<20)
-	return e, err
 }
 
 // implement runs the first implementer Attempt: AttemptStarting before the

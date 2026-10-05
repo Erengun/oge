@@ -75,7 +75,7 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	res, err := selectView(env, f, t, frozen).show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		return run.Start(ctx, run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
-			State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: observe,
+			State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
 		})
 	})
 	if errors.Is(err, errForced) {
