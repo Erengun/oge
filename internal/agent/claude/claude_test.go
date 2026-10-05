@@ -185,14 +185,6 @@ func insertAfter(frames []string, marker string, add ...string) []string {
 	panic("no " + marker)
 }
 
-func kinds(evs []agent.Event) []agent.EventKind {
-	var k []agent.EventKind
-	for _, e := range evs {
-		k = append(k, e.Kind)
-	}
-	return k
-}
-
 func settled(t *testing.T, evs []agent.Event) agent.Event {
 	t.Helper()
 	last := evs[len(evs)-1]
