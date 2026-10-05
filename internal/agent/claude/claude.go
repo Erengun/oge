@@ -161,7 +161,14 @@ func (s *session) initialize(ctx context.Context, timeout time.Duration) error {
 	hooks := map[string]any{"PreToolUse": []any{map[string]any{"matcher": nil, "hookCallbackIds": []string{hookID}}}}
 	resp, err := s.request(map[string]any{"subtype": "initialize", "hooks": hooks})
 	if err != nil {
-		return err
+		// A write can fail (e.g. a broken pipe) because claude has already
+		// exited; report that, not the pipe error.
+		select {
+		case <-s.exited:
+			return fmt.Errorf("claude exited before the session started%s", s.stderr.reason())
+		case <-time.After(2 * time.Second):
+			return err
+		}
 	}
 	t := time.NewTimer(timeout)
 	defer t.Stop()
