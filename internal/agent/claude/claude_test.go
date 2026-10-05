@@ -1045,8 +1045,18 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 		t.Errorf("Edit target = %q", got)
 	}
 	sp := "/srv/Application Support/w"
-	if got := target("Bash", map[string]any{"command": `cd /srv/Application\ Support/w && go test ./...`}, []string{sp}); got != "go test ./..." {
-		t.Errorf("cd target = %q", got)
+	// The cd prefix stays, so a denied "cd <ws> && go test" reads apart
+	// from an allowed "go test"; the Workspace itself shortens to ".".
+	for cmd, want := range map[string]string{
+		`cd /srv/Application\ Support/w && go test ./...`:  "cd . && go test ./...",
+		`cd "/srv/Application Support/w" && go test ./...`: "cd . && go test ./...",
+		`cd /srv/Application\ Support/w/pkg && go test`:    "cd pkg && go test",
+		`go test /srv/Application\ Support/w/pkg`:          "go test pkg",
+		`ls /srv/Application\ Support/wx`:                  `ls /srv/Application\ Support/wx`,
+	} {
+		if got := target("Bash", map[string]any{"command": cmd}, []string{sp}); got != want {
+			t.Errorf("target(%q) = %q, want %q", cmd, got, want)
+		}
 	}
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {

@@ -115,7 +115,16 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		}
 		return answer(p.path(path, true), "it writes outside the Workspace or under .git", "")
 	case "Bash":
-		return answer(p.bash(strings.TrimSpace(str("command"))), "the command reaches outside the Workspace", "this command isn't pre-authorised")
+		cmd := strings.TrimSpace(str("command"))
+		v := p.bash(cmd)
+		if v == vGrey {
+			if h := p.hint(cmd); h != "" {
+				// A hint replaces the tail's "don't retry this another way".
+				d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: this command isn't pre-authorised. "+h
+				return d
+			}
+		}
+		return answer(v, "the command reaches outside the Workspace", "this command isn't pre-authorised")
 	case "AskUserQuestion":
 		// A question is never answered on the human's behalf (ADR-0019).
 		d.Family = agent.Question
@@ -293,16 +302,41 @@ func target(tool string, in map[string]any, ws []string) string {
 		}
 	case "Bash":
 		t, _, _ = strings.Cut(strings.TrimSpace(str("command")), "\n")
-		for _, w := range ws {
-			for _, form := range []string{w, strings.ReplaceAll(w, " ", `\ `), `"` + w + `"`, "'" + w + "'"} {
-				t = strings.ReplaceAll(t, form+string(os.PathSeparator), "")
-				t = strings.ReplaceAll(t, "cd "+form+" && ", "")
-			}
-		}
+		t = shortenWorkspace(t, ws)
 	case "AskUserQuestion":
 		t = "a question"
 	}
 	return shorten(string(redact.Redact([]byte(t))), 80)
+}
+
+// shortenWorkspace writes a command's Workspace paths relative to it:
+// "<ws>/a" as "a" and the Workspace itself as ".", in its plain,
+// escaped and quoted forms. Everything else, a "cd" prefix included,
+// stays, so "cd <ws> && go test" reads apart from "go test" (#90).
+func shortenWorkspace(t string, ws []string) string {
+	for _, w := range ws {
+		for _, form := range []string{w, strings.ReplaceAll(w, " ", `\ `), `"` + w + `"`, "'" + w + "'"} {
+			t = strings.ReplaceAll(t, form+string(os.PathSeparator), "")
+			var b strings.Builder
+			for {
+				i := strings.Index(t, form)
+				if i < 0 {
+					break
+				}
+				end := i + len(form)
+				b.WriteString(t[:i])
+				if end == len(t) || strings.ContainsRune(" ;&|)", rune(t[end])) {
+					b.WriteString(".")
+				} else {
+					b.WriteString(form) // a longer path that only starts like the Workspace
+				}
+				t = t[end:]
+			}
+			b.WriteString(t)
+			t = b.String()
+		}
+	}
+	return t
 }
 
 func relPath(p string, ws []string) string {

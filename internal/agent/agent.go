@@ -96,7 +96,20 @@ type Event struct {
 	// authentication or quota: an Infrastructure stop, not an Attempt
 	// failure (ADR-0012).
 	Stop string `json:",omitempty"`
+	// Friction is set on a settled turn by an adapter that measures
+	// policy friction (ADR-0019); nil when it doesn't.
+	Friction *Friction `json:",omitempty"`
 }
+
+// Friction is a turn's policy friction (ADR-0019, #90): the Host requests
+// Öge denied, and the model turns spent recovering from them.
+type Friction struct {
+	Denied        int
+	RecoveryTurns int
+}
+
+// Turns is the friction count: denied requests plus recovery turns.
+func (f Friction) Turns() int { return f.Denied + f.RecoveryTurns }
 
 // Host-request families (ADR-0005).
 const (

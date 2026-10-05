@@ -116,6 +116,9 @@ type Attempt struct {
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration
+	// Friction is the Attempt's policy friction (ADR-0019), when its
+	// adapter measures it.
+	Friction *agent.Friction
 }
 
 // Result is what a Run ended with.
@@ -460,6 +463,7 @@ loop:
 			case agent.TurnSettled:
 				settled = true
 				a.Exit, a.Failure, a.Stop = ev.Exit, ev.Failure, ev.Stop
+				a.Friction = ev.Friction
 				break loop
 			}
 		case <-timeout.C:
@@ -492,6 +496,9 @@ loop:
 	obs := map[string]any{"attempt": a.ID, "kind": "responsiveness", "duration_ms": time.Since(launched).Milliseconds(), "host_requests": hosts}
 	if a.FirstActivity > 0 {
 		obs["first_activity_ms"] = a.FirstActivity.Milliseconds()
+	}
+	if f := a.Friction; f != nil {
+		obs["policy_friction"] = map[string]int{"turns": f.Turns(), "denied": f.Denied, "recovery_turns": f.RecoveryTurns}
 	}
 	if err := l.Append(RecObservation, obs); err != nil {
 		return nil, err

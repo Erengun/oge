@@ -224,6 +224,9 @@ func (r *renderer) observe(ev run.Event) {
 		if step, ok := agentStep(ev.Agent); ok {
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
+		if f := ev.Agent.Friction; f != nil {
+			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, frictionText(*f))
+		}
 	case run.EvNotice:
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
@@ -375,6 +378,11 @@ func (r *renderer) summary(res *run.Result) {
 		head := strings.ToUpper(string(res.Outcome))
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
+		// TODO(#90-decision): shown only when there was friction, so the
+		// happy path stays quiet; -v always shows it.
+		if a := res.Attempt; a != nil && a.Friction != nil && a.Friction.Turns() > 0 {
+			r.p("%-10s %s", "friction", frictionText(*a.Friction))
+		}
 		// TODO(#63): the Receipt replaces these lines.
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
 		r.p("Nothing was written to your repository.")
@@ -385,6 +393,18 @@ func (r *renderer) summary(res *run.Result) {
 			r.p("  %s", clean(w))
 		}
 	}
+}
+
+// frictionText is an Attempt's policy friction (ADR-0019).
+func frictionText(f agent.Friction) string {
+	return fmt.Sprintf("policy friction %d (%d denied, %s)", f.Turns(), f.Denied, plural(f.RecoveryTurns, "recovery turn"))
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }
 
 func files(n int) string {

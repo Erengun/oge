@@ -149,6 +149,7 @@ type session struct {
 	apiError  string // the last structured API error this turn
 	dead      error  // the Session can take no more turns
 	closeOnce sync.Once
+	friction  frictionMeter // the turn's policy friction, under mu
 }
 
 func (s *session) Process() agent.Process     { return s.process }
@@ -342,9 +343,11 @@ func (s *session) settle(ev agent.Event) {
 	s.mu.Lock()
 	was := s.inFlight
 	s.inFlight = false
+	friction := s.friction.take()
 	s.mu.Unlock()
 	if was {
 		ev.Kind = agent.TurnSettled
+		ev.Friction = friction
 		s.emit(ev)
 	}
 }
@@ -614,8 +617,9 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		gate = "the agent's startup envelope hasn't been checked yet"
 	}
 	if gate != "" {
-		s.mu.Unlock()
 		d := s.policy.refuse(tool, input, gate)
+		s.friction.decided(useKey(tool, input), d)
+		s.mu.Unlock()
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
 		return s.answer(id, r.Subtype, d, input)
 	}
@@ -625,6 +629,7 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		if useID != "" {
 			s.decided[useID] = d
 		}
+		s.friction.decided(useKey(tool, input), d)
 	}
 	s.mu.Unlock()
 	if !seen {
@@ -719,11 +724,20 @@ func (s *session) assistant(f frame) error {
 		return nil // a subagent's message; the implementer has no Task tool
 	}
 	var m struct {
+		ID      string    `json:"id"`
 		Content []content `json:"content"`
 	}
 	if err := json.Unmarshal(f.Message, &m); err != nil {
 		return errors.New("an assistant message can't be decoded")
 	}
+	s.mu.Lock()
+	s.friction.message(m.ID)
+	for _, c := range m.Content {
+		if c.Type == "tool_use" {
+			s.friction.toolUse(useKey(c.Name, c.Input))
+		}
+	}
+	s.mu.Unlock()
 	for _, c := range m.Content {
 		switch c.Type {
 		case "text":
