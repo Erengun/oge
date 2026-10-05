@@ -26,6 +26,16 @@ type interrupts struct {
 	forced chan struct{}
 	mu     sync.Mutex
 	n      int
+	// diverted, when set, takes the next interrupt instead: Ctrl-C at a
+	// Gate's reason prompt returns to the Gate.
+	diverted func()
+}
+
+// divert sends interrupts to f until it is called with nil.
+func (i *interrupts) divert(f func()) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.diverted = f
 }
 
 func newInterrupts(cancel context.CancelFunc) *interrupts {
@@ -35,6 +45,11 @@ func newInterrupts(cancel context.CancelFunc) *interrupts {
 func (i *interrupts) interrupt() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if f := i.diverted; f != nil && i.n == 0 {
+		i.diverted = nil
+		f()
+		return
+	}
 	i.n++
 	switch i.n {
 	case 1:

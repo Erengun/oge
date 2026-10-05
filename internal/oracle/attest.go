@@ -468,6 +468,7 @@ type Control struct {
 
 	mu        sync.Mutex
 	consulted bool
+	recorded  bool
 	waited    time.Duration
 }
 
@@ -517,6 +518,22 @@ type ControlRecord struct {
 	DurationMs int64   `json:"duration_ms,omitempty"`
 	Result     *Result `json:"result,omitempty"`
 	Error      string  `json:"error,omitempty"`
+}
+
+// Consulted returns the control's record the first time it is called
+// after a Check consulted it, so it is recorded once.
+func (c *Control) Consulted() (ControlRecord, bool) {
+	if c == nil {
+		return ControlRecord{}, false
+	}
+	c.mu.Lock()
+	ok := c.consulted && !c.recorded
+	c.recorded = c.recorded || ok
+	c.mu.Unlock()
+	if !ok {
+		return ControlRecord{}, false
+	}
+	return c.Stop(), true // it has finished: Wait returned
 }
 
 // Stop ends the control, if it is still running, and returns its record.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
@@ -44,6 +45,9 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 			return ExitRefused
 		}
 	}
+	for _, n := range frozen.Notices {
+		fmt.Fprintf(env.Stderr, "oge: %s\n", n)
+	}
 	if !f.unattended && !env.Interactive() {
 		fmt.Fprintln(env.Stderr, "oge: an attended Run needs a terminal; pass --unattended to run without one")
 		return ExitRefused
@@ -75,10 +79,14 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	v := selectView(env, f, t, frozen)
 	withWarning(v, testConfigWarning(root, frozen))
 	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
-		return run.Start(ctx, run.Params{
+		p := run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 			State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
-		})
+		}
+		if !f.unattended {
+			p.Gates = viewPort{v}
+		}
+		return run.Start(ctx, p)
 	})
 	if errors.Is(err, errForced) {
 		proc.KillAll()
@@ -94,6 +102,12 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 		return ExitOK
 	case run.Rejected:
 		return ExitRejected
+	case run.Infeasible:
+		return ExitInfeasible
+	case run.Overridden:
+		return ExitOverridden
+	case run.Cancelled:
+		return ExitCancelled
 	case run.Parked:
 		return ExitParked
 	case run.Refused:
@@ -116,20 +130,14 @@ type view interface {
 	// errForced without waiting once in is forced. A view that takes
 	// Ctrl-C as a key passes it to in.
 	show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error)
-	// gate and hostRequest are where a Gate (#43) and an agent's Host
-	// request (#45) will be answered. Neither is built yet; whatever answers
-	// them never offers a default choice (ADR-0015).
-	gate(g gatePrompt) (string, error)
+	// gate is where a Gate waits for the human's decision (ADR-0015), and
+	// hostRequest where an agent's Host request (#45) will be answered;
+	// they stay separate ports. Neither ever offers a default choice.
+	gate(ctx context.Context, r gate.Request) (gate.Decision, error)
 	hostRequest(h hostPrompt) (string, error)
 }
 
 type startFunc func(ctx context.Context, observe func(run.Event)) (*run.Result, error)
-
-// gatePrompt is a Gate waiting for a human decision.
-type gatePrompt struct {
-	Name    string
-	Choices []string // full words; there is no default
-}
 
 // hostPrompt is an agent's Host request, such as a permission to run a tool.
 type hostPrompt struct {
@@ -144,7 +152,8 @@ var errNotBuilt = errors.New("not built yet")
 // otherwise: without a TTY, on a terminal that can't move the cursor
 // (TERM empty or dumb), with --plain, or with -v/-vv (ADR-0022).
 func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view {
-	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen}
+	plain := &renderer{w: env.Stdout, verbose: f.verbose || f.veryVerbose, frozen: frozen,
+		input: &lines{in: env.Stdin}, edit: env.Edit}
 	// TODO(#79-decision): --unattended on a terminal still draws the live
 	// view; unattended means "never prompt", and the view doesn't.
 	// TODO(#79-decision): an empty TERM gets plain lines too. Windows
@@ -164,10 +173,14 @@ type renderer struct {
 	w       io.Writer
 	verbose bool
 	frozen  *pipeline.Frozen
+	input   *lines             // what the human types at a Gate
+	edit    func(string) error // $EDITOR, for a Gate reason
+	intr    *interrupts
 	warn    string // shown with the summary
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
+	r.intr = in
 	e := runAsync(ctx, start, r.observe, nil)
 	select {
 	case e := <-e:
@@ -211,7 +224,6 @@ func runAsync(ctx context.Context, start startFunc, observe func(run.Event), aft
 	return done
 }
 
-func (r *renderer) gate(gatePrompt) (string, error)        { return "", errNotBuilt }
 func (r *renderer) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 
 func (r *renderer) p(format string, a ...any) { fmt.Fprintf(r.w, format+"\n", a...) }
@@ -226,7 +238,7 @@ func (r *renderer) observe(ev run.Event) {
 		if !r.verbose {
 			return
 		}
-		if step, ok := agentStep(ev.Agent); ok {
+		if step, ok := agentStep(ev.Agent, ev.Attempt.Cause); ok {
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
 	case run.EvNotice:
@@ -236,10 +248,14 @@ func (r *renderer) observe(ev run.Event) {
 		if s := scopeText(ev.Attempt); s != "" {
 			r.p("%-10s %s", "scope", s)
 		}
+	case run.EvSendBack:
+		r.p("%-10s %s", "send back", sendBackText(ev))
+	case run.EvDecided:
+		r.p("%-10s %s", "decision", decidedText(ev))
 	case run.EvCheck:
 		res := ev.Result
 		if r.verbose {
-			r.p("[check #1] Candidate %s · Oracle v%d · fresh Check directory", res.Candidate[:7], res.Oracle)
+			r.p("[check #%d] Candidate %s · Oracle v%d · fresh Check directory", res.Checks, res.Candidate[:7], res.Oracle)
 		}
 		for _, l := range checkLines(ev.Check) {
 			r.p("%-10s %s", "check", l)
@@ -269,7 +285,7 @@ func preflightText(f *pipeline.Frozen) string {
 
 // agentStep is one agent event as a line of activity; ok is false for
 // events that show nothing.
-func agentStep(e agent.Event) (string, bool) {
+func agentStep(e agent.Event, cause string) (string, bool) {
 	if step, ok := activityStep(e); ok {
 		if e.Kind == agent.Claim && e.Tool == "" {
 			step = fmt.Sprintf("%q", step) // what the agent says, as said
@@ -279,6 +295,9 @@ func agentStep(e agent.Event) (string, bool) {
 	switch e.Kind {
 	case agent.SessionOpened:
 		line := "started (cause: first) · fresh Session · Workspace from Snapshot"
+		if cause == "send_back" {
+			line = "started (cause: send_back) · fresh Session · Workspace from the Candidate sent back"
+		}
 		if s := e.Session; s != nil {
 			line += clean(fmt.Sprintf(" · %s · envelope %s · Launch profile %s", s.AgentVersion, s.Envelope, s.Profile))
 		}
@@ -379,7 +398,9 @@ func commandLine(e oracle.Execution) string {
 
 func (r *renderer) summary(res *run.Result) {
 	switch res.Outcome {
-	case run.Accepted, run.Rejected, run.Parked:
+	case run.Parked:
+		r.parkedSummary(res)
+	case run.Accepted, run.Rejected, run.Cancelled, run.Overridden, run.Infeasible:
 		head := strings.ToUpper(string(res.Outcome))
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
@@ -396,30 +417,34 @@ func (r *renderer) summary(res *run.Result) {
 			label = strings.Repeat(" ", len("Not covered"))
 		}
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges", label)
-		if obs := observed(res); len(obs) > 0 {
-			r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(obs, " · ")))
-		}
+		r.observed(res)
 		if r.warn != "" {
 			r.p("! %s", r.warn)
 		}
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")
-		r.p("INFRASTRUCTURE STOP   no Verdict")
+		if res.Gate != "" {
+			r.p("INFRASTRUCTURE STOP   no decision at the %s", gateTitle(gateLabel(res)))
+		} else {
+			r.p("INFRASTRUCTURE STOP   no Verdict")
+		}
 		for _, w := range res.Why {
 			r.p("  %s", clean(w))
 		}
 	}
 }
 
-// observed are the tripwires a Run set off: the static ones on the
-// Candidate's changes, and attestation lines that named no test.
-func observed(res *run.Result) []string {
-	obs := res.Tripwires
+// observed prints the tripwires a Run set off, if any: the static ones
+// on the Candidate's changes, and attestation lines that named no test.
+func (r *renderer) observed(res *run.Result) {
+	obs := append([]string(nil), res.Tripwires...)
 	if c := res.Check; c != nil && c.Stray > 0 {
 		obs = append(obs, fmt.Sprintf("%d stray lines on the attestation channel", c.Stray))
 	}
-	return obs
+	if len(obs) > 0 {
+		r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(obs, " · ")))
+	}
 }
 
 func files(n int) string {

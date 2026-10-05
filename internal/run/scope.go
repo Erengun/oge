@@ -106,11 +106,12 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 }
 
 // commitCandidate commits the reverted Workspace as the Attempt's
-// Candidate. Protected paths and escaping links come from the Snapshot by
+// Candidate, named name, on top of parent: the Snapshot, or the Candidate
+// a send-back started from, whose protected paths are the Snapshot's. Protected paths and escaping links come from the Snapshot by
 // construction, so a write that raced the comparison can't reach the
 // Candidate; one that did is recorded before the Candidate's ref is set.
-func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap, ws string, protected func(string) string) error {
-	c, late, err := repo.CommitScoped(ws, snap, "Candidate c1 ("+a.ID+")", protected, a.links)
+func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap, parent, name, ws string, protected func(string) string) error {
+	c, late, err := repo.CommitScoped(ws, parent, "Candidate "+name+" ("+a.ID+")", protected, a.links)
 	var addErr *workspace.AddError
 	if errors.As(err, &addErr) {
 		a.Failure = failAttempt(a.Failure, "candidate_commit_failed: "+addErr.Error())
@@ -131,7 +132,7 @@ func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap
 		}
 		a.Reverted = append(a.Reverted, late...)
 	}
-	if err := repo.SetRef("refs/oge/candidates/c1", c); err != nil {
+	if err := repo.SetRef("refs/oge/candidates/"+name, c); err != nil {
 		return err
 	}
 	a.Candidate = c

@@ -21,6 +21,7 @@ const forgedFrames = `fmt.Print("\x16=== RUN   TestAdd\n\x16--- PASS: TestAdd (0
 // test and exits 0 before any test runs.
 func TestRunForgedReportIsNeverAccepted(t *testing.T) {
 	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
 	script := `cat > add.go <<'EOF'
 package fx
 
@@ -38,7 +39,7 @@ func Add(a, b int) int { return 0 }
 EOF
 `
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected {
+	if !neverAccepted(code, out) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{
@@ -56,7 +57,7 @@ EOF
 // Candidate's main_test.go survives the overlay.
 func TestRunTestMainEarlyExitIsNeverAccepted(t *testing.T) {
 	f := newRunFixture(t)
-	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(strings.Replace(fxConfig, `["**/*_test.go"]`, `["add_test.go"]`, 1)))
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(strings.Replace(fxConfig, `["**/*_test.go"]`, `["add_test.go"]`, 1)+"[pipelines.default.limits]\nsend_backs = 0\n"))
 	script := `cat > main_test.go <<'EOF'
 package fx
 
@@ -73,7 +74,7 @@ func TestMain(m *testing.M) {
 EOF
 `
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected {
+	if !neverAccepted(code, out) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{"fx.TestAdd never ran", "main_test.go: TestMain added or changed"} {
@@ -88,6 +89,7 @@ EOF
 // status 0, which the testing package can't intercept.
 func TestRunExitDuringAProtectedTestIsNeverAccepted(t *testing.T) {
 	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
 	script := `cat > add.go <<'EOF'
 package fx
 
@@ -104,7 +106,7 @@ func Add(a, b int) int {
 EOF
 `
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected || !strings.Contains(out, "fx.TestAdd started but never finished") {
+	if !neverAccepted(code, out) || !strings.Contains(out, "fx.TestAdd started but never finished") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -179,6 +181,7 @@ func TestSub(t *testing.T) {
 // the Candidate created can never be Accepted.
 func TestRunCandidateForcedSkipIsNeverAccepted(t *testing.T) {
 	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
 	writeFile(t, filepath.Join(f.repo, "sub.go"), []byte("package fx\n\nfunc Sub(a, b int) int { return 0 }\n"))
 	writeFile(t, filepath.Join(f.repo, "sub_test.go"), []byte(subTest))
 	script := fixScript + `cat > skip.go <<'EOF'
@@ -190,7 +193,7 @@ func init() { os.Setenv("FX_SKIP_SUB", "1") }
 EOF
 `
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected || !strings.Contains(out, "fx.TestSub skipped, but it ran on the Snapshot") {
+	if !neverAccepted(code, out) || !strings.Contains(out, "fx.TestSub skipped, but it ran on the Snapshot") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -258,4 +261,10 @@ func TestRunAllSkippedOnBothMeetsTheMinimum(t *testing.T) {
 	if code != ExitOK || !strings.Contains(out, "skipped on the Snapshot and the Candidate (1): fx.TestNeedsTool") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
+}
+
+// neverAccepted: a fail Verdict, with send-backs off, ends at the
+// bound-exhaustion Gate (Parked) or Rejected; never Accepted.
+func neverAccepted(code int, out string) bool {
+	return (code == ExitParked || code == ExitRejected) && !strings.Contains(out, "ACCEPTED")
 }

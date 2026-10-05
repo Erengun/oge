@@ -11,9 +11,6 @@ import (
 	"github.com/erengun/oge/internal/workspace"
 )
 
-// ExitParked is a Run waiting for a human decision (ADR-0015).
-const ExitParked = 10
-
 // scopeText is the compact line for an Attempt's reverts, or "" when
 // there were none. It says what changed and what Öge undid, never why.
 func scopeText(a *run.Attempt) string {

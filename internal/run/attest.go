@@ -30,10 +30,13 @@ func recordTripwires(l *ledger.Ledger, repo *workspace.RunRepo, res *Result, a *
 			return b, ok && err == nil
 		}
 	}
-	res.Tripwires = oracle.Tripwires(a.Changed, show(res.Snapshot), show(a.Candidate))
-	if len(res.Tripwires) == 0 {
+	// Against the Snapshot, so a later Attempt's Candidate is scanned
+	// for everything it changes.
+	trip := oracle.Tripwires(a.Changed, show(res.Snapshot), show(a.Candidate))
+	res.Tripwires = trip
+	if len(trip) == 0 {
 		return nil
 	}
-	return l.Append(RecObservation, map[string]any{"attempt": a.ID, "kind": "tripwire", "tripwires": res.Tripwires,
+	return l.Append(RecObservation, map[string]any{"attempt": a.ID, "kind": "tripwire", "tripwires": trip,
 		"note": "signals, not proof: a simple scan of the changed files"})
 }

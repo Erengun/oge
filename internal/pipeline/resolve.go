@@ -88,6 +88,8 @@ type Overrides struct {
 	Blind     bool
 	Confirm   bool
 	Require   []string
+	// Unattended removes the optional Gates (ADR-0008).
+	Unattended bool
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
@@ -103,6 +105,8 @@ type Frozen struct {
 	Graph          Graph
 	Hash           string
 	TrustWeakening []Weakening
+	// Notices are what the resolution changed from what was asked.
+	Notices []string
 }
 
 // CheckCommand is one resolved Oracle command.
@@ -242,7 +246,13 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	}
 
 	// Gates and limits.
-	f.ResultGate = o.Confirm || (p.Gates.Result != nil && *p.Gates.Result)
+	f.ResultGate = !o.Unattended && (o.Confirm || (p.Gates.Result != nil && *p.Gates.Result))
+	switch {
+	case o.Unattended && o.Confirm:
+		f.Notices = append(f.Notices, "--confirm ignored: unattended Runs have no Result gate (ADR-0008)")
+	case o.Unattended && p.Gates.Result != nil && *p.Gates.Result:
+		f.Notices = append(f.Notices, "gates.result ignored: unattended Runs have no Result gate (ADR-0008)")
+	}
 	f.Limits = resolveLimits(p.Limits)
 
 	// Trust-weakening options: from the project file only (there is no user

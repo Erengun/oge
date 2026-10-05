@@ -99,11 +99,14 @@ func TestBinaryRunAcceptedExitsZero(t *testing.T) {
 	}
 }
 
-func TestBinaryRunRejectedExitsThree(t *testing.T) {
+// A Check that keeps failing uses up the send-backs, and an unattended
+// Run parks at the bound-exhaustion Gate rather than decide (ADR-0008).
+func TestBinaryRunParkedExitsTen(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withScript(t, env, "echo 'nothing to do'\n")
 	code, out, errOut := runExe(t, testBinary, repo, env, "run", "--fast", "--agent", "fake", "--unattended", "fix Add")
-	if code != 3 || !strings.Contains(out, "REJECTED") || !strings.Contains(out, "1 failed: TestAdd") {
+	if code != 10 || !strings.Contains(out, "PARKED     at the bound-exhaustion Gate") || !strings.Contains(out, "send back  3 of 3") ||
+		strings.Contains(out, "REJECTED") || !strings.Contains(out, "1 failed: TestAdd") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

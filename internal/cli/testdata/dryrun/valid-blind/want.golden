@@ -7,7 +7,7 @@ Criteria   none
 
 Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph 95f0bc4a84cd)
+Pipeline   default (frozen, compiled graph ad3fc0798e5b)
            verify (before) ─▶ implement ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     codex:gpt-5.5  network off   fresh Session every Attempt   (cli)
