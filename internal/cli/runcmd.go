@@ -77,6 +77,7 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 	v := selectView(env, f, t, frozen)
+	plainOf(v).applying = f.apply
 	withWarning(v, testConfigWarning(root, frozen))
 	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		p := run.Params{
@@ -96,6 +97,9 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal
+	}
+	if code := afterRun(env, f, v, root, res); code != ExitOK {
+		return code
 	}
 	switch res.Outcome {
 	case run.Accepted:
@@ -177,6 +181,9 @@ type renderer struct {
 	edit    func(string) error // $EDITOR, for a Gate reason
 	intr    *interrupts
 	warn    string // shown with the summary
+	// applying: --apply is about to take an Accepted Candidate into the
+	// working tree, so the summary doesn't say nothing was written.
+	applying bool
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
@@ -414,7 +421,9 @@ func (r *renderer) summary(res *run.Result) {
 		if r.warn != "" {
 			r.p("! %s", r.warn)
 		}
-		r.p("Nothing was written to your repository.")
+		if !r.applying || res.Outcome != run.Accepted {
+			r.p("Nothing was written to your repository.")
+		}
 	case run.InfrastructureStop:
 		r.p("")
 		if res.Gate != "" {

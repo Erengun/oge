@@ -42,7 +42,10 @@ type Env struct {
 	Interactive func() bool
 	LookPath    func(string) (string, error)
 	// Edit opens path in the user's $EDITOR and waits for it to exit.
-	Edit    func(path string) error
+	Edit func(path string) error
+	// Page shows text in the user's pager and waits for it to exit; nil
+	// writes it to Stdout.
+	Page    func(text string) error
 	GOOS    string
 	Version string
 	Getenv  func(string) string
@@ -66,6 +69,7 @@ func ProcessEnv(version string) Env {
 		Interactive: func() bool { return isTerminal(os.Stdin) && isTerminal(os.Stdout) },
 		LookPath:    exec.LookPath,
 		Edit:        runEditor,
+		Page:        pageText,
 		GOOS:        runtimeGOOS,
 		Version:     version,
 		Getenv:      os.Getenv,
@@ -95,12 +99,15 @@ func runEditor(path string) error {
 // need `oge run <word>`.
 var notYet = map[string]bool{
 	"doctor": true, "init": true, "resume": true, "cancel": true, "status": true,
-	"diff": true, "apply": true, "branch": true, "receipt": true,
+	"receipt": true,
 }
 
 const usage = `Usage:
   oge "<task>" [flags]          run a Task (same as oge run)
   oge run [<task>] [flags]
+  oge diff [<run>]         show a Run's Candidate against its Snapshot
+  oge apply [<run>]        apply an Accepted Candidate to your working tree
+  oge branch [<name>] [<run>]   make a local branch with it, never checked out
   oge --version
 
 Run flags:
@@ -110,6 +117,8 @@ Run flags:
   --fast | --blind         mode: Fast (no verifier) or Blind (verifier first); default Standard
   --require <guarantee>    refuse unless the mode gives it (e.g. held-out)
   --confirm                stop at the Result gate before accepting
+  --apply                  apply the Candidate to your working tree if Accepted
+                           (never commits)
   --agent <stage>=<agent>[:<model>]   bind a Stage; --agent <agent> binds every Stage
   --implement, --verify <agent>[:<model>]
   --check <command>        add a Check command for this Run
@@ -138,6 +147,8 @@ func Main(env Env, args []string) int {
 			return ExitOK
 		case a == "run":
 			args = args[1:]
+		case a == "diff" || a == "apply" || a == "branch":
+			return deliverCommand(env, a, args[1:])
 		case notYet[a]:
 			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet\n", a)
 			return ExitRefused
@@ -160,6 +171,7 @@ type runFlags struct {
 	// second level has something more to show.
 	veryVerbose bool
 	plain       bool
+	apply       bool // --apply: apply an Accepted Candidate at the end
 	o           pipeline.Overrides
 }
 
@@ -173,6 +185,7 @@ func parseRunFlags(args []string) (runFlags, []string, error) {
 	fs.BoolVar(&f.verbose, "v", false, "")
 	fs.BoolVar(&f.veryVerbose, "vv", false, "")
 	fs.BoolVar(&f.plain, "plain", false, "")
+	fs.BoolVar(&f.apply, "apply", false, "")
 	fs.BoolVar(&f.o.Fast, "fast", false, "")
 	fs.BoolVar(&f.o.Blind, "blind", false, "")
 	fs.BoolVar(&f.o.Confirm, "confirm", false, "")
