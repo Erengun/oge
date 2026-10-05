@@ -11,3 +11,5 @@ func setGroup(*exec.Cmd) {}
 func killGroup(cmd *exec.Cmd) { _ = cmd.Process.Kill() }
 
 func group(*exec.Cmd) int { return 0 }
+
+func termGroup(cmd *exec.Cmd) { _ = cmd.Process.Kill() }

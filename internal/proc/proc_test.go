@@ -34,3 +34,24 @@ func TestKillAllKillsEveryLiveGroup(t *testing.T) {
 		t.Errorf("%d commands still live after Wait", n)
 	}
 }
+
+// Terminate signals the whole group: a shell that traps nothing and the
+// sleep it forked both end.
+func TestTerminateEndsTheGroup(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "sleep 30 & wait")
+	if err := Start(cmd); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- Wait(cmd) }()
+	time.Sleep(100 * time.Millisecond)
+	Terminate(cmd)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("the command exited cleanly")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Terminate didn't end the command")
+	}
+}
