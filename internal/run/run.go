@@ -20,6 +20,7 @@ import (
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
 )
@@ -321,7 +322,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	}
 	sess, err := adapter.Open(ctx, spec)
 	if err != nil {
-		a.Failure = "launch_failed: " + err.Error()
+		a.Failure = string(redact.Redact([]byte("launch_failed: " + err.Error())))
 		return a, l.Append(RecAttemptEnded, map[string]any{"attempt": a.ID, "failure": a.Failure})
 	}
 	defer sess.Close()
@@ -364,7 +365,11 @@ loop:
 		a.Failure = "lost_subprocess: the turn never settled"
 	}
 	_ = sess.Close()
-	streamBlob, err := blobs.Put(stream.Bytes())
+	// Everything the agent said is redacted before it's persisted; the
+	// Exit name and failure reach AttemptEnded and RunEnded.why.
+	a.Exit = string(redact.Redact([]byte(a.Exit)))
+	a.Failure = string(redact.Redact([]byte(a.Failure)))
+	streamBlob, err := blobs.Put(redact.Redact(stream.Bytes()))
 	if err != nil {
 		return nil, err
 	}

@@ -318,3 +318,31 @@ func TestRunSetupCannotRewriteTheOracle(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
+
+func TestRunRedactsAgentText(t *testing.T) {
+	const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz0123"
+	for name, script := range map[string]string{
+		"claim": "echo 'my key is " + secret + "'\n" + fixScript,
+		"exit":  "echo 'exit: " + secret + "'\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRunFixture(t)
+			code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+			if code != ExitOK && code != ExitInfra {
+				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+			}
+			err := filepath.WalkDir(f.state, func(p string, d os.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return err
+				}
+				if b, err := os.ReadFile(p); err == nil && bytes.Contains(b, []byte(secret)) {
+					t.Errorf("%s holds the secret", p)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
