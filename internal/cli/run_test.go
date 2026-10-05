@@ -194,7 +194,7 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 		"implement  fake · Exit done · Candidate ", "· 1 file changed",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
 		"ACCEPTED   Candidate ", "Oracle v0",
-		"Not covered", "Checks run Candidate code uncontained; a hostile Candidate can forge test results",
+		"Not covered", "Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges",
 		"Nothing was written to your repository.",
 	} {
 		if !strings.Contains(out, want) {
@@ -244,6 +244,9 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 		Result struct {
 			Cache   string `json:"cache"`
 			CacheMs *int64 `json:"cache_materialise_ms"`
+			Tests   []struct {
+				Name, Attested string
+			} `json:"tests"`
 		} `json:"result"`
 	}
 	recordData(t, dir, run.RecCacheSeeded, &seeded)
@@ -255,6 +258,12 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	if c := ended.Result.Cache; c == oracle.CacheCold || c == "" || (want != "" && c != want) || ended.Result.CacheMs == nil {
 		t.Errorf("CheckEnded cache = %q (%v ms), want a seeded cache", c, ended.Result.CacheMs)
 	}
+	// The Oracle test attested its own execution (ADR-0020), and the
+	// Verdict never waited for the Snapshot control.
+	if tests := ended.Result.Tests; len(tests) != 1 || tests[0].Name != "TestAdd" || tests[0].Attested != "pass" {
+		t.Errorf("CheckEnded tests = %+v, want TestAdd attested passing", tests)
+	}
+	// (wantOrder above has no ControlEnded: the control wasn't consulted.)
 }
 
 // recordData decodes the data of the Run's only record of type typ.
@@ -501,7 +510,7 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	script := fixScript + "printf 'module sub\\n\\ngo 1.22\\n' > sub/go.mod\n"
 	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitParked || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
+	if code != ExitParked || !strings.Contains(out, "Oracle tests not attested passing (1): fx/sub.TestX never ran") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

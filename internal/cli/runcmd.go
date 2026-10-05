@@ -419,7 +419,21 @@ func (r *renderer) summary(res *run.Result) {
 		}
 		r.friction(res)
 		// TODO(#63): the Receipt replaces these lines.
-		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
+		label := "Not covered"
+		if c := res.Check; c != nil {
+			// Coverage gaps the Snapshot already had: shown first.
+			for _, gap := range []struct {
+				what  string
+				items []string
+			}{{"Oracle tests skipped on the Snapshot and the Candidate", c.Skipped}, {"Oracle test files this machine doesn't build", c.NotBuilt}} {
+				if len(gap.items) > 0 {
+					r.p("%-10s %s", label, clean(fmt.Sprintf("%s (%d): %s", gap.what, len(gap.items), strings.Join(gap.items, "; "))))
+					label = strings.Repeat(" ", len("Not covered"))
+				}
+			}
+		}
+		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges", label)
+		r.observed(res)
 		if r.warn != "" {
 			r.p("! %s", r.warn)
 		}
@@ -435,6 +449,18 @@ func (r *renderer) summary(res *run.Result) {
 			r.p("  %s", clean(w))
 		}
 		r.friction(res)
+	}
+}
+
+// observed prints the tripwires a Run set off, if any: the static ones
+// on the Candidate's changes, and attestation lines that named no test.
+func (r *renderer) observed(res *run.Result) {
+	obs := append([]string(nil), res.Tripwires...)
+	if c := res.Check; c != nil && c.Stray > 0 {
+		obs = append(obs, fmt.Sprintf("%d stray lines on the attestation channel", c.Stray))
+	}
+	if len(obs) > 0 {
+		r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(obs, " · ")))
 	}
 }
 

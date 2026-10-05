@@ -142,6 +142,9 @@ _Avoid_: Prompt log, context dump
 The revision a Run's Workspace starts from, including the user's uncommitted and untracked work.
 _Avoid_: Base, checkpoint
 
+**Snapshot control**:
+The protected tests of one Oracle version run on the immutable Snapshot, with the same setup, environment policy and Attestation as a Check. A Check consults it to judge skips: a protected test may skip on the Candidate only if it also skipped on the Snapshot control.
+
 **Run repository**:
 The Öge-owned private repository of one Run, holding its Snapshot and every Candidate. The user's own repository is only the source of the Snapshot and is never where agents work.
 _Avoid_: Shadow repo, worktree, the user's repo

@@ -57,6 +57,7 @@ const (
 	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
+	RecControlEnded      = "ControlEnded"
 	RecVerdict           = "Verdict"
 	RecRunEnded          = "RunEnded"
 )
@@ -158,6 +159,9 @@ type Result struct {
 	// ended it.
 	Gate     string
 	Decision *gate.Decision
+	// Tripwires are the static tripwires the Candidate's changes set off
+	// (ADR-0020): signals, not proof.
+	Tripwires []string
 	// Friction is the Run's policy friction, summed over its Attempts.
 	Friction *agent.Friction
 }
@@ -324,6 +328,8 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	p.Observe(Event{Kind: EvPreflight, Result: res})
+	control := startControl(ctx, runner, seed, repo, m, snap, f.Setup.Run, res.Dir)
+	defer control.Stop()
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
 	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
@@ -353,6 +359,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
 		}
 		res.Candidate = a.Candidate
+		if err := recordTripwires(l, repo, res, a); err != nil {
+			return nil, err
+		}
 		// A Tamper event stays unacknowledged for the rest of the Run,
 		// whatever later Attempts do (ADR-0019 #2).
 		w.addTamper(a)
@@ -377,7 +386,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := l.Append(RecCheckStarted, map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 			return nil, err
 		}
-		cr, err := runner.Check(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)))
+		cr, err := runner.CheckAgainst(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
 		if err != nil {
 			return nil, err
 		}
@@ -394,6 +403,17 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		}
 		if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true}); err != nil {
 			return nil, err
+		}
+		// TODO(#73-decision): the Snapshot control is recorded once a Check
+		// has consulted it; one no Verdict needed is stopped unrecorded at
+		// the end of the Run.
+		if rec, ok := control.Consulted(); ok {
+			if err := l.Append(RecControlEnded, rec); err != nil {
+				return nil, err
+			}
+		}
+		if cr.Infra != "" {
+			return end(InfrastructureStop, cr.Infra)
 		}
 		if err := l.Append(RecVerdict, map[string]any{"check": check, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
 			return nil, err
