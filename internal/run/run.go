@@ -68,6 +68,9 @@ type Params struct {
 	// CacheSeedTemplate is a build cache the Run's seed starts from. Only
 	// tests set it; see cli.Env.CacheSeedTemplate.
 	CacheSeedTemplate string
+	// CacheWait bounds how long the Check waits for the seed's warm step
+	// (DefaultCacheWait when zero).
+	CacheWait time.Duration
 	// Observe receives progress as it happens, for rendering.
 	Observe func(Event)
 }
@@ -118,6 +121,13 @@ type Result struct {
 	Duration  time.Duration
 	Candidate string
 }
+
+// DefaultCacheWait bounds the Check's wait for the warm step: past it the
+// warm step is stopped and the Check starts from the partial seed, so a
+// large module with a fast agent never waits longer than a cold Check.
+// TODO(#74-decision): a fixed bound; make it a config key if projects
+// need another.
+const DefaultCacheWait = 30 * time.Second
 
 // interrupted is why a cancelled Run stopped.
 // TODO(#40-decision): ADR-0012's interrupted status and exit 130 come
@@ -284,13 +294,13 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	// The Check, from the cache seed once it is warm. A cancelled Run
 	// never reaches a Verdict: the Check it killed didn't fail.
 	if seed != nil {
-		waitStart := time.Now()
-		warm, werr := seed.Wait()
-		rec := map[string]any{"warm": warm, "waited_ms": time.Since(waitStart).Milliseconds()}
-		if werr != nil {
-			rec["error"] = string(redact.Redact([]byte(werr.Error())))
+		limit := p.CacheWait
+		if limit <= 0 {
+			limit = DefaultCacheWait
 		}
-		if err := l.Append(RecCacheSeeded, rec); err != nil {
+		w := seed.WaitFor(limit)
+		w.Error = string(redact.Redact([]byte(w.Error)))
+		if err := l.Append(RecCacheSeeded, w); err != nil {
 			return nil, err
 		}
 		runner.Seed = seed

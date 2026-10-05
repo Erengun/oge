@@ -6,10 +6,10 @@ import (
 	"os/exec"
 )
 
-// cloneTree clones src to a new dst with reflinks. --reflink=always fails
+// cloneTreeOS clones src to a new dst with reflinks. --reflink=always fails
 // where the filesystem can't reflink, instead of quietly copying, so a
 // clone is never mislabelled.
-func cloneTree(src, dst string) error {
+func cloneTreeOS(src, dst string) error {
 	cp := "/bin/cp"
 	if _, err := os.Stat(cp); err != nil {
 		cp = "/usr/bin/cp"

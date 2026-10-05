@@ -2,10 +2,12 @@ package oracle
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -25,7 +27,16 @@ const (
 // be a compile error) still seeds whatever does.
 // TODO(#74-decision): Öge runs this Go-specific warm step itself, beyond
 // the project's setup command; a project with no go.mod gets no warm step.
-const warmCommand = `go list -e -export -deps -test -f '{{if .Error}}{{.ImportPath}}: {{.Error}}{{end}}' ./...`
+// It runs niced, on about half the cores, so it doesn't slow the
+// implementer it overlaps.
+var warmCommand = fmt.Sprintf(`nice -n 10 go list -p %d -e -export -deps -test -f '{{if .Error}}{{.ImportPath}}: {{.Error}}{{end}}' ./...`,
+	max(1, runtime.NumCPU()/2))
+
+// Replaceable for tests, to force each fallback.
+var (
+	cloneTree = cloneTreeOS
+	copyTree  = copyTreeGo
+)
 
 // Seed is a Run's warm cache seed (ADR-0021): a build cache and a module
 // cache filled on the trusted Snapshot, by the setup command and then by
@@ -38,6 +49,8 @@ type Seed struct {
 	cancel context.CancelFunc
 	warm   *Execution
 	err    error
+	// stopped is set when WaitFor stopped the warm step at its limit.
+	stopped bool
 }
 
 // Dir holds the seed's caches.
@@ -58,6 +71,35 @@ func (s *Seed) Wait() (*Execution, error) {
 	}
 	<-s.done
 	return s.warm, s.err
+}
+
+// Warmth is how a wait for the warm step ended.
+type Warmth struct {
+	Warm     *Execution `json:"warm"`
+	Complete bool       `json:"complete"` // false: stopped at the limit, the seed is partial
+	WaitedMs int64      `json:"waited_ms"`
+	Error    string     `json:"error,omitempty"`
+}
+
+// WaitFor waits up to limit for the warm step. Past it, the warm step is
+// stopped and the seed is used as it is: Go's cache entries are
+// self-checking, so a partial seed only means more cache misses.
+func (s *Seed) WaitFor(limit time.Duration) Warmth {
+	start := time.Now()
+	t := time.NewTimer(limit)
+	defer t.Stop()
+	select {
+	case <-s.done:
+	case <-t.C:
+		s.stopped = true
+		s.cancel()
+		<-s.done
+	}
+	w := Warmth{Warm: s.warm, Complete: !s.stopped, WaitedMs: time.Since(start).Milliseconds()}
+	if s.err != nil {
+		w.Error = s.err.Error()
+	}
+	return w
 }
 
 // Close stops the warm step, waits for it, and removes the seed.
@@ -93,7 +135,7 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 		}
 	}
 	if r.SeedTemplate != "" {
-		if _, err := materialise(r.SeedTemplate, s.GoCache()); err != nil {
+		if _, _, err := materialise(r.SeedTemplate, s.GoCache()); err != nil {
 			return fail(nil, err)
 		}
 	}
@@ -121,60 +163,108 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 	go func() {
 		defer close(s.done)
 		defer RemoveAll(work)
-		if !hasModule {
-			return
+		if hasModule {
+			env["GOPROXY"] = "off" // the warm step never fetches
+			e, _, err := r.Exec(wctx, warmCommand, dir, env, 10*time.Minute, 64<<10)
+			s.warm, s.err = &e, err
 		}
-		env["GOPROXY"] = "off" // the warm step never fetches
-		e, _, err := r.Exec(wctx, warmCommand, dir, env, 10*time.Minute, 64<<10)
-		s.warm, s.err = &e, err
+		// Checks run uncontained (ADR-0010) and can reach the seed by its
+		// path; read-only, a stray write fails instead of poisoning every
+		// later Check's cache, which Go trusts.
+		if err := setModes(s.Dir(), 0o500, 0o400); err != nil && s.err == nil {
+			s.err = err
+		}
 	}()
 	return s, setupE, nil
 }
 
-// prepareCheck is Prepare plus the Check-local caches: private clones or
-// copies of the Run's seed when there is one, else cold. It returns the
-// strategy and how long materialising took.
-func (r *Runner) prepareCheck(root string) (string, map[string]string, string, int64, error) {
+// checkCache is how a Check's caches were made.
+type checkCache struct {
+	strategy, why string
+	ms            int64
+}
+
+// prepareCheck is Prepare plus the Check-local caches: private, writable
+// clones or copies of the Run's seed when there is one, else cold.
+func (r *Runner) prepareCheck(root string) (string, map[string]string, checkCache, error) {
 	dir, env, err := r.Prepare(root)
 	if err != nil || r.Seed == nil {
-		return dir, env, CacheCold, 0, err
+		return dir, env, checkCache{strategy: CacheCold, why: "no cache seed"}, err
 	}
 	_, _ = r.Seed.Wait() // a failed warm step leaves a partial seed, still valid
 	start := time.Now()
-	cache := CacheClone
-	for src, dst := range map[string]string{r.Seed.GoCache(): env["GOCACHE"], r.Seed.ModCache(): env["GOMODCACHE"]} {
-		s, err := materialise(src, dst)
+	c := checkCache{strategy: CacheClone}
+	for _, p := range [][2]string{{r.Seed.GoCache(), env["GOCACHE"]}, {r.Seed.ModCache(), env["GOMODCACHE"]}} {
+		s, why, err := materialise(p[0], p[1])
 		if err != nil {
-			return "", nil, "", 0, err
+			return "", nil, checkCache{}, err
 		}
-		cache = weaker(cache, s)
+		if weaker(c.strategy, s) != c.strategy || (c.why == "" && why != "") {
+			c.why = why
+		}
+		c.strategy = weaker(c.strategy, s)
 	}
-	return dir, env, cache, time.Since(start).Milliseconds(), nil
+	c.ms = time.Since(start).Milliseconds()
+	return dir, env, c, nil
 }
 
-// materialise makes dst a private cache from src: a copy-on-write clone
-// where the filesystem supports it, else a regular copy, else an empty
-// cache. It never links dst to src.
-func materialise(src, dst string) (string, error) {
+// materialise makes dst a private, writable cache from src: a
+// copy-on-write clone where the filesystem supports it, else a regular
+// copy, else an empty cache. It never links dst to src. why says why it
+// fell back, if it did.
+func materialise(src, dst string) (strategy, why string, err error) {
 	if err := RemoveAll(dst); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return "", err
+		return "", "", err
 	}
-	if cloneTree(src, dst) == nil {
-		return CacheClone, nil
-	}
-	if err := RemoveAll(dst); err != nil {
-		return "", err
-	}
-	if copyTree(src, dst) == nil {
-		return CacheCopy, nil
+	cerr := cloneTree(src, dst)
+	if cerr == nil {
+		return CacheClone, "", setModes(dst, 0o700, 0o600)
 	}
 	if err := RemoveAll(dst); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return CacheCold, os.MkdirAll(dst, 0o700)
+	perr := copyTree(src, dst)
+	if perr == nil {
+		return CacheCopy, "no clone: " + short(cerr), setModes(dst, 0o700, 0o600)
+	}
+	if err := RemoveAll(dst); err != nil {
+		return "", "", err
+	}
+	return CacheCold, "no clone: " + short(cerr) + "; no copy: " + short(perr), os.MkdirAll(dst, 0o700)
+}
+
+func short(err error) string { return truncate(err.Error(), 120) }
+
+// setModes sets every directory under dir (dir included) to dirMode and
+// every regular file to fileMode. Directories are opened up first, so a
+// read-only tree can be walked and changed.
+func setModes(dir string, dirMode, fileMode fs.FileMode) error {
+	var dirs []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			dirs = append(dirs, p)
+			return os.Chmod(p, 0o700)
+		case d.Type().IsRegular():
+			return os.Chmod(p, fileMode)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := os.Chmod(dirs[i], dirMode); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func weaker(a, b string) string {
@@ -185,10 +275,10 @@ func weaker(a, b string) string {
 	return a
 }
 
-// copyTree copies src to a new dst: regular files' contents and modes,
+// copyTreeGo copies src to a new dst: regular files' contents and modes,
 // directories' modes (applied once they are filled) and symlinks as
 // symlinks. Nothing is hard-linked.
-func copyTree(src, dst string) error {
+func copyTreeGo(src, dst string) error {
 	type dirMode struct {
 		path string
 		mode fs.FileMode

@@ -197,6 +197,7 @@ type Result struct {
 	// Cache is how the Check-local caches were made (CacheClone, CacheCopy
 	// or CacheCold), and CacheMs how long that took.
 	Cache    string      `json:"cache"`
+	CacheWhy string      `json:"cache_why,omitempty"` // why it fell back
 	CacheMs  int64       `json:"cache_materialise_ms"`
 	Setup    *Execution  `json:"setup,omitempty"`
 	Commands []Execution `json:"commands"`
@@ -208,14 +209,14 @@ type Result struct {
 // only if every command passes. root is removed afterwards.
 func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, setup, root string) (*Result, error) {
 	defer RemoveAll(root)
-	dir, env, cache, cacheMs, err := r.prepareCheck(root)
+	dir, env, cache, err := r.prepareCheck(root)
 	if err != nil {
 		return nil, err
 	}
 	if err := repo.Checkout(candidate, dir); err != nil {
 		return nil, err
 	}
-	res := &Result{Pass: true, Cache: cache, CacheMs: cacheMs}
+	res := &Result{Pass: true, Cache: cache.strategy, CacheWhy: cache.why, CacheMs: cache.ms}
 	if setup != "" {
 		e, _, err := r.Exec(ctx, setup, dir, env, 10*time.Minute, 1<<20)
 		if err != nil {

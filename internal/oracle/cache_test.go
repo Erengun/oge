@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -288,5 +289,131 @@ func TestCacheMaterialisationIsTimed(t *testing.T) {
 	}
 	if res.CacheMs < 0 || time.Duration(res.CacheMs)*time.Millisecond > time.Since(start) {
 		t.Errorf("CacheMs = %d, not a plausible duration", res.CacheMs)
+	}
+}
+
+// A Check that writes straight to the seed's files, through a relative
+// path, can't change it: the seed is read-only once warm.
+func TestSeedIsReadOnlyToChecks(t *testing.T) {
+	r := newCacheRunner(t)
+	base := t.TempDir()
+	seed, _, err := r.NewSeed(context.Background(), goFixture, "snap", "", filepath.Join(base, "cache-seed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	if _, err := seed.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	before := treeHash(t, seed.Dir())
+	r.Seed = seed
+	checkRoot := filepath.Join(base, "checks", "1")
+	rel, err := filepath.Rel(filepath.Join(checkRoot, "tree"), seed.GoCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := &Manifest{Commands: []Command{{
+		Run: `echo pwned > '` + rel + `/POISON'; for f in $(find '` + rel + `' -type f | head -5); do echo pwned > "$f"; done; ` +
+			`rm -rf '` + rel + `/00'; test -w "$GOCACHE" && touch "$GOCACHE/ok"`,
+		TimeoutSec: 60, OutputCap: 1 << 10,
+	}}}
+	res, err := r.Check(context.Background(), goFixture, write, "c1", "", checkRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Pass {
+		t.Errorf("the Check's own cache isn't writable: %+v", res.Commands)
+	}
+	if after := treeHash(t, seed.Dir()); after != before {
+		t.Error("a Check wrote to the seed through a relative path")
+	}
+	next := &Manifest{Commands: []Command{{Run: `! grep -rq pwned "$GOCACHE"`, TimeoutSec: 60, OutputCap: 1 << 10}}}
+	if res, err := r.Check(context.Background(), goFixture, next, "c2", "", filepath.Join(base, "checks", "2")); err != nil || !res.Pass {
+		t.Errorf("the next Check saw the write: %v %+v", err, res)
+	}
+}
+
+func TestMaterialiseFallbacksAreLabelled(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	oldClone, oldCopy := cloneTree, copyTree
+	defer func() { cloneTree, copyTree = oldClone, oldCopy }()
+	partial := func(name string) func(string, string) error {
+		return func(_, dst string) error {
+			if _, err := os.Stat(dst); err == nil {
+				t.Errorf("%s: a partial cache from the last attempt is still there", name)
+			}
+			os.MkdirAll(dst, 0o700)
+			os.WriteFile(filepath.Join(dst, "partial"), []byte("half"), 0o600)
+			return errors.New(name + " unsupported")
+		}
+	}
+	cloneTree = partial("clone")
+	dst := filepath.Join(t.TempDir(), "c", "gocache")
+	got, why, err := materialise(src, dst)
+	if err != nil || got != CacheCopy || why == "" {
+		t.Errorf("clone fails: %q (%q), %v; want %q with a reason", got, why, err, CacheCopy)
+	}
+	if b, err := os.ReadFile(filepath.Join(dst, "f")); err != nil || string(b) != "x" {
+		t.Errorf("the copy lacks the seed's file: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "partial")); err == nil {
+		t.Error("the partial clone survived into the copy")
+	}
+	if f, err := os.OpenFile(filepath.Join(dst, "f"), os.O_WRONLY, 0); err != nil {
+		t.Errorf("the Check's copy isn't writable: %v", err)
+	} else {
+		f.Close()
+	}
+
+	copyTree = partial("copy")
+	got, why, err = materialise(src, dst)
+	if err != nil || got != CacheCold || !strings.Contains(why, "copy unsupported") {
+		t.Errorf("clone and copy fail: %q (%q), %v; want %q with the copy's error", got, why, err, CacheCold)
+	}
+	if entries, err := os.ReadDir(dst); err != nil || len(entries) != 0 {
+		t.Errorf("a cold cache should be empty and exist: %v %v", entries, err)
+	}
+}
+
+// The wait for the warm step is bounded: past the limit the warm step is
+// stopped and the Check uses the partial seed, recorded as incomplete.
+func TestSeedWaitIsBounded(t *testing.T) {
+	r := newCacheRunner(t)
+	r.SeedTemplate = "" // a cold warm step takes seconds
+	seed, _, err := r.NewSeed(context.Background(), goFixture, "snap", "", filepath.Join(t.TempDir(), "seed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	start := time.Now()
+	w := seed.WaitFor(50 * time.Millisecond)
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("WaitFor took %v past a 50ms limit", took)
+	}
+	if w.Complete {
+		t.Errorf("the warm step finished within 50ms? %+v", w)
+	}
+	if again := seed.WaitFor(time.Hour); again.Complete {
+		t.Error("a stopped warm step later reads as complete")
+	}
+	if f, err := os.Create(filepath.Join(seed.GoCache(), "x")); err == nil {
+		f.Close()
+		t.Error("the partial seed is still writable")
+	}
+}
+
+func TestWarmStepIsNicedAndBounded(t *testing.T) {
+	r := newCacheRunner(t)
+	seed, _, err := r.NewSeed(context.Background(), goFixture, "snap", "", filepath.Join(t.TempDir(), "seed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer seed.Close()
+	w := seed.WaitFor(time.Minute)
+	if w.Warm == nil || !w.Complete || !strings.HasPrefix(w.Warm.Run, "nice ") || !strings.Contains(w.Warm.Run, " -p ") {
+		t.Errorf("warm = %+v, want a complete, niced go list with -p", w)
 	}
 }

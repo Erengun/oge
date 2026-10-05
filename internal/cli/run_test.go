@@ -228,6 +228,7 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 			Run  string
 			Pass bool
 		} `json:"warm"`
+		Complete bool   `json:"complete"`
 		WaitedMs *int64 `json:"waited_ms"`
 	}
 	var ended struct {
@@ -238,7 +239,7 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	}
 	recordData(t, dir, run.RecCacheSeeded, &seeded)
 	recordData(t, dir, run.RecCheckEnded, &ended)
-	if seeded.Warm == nil || !strings.HasPrefix(seeded.Warm.Run, "go list ") || !seeded.Warm.Pass || seeded.WaitedMs == nil {
+	if seeded.Warm == nil || !strings.Contains(seeded.Warm.Run, " go list ") || !seeded.Warm.Pass || !seeded.Complete || seeded.WaitedMs == nil {
 		t.Errorf("CacheSeeded = %+v, want the passing warm step and the wait", seeded)
 	}
 	want := map[bool]string{true: oracle.CacheClone, false: ""}[runtime.GOOS == "darwin"]
