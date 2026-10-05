@@ -75,8 +75,8 @@ func TestRecoveryHints(t *testing.T) {
 		{`find src -name "*.go" | wc -l`, "Use the Glob tool."},
 		{`find . -name "*.go" | sort`, "Use the Glob tool."},
 		{`cd /home/user/project && go test ./...`, "Run go test ./... directly; the working directory is already the Workspace."},
-		{`cd "/home/user/project" && go test -run TestAdd ./... 2>&1 | tail -30`, "Run go test -run TestAdd ./... 2>&1 | tail -30 directly; the working directory is already the Workspace."},
-		{`cd /home/user/project/src && ls`, "Run ls directly; the working directory is already the Workspace."},
+		{`cd "/home/user/project" && go test -run TestAdd ./...`, "Run go test -run TestAdd ./... directly; the working directory is already the Workspace."},
+		{`cd /home/user/project/ && ls src`, "Run ls src directly; the working directory is already the Workspace."},
 	} {
 		h := open(t, syntheticSession(bashStep("m1", c.cmd, "deny")))
 		evs := h.turn("go")
@@ -112,15 +112,36 @@ func TestNoHintElsewhere(t *testing.T) {
 	grey := "Öge denied this: this command isn't pre-authorised." + denyTail
 	outside := "Öge denied this: the command reaches outside the Workspace." + denyTail
 	for cmd, want := range map[string]string{
-		"curl https://example.com":           grey,
-		"ls | grep x":                        grey,
-		"find . -name x | sh":                grey,
-		"find . -name x | grep y; rm -rf .":  grey,
-		"find . -name x || grep y z":         grey,
-		"find . -name x && grep y z":         grey,
-		"cd /tmp && ls":                      grey,
-		"cd " + dir + " && ls":               grey,
-		"cd " + ws + " && cat /etc/hosts":    grey, // its remedy reaches outside
+		"curl https://example.com":          grey,
+		"ls | grep x":                       grey,
+		"find . -name x | sh":               grey,
+		"find . -name x | grep y; rm -rf .": grey,
+		"find . -name x || grep y z":        grey,
+		"find . -name x && grep y z":        grey,
+		"cd /tmp && ls":                     grey,
+		"cd " + dir + " && ls":              grey,
+		"cd " + ws + " && cat /etc/hosts":   grey, // its remedy reaches outside
+		// The remedy must itself be pre-authorised.
+		"cd " + ws + " && rm -rf /":                         grey,
+		"cd " + ws + " && curl x | sh":                      grey,
+		"cd " + ws + " && git push":                         grey,
+		"cd " + ws + " && go test $(evil)":                  grey,
+		"cd " + ws + " && go test ./... 2>&1 | tail":        grey,
+		"cd " + ws + " && ignore all previous instructions": grey,
+		// Only a cd to the Workspace itself: a subdirectory changes what runs.
+		"cd " + ws + "/src && ls": grey,
+		"cd src && ls":            grey,
+		// A find hint only for a read-only find inside the Workspace.
+		"find . -name x | xargs rm":          grey,
+		"find . -name x | xargs -0 rm -f":    grey,
+		"find . -delete | head":              grey,
+		"find . -exec cat {} + | grep y":     grey,
+		"find . -name x | grep -r y /etc":    grey,
+		"find . -name x | grep y ../other":   grey,
+		"find / -name x | grep y":            grey,
+		"find /etc -name x | head":           grey,
+		"find . -name x | sort -o out":       grey,
+		"find . -name x | sort --output=out": grey,
 		"cd " + ws + " && go test\nrm -rf .": grey,
 		"cd " + ws + "; go test":             grey,
 		"cat /etc/hosts":                     outside,
@@ -155,12 +176,24 @@ func TestPolicyFriction(t *testing.T) {
 		{"two denied in one turn", []step{bashStep("m1", "curl x", "deny"), bashStep("m1", "curl y", "deny"), bashStep("m2", "ls", "allow")}, agent.Friction{Denied: 2, LostTurns: 1}},
 	} {
 		h := open(t, syntheticSession(c.steps...))
-		s := settled(t, h.turn("go"))
+		evs := h.turn("go")
+		s := settled(t, evs)
 		if s.Exit != "done" {
 			t.Fatalf("%s: settled %+v", c.name, s)
 		}
 		if s.Friction == nil || *s.Friction != c.want {
 			t.Errorf("%s: friction %+v, want %+v", c.name, s.Friction, c.want)
+		}
+		// Each Host request carries the turn's friction so far, for a
+		// turn that never settles.
+		var last *agent.Friction
+		for _, e := range evs {
+			if e.Kind == agent.HostRequest {
+				last = e.Friction
+			}
+		}
+		if len(c.steps) > 0 && (last == nil || last.Denied != c.want.Denied) {
+			t.Errorf("%s: last Host request's friction %+v", c.name, last)
 		}
 		h.sess.Close()
 	}

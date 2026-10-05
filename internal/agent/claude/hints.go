@@ -1,6 +1,9 @@
 package claude
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Recovery hints (#90): when Öge denies a common shell idiom, the deny
 // reason says in one line what to do instead, so Claude recovers on its
@@ -16,29 +19,31 @@ const (
 // files, which Glob does.
 var globPipes = map[string]bool{"head": true, "tail": true, "wc": true, "xargs": true, "sort": true}
 
+// findWrites are find's actions that run, delete or write something.
+var findWrites = map[string]bool{"-delete": true, "-exec": true, "-execdir": true, "-ok": true, "-okdir": true,
+	"-fprint": true, "-fprint0": true, "-fprintf": true, "-fls": true}
+
+// xargsRuns are the commands a hinted find may hand to xargs: read-only.
+var xargsRuns = map[string]bool{"grep": true, "wc": true, "head": true, "tail": true}
+
 // hint is the recovery hint for a denied Bash command, or "".
 //   - find … | … grep …: the Grep tool;
 //   - find … | head (tail, wc, xargs, sort): the Glob tool;
-//   - cd <the Workspace, or a directory in it> && <rest>: run <rest>
-//     directly, as long as <rest> alone doesn't reach outside.
+//   - cd <the Workspace> && <rest>: run <rest> directly.
 //
-// TODO(#90-decision): a cd into a subdirectory gets the same wording,
-// and <rest> may itself still be denied (a pipe, say); the hint then
-// costs another retry.
-//
-// Every segment must lex as simple words; anything else gets no hint.
+// A hint never points at something Öge would refuse: <rest> must itself
+// be pre-authorised, and a find pipeline must be read-only, with every
+// path it names inside the Workspace. Every segment must lex as simple
+// words; anything else gets no hint.
 func (p *policy) hint(cmd string) string {
 	if strings.ContainsAny(cmd, "\n\r") {
 		return ""
 	}
 	if dir, rest, ok := cutTopLevel(cmd, "&&"); ok {
 		words, ok := lex(dir)
+		rest = strings.TrimSpace(rest)
 		if ok && len(words) == 2 && words[0].text == "cd" && !words[0].quoted && !words[1].glob &&
-			p.path(words[1].text, false) == vOK {
-			rest = strings.TrimSpace(rest)
-			if rest == "" || p.bash(rest) == vOutside {
-				return ""
-			}
+			p.isWorkspace(words[1].text) && rest != "" && p.bash(rest) == vOK {
 			return "Run " + target("Bash", map[string]any{"command": rest}, p.ws) + " directly; the working directory is already the Workspace."
 		}
 		return ""
@@ -47,21 +52,55 @@ func (p *policy) hint(cmd string) string {
 	if len(segs) < 2 {
 		return ""
 	}
-	first, ok := lex(segs[0])
-	if !ok || len(first) == 0 || first[0].text != "find" || first[0].quoted || p.bash(segs[0]) == vOutside {
-		return ""
-	}
 	grep, glob := false, false
-	for _, s := range segs[1:] {
+	for i, s := range segs {
 		words, ok := lex(s)
-		if !ok || len(words) == 0 {
+		if !ok || len(words) == 0 || words[0].quoted {
 			return ""
 		}
 		for _, w := range words {
-			grep = grep || w.text == "grep"
+			if w.text == "grep" {
+				grep = true
+			}
+			// Any path-like word must be inside the Workspace.
+			if (strings.HasPrefix(w.text, "/") || strings.HasPrefix(w.text, "~") || hasDotDot(w.text)) && p.path(w.text, false) != vOK {
+				return ""
+			}
 		}
-		glob = glob || globPipes[words[0].text]
-		if !globPipes[words[0].text] && words[0].text != "grep" {
+		name := words[0].text
+		switch {
+		case i == 0:
+			if name != "find" {
+				return ""
+			}
+			for _, w := range words {
+				if findWrites[w.text] {
+					return ""
+				}
+			}
+		case name == "grep":
+		case name == "xargs":
+			glob = true
+			run := ""
+			for _, w := range words[1:] {
+				if !strings.HasPrefix(w.text, "-") {
+					run = w.text
+					break
+				}
+			}
+			if run != "" && !xargsRuns[run] {
+				return ""
+			}
+		case name == "sort":
+			glob = true
+			for _, w := range words[1:] {
+				if w.text == "-o" || strings.HasPrefix(w.text, "--output") || (strings.HasPrefix(w.text, "-") && !strings.HasPrefix(w.text, "--") && strings.Contains(w.text, "o")) {
+					return ""
+				}
+			}
+		case globPipes[name]:
+			glob = true
+		default:
 			return "" // piped into something else
 		}
 	}
@@ -72,6 +111,23 @@ func (p *policy) hint(cmd string) string {
 		return hintGlob
 	}
 	return ""
+}
+
+// isWorkspace reports whether a cd target is the Workspace itself.
+func (p *policy) isWorkspace(dir string) bool {
+	if p.path(dir, false) != vOK {
+		return false
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(p.ws[0], dir)
+	}
+	dir = filepath.Clean(dir)
+	for _, w := range p.ws {
+		if dir == w || resolve(dir) == w {
+			return true
+		}
+	}
+	return false
 }
 
 // splitTopLevel splits s at each sep outside quotes. A "|" that is part

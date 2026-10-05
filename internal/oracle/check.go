@@ -303,7 +303,8 @@ func (r *Runner) Prepare(root string) (string, map[string]string, error) {
 }
 
 // overlay lays the Oracle version over the Check directory's test paths:
-// files matching the test globs are the Oracle's, never the Candidate's.
+// files matching the test globs or the test-config globs are the Oracle's,
+// never the Candidate's.
 // It never writes outside dir: an Oracle path the Candidate blocks with a
 // symlink (or a non-directory) anywhere along it is returned as a reason
 // the Check fails, and nothing is written for it.
@@ -313,7 +314,7 @@ func (r *Runner) overlay(m *Manifest, dir string) (blocked string, err error) {
 			return err
 		}
 		rel, _ := filepath.Rel(dir, p)
-		if MatchAny(m.TestGlobs, filepath.ToSlash(rel)) {
+		if rel := filepath.ToSlash(rel); MatchAny(m.TestGlobs, rel) || MatchAny(m.TestConfigGlobs, rel) {
 			return os.Remove(p)
 		}
 		return nil
@@ -321,7 +322,7 @@ func (r *Runner) overlay(m *Manifest, dir string) (blocked string, err error) {
 	if err != nil {
 		return "", err
 	}
-	for _, f := range m.Tests {
+	for _, f := range append(append([]File(nil), m.Tests...), m.Config...) {
 		if why, err := blockedPath(dir, f.Path); err != nil || why != "" {
 			return why, err
 		}

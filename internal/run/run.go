@@ -23,6 +23,7 @@ import (
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	procs "github.com/erengun/oge/internal/proc"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -38,6 +39,8 @@ const (
 	Refused Outcome = "Refused"
 	// InfrastructureStop is a status: no Verdict could be reached.
 	InfrastructureStop Outcome = "Infrastructure stop"
+	// Parked is a status: the Run waits for a human decision.
+	Parked Outcome = "Parked"
 )
 
 // Ledger record types, in the order a Run writes them.
@@ -113,11 +116,14 @@ type Attempt struct {
 	Stop      string
 	Candidate string
 	Changed   []string
+	// Reverted are the writes outside the Write scope that Öge undid.
+	Reverted []workspace.Revert
+	links    map[string]string // the links the scope check let stand
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration
-	// Friction is the Attempt's policy friction (ADR-0019), when its
-	// adapter measures it.
+	// Friction is the Attempt's policy friction, summed over its turns
+	// (ADR-0019), when its adapter measures it.
 	Friction *agent.Friction
 }
 
@@ -135,6 +141,8 @@ type Result struct {
 	Started   time.Time
 	Duration  time.Duration
 	Candidate string
+	// Friction is the Run's policy friction, summed over its Attempts.
+	Friction *agent.Friction
 }
 
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
@@ -297,11 +305,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	p.Observe(Event{Kind: EvPreflight, Result: res})
 
 	// The implementer Attempt.
-	a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, ws)
+	a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, ws, implementerScope(m, f))
 	if err != nil {
 		return nil, err
 	}
 	res.Attempt = a
+	res.Friction = agent.SumFriction(res.Friction, a.Friction)
 	p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
 	if a.Stop != "" {
 		return end(InfrastructureStop, a.Stop)
@@ -362,6 +371,13 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
 	if cr.Pass {
+		if n := a.Tamper(); n > 0 {
+			// TODO(#41-decision): a Tamper event's acknowledgement belongs
+			// to the end-of-run review (ADR-0019 #2), whose Gate isn't
+			// built yet (#43, #49). Until then the Run parks (exit 10)
+			// rather than becoming Accepted without it.
+			return end(Parked, tamperWaiting(n))
+		}
 		return end(Accepted)
 	}
 	// TODO(#40-decision): a fail Verdict ends the Run Rejected (exit 3), as
@@ -374,7 +390,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 // spawn, ProcessStarted right after it, AttemptEnded only once the
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
-	adapter agent.Adapter, stage pipeline.Stage, runID, snap, ws string) (*Attempt, error) {
+	adapter agent.Adapter, stage pipeline.Stage, runID, snap, ws string, protected func(string) string) (*Attempt, error) {
 	a := &Attempt{ID: stage.Name + "#1", Stage: stage.Name, Agent: stage.Agent}
 	instructions, err := repoInstructions(repo, snap)
 	if err != nil {
@@ -424,6 +440,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	enc := json.NewEncoder(&stream)
 	settled := false
 	hosts := map[string]int{}
+	var turn *agent.Friction // the turn in flight's friction so far
 	timeout := time.NewTimer(p.Frozen.Limits.StageTimeout)
 	defer timeout.Stop()
 loop:
@@ -460,10 +477,14 @@ loop:
 				if ev.Host != nil {
 					hosts[ev.Host.Rule]++
 				}
+				if ev.Friction != nil {
+					turn = ev.Friction // the turn's so far
+				}
 			case agent.TurnSettled:
 				settled = true
 				a.Exit, a.Failure, a.Stop = ev.Exit, ev.Failure, ev.Stop
-				a.Friction = ev.Friction
+				a.Friction = agent.SumFriction(a.Friction, ev.Friction)
+				turn = nil
 				break loop
 			}
 		case <-timeout.C:
@@ -478,10 +499,17 @@ loop:
 			break loop
 		}
 	}
+	// A turn that never settled still had its friction.
+	a.Friction = agent.SumFriction(a.Friction, turn)
 	if !settled && a.Failure == "" {
 		a.Failure = "lost_subprocess: the turn never settled"
 	}
-	_ = sess.Close()
+	_ = sess.Close() // kills the agent's whole process group
+	// The scope check below needs the agent's whole tree gone, so nothing
+	// writes after it. A tree that outlives the kill fails the Attempt.
+	if !procs.WaitGone(proc.PGID, 5*time.Second) && a.Failure == "" {
+		a.Failure = "lost_subprocess: the agent's processes outlived the kill"
+	}
 	// Everything the agent said is redacted before it's persisted; the
 	// Exit name and failure reach AttemptEnded and RunEnded.why.
 	a.Exit = string(redact.Redact([]byte(a.Exit)))
@@ -503,22 +531,22 @@ loop:
 	if err := l.Append(RecObservation, obs); err != nil {
 		return nil, err
 	}
+	// The scope check runs after every Attempt whose agent ran, failed or
+	// not, and before the Candidate is committed.
+	if err := enforceScope(l, blobs, repo, a, snap, ws, protected); err != nil {
+		return nil, err
+	}
+	if a.Failure == "" && a.Stop == "" {
+		if err := commitCandidate(l, repo, a, snap, ws, protected); err != nil {
+			return nil, err
+		}
+	}
 	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
 	if a.Stop != "" {
 		ended["stop"] = a.Stop
 	}
-	if a.Failure == "" && a.Stop == "" {
-		// TODO(#41): Write-scope comparison, revert and Tamper detection
-		// run here, before the Candidate is committed.
-		c, err := repo.CommitCandidate(ws, snap, "refs/oge/candidates/c1", "Candidate c1 ("+a.ID+")")
-		if err != nil {
-			return nil, err
-		}
-		a.Candidate = c
-		if a.Changed, err = repo.ChangedFiles(snap, c); err != nil {
-			return nil, err
-		}
-		ended["candidate"] = c
+	if a.Candidate != "" {
+		ended["candidate"] = a.Candidate
 	}
 	return a, l.Append(RecAttemptEnded, ended)
 }
@@ -597,4 +625,14 @@ func newID() string {
 	var b [3]byte
 	_, _ = rand.Read(b[:])
 	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
+}
+
+// tamperWaiting is why a Run with Tamper events and a passing Verdict
+// parks.
+func tamperWaiting(n int) string {
+	events := "1 Tamper event needs"
+	if n != 1 {
+		events = fmt.Sprintf("%d Tamper events need", n)
+	}
+	return events + " acknowledging before this Run can be Accepted, and that review isn't built yet"
 }

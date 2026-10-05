@@ -1,0 +1,12 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+✓ preflight  ok · 0.4s
+✓ implement  fake · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+             scope 1 protected test change reverted: add_test.go
+✓ check      go test -json ./... · 1 ran · 0 failed · pass · 1.2s
+
+PARKED     Candidate 6d1231d · Oracle v0 · 7.3s
+           the Check passed, but 1 Tamper event needs acknowledging before this Run can be Accepted, and that review isn't built yet
+Not covered an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges
+Nothing was written to your repository.

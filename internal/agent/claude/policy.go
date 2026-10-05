@@ -308,7 +308,18 @@ func target(tool string, in map[string]any, ws []string) string {
 	case "AskUserQuestion":
 		t = "a question"
 	}
-	return shorten(string(redact.Redact([]byte(t))), 80)
+	return shorten(noControl(string(redact.Redact([]byte(t)))), 80)
+}
+
+// noControl drops C0, DEL and C1 control characters, so no terminal
+// escape reaches a target or a hint built from one.
+func noControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // shortenWorkspace writes a command's Workspace paths relative to it:

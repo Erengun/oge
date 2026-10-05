@@ -55,6 +55,15 @@ func (m *frictionMeter) decided(d agent.HostDecision) {
 // refused is a request refused before the envelope passed.
 func (m *frictionMeter) refused() { m.f.EnvelopeRefusals++ }
 
+// sofar is the turn's friction so far, as if it ended now.
+func (m *frictionMeter) sofar() *agent.Friction {
+	f := m.f
+	if m.denied && !m.allowed {
+		f.LostTurns++
+	}
+	return &f
+}
+
 // take returns the turn's friction and starts the next turn's at zero.
 func (m *frictionMeter) take() *agent.Friction {
 	m.endTurn()

@@ -1069,6 +1069,10 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 			t.Errorf("target(%q) = %q, want %q", cmd, got, want)
 		}
 	}
+	// No control character reaches a target: no terminal escapes.
+	if got := target("Bash", map[string]any{"command": "ls \x1b[31mred\x07\u009b"}, []string{ws}); got != "ls [31mred" {
+		t.Errorf("control target = %q", got)
+	}
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {
 		t.Errorf("long target has %d runes", len([]rune(got)))

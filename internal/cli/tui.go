@@ -195,6 +195,9 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		m.step = "note: " + clean(ev.Notice)
 	case run.EvAttempt:
 		m.text = attemptText(ev.Attempt)
+		if s := scopeText(ev.Attempt); s != "" {
+			m.sub = []string{"scope " + s}
+		}
 		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Stop != "" || ev.Attempt.Exit != "done"
 	case run.EvCheck:
 		lines := checkLines(ev.Check)

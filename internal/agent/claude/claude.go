@@ -619,8 +619,9 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 	if gate != "" {
 		d := s.policy.refuse(tool, input, gate)
 		s.friction.refused()
+		sofar := s.friction.sofar()
 		s.mu.Unlock()
-		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
 		return s.answer(id, r.Subtype, d, input)
 	}
 	d, seen := s.decided[useID]
@@ -631,9 +632,10 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		}
 		s.friction.decided(d)
 	}
+	sofar := s.friction.sofar()
 	s.mu.Unlock()
 	if !seen {
-		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
 	}
 	return s.answer(id, r.Subtype, d, input)
 }
