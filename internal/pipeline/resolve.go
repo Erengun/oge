@@ -308,6 +308,10 @@ func bind(stages []Stage, o Overrides) []Problem {
 			set(flag, stage, spec)
 			continue
 		}
+		if agent, _, _ := strings.Cut(a, ":"); !knownAgent(agent) {
+			set(flag, stages[0].Name, a) // reports the unknown agent once
+			continue
+		}
 		for _, s := range stages {
 			set(flag, s.Name, a)
 		}

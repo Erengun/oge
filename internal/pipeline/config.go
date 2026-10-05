@@ -130,8 +130,15 @@ func Load(data []byte) (*Config, []Problem) {
 	var raw map[string]any
 	if _, err := toml.Decode(string(data), &raw); err != nil {
 		var perr toml.ParseError
-		if errors.As(err, &perr) {
+		ok := errors.As(err, &perr)
+		switch {
+		case ok && credentialValue.Match(data):
+			// The parser's message may quote the token; never echo it.
+			return nil, []Problem{{Msg: fmt.Sprintf("not valid TOML: line %d", perr.Position.Line)}}
+		case ok:
 			return nil, []Problem{{Msg: fmt.Sprintf("not valid TOML: line %d: %s", perr.Position.Line, perr.Message)}}
+		case credentialValue.Match(data):
+			return nil, []Problem{{Msg: "not valid TOML"}}
 		}
 		return nil, []Problem{{Msg: "not valid TOML: " + err.Error()}}
 	}
@@ -156,6 +163,9 @@ func Load(data []byte) (*Config, []Problem) {
 	md, err := toml.Decode(string(data), &cfg)
 	if err != nil {
 		// Types that don't match the schema, e.g. a string where a list goes.
+		if credentialValue.Match(data) {
+			return nil, append(probs, Problem{Msg: "wrong type for a key"})
+		}
 		return nil, append(probs, Problem{Msg: typeError(err)})
 	}
 	probs = append(probs, undecoded(md.Undecoded())...)

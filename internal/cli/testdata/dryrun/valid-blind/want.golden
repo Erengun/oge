@@ -7,9 +7,9 @@ Criteria   none
 
 Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph df8469430d5a)
+Pipeline   default (frozen, compiled graph 95f0bc4a84cd)
            verify (before) ─▶ implement ─▶ Check
-           mandatory Gates: tamper · infeasible · bound exhaustion · Oracle growth · own-test failure · Ambiguous file
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     codex:gpt-5.5  network off   fresh Session every Attempt   (cli)
   implement  claude:sonnet  network off   (cli)
   Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)

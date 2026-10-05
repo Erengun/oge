@@ -7,9 +7,9 @@ Criteria   none
 
 Mode       Fast: implementer, then Öge's Check. No independent verifier and no held-out tests
 Config     none in the Snapshot; CLI flags only
-Pipeline   default (frozen, compiled graph 56dcf58944b6)
+Pipeline   default (frozen, compiled graph 483ddcae57aa)
            implement ─▶ Check
-           mandatory Gates: tamper · infeasible · bound exhaustion · own-test failure · Ambiguous file
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)
   Check      make test   no report · timeout 10m · network off   (cli)
   tests      tests/**

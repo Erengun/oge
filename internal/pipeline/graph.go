@@ -70,12 +70,12 @@ func Compile(mode Mode, resultGate bool) Graph {
 	// end-of-run review (ADR-0019).
 	node(Node{ID: "gate.tamper", Kind: KindGate, Label: "tamper", Mandatory: true, Trigger: "a Tamper event"})
 	node(Node{ID: "gate.infeasible", Kind: KindGate, Label: "infeasible", Mandatory: true, Trigger: "an infeasible or conflicts_with_oracle Exit"})
-	node(Node{ID: "gate.bound_exhaustion", Kind: KindGate, Label: "bound exhaustion", Mandatory: true, Trigger: "a budget, send-back limit or the Attempt cap exhausted"})
+	node(Node{ID: "gate.bound_exhaustion", Kind: KindGate, Label: "bound-exhaustion", Mandatory: true, Trigger: "a budget, send-back limit or the Attempt cap exhausted"})
 	if hasVerifier {
-		node(Node{ID: "gate.oracle_growth", Kind: KindGate, Label: "Oracle growth", Mandatory: true, Trigger: "an Oracle-growth limit hit"})
+		node(Node{ID: "gate.oracle_growth", Kind: KindGate, Label: "Oracle-growth", Mandatory: true, Trigger: "an Oracle-growth limit hit"})
 	}
-	node(Node{ID: "gate.own_test_failure", Kind: KindGate, Label: "own-test failure", Mandatory: true, Trigger: "Implementer-authored tests fail after the repair budget"})
-	node(Node{ID: "gate.ambiguous_file", Kind: KindGate, Label: "Ambiguous file", Mandatory: true, Trigger: "Ambiguous files remain after a pass"})
+	node(Node{ID: "gate.own_test_failure", Kind: KindGate, Label: "Own-test-failure", Mandatory: true, Trigger: "Implementer-authored tests fail after the repair budget"})
+	node(Node{ID: "gate.ambiguous_file", Kind: KindGate, Label: "Ambiguous-file", Mandatory: true, Trigger: "Ambiguous files remain after a pass"})
 	if resultGate {
 		node(Node{ID: "gate.result", Kind: KindGate, Label: "Result gate", Trigger: "the final Check passes"})
 	}

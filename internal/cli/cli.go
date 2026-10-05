@@ -30,7 +30,6 @@ type Env struct {
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Dir            string // working directory
-	Getenv         func(string) string
 	// Interactive reports whether a human is at a terminal (stdin and stdout).
 	Interactive func() bool
 	LookPath    func(string) (string, error)
@@ -46,7 +45,6 @@ func ProcessEnv(version string) Env {
 	return Env{
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 		Dir:         dir,
-		Getenv:      os.Getenv,
 		Interactive: func() bool { return isTerminal(os.Stdin) && isTerminal(os.Stdout) },
 		LookPath:    exec.LookPath,
 		Edit:        runEditor,
@@ -87,6 +85,7 @@ const usage = `Usage:
 
 Run flags:
   --dry-run                show what a Run would do, without starting any agent
+                           (a first-run config proposal is still saved on yes)
   --task-file <path|->     read the Task from a file, or stdin with -
   --fast | --blind         mode: Fast (no verifier) or Blind (verifier first); default Standard
   --require <guarantee>    refuse unless the mode gives it (e.g. held-out)
@@ -132,7 +131,7 @@ type runFlags struct {
 	o          pipeline.Overrides
 }
 
-func parseRunFlags(env Env, args []string) (runFlags, []string, error) {
+func parseRunFlags(args []string) (runFlags, []string, error) {
 	var f runFlags
 	fs := flag.NewFlagSet("oge run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -171,7 +170,7 @@ func parseRunFlags(env Env, args []string) (runFlags, []string, error) {
 }
 
 func runCommand(env Env, args []string) int {
-	f, positional, err := parseRunFlags(env, args)
+	f, positional, err := parseRunFlags(args)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
 		fmt.Fprint(env.Stdout, usage)
@@ -375,6 +374,7 @@ func readTask(env Env, f runFlags, positional []string, attended bool) (task.Tas
 		fmt.Fprintln(env.Stderr, `oge: no Task. Give it as an argument (oge "fix the login bug"), with --task-file <path>, or --task-file - for stdin.`)
 		return task.Task{}, ExitRefused
 	}
+	text = task.StripComments(text)
 	if task.IsEmpty(text) {
 		fmt.Fprintln(env.Stderr, "oge: the Task is empty; nothing to do")
 		return task.Task{}, ExitRefused
@@ -404,5 +404,5 @@ func editTask(env Env) (string, int) {
 		fmt.Fprintf(env.Stderr, "oge: reading the Task: %v\n", err)
 		return "", ExitInternal
 	}
-	return task.StripComments(string(b)), ExitOK
+	return string(b), ExitOK
 }

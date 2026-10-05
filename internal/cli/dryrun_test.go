@@ -78,7 +78,6 @@ func runCase(t *testing.T, dir string) string {
 	env := Env{
 		Stdin: bytes.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
 		Dir:         repo,
-		Getenv:      func(string) string { return "" },
 		Interactive: func() bool { return exists(filepath.Join(dir, "interactive")) },
 		LookPath: func(name string) (string, error) {
 			for _, a := range installed {
