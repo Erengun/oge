@@ -277,3 +277,19 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 	}
 	return string(out)
 }
+
+func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
+	f := newRunFixture(t)
+	// The setup command sees the Snapshot (untracked test included) and
+	// fails, so Preflight refuses before any agent starts.
+	cfg := fxConfig + "[setup]\nrun = \"test -f add_test.go && exit 7\"\n"
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	marker := filepath.Join(t.TempDir(), "agent-ran")
+	code, _, errOut := f.run(t, "touch '"+marker+"'\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitRefused || !strings.Contains(errOut, "fails on the Snapshot (exit 7)") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the agent ran after setup failed on the Snapshot")
+	}
+}
