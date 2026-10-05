@@ -1,8 +1,7 @@
 name: ci
 
-# The repo is private, so Actions minutes are billed: every job is rounded up
-# to the minute, Windows costs 2x and macOS 10x. PRs run one Ubuntu job, main
-# runs one race job, and the expensive platforms run only on demand (ADR-0017).
+# Public repo: standard runners are free, so jobs run in parallel for wall
+# time. macOS stays off PRs (slow queues); docs-only changes skip CI.
 on:
   push:
     branches: [main]
@@ -20,19 +19,14 @@ on:
       - ".claude/**"
       - "LICENSE"
   workflow_dispatch:
-    inputs:
-      full:
-        description: "Also run race, macOS, Windows and the GoReleaser snapshot"
-        type: boolean
-        default: true
 
 permissions:
   contents: read
 
-# A new push to the same PR or branch cancels the run it supersedes.
+# A new push to a PR cancels the run it supersedes; main runs every commit.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   STATICCHECK_VERSION: v0.8.1
@@ -40,10 +34,9 @@ env:
   GORELEASER_VERSION: v2.18.2
 
 jobs:
-  # Blocking, and kept to a few minutes. The no-cgo job validates ADR-0001's build invariant, cross-builds
+  # Blocking. The no-cgo job validates ADR-0001's build invariant, cross-builds
   # every release target (Windows included), and checks DCO and the release config.
   test:
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "0"
@@ -78,11 +71,7 @@ jobs:
             echo "== $target"
             GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/oge
           done
-      # The two e2e packages (internal/cli, cmd/oge) are ~10 of this job's
-      # minutes. vet above still compiles their tests; they run in full on
-      # main (race) and must pass locally before a push.
-      - name: go test (without e2e packages)
-        run: go test -timeout 30m $(go list ./... | grep -v -e '/internal/cli$' -e '/cmd/oge$')
+      - run: go test -timeout 30m ./...
       - run: go run honnef.co/go/tools/cmd/staticcheck@"$STATICCHECK_VERSION" ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@"$GOVULNCHECK_VERSION" ./...
       - uses: goreleaser/goreleaser-action@v7
@@ -91,9 +80,7 @@ jobs:
           args: check
 
   # Race detection needs cgo; testing only, never for release binaries.
-  # Runs after merge to main and on demand, not on every PR push.
   race:
-    if: github.event_name == 'push' || inputs.full
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "1"
@@ -105,10 +92,9 @@ jobs:
       - run: scripts/ci-no-live-agents.sh
       - run: go test -race -timeout 30m ./...
 
-  # Runtime behaviour on macOS (10x minutes): on demand only. Development
-  # happens on macOS, so local runs cover it between dispatches.
+  # Runtime behaviour on macOS: main pushes and on demand.
   macos:
-    if: inputs.full
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     env:
       CGO_ENABLED: "0"
@@ -120,9 +106,8 @@ jobs:
       - run: scripts/ci-no-live-agents.sh
       - run: go test -timeout 30m ./...
 
-  # Non-blocking: Windows is cross-build-only for the MVP (ADR-0017). On demand.
+  # Non-blocking: Windows is cross-build-only for the MVP (ADR-0017).
   windows:
-    if: inputs.full
     runs-on: windows-latest
     continue-on-error: true
     env:
@@ -136,9 +121,8 @@ jobs:
         run: scripts/ci-no-live-agents.sh
       - run: go test -timeout 30m ./...
 
-  # Builds a release snapshot. Nothing is published. On demand.
+  # Builds a release snapshot. Nothing is published.
   goreleaser:
-    if: inputs.full
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
