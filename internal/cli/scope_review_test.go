@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/erengun/oge/internal/run"
@@ -36,7 +35,9 @@ func TestRunEscapedWriterCannotRaceTheCandidate(t *testing.T) {
 	t.Cleanup(func() {
 		if b, err := os.ReadFile(pidFile); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
-				_ = syscall.Kill(pid, syscall.SIGKILL)
+				if p, err := os.FindProcess(pid); err == nil {
+					_ = p.Kill()
+				}
 			}
 		}
 	})
@@ -139,5 +140,16 @@ func TestRunCheckReadsTheSnapshotsTestConfig(t *testing.T) {
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// Paths in the scope line are escaped, never stripped, so two distinct
+// paths never read as one and no control character reaches the terminal.
+func TestRunScopeLineEscapesPaths(t *testing.T) {
+	f := newRunFixture(t)
+	script := fixScript + "printf x > \".oge/a$(printf '\\033')[2Jb\"\nprintf x > '.oge/a[2Jb'\n"
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitParked || strings.ContainsRune(out, 0x1b) || !strings.Contains(out, `".oge/a\x1b[2Jb", .oge/a[2Jb`) {
+		t.Fatalf("exit %d\nstdout:\n%q\nstderr:\n%s", code, out, errOut)
 	}
 }

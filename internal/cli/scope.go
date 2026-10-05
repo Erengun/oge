@@ -2,7 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/workspace"
@@ -17,14 +19,15 @@ func scopeText(a *run.Attempt) string {
 	var prot, links, inWay []string
 	allTests := true
 	for _, r := range a.Reverted {
+		p := pathText(r.Path)
 		switch {
 		case r.Tamper:
-			prot = append(prot, r.Path)
+			prot = append(prot, p)
 			allTests = allTests && r.Class == run.ClassOracleTest
 		case r.Class == workspace.ClassSymlinkEscape:
-			links = append(links, r.Path)
+			links = append(links, p)
 		default:
-			inWay = append(inWay, r.Path)
+			inWay = append(inWay, p)
 		}
 	}
 	var parts []string
@@ -55,4 +58,14 @@ func counted(paths []string, one, many, verb string) string {
 		names, more = names[:3], fmt.Sprintf(" and %d more", len(paths)-3)
 	}
 	return fmt.Sprintf("%d %s %s: %s%s", len(paths), noun, verb, strings.Join(names, ", "), more)
+}
+
+// pathText is a path for the terminal: quoted with Go escapes when it holds
+// a control character or invalid UTF-8, so clean has nothing to drop and
+// two distinct paths never print alike.
+func pathText(p string) string {
+	if !utf8.ValidString(p) || strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || (r >= 0x7f && r <= 0x9f) }) {
+		return strconv.Quote(p)
+	}
+	return p
 }
