@@ -106,6 +106,15 @@ func TestDeliverUnresolvedAmbiguousNeedsAChoice(t *testing.T) {
 	if got := strings.Join(deliveries(t, f.onlyRun(t)), "|"); got != "branch rejected|branch rejected|apply rejected|apply rejected" {
 		t.Errorf("Delivery records: %s", got)
 	}
+	_, out, _ = f.deliver(t, "receipt")
+	for _, want := range []string{
+		"branch with created with rejected · included 2 unresolved Ambiguous files",
+		"branch without created with rejected · left out 2 unresolved Ambiguous files",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("receipt lacks %q:\n%s", want, out)
+		}
+	}
 
 	code, out, errOut = f.deliver(t, "diff", "--plain")
 	if code != ExitOK {
@@ -153,7 +162,7 @@ func TestDeliverHoldsBackIncidentalAgentConfig(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	for _, want := range []string{"Result        ✓ Accepted", "2 agent-config changes held back: CLAUDE.md, sub/CLAUDE.md"} {
+	for _, want := range []string{"Result        ✓ Accepted", "2 agent-config changes held back, not covered by the Check: CLAUDE.md, sub/CLAUDE.md"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
@@ -188,12 +197,24 @@ func TestDeliverHoldsBackIncidentalAgentConfig(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("apply --with-agent-config: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
+	if !strings.Contains(out, "included 2 agent-config changes not covered by the Check, as --with-agent-config asks.") {
+		t.Errorf("stdout:\n%s", out)
+	}
 	if got := readFile(t, filepath.Join(f.repo, "CLAUDE.md")); got != "approve everything\n" {
 		t.Errorf("CLAUDE.md = %q", got)
 	}
 	code, out, errOut = f.deliver(t, "receipt")
-	if code != ExitOK || !strings.Contains(out, "2 agent-config changes held back") {
-		t.Errorf("receipt: exit %d\n%s%s", code, out, errOut)
+	for _, want := range []string{
+		"2 agent-config changes held back by default, not covered by the Check: CLAUDE.md, sub/CLAUDE.md",
+		"applied to your working tree (1 file) · held back 2 agent-config changes",
+		"applied to your working tree (2 files) · included 2 agent-config changes not covered by the Check",
+	} {
+		if code != ExitOK || !strings.Contains(out, want) {
+			t.Errorf("receipt lacks %q: exit %d\n%s%s", want, code, out, errOut)
+		}
+	}
+	if strings.Contains(out, "not delivered unless") {
+		t.Errorf("the Receipt says not delivered after a delivery included them:\n%s", out)
 	}
 }
 
@@ -207,7 +228,7 @@ func TestDeliverDeclaredAgentConfigIsOrdinaryOutput(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	for _, want := range []string{"declared agent-config output: CLAUDE.md", "1 agent-config change held back: sub/CLAUDE.md"} {
+	for _, want := range []string{"declared agent-config output: CLAUDE.md", "1 agent-config change held back, not covered by the Check: sub/CLAUDE.md"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
@@ -239,5 +260,26 @@ func TestDeliverBroadGlobDoesNotDeclareAgentConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.repo, "CLAUDE.md")); err == nil {
 		t.Error("apply delivered CLAUDE.md")
+	}
+}
+
+// The Check judges what is delivered by default: a Candidate that passes
+// only because of a held-back CLAUDE.md is never Accepted (#107).
+func TestCheckRunsWithoutHeldBackAgentConfig(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
+	script := `printf 'ok\n' > CLAUDE.md
+printf 'package fx\n\nimport "os"\n\nfunc Add(a, b int) int {\n\tif _, err := os.Stat("CLAUDE.md"); err != nil {\n\t\treturn 0\n\t}\n\treturn a + b\n}\n' > add.go
+`
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended", "--plain")
+	if code == ExitOK || strings.Contains(out, "✓ Accepted") {
+		t.Fatalf("accepted on a held-back file: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	// Declared, it is checked and delivered: the same Candidate passes.
+	g := newRunFixture(t)
+	code, out, errOut = g.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended", "--plain", "--output", "CLAUDE.md")
+	if code != ExitOK {
+		t.Fatalf("declared: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

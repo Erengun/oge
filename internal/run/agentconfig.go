@@ -10,7 +10,7 @@ import (
 // DeclaredAgentConfig reports whether an Excluded agent-config path p is
 // declared as output (#106, #107): an output glob matches it and names
 // the agent-config entry that makes it Excluded literally, as a path
-// segment (CLAUDE.md, **/AGENTS.md, .claude/**). A declared file is an
+// segment, ignoring case (CLAUDE.md, **/AGENTS.md, .claude/**). A declared file is an
 // ordinary deliverable: in the Promoted view QA sees, checked and
 // delivered. Any other Excluded change is held back from delivery.
 // Intent is never inferred from the Task's text.
@@ -29,10 +29,30 @@ func DeclaredAgentConfig(outputGlobs []string, p string) bool {
 			continue
 		}
 		for _, seg := range strings.Split(g, "/") {
-			if seg == entry {
+			if strings.EqualFold(seg, entry) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// checkedTree is the tree the Check judges for cand: the Candidate with
+// each agent-config change the Run didn't declare at the Snapshot's
+// version, the tree oge apply delivers by default (#107). One whose
+// Snapshot version can't stand beside the rest keeps the Candidate's;
+// delivery then refuses it unless --with-agent-config.
+func (w *walk) checkedTree(cand string) (string, error) {
+	changed, err := w.repo.ChangedFiles(w.snap, cand)
+	if err != nil {
+		return "", err
+	}
+	var held []string
+	for _, p := range changed {
+		if workspace.Excluded(p) && !DeclaredAgentConfig(w.p.Frozen.Project.OutputGlobs, p) {
+			held = append(held, p)
+		}
+	}
+	checked, _, err := w.repo.Restore(w.snap, cand, held, "Checked tree of "+cand[:12]+": held-back agent configuration at the Snapshot's version")
+	return checked, err
 }

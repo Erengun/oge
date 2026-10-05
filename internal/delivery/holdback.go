@@ -87,6 +87,10 @@ func (r *Run) held() ([]Held, error) {
 	if err != nil {
 		return nil, err
 	}
+	return r.heldIn(changes), nil
+}
+
+func (r *Run) heldIn(changes []workspace.Change) []Held {
 	var paths []string
 	for _, c := range changes {
 		paths = append(paths, c.Path)
@@ -95,20 +99,18 @@ func (r *Run) held() ([]Held, error) {
 	if r.Outcome == run.Accepted {
 		unresolved = nil
 	}
-	return HeldBack(paths, r.OutputGlobs, unresolved), nil
+	return HeldBack(paths, r.OutputGlobs, unresolved)
 }
 
 // Holding is what a delivery leaves out, and what it includes on request.
 type Holding struct {
 	Left, Included []Held
-}
-
-func (h *Holding) skip() map[string]bool {
-	m := map[string]bool{}
-	for _, x := range h.Left {
-		m[x.Path] = true
-	}
-	return m
+	// Rev is the commit delivered: the Candidate with each path in Left
+	// at its Snapshot version. For an Accepted Run's default delivery it
+	// is the tree the Check judged.
+	Rev string
+	// Renames say where a held-back file came from a delivered delete.
+	Renames []string
 }
 
 // Count is how many of hs are of kind.
@@ -125,10 +127,11 @@ func Count(hs []Held, kind string) int {
 // Hold works out what a delivery of r leaves out under c, and refuses c
 // when it leaves a choice unmade or asks for one there is nothing to make.
 func Hold(r *Run, c Choice) (*Holding, error) {
-	held, err := r.held()
+	changes, err := r.repo().Changes(r.Snapshot, r.Candidate)
 	if err != nil {
 		return nil, err
 	}
+	held := r.heldIn(changes)
 	var open []string
 	for _, h := range held {
 		if h.Kind == HeldUnresolved {
@@ -146,14 +149,79 @@ func Hold(r *Run, c Choice) (*Holding, error) {
 		return nil, refuse("Run %s holds back no agent-config change; --with-agent-config is only for a Run that does", r.ID)
 	}
 	h := &Holding{}
+	var left []string
 	for _, x := range held {
 		if x.Kind == HeldUnresolved && c.Unresolved == Include || x.Kind == HeldAgentConfig && c.AgentConfig {
 			h.Included = append(h.Included, x)
 		} else {
 			h.Left = append(h.Left, x)
+			left = append(left, x.Path)
 		}
 	}
+	rev, clashes, err := r.repo().Restore(r.Snapshot, r.Candidate, left, "Öge delivery of "+Short(r.Candidate)+": held-back paths at the Snapshot's version")
+	if err != nil {
+		return nil, err
+	}
+	if len(clashes) > 0 {
+		return nil, refuse("%s held back, but the Snapshot's version can't stand beside what Candidate %s delivers (a file and a directory of one name), so it can't be left out; %s",
+			shownList(clashes), Short(r.Candidate), includeHint(held, clashes))
+	}
+	h.Rev = rev
+	h.Renames = renames(changes, h.Left)
 	return h, nil
+}
+
+// includeHint names the flag that delivers the clashing paths.
+func includeHint(held []Held, clashes []string) string {
+	kinds := map[string]bool{}
+	for _, p := range clashes {
+		for _, x := range held {
+			if x.Path == p {
+				kinds[x.Kind] = true
+			}
+		}
+	}
+	var flags []string
+	if kinds[HeldAgentConfig] {
+		flags = append(flags, "--with-agent-config")
+	}
+	if kinds[HeldUnresolved] {
+		flags = append(flags, "--with-unresolved")
+	}
+	return "pass " + strings.Join(flags, " and ") + " to deliver it as the Candidate has it"
+}
+
+// renames notes each held-back new file whose content a delivered change
+// deletes elsewhere: a move split by the hold-back, delivered as a
+// delete alone.
+func renames(changes []workspace.Change, left []Held) []string {
+	held := map[string]bool{}
+	for _, x := range left {
+		held[x.Path] = true
+	}
+	var out []string
+	for _, add := range changes {
+		if !held[add.Path] || add.OldMode != "" || add.NewOID == "" {
+			continue
+		}
+		for _, del := range changes {
+			if !held[del.Path] && del.NewMode == "" && del.OldOID == add.NewOID {
+				out = append(out, fmt.Sprintf("%s moved to %s, which is held back: the delivery deletes %s and doesn't create %s",
+					Shown(del.Path), Shown(add.Path), Shown(del.Path), Shown(add.Path)))
+				break
+			}
+		}
+	}
+	return out
+}
+
+// IncludedLine says what a delivery included on request that the Check
+// didn't judge, or "" when nothing.
+func (h *Holding) IncludedLine() string {
+	if n := Count(h.Included, HeldAgentConfig); n > 0 {
+		return "included " + plural(n, "agent-config change", "agent-config changes") + " not covered by the Check, as --with-agent-config asks"
+	}
+	return ""
 }
 
 // LeftLine says what a delivery left out, or "" when nothing.

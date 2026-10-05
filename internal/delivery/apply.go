@@ -114,12 +114,13 @@ func (p *Plan) Deletes() int {
 // tree ours, the Candidate theirs. Working-tree bytes meet working-tree
 // bytes, so the user's attributes (eol, filters, encodings) never come
 // into it.
-func PlanApply(r *Run, target string) (*Plan, error) { return planApply(r, target, nil) }
+func PlanApply(r *Run, target string) (*Plan, error) { return planApply(r, target, r.Candidate) }
 
-// planApply is PlanApply leaving out the paths in skip.
-func planApply(r *Run, target string, skip map[string]bool) (*Plan, error) {
+// planApply is PlanApply delivering rev, the Candidate or the commit Hold
+// made of it.
+func planApply(r *Run, target, rev string) (*Plan, error) {
 	repo := r.repo()
-	changes, err := candidateChanges(r, skip)
+	changes, err := candidateChanges(r, rev)
 	if err != nil {
 		return nil, err
 	}
@@ -449,22 +450,17 @@ func linkLeaves(rel, target string) bool {
 
 func gitlink(c workspace.Change) bool { return c.NewMode == "160000" || c.OldMode == "160000" }
 
-// candidateChanges is what the Candidate changes since the Snapshot,
-// less the held-back paths in skip, refusing what delivery can't carry.
-func candidateChanges(r *Run, skip map[string]bool) ([]workspace.Change, error) {
-	all, err := r.repo().Changes(r.Snapshot, r.Candidate)
+// candidateChanges is what rev, the Candidate or the commit of it Hold
+// made, changes since the Snapshot, refusing what delivery can't carry.
+func candidateChanges(r *Run, rev string) ([]workspace.Change, error) {
+	changes, err := r.repo().Changes(r.Snapshot, rev)
 	if err != nil {
 		return nil, err
 	}
-	var changes []workspace.Change
-	for _, c := range all {
-		if skip[c.Path] {
-			continue
-		}
+	for _, c := range changes {
 		if gitlink(c) {
 			return nil, refuse("%s is a submodule (a nested repository) in Candidate %s, which Öge doesn't deliver", c.Path, Short(r.Candidate))
 		}
-		changes = append(changes, c)
 	}
 	return changes, nil
 }
@@ -505,7 +501,7 @@ func Apply(r *Run, target string, c Choice) (*Applied, error) {
 		return nil, err
 	}
 	defer unlock()
-	p, err := planApply(r, target, h.skip())
+	p, err := planApply(r, target, h.Rev)
 	if err != nil {
 		return nil, err
 	}

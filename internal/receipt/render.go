@@ -103,7 +103,7 @@ func (r *Receipt) Lines() []Line {
 	}
 	if c := r.Candidate; c != nil {
 		add("Candidate", fmt.Sprintf("%s · %s · Oracle v%d", short(c.Commit), plural(c.FilesChanged, "file changed", "files changed"), r.Oracle), Plain)
-		for _, l := range c.agentConfig() {
+		for _, l := range c.agentConfig(r.Deliveries) {
 			add("", l, Plain)
 		}
 	}
@@ -310,6 +310,18 @@ func (d Delivery) text() string {
 	if d.Flag != "" {
 		s += " with " + val(d.Flag)
 	}
+	if n := delivery.Count(d.Included, delivery.HeldAgentConfig); n > 0 {
+		s += " · included " + plural(n, "agent-config change", "agent-config changes") + " not covered by the Check"
+	}
+	if n := delivery.Count(d.Included, delivery.HeldUnresolved); n > 0 {
+		s += " · included " + plural(n, "unresolved Ambiguous file", "unresolved Ambiguous files")
+	}
+	if n := delivery.Count(d.HeldBack, delivery.HeldUnresolved); n > 0 {
+		s += " · left out " + plural(n, "unresolved Ambiguous file", "unresolved Ambiguous files")
+	}
+	if n := delivery.Count(d.HeldBack, delivery.HeldAgentConfig); n > 0 {
+		s += " · held back " + plural(n, "agent-config change", "agent-config changes")
+	}
 	return s
 }
 
@@ -418,7 +430,7 @@ func (r *Receipt) Markdown() string {
 	}
 	if c := r.Candidate; c != nil && len(c.Files) > 0 {
 		fmt.Fprintf(&b, "- Files changed: %s\n", mdText(vals(c.Files, ", "), false))
-		for _, l := range c.agentConfig() {
+		for _, l := range c.agentConfig(r.Deliveries) {
 			fmt.Fprintf(&b, "- %s\n", mdText(l, false))
 		}
 	}
@@ -551,13 +563,20 @@ func truncate(s string, n int) string {
 
 // agentConfig says which of the Candidate's agent-config changes were
 // declared as output, and which delivery holds back (#107).
-func (c *Candidate) agentConfig() []string {
+func (c *Candidate) agentConfig(ds []Delivery) []string {
 	var out []string
 	if n := len(c.Declared); n > 0 {
 		out = append(out, "declared agent-config output: "+list(c.Declared))
 	}
-	if n := len(c.HeldBack); n > 0 {
-		out = append(out, plural(n, "agent-config change", "agent-config changes")+" held back: "+list(c.HeldBack)+
+	included := false
+	for _, d := range ds {
+		included = included || delivery.Count(d.Included, delivery.HeldAgentConfig) > 0
+	}
+	switch n := len(c.HeldBack); {
+	case n > 0 && included:
+		out = append(out, plural(n, "agent-config change", "agent-config changes")+" held back by default, not covered by the Check: "+list(c.HeldBack))
+	case n > 0:
+		out = append(out, plural(n, "agent-config change", "agent-config changes")+" held back, not covered by the Check: "+list(c.HeldBack)+
 			" · not delivered unless oge apply or oge branch --with-agent-config")
 	}
 	return out

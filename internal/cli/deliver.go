@@ -389,10 +389,19 @@ func appliedLine(r *delivery.Run, a *delivery.Applied) string {
 	if a.Plan.Writes() == 0 && a.Plan.Already == 0 && len(a.Held.Left) > 0 {
 		line = fmt.Sprintf("Nothing of Candidate %s of Run %s was applied: everything it changes is held back.", delivery.Short(r.Candidate), r.ID)
 	}
-	if left := a.Held.LeftLine(); left != "" {
-		line += "\n" + left + "."
+	return line + heldLines(a.Held)
+}
+
+// heldLines say what a delivery held back, what it included on request
+// that the Check didn't judge, and a move the hold-back split.
+func heldLines(h *delivery.Holding) string {
+	var s string
+	for _, l := range append([]string{h.LeftLine(), h.IncludedLine()}, h.Renames...) {
+		if l != "" {
+			s += "\n" + l + "."
+		}
 	}
-	return line
+	return s
 }
 
 func appliedPlan(r *delivery.Run, p *delivery.Plan) string {
@@ -430,8 +439,8 @@ func branchCommand(env Env, r *delivery.Run, root, name string, c delivery.Choic
 	}
 	fmt.Fprintf(env.Stdout, "Created branch %s from Run %s: Candidate %s as commit %s on %s. Not checked out; git switch %s to use it.\n",
 		b.Name, r.ID, delivery.Short(r.Candidate), delivery.Short(b.Commit), on, b.Name)
-	if left := b.Held.LeftLine(); left != "" {
-		fmt.Fprintln(env.Stdout, left+".")
+	if l := heldLines(b.Held); l != "" {
+		fmt.Fprintln(env.Stdout, l[1:])
 	}
 	return ExitOK
 }

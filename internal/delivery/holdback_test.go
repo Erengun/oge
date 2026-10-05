@@ -99,3 +99,79 @@ func TestHeldBackDeclaration(t *testing.T) {
 		}
 	}
 }
+
+// A leaf named like an agent config directory (a .claude symlink to a
+// directory of settings), and any case variant, is agent configuration
+// even under a glob that matches everything.
+func TestHeldBackCatchesLeafDirsAndCaseVariants(t *testing.T) {
+	paths := []string{".claude", "cfg/settings.json", "claude.md", "sub/Agents.md", ".Claude/x", "a/.CODEX"}
+	var got []string
+	for _, h := range HeldBack(paths, []string{"**"}, nil) {
+		got = append(got, h.Path)
+	}
+	if want := ".claude|claude.md|sub/Agents.md|.Claude/x|a/.CODEX"; strings.Join(got, "|") != want {
+		t.Errorf("held back %s, want %s", strings.Join(got, "|"), want)
+	}
+	if got := Declared([]string{"claude.md", ".Claude/x"}, []string{"claude.md", ".claude/**"}); strings.Join(got, "|") != "claude.md" {
+		t.Errorf("declared %v", got)
+	}
+}
+
+// A .claude symlink the Candidate creates is held back, its target's
+// files are not agent configuration by name, and the link never lands.
+func TestApplyHoldsBackAClaudeSymlink(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.MkdirAll(filepath.Join(ws, "cfg"), 0o755)
+		os.WriteFile(filepath.Join(ws, "cfg", "settings.json"), []byte(`{"hooks":{}}`), 0o644)
+		os.Symlink("cfg", filepath.Join(ws, ".claude"))
+	})
+	branchable(t, r)
+	r.OutputGlobs = []string{"**"}
+	if _, err := Apply(r, user, Choice{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(user, ".claude")); err == nil {
+		t.Error("the .claude symlink was delivered")
+	}
+}
+
+// A held-back path that would be a file where the delivered tree has a
+// directory is refused up front, naming the flag that delivers it.
+func TestHoldRefusesAFileDirectoryClash(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n", "CLAUDE.md": "notes\n"}, func(ws string) {
+		os.Remove(filepath.Join(ws, "CLAUDE.md"))
+		os.MkdirAll(filepath.Join(ws, "CLAUDE.md"), 0o755)
+		os.WriteFile(filepath.Join(ws, "CLAUDE.md", "x.txt"), []byte("x\n"), 0o644)
+	})
+	branchable(t, r)
+	for name, deliver := range map[string]func() error{
+		"apply":  func() error { _, err := Apply(r, user, Choice{}); return err },
+		"branch": func() error { _, err := Branch(r, user, "clash", Choice{}); return err },
+	} {
+		if err := deliver(); !IsRefused(err) || !strings.Contains(err.Error(), "CLAUDE.md held back, but the Snapshot's version can't stand beside") ||
+			!strings.Contains(err.Error(), "--with-agent-config") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(user, "CLAUDE.md")); string(b) != "notes\n" {
+		t.Errorf("CLAUDE.md: %q", b)
+	}
+	if _, err := Branch(r, user, "with", Choice{AgentConfig: true}); err != nil {
+		t.Errorf("--with-agent-config: %v", err)
+	}
+}
+
+// A move into agent configuration, split by the hold-back, is noted.
+func TestHoldNotesASplitMove(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"docs/notes.md": "the notes\n"}, func(ws string) {
+		os.Rename(filepath.Join(ws, "docs", "notes.md"), filepath.Join(ws, "CLAUDE.md"))
+	})
+	branchable(t, r)
+	a, err := Apply(r, user, Choice{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "docs/notes.md moved to CLAUDE.md, which is held back: the delivery deletes docs/notes.md and doesn't create CLAUDE.md"; strings.Join(a.Held.Renames, "|") != want {
+		t.Errorf("renames %q", a.Held.Renames)
+	}
+}

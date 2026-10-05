@@ -40,26 +40,27 @@ var (
 // instruction list, or is Öge's own Workspace marker.
 func Excluded(p string) bool { return ExcludedEntry(p) != "" }
 
-// ExcludedEntry is the path segment that puts p on Öge's fixed list: the
-// agent config directory it is under, or its instruction file name. It is
-// "" for a path not on the list.
+// ExcludedEntry is the path segment that puts p on Öge's fixed list: an
+// agent config directory it is under or is itself (a file or symlink of
+// that name too), or its instruction file name. Names compare ignoring
+// case: a case-insensitive filesystem, or a tool, reads Claude.md as
+// CLAUDE.md. It is "" for a path not on the list.
 func ExcludedEntry(p string) string {
 	if p == ledger.WorkspaceMarker {
 		return p
 	}
 	parts := strings.Split(p, "/")
 	for i, part := range parts {
+		for _, d := range excludedDirs {
+			if strings.EqualFold(part, d) {
+				return part
+			}
+		}
 		if i == len(parts)-1 {
 			for _, n := range excludedNames {
-				if part == n {
+				if strings.EqualFold(part, n) {
 					return part
 				}
-			}
-			break
-		}
-		for _, d := range excludedDirs {
-			if part == d {
-				return part
 			}
 		}
 	}

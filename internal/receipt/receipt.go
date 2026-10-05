@@ -247,6 +247,10 @@ type Delivery struct {
 	Flag   string `json:"flag,omitempty"`
 	Files  int    `json:"files,omitempty"`
 	Branch string `json:"branch,omitempty"`
+	// HeldBack is what the delivery left out; Included what it delivered
+	// on request that is held back by default (#105, #107).
+	HeldBack []delivery.Held `json:"held_back,omitempty"`
+	Included []delivery.Held `json:"included,omitempty"`
 }
 
 // Source is where a Receipt reads what the Ledger refers to: blobs and
@@ -372,6 +376,8 @@ type (
 	deliveryRec struct {
 		Kind, Flag, Branch string
 		Files              int
+		HeldBack           []delivery.Held `json:"held_back"`
+		Included           []delivery.Held
 	}
 )
 
@@ -637,7 +643,8 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		case delivery.RecDelivery:
 			var d deliveryRec
 			if get(rec.Data, &d) {
-				r.Deliveries = append(r.Deliveries, Delivery{Kind: clean(d.Kind), Flag: clean(d.Flag), Files: d.Files, Branch: clean(d.Branch)})
+				r.Deliveries = append(r.Deliveries, Delivery{Kind: clean(d.Kind), Flag: clean(d.Flag), Files: d.Files, Branch: clean(d.Branch),
+					HeldBack: cleanHeld(d.HeldBack), Included: cleanHeld(d.Included)})
 			}
 		}
 	}
@@ -1163,4 +1170,12 @@ func GateTitle(node string) string {
 		return "Ambiguous-file Gate"
 	}
 	return clean(strings.ReplaceAll(strings.TrimPrefix(node, "gate."), "_", "-")) + " Gate"
+}
+
+func cleanHeld(hs []delivery.Held) []delivery.Held {
+	var out []delivery.Held
+	for _, h := range hs {
+		out = append(out, delivery.Held{Path: clean(h.Path), Kind: clean(h.Kind)})
+	}
+	return out
 }

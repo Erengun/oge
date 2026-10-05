@@ -69,12 +69,8 @@ func Branch(r *Run, target, name string, choice Choice) (*Branched, error) {
 			return nil, refuse("the Snapshot's HEAD %s is no longer in this repository", Short(r.Head))
 		}
 	}
-	changes, err := candidateChanges(r, h.skip())
-	if err != nil {
-		return nil, err
-	}
 	// The held-back paths keep the Snapshot's version in the commit.
-	restore, err := snapshotStates(r, h.skip())
+	changes, err := candidateChanges(r, h.Rev)
 	if err != nil {
 		return nil, err
 	}
@@ -126,11 +122,6 @@ func Branch(r *Run, target, name string, choice Choice) (*Branched, error) {
 		if err := r.repo().Checkout(rev, wt); err != nil {
 			return "", err
 		}
-		if rev == r.Candidate {
-			if err := restore.write(wt); err != nil {
-				return "", err
-			}
-		}
 		// -f: the checkout holds exactly the Run's tree; nothing in it is
 		// left out for being ignored here.
 		if _, err := sc.run(wt, index, "add", "-A", "-f", "--", "."); err != nil {
@@ -166,7 +157,7 @@ func Branch(r *Run, target, name string, choice Choice) (*Branched, error) {
 			b.SnapshotCommit, parent = c, c
 		}
 	}
-	c, err := commit(r.Candidate, commitMessage(r))
+	c, err := commit(h.Rev, commitMessage(r))
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +171,7 @@ func Branch(r *Run, target, name string, choice Choice) (*Branched, error) {
 	// Nothing has reached the user's repository yet. If their own git add
 	// would run a clean filter on a delivered path, this commit differs
 	// from theirs: refuse rather than run the filter or hide it.
-	if err := refuseUserFilters(g, sc, r, c, filepath.Join(tmp, Short(r.Candidate))); err != nil {
+	if err := refuseUserFilters(g, sc, r, c, filepath.Join(tmp, Short(h.Rev))); err != nil {
 		return nil, err
 	}
 	if _, err := sc.run("", "", "update-ref", "refs/heads/oge", c); err != nil {
@@ -424,28 +415,4 @@ func dedupe(list []string) []string {
 		}
 	}
 	return out
-}
-
-// snapshotStates is a plan that puts each path in skip back to the
-// Snapshot's version: the content it had, or absent.
-func snapshotStates(r *Run, skip map[string]bool) (*Plan, error) {
-	p := &Plan{}
-	if len(skip) == 0 {
-		return p, nil
-	}
-	all, err := r.repo().Changes(r.Snapshot, r.Candidate)
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range all {
-		if !skip[c.Path] {
-			continue
-		}
-		base, err := blobState(r.repo(), c.OldMode, c.OldOID)
-		if err != nil {
-			return nil, err
-		}
-		p.actions = append(p.actions, action{c.Path, base})
-	}
-	return p, nil
 }
