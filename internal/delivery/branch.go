@@ -29,9 +29,11 @@ func DefaultBranch(r *Run) string { return "oge/" + r.ID }
 // checks the branch out, never touches the index, working tree or HEAD,
 // and never pushes. Blobs are made by git add with the user's attributes
 // and end-of-line settings, so they are normalised as a commit of the
-// applied files would be, except that no clean filter runs: an
-// agent-added .gitattributes must not execute anything. The commits are
-// never signed; signing stays the user's act.
+// applied files would be. No filter or hook ever runs: an agent-added
+// .gitattributes must not execute anything. Where the user's repository
+// has a clean filter for a delivered path, the commit would differ from
+// the user's own, so Branch refuses and points to oge apply (ADR-0015).
+// The commits are never signed; signing stays the user's act.
 //
 // TODO(#54-decision): when the Snapshot held uncommitted or untracked
 // work, that work is its own commit under the Candidate's, so the
@@ -156,6 +158,12 @@ func Branch(r *Run, target, name, flag string) (*Branched, error) {
 		return nil, refuse("the Candidate changes nothing on top of the Snapshot; there is nothing to branch")
 	}
 	b.Commit = c
+	// Nothing has reached the user's repository yet. If their own git add
+	// would run a clean filter on a delivered path, this commit differs
+	// from theirs: refuse rather than run the filter or hide it.
+	if err := refuseUserFilters(g, sc, r, c); err != nil {
+		return nil, err
+	}
 	if _, err := sc.run("", "", "update-ref", "refs/heads/oge", c); err != nil {
 		return nil, err
 	}
@@ -272,4 +280,77 @@ func scratchRepo(g *userGit, dir string) (*userGit, error) {
 		}
 	}
 	return sc, nil
+}
+
+// refuseUserFilters refuses the branch when a delivered path (one the
+// branch's commits add or change on top of the Snapshot's HEAD) has a
+// filter attribute in the user's repository whose driver has a clean or
+// process command configured. Nothing is executed to find out.
+func refuseUserFilters(g, sc *userGit, r *Run, commit string) error {
+	base := r.Head
+	if base == "" {
+		empty, err := sc.runIn("", "mktree")
+		if err != nil {
+			return err
+		}
+		base = strings.TrimSpace(empty)
+	}
+	out, err := sc.run("", "", "diff-tree", "-r", "-z", "--name-only", "--no-renames", "--diff-filter=d", base, commit)
+	if err != nil {
+		return err
+	}
+	paths := strings.TrimRight(out, "\x00")
+	if paths == "" {
+		return nil
+	}
+	attrs, err := g.runIn(paths+"\x00", "check-attr", "-z", "--stdin", "filter")
+	if err != nil {
+		return err
+	}
+	f := strings.Split(attrs, "\x00")
+	active := map[string]bool{}
+	var hit []string
+	for i := 0; i+2 < len(f); i += 3 {
+		path, value := f[i], f[i+2]
+		if value == "unspecified" || value == "unset" || value == "set" || value == "" {
+			continue
+		}
+		on, seen := active[value]
+		if !seen {
+			for _, key := range []string{"clean", "process"} {
+				if v, err := g.run("", "", "config", "--get", "filter."+value+"."+key); err == nil && strings.TrimSpace(v) != "" {
+					on = true
+				}
+			}
+			active[value] = on
+		}
+		if on {
+			hit = append(hit, path)
+		}
+	}
+	if len(hit) == 0 {
+		return nil
+	}
+	shown := hit
+	if len(shown) > 5 {
+		shown = append(shown[:5:5], fmt.Sprintf("and %d more", len(hit)-5))
+	}
+	return refuse("oge branch can't safely reproduce this repository's normal git transformation for %s without executing user-configured filters; use oge apply %s and commit it yourself",
+		strings.Join(shown, ", "), r.ID)
+}
+
+// runIn is run with stdin, in the user's repository.
+func (g *userGit) runIn(stdin string, args ...string) (string, error) {
+	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false"}, args...)
+	cmd := exec.Command("git", full...)
+	cmd.Dir = g.root
+	cmd.Env = append(append(scrubGit(os.Environ()), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0"), g.env...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
 }

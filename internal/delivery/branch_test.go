@@ -69,3 +69,66 @@ func TestBranchRefusesBadNamesLinksOutAndGitlinks(t *testing.T) {
 		t.Errorf("branches: %q", out)
 	}
 }
+
+// objectFiles lists what is in a repository's object store.
+func objectFiles(t *testing.T, repo string) []string {
+	t.Helper()
+	var files []string
+	filepath.Walk(filepath.Join(repo, ".git", "objects"), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && !fi.IsDir() {
+			files = append(files, p)
+		}
+		return nil
+	})
+	return files
+}
+
+// A clean filter the user's repository applies to a delivered path makes
+// oge branch refuse: it won't run the filter, and won't knowingly commit
+// something other than what the user's git add would.
+func TestBranchRefusesWhenAUserCleanFilterApplies(t *testing.T) {
+	for _, c := range []struct {
+		name, attrs, driver string
+		refused             bool
+	}{
+		{"filter on a delivered path", "*.txt filter=keep\n", "clean", true},
+		{"process filter on a delivered path", "*.txt filter=keep\n", "process", true},
+		{"filter on an untouched path", "*.dat filter=keep\n", "clean", false},
+		{"filter with no driver", "*.txt filter=nodriver\n", "clean", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			user, r := planFixture(t, map[string]string{"a.txt": "a\n", ".gitattributes": c.attrs}, func(ws string) {
+				os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
+			})
+			branchable(t, r)
+			marker := filepath.Join(t.TempDir(), "filter-ran")
+			if out, err := userGitOut(t, user, "config", "filter.keep."+c.driver, "touch '"+marker+"'; cat"); err != nil {
+				t.Fatal(err, out)
+			}
+			before := objectFiles(t, user)
+			b, err := Branch(r, user, "taken", "")
+			if _, serr := os.Stat(marker); serr == nil {
+				t.Error("oge branch ran the user's filter")
+			}
+			if !c.refused {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				if out, _ := userGitOut(t, user, "cat-file", "blob", b.Commit+":a.txt"); out != "A\n" {
+					t.Errorf("a.txt on the branch: %q", out)
+				}
+				return
+			}
+			if !IsRefused(err) || !strings.Contains(err.Error(), "can't safely reproduce this repository's normal git transformation for a.txt without executing user-configured filters") ||
+				!strings.Contains(err.Error(), "oge apply r1") {
+				t.Fatalf("Branch: %v", err)
+			}
+			if out, _ := userGitOut(t, user, "branch", "--list"); out != "" {
+				t.Errorf("branches: %q", out)
+			}
+			if after := objectFiles(t, user); strings.Join(after, "\n") != strings.Join(before, "\n") {
+				t.Errorf("objects left behind:\n%v\nwere:\n%v", after, before)
+			}
+		})
+	}
+}
