@@ -1,0 +1,52 @@
+---
+status: accepted
+---
+
+# Protected-test execution attestation is required Evidence; the structured report is diagnostic
+
+[#72](https://github.com/Erengun/oge/issues/72) came out of the review of the walking skeleton (#40, PR #70). A Candidate made a broken change Accepted by printing fake `go test -json` PASS frames from `init()` and exiting 0 before any protected test ran. Checks run Candidate code without containment (ADR-0010), so no report parser can close this.
+
+A reader might expect one of two things this design rejects:
+
+- disclosing report forgery in the Receipt's "Not covered" line and leaving it as a known path to Accepted;
+- claiming the MVP isolates hostile code.
+
+## The acceptance-boundary rule
+
+**Anything that can turn a broken Candidate into Accepted is an acceptance-boundary issue first, not a "Not covered" item.** "Not covered" is for threats outside the stated boundary. It must never list easy ways to counterfeit the exact Evidence Öge uses to accept.
+
+## Threat model
+
+> Öge is designed to catch ordinary agent mistakes, reward hacking, test manipulation and straightforward attempts to bypass verification. The MVP does not claim isolation against deliberately hostile Candidate code executing with the user's OS privileges.
+
+A determined hostile program running in the same process can still inspect memory, file descriptors or binary contents and evade the measures below. The Receipt's "Not covered" line says so. OS and process isolation is what changes that boundary. It is post-MVP and is not attempted in M1.
+
+## Decisions
+
+- **Execution attestation.** It applies to every Check on a Candidate.
+  1. After the Candidate is frozen, Öge generates unpredictable per-Check, per-test attestation values.
+  2. They exist only in Öge's protected test overlay, never in the Candidate, the Briefing or the Workspace.
+  3. Each protected test emits its expected attestation when it actually executes.
+  4. Attestations travel over a dedicated channel owned by Öge as the parent process, not stdout/stderr and not the structured test report.
+  5. Öge knows the complete expected set of protected tests before launch, derived from the Oracle manifest.
+  6. **A missing attestation means the Check cannot pass,** even with exit code 0, PASS on stdout or a successful structured report.
+- **The structured report is diagnostic Evidence. Attestation is required Evidence.** The pass rule (ADR-0011) becomes: every command exits 0, every expected protected test is attested, and none is reported failing.
+- **Attestation-mechanism failure is attributed to Öge.** If attestation fails on the Snapshot control case, the failure is an infrastructure/harness failure, not a Candidate failure (ADR-0011 attribution).
+- **Static tripwires are signals, not proof.** Öge flags Candidate changes to obvious test-process control points:
+  - `TestMain`;
+  - process termination (`os.Exit`, `syscall.Exit`, `runtime.Goexit`) reachable from `init`;
+  - writes to the attestation channel's descriptor.
+
+  A tripwire is recorded as an Observation and shown in the Receipt. It never claims completeness or intent.
+- **Evaluation.** The forged-report exploit becomes an evaluation fixture now (#58), to measure whether real coding agents discover or use this path.
+
+## Consequences
+
+- This amends ADR-0011's pass rule and adds attestation to the Check Evidence.
+- New ticket: protected-test execution attestation. It blocks the Receipt, because M1's `✓ Accepted` has to mean this.
+- **Open:** how Oracle tests that skip are treated under attestation (#72 comment).
+
+## What would reverse this
+
+- Attestation proves routinely brittle on real projects (generated tests, build tags, unusual runners) without catching real agent behaviour in the evaluation. Then simplify, but never to "report only".
+- Process isolation ships. Then attestation may be simplified to fit the stronger boundary.

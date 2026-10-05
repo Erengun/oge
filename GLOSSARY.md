@@ -10,6 +10,10 @@
 A record Öge made itself of something it ran or directly observed: a command execution, a Briefing manifest, a Preflight observation, a scope or revert observation, a Tamper event, or an environment or capability observation. A Verdict rests only on a Check's command-execution Evidence.
 _Avoid_: Proof, test results (when reported by an agent)
 
+**Attestation**:
+Evidence that a protected test actually executed during a Check: an unpredictable per-test value, known only to Öge and its protected overlay, which the test sends to Öge over a channel Öge owns. A Check can't pass without the attestation of every expected protected test. A test report is diagnostic; the attestation is required.
+_Avoid_: Signature, proof of correctness
+
 **Check command**:
 A command that a Check runs on a Candidate. It is part of the Oracle, so it is versioned, protected and pinned into every Verdict. An agent may propose one, but only a human at a Gate adds it.
 _Avoid_: Test command (when an agent's own run is meant), verification script

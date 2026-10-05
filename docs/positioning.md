@@ -22,6 +22,12 @@ This is used only once the coordination roles (Decider, Advisor, Handoff) ship. 
 
 > I had become both the glue between models and the checker of every "all tests pass." Öge takes the second job first. The first comes next.
 
+## Threat model
+
+> Öge is designed to catch ordinary agent mistakes, reward hacking, test manipulation and straightforward attempts to bypass verification. The MVP does not claim isolation against deliberately hostile Candidate code executing with the user's OS privileges.
+
+The Receipt's "Not covered" line states this limit. It never lists easy ways to counterfeit the Evidence Öge accepts on: those are acceptance-boundary bugs ([ADR-0020](adr/0020-protected-test-execution-attestation-is-required-evidence.md)).
+
 ## Usage boundary
 
 > Use your agent when you're watching. Use Öge when you're not.
