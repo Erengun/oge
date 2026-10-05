@@ -244,6 +244,9 @@ func (r *renderer) observe(ev run.Event) {
 			}
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
+		if f := ev.Agent.Friction; f != nil && ev.Agent.Kind == agent.TurnSettled {
+			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, frictionText(*f))
+		}
 	case run.EvNotice:
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
@@ -302,6 +305,11 @@ func agentStep(e agent.Event, cause string) (string, bool) {
 	if step, ok := activityStep(e); ok {
 		if e.Kind == agent.Claim && e.Tool == "" {
 			step = fmt.Sprintf("%q", step) // what the agent says, as said
+		}
+		if h := e.Host; e.Kind == agent.HostRequest && h.Decision == "deny" {
+			if why := denialWhy(h); why != "" {
+				step += clean(" (" + why + ")")
+			}
 		}
 		return step, true
 	}
@@ -422,8 +430,23 @@ func (r *renderer) summary(res *run.Result) {
 				r.p("%-10s the Check passed, but %s", "", clean(w))
 			}
 		}
+		r.friction(res)
 		// TODO(#63): the Receipt replaces these lines.
-		r.p("%-10s %s", "Not covered", notCovered(r.frozen, res))
+		label := "Not covered"
+		if c := res.Check; c != nil {
+			// Coverage gaps the Snapshot already had: shown first.
+			for _, gap := range []struct {
+				what  string
+				items []string
+			}{{"Oracle tests skipped on the Snapshot and the Candidate", c.Skipped}, {"Oracle test files this machine doesn't build", c.NotBuilt}} {
+				if len(gap.items) > 0 {
+					r.p("%-10s %s", label, clean(fmt.Sprintf("%s (%d): %s", gap.what, len(gap.items), strings.Join(gap.items, "; "))))
+					label = strings.Repeat(" ", len("Not covered"))
+				}
+			}
+		}
+		r.p("%-10s %s", label, notCovered(r.frozen, res))
+		r.observed(res)
 		if r.warn != "" {
 			r.p("! %s", r.warn)
 		}
@@ -438,7 +461,58 @@ func (r *renderer) summary(res *run.Result) {
 		for _, w := range res.Why {
 			r.p("  %s", clean(w))
 		}
+		r.friction(res)
 	}
+}
+
+// observed prints the tripwires a Run set off, if any: the static ones
+// on the Candidate's changes, and attestation lines that named no test.
+func (r *renderer) observed(res *run.Result) {
+	obs := append([]string(nil), res.Tripwires...)
+	if c := res.Check; c != nil && c.Stray > 0 {
+		obs = append(obs, fmt.Sprintf("%d stray lines on the attestation channel", c.Stray))
+	}
+	if len(obs) > 0 {
+		r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(obs, " · ")))
+	}
+}
+
+// friction is the Run's policy friction line, for every outcome.
+// TODO(#90-decision): shown only when there was friction, so the happy
+// path stays quiet; -v always shows each Attempt's.
+func (r *renderer) friction(res *run.Result) {
+	if f := res.Friction; f != nil && (f.Denied > 0 || f.LostTurns > 0) {
+		r.p("%-10s %s", "friction", frictionText(*f))
+	}
+}
+
+// denialWhy is why a request was denied, in short: its recovery hint,
+// or the reason's first sentence (#90).
+func denialWhy(h *agent.HostDecision) string {
+	if h.Hint != "" {
+		return h.Hint
+	}
+	why := strings.TrimPrefix(h.Reason, "Öge denied this: ")
+	if first, _, ok := strings.Cut(why, ". "); ok {
+		why = first
+	}
+	return strings.TrimSuffix(why, ".")
+}
+
+// frictionText is an Attempt's policy friction (ADR-0019).
+func frictionText(f agent.Friction) string {
+	s := fmt.Sprintf("policy friction %s (%d denied)", plural(f.LostTurns, "turn"), f.Denied)
+	if f.EnvelopeRefusals > 0 {
+		s += fmt.Sprintf(" · %d refused before the envelope passed", f.EnvelopeRefusals)
+	}
+	return s
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }
 
 func files(n int) string {

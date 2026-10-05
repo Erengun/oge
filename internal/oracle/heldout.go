@@ -89,7 +89,11 @@ func NewVersion(parent *Manifest, parentBlob, attempt string, adds []Addition, s
 			dropped = append(dropped, Dropped{p, "not a Go test file; no Check command Öge reads would run it"})
 			continue
 		}
-		if !inDotDotDot(path.Dir(p), mods) {
+		if why := screen(a.Data); why != "" {
+			dropped = append(dropped, Dropped{p, why})
+			continue
+		}
+		if !goPackageDir(path.Dir(p)) || nestedModule(path.Dir(p), mods) {
 			dropped = append(dropped, Dropped{p, "outside the packages go test ./... builds; no Check command would run it"})
 			continue
 		}
@@ -117,7 +121,7 @@ func NewVersion(parent *Manifest, parentBlob, attempt string, adds []Addition, s
 			return nil, "", nil, err
 		}
 		taken[p] = true
-		m.Tests = append(m.Tests, File{Path: p, Blob: blob, HeldOut: true, Attempt: attempt})
+		m.Tests = append(m.Tests, File{Path: p, Blob: blob, HeldOut: true, Attempt: attempt, Expected: ids})
 		m.Added = append(m.Added, p)
 		for i, t := range tests {
 			known[ids[i]] = true
@@ -224,6 +228,20 @@ func (m *Manifest) Unmapped() int {
 // report at all (setup failed, an Oracle path was blocked) it names none:
 // the Check failed for a reason they don't show.
 func (m *Manifest) HeldOutFailures(r *Result) []HeldOut {
+	if len(r.Tests) > 0 {
+		// The attestation channel decides, never a report (ADR-0020).
+		attested := map[TestID]string{}
+		for _, t := range r.Tests {
+			attested[t.TestID] = t.Attested
+		}
+		var out []HeldOut
+		for _, h := range m.HeldOut {
+			if attested[h.Test] != AttestPass {
+				out = append(out, h)
+			}
+		}
+		return out
+	}
 	var reports []*Report
 	for _, e := range r.Commands {
 		if e.Report != nil && e.Report.Error == "" {
@@ -268,6 +286,98 @@ func SplitGoTestOutput(raw []byte) []OutputLine {
 		}
 		top, _, _ := strings.Cut(ev.Test, "/")
 		out = append(out, OutputLine{Test: TestID{Package: ev.Package, Name: top}, Text: ev.Output})
+	}
+	return out
+}
+
+// screen is why a verifier's test file can't join the Oracle as it is, or
+// "": it doesn't parse, declares no test, or declares TestMain or init,
+// which run before (or instead of) every test in its package and could
+// change how the Oracle's other tests run or report. Each is QA's own
+// defect, never the implementer's.
+func screen(src []byte) string {
+	f, err := parser.ParseFile(token.NewFileSet(), "x_test.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return "QA's test file doesn't parse; left out"
+	}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && (fn.Name.Name == "TestMain" || fn.Name.Name == "init") {
+			return "QA's test file declares " + fn.Name.Name + ", which runs around every test in its package; left out"
+		}
+	}
+	if len(testNames(src)) == 0 {
+		return "QA's file declares no TestXxx(*testing.T); left out"
+	}
+	return ""
+}
+
+// nestedModule reports whether dir is inside a module nested under the
+// root's: go test ./... from the root never builds it.
+func nestedModule(dir string, mods map[string]string) bool {
+	if _, ok := mods["."]; !ok {
+		return false
+	}
+	for d := dir; d != "." && d != "/"; d = path.Dir(d) {
+		if _, nested := mods[d]; nested {
+			return true
+		}
+	}
+	return false
+}
+
+// Without is m less the added files paths, with their tests: a new
+// manifest, stored as a new blob.
+func (m *Manifest) Without(paths []string, blobs *ledger.Blobs) (*Manifest, string, error) {
+	drop := map[string]bool{}
+	for _, p := range paths {
+		drop[p] = true
+	}
+	out := *m
+	out.Tests, out.Added, out.HeldOut, out.Expected = nil, nil, nil, nil
+	gone := map[TestID]bool{}
+	for _, f := range m.Tests {
+		if drop[f.Path] {
+			for _, id := range f.Expected {
+				gone[id] = true
+			}
+			continue
+		}
+		out.Tests = append(out.Tests, f)
+	}
+	for _, p := range m.Added {
+		if !drop[p] {
+			out.Added = append(out.Added, p)
+		}
+	}
+	for _, h := range m.HeldOut {
+		if !drop[h.File] {
+			out.HeldOut = append(out.HeldOut, h)
+		}
+	}
+	for _, e := range m.Expected {
+		if !gone[e] {
+			out.Expected = append(out.Expected, e)
+		}
+	}
+	raw, err := json.Marshal(&out)
+	if err != nil {
+		return nil, "", err
+	}
+	id, err := blobs.Put(raw)
+	return &out, id, err
+}
+
+// FuncNames are the top-level functions a Go file declares.
+func FuncNames(src []byte) []string {
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil {
+			out = append(out, fn.Name.Name)
+		}
 	}
 	return out
 }

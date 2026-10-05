@@ -63,10 +63,10 @@ func qaText(a *run.Attempt) string {
 		parts = append(parts, s)
 	}
 	if n := len(q.Dropped); n > 0 {
-		parts = append(parts, plural(n, "addition", "additions")+" left out")
+		parts = append(parts, pluralOf(n, "addition", "additions")+" left out")
 	}
 	if n := len(q.Withheld); n > 0 {
-		parts = append(parts, plural(n, "file", "files")+" withheld")
+		parts = append(parts, pluralOf(n, "file", "files")+" withheld")
 	}
 	return strings.Join(parts, " · ")
 }
@@ -86,10 +86,10 @@ func qaScopeText(a *run.Attempt) string {
 	if len(names) > 3 {
 		names, more = names[:3], fmt.Sprintf(" and %d more", len(paths)-3)
 	}
-	return clean(fmt.Sprintf("%s outside QA's scope: %s%s", plural(len(paths), "discarded write", "discarded writes"), strings.Join(names, ", "), more))
+	return clean(fmt.Sprintf("%s outside QA's scope: %s%s", pluralOf(len(paths), "discarded write", "discarded writes"), strings.Join(names, ", "), more))
 }
 
-func plural(n int, one, many string) string {
+func pluralOf(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
 	}
@@ -102,7 +102,7 @@ func issueLines(issues []string) []string {
 	if len(issues) == 0 {
 		return nil
 	}
-	lines := []string{"QA found " + plural(len(issues), "issue", "issues")}
+	lines := []string{"QA found " + pluralOf(len(issues), "issue", "issues")}
 	for i, s := range issues {
 		if i == maxIssues {
 			lines = append(lines, fmt.Sprintf("· and %d more", len(issues)-maxIssues))
@@ -131,7 +131,7 @@ func qaStep(e agent.Event) bool {
 // notCovered is the summary's "Not covered" text for the Run's mode.
 // TODO(#63): the Receipt replaces it.
 func notCovered(f *pipeline.Frozen, res *run.Result) string {
-	const unconfined = "Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges"
+	const unconfined = "Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges"
 	if f == nil || f.Mode == pipeline.Fast {
 		return "an independent verifier and held-out tests (Fast mode) · " + unconfined
 	}
@@ -142,7 +142,7 @@ func notCovered(f *pipeline.Frozen, res *run.Result) string {
 	}
 	if q := res.QA; q != nil {
 		if q.UnmappedTotal > 0 {
-			parts = append(parts, plural(q.UnmappedTotal, "held-out test names", "held-out tests name")+" no acceptance criterion")
+			parts = append(parts, pluralOf(q.UnmappedTotal, "held-out test names", "held-out tests name")+" no acceptance criterion")
 		}
 		ambiguous := 0
 		for _, w := range q.Withheld {
@@ -152,7 +152,7 @@ func notCovered(f *pipeline.Frozen, res *run.Result) string {
 		}
 		// TODO(#48): the Ambiguous-file gate resolves these before Accepted.
 		if ambiguous > 0 {
-			parts = append(parts, plural(ambiguous, "new file", "new files")+" QA never saw (no output glob matches)")
+			parts = append(parts, pluralOf(ambiguous, "new file", "new files")+" QA never saw (no output glob matches)")
 		}
 	}
 	return strings.Join(append(parts, unconfined), " · ")

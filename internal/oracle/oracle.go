@@ -55,6 +55,9 @@ type File struct {
 	// implementer Briefing or Workspace.
 	HeldOut bool   `json:"held_out,omitempty"`
 	Attempt string `json:"attempt,omitempty"` // the verifier Attempt that added it
+	// Expected are the expected tests the file declares; each attests its
+	// execution in a Check (ADR-0020).
+	Expected []TestID `json:"expected,omitempty"`
 }
 
 // Source reads a commit's files.
@@ -101,10 +104,14 @@ func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs)
 	for _, t := range m.Tests {
 		testPaths = append(testPaths, t.Path)
 	}
-	m.Expected = expectedTests(testPaths, files, func(p string) ([]byte, error) {
+	var byFile map[string][]TestID
+	m.Expected, byFile = expectedTests(testPaths, files, func(p string) ([]byte, error) {
 		b, _, err := src.Show(snapshot, p)
 		return b, err
 	})
+	for i := range m.Tests {
+		m.Tests[i].Expected = byFile[m.Tests[i].Path]
+	}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return nil, "", err

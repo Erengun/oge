@@ -101,6 +101,7 @@ func (r *renderer) parkedSummary(res *run.Result) {
 		r.p("  %s", clean(w))
 	}
 	r.p("  Unattended Runs never decide a Gate; a human must (exit 10).")
+	r.observed(res)
 	r.p("Nothing was written to your repository.")
 }
 

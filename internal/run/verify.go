@@ -20,6 +20,10 @@ import (
 	"github.com/erengun/oge/internal/workspace"
 )
 
+// qaDir holds every verifier Workspace and cache of a Run, under its work
+// directory.
+const qaDir = "qa"
+
 // ClassOutsideScope is a verifier write outside its Write scope: anything
 // but a new file matching the test globs (spec #35). It is discarded and
 // recorded, and is never a Tamper event.
@@ -66,8 +70,12 @@ type qaStage struct {
 	// m is the latest Oracle version and mBlob its manifest's blob.
 	m     *oracle.Manifest
 	mBlob string
-	n     int // verifier Attempts so far
-	added int // held-out files added this Run
+	// runner and seed build QA's additions before they are admitted.
+	runner *oracle.Runner
+	seed   *oracle.Seed
+	runDir string
+	n      int // verifier Attempts so far
+	added  int // held-out files added this Run
 }
 
 // review runs one verifier Attempt on cand's Candidate and admits its
@@ -83,11 +91,21 @@ func (q *qaStage) review(ctx context.Context, w *walk, res *Result, cand *Attemp
 	if err != nil {
 		return step{}, err
 	}
-	ws := filepath.Join(q.workDir, fmt.Sprintf("verify-%d", q.n))
+	// QA's Workspace and caches live under one directory the implementer
+	// is denied, removed as soon as the Attempt ends: held-out source
+	// and its build products never outlast it (#46).
+	root := filepath.Join(q.workDir, qaDir)
+	ws := filepath.Join(root, fmt.Sprintf("verify-%d", q.n))
 	if err := q.repo.Checkout(view, ws); err != nil {
 		return step{}, err
 	}
-	defer oracle.RemoveAll(ws)
+	defer oracle.RemoveAll(root)
+	// The implementer's Workspaces and caches hold Ambiguous and Excluded
+	// files and its residue: QA's sandbox denies them.
+	deny := []string{filepath.Join(q.workDir, "cache")}
+	if impls, err := filepath.Glob(filepath.Join(q.workDir, "implement*")); err == nil {
+		deny = append(deny, impls...)
+	}
 	if err := os.WriteFile(filepath.Join(ws, ledger.WorkspaceMarker), nil, 0o600); err != nil {
 		return step{}, err
 	}
@@ -120,7 +138,7 @@ func (q *qaStage) review(ctx context.Context, w *walk, res *Result, cand *Attemp
 	for _, c := range q.p.Task.Criteria {
 		ids = append(ids, c.ID)
 	}
-	at := attemptSpec{n: q.n, cause: cand.Cause, start: view, ws: ws, base: view, view: view, withheld: withheld,
+	at := attemptSpec{n: q.n, cause: cand.Cause, start: view, ws: ws, base: view, view: view, withheld: withheld, denyRead: deny,
 		brief: briefing.Verifier(q.p.Task, checks, f.Project.TestGlobs), writeGlobs: f.Project.TestGlobs, collect: true}
 	a, err := implement(ctx, q.p, q.l, q.blobs, q.repo, q.adapter, q.stage, q.runID, q.snap, at, scope)
 	if err != nil {
@@ -155,6 +173,28 @@ func (q *qaStage) review(ctx context.Context, w *walk, res *Result, cand *Attemp
 	if err != nil {
 		return step{}, err
 	}
+	if len(next.Added) > 0 {
+		// QA's own defects never reach the Oracle: a file that breaks its
+		// package's build would fail every later Check (#46 review H1).
+		rr := *q.runner
+		if q.seed != nil {
+			rr.Seed = q.seed
+		}
+		broken, err := rr.Unbuildable(ctx, q.repo, q.m, next, view, f.Setup.Run, filepath.Join(q.runDir, "checks", fmt.Sprintf("qa-%d", q.n)))
+		if err != nil {
+			return step{}, err
+		}
+		if len(broken) > 0 {
+			var paths []string
+			for _, b := range broken {
+				paths = append(paths, b.Path)
+			}
+			if next, nextBlob, err = next.Without(paths, q.blobs); err != nil {
+				return step{}, err
+			}
+			dropped = append(dropped, broken...)
+		}
+	}
 	qa.Dropped = dropped
 	newTests := len(next.HeldOut) - len(q.m.HeldOut)
 	qa.HeldOut, qa.Files = newTests, next.Added
@@ -165,19 +205,22 @@ func (q *qaStage) review(ctx context.Context, w *walk, res *Result, cand *Attemp
 	switch {
 	case a.Exit == ExitConflicts:
 		qa.Exit = ExitConflicts
-	case len(next.Added) > 0:
+	case newTests > 0: // tests, never files: a helper alone adds nothing
 		qa.Exit = ExitExtended
 	}
 	l := f.Limits
 	if n := len(next.Added); n > 0 && (q.n > l.OracleGrowthAttempts || n > l.OracleGrowthPerAttempt || q.added+n > l.OracleGrowthPerRun) {
 		// TODO(#51): the Oracle-growth Gate holds the additions for a
-		// human; until it exists the Run stops, never truncating them.
+		// human; until it exists the Run parks there, never truncating
+		// them and never calling it an Infrastructure stop.
 		if err := q.l.Append(RecObservation, map[string]any{"attempt": a.ID, "kind": "oracle_growth_held",
 			"held": next.Added, "attempts": q.n, "run_total": q.added}); err != nil {
 			return step{}, err
 		}
-		return fail(fmt.Sprintf("QA's additions hit an Oracle-growth limit (%d Attempts, %d per Attempt, %d per Run), and the Oracle-growth Gate isn't built yet",
-			l.OracleGrowthAttempts, l.OracleGrowthPerAttempt, l.OracleGrowthPerRun))
+		w.p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
+		return step{gate: "gate.oracle_growth", stop: Parked, why: []string{fmt.Sprintf(
+			"Oracle-growth limit reached (%d verifier Attempts, %d additions per Attempt, %d per Run): QA's %d new held-out files are held; #51 adds the Gate where a human admits them",
+			l.OracleGrowthAttempts, l.OracleGrowthPerAttempt, l.OracleGrowthPerRun, n)}}, nil
 	}
 	if len(next.Added) > 0 {
 		q.added += len(next.Added)
@@ -286,11 +329,13 @@ func issues(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs) []string
 	return out
 }
 
-// briefingManifest is an Attempt's Briefing manifest (ADR-0009): each
-// item's provenance and hash, the classes denied, the files withheld, the
-// observed envelope and whether the Session was fresh. It holds no
-// held-out or secret content, only hashes.
-func briefingManifest(p Params, a *Attempt, at attemptSpec, brief, instructions string) map[string]any {
+// briefingManifest is an Attempt's Briefing manifest (ADR-0009), written
+// before it starts: each item's provenance and hash, each class denied and
+// what denies it, the files withheld, the paths its sandbox is asked to
+// deny reading, and whether the Session is fresh. The observed envelope
+// follows in the Attempt's session Observation. It holds no held-out or
+// secret content, only hashes.
+func briefingManifest(p Params, a *Attempt, at attemptSpec, brief, instructions string, denyRead []string) map[string]any {
 	sum := func(s string) string {
 		h := sha256.Sum256([]byte(s))
 		return hex.EncodeToString(h[:])
@@ -302,22 +347,33 @@ func briefingManifest(p Params, a *Attempt, at attemptSpec, brief, instructions 
 	if instructions != "" {
 		items = append(items, map[string]string{"item": "repo_instructions", "source": "the Snapshot's CLAUDE.md", "sha256": sum(instructions)})
 	}
-	denied := []string{"held_out_source"}
+	// Only what is actually enforced, and by what (#46 review).
+	const (
+		notBriefed = "never in the Briefing: Öge builds it from the Task"
+		sandboxed  = "the agent's sandbox is asked to deny reading these paths (deny_read); only an adapter with a sandbox enforces it"
+	)
+	type denial struct {
+		Class    string `json:"class"`
+		Enforced string `json:"enforced"`
+	}
+	var denied []denial
 	if a.Role == "verifier" {
 		items = append(items, map[string]string{"item": "workspace", "source": "the Promoted view of the Candidate", "commit": at.view})
-		denied = []string{"implementer_transcript", "implementer_exit", "implementer_claims", "authorship", "prior_verdicts",
-			"held_out_source", "ambiguous_files", "excluded_files"}
+		for _, c := range []string{"implementer_transcript", "implementer_exit", "implementer_claims", "authorship", "prior_verdicts"} {
+			denied = append(denied, denial{c, notBriefed})
+		}
+		denied = append(denied,
+			denial{"ambiguous_files", "left out of its Workspace (the Promoted view); the implementer's Workspaces: " + sandboxed},
+			denial{"excluded_files", "kept at the Snapshot's version in its Workspace; the implementer's Workspaces: " + sandboxed},
+			denial{"earlier_held_out_source", "never in any Workspace; Öge's private state: " + sandboxed})
 	} else {
 		items = append(items, map[string]string{"item": "workspace", "source": "a copy of revision " + at.start, "commit": at.start})
+		denied = append(denied, denial{"held_out_source", "never in its Briefing or Workspace (send-backs carry a count and criterion ids); QA's directory and Öge's private state: " + sandboxed})
 	}
 	withheld := at.withheld
 	if withheld == nil {
 		withheld = []workspace.Withheld{}
 	}
-	envelope := a.Envelope
-	if envelope == "" {
-		envelope = "not reported"
-	}
 	return map[string]any{"attempt": a.ID, "role": a.Role, "items": items, "denied": denied, "withheld": withheld,
-		"envelope": envelope, "session": "fresh"}
+		"deny_read": denyRead, "envelope": "recorded in the Attempt's session Observation", "session": "fresh"}
 }

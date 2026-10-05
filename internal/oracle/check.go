@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -46,6 +47,9 @@ type Runner struct {
 	// tests set it, to skip compiling the standard library every Run
 	// (see cli.Env.CacheSeedTemplate).
 	SeedTemplate string
+	// nice runs every command at a lower priority: the Snapshot control
+	// does, so it never slows the Check or the agent it overlaps.
+	nice bool
 }
 
 // Execution is the command-execution Evidence Öge records (ADR-0011).
@@ -83,7 +87,17 @@ const maxParsed = 256 << 20
 // the PassEnv names are added from the process environment. It returns an
 // error only when Öge itself fails; a nonzero exit is data.
 func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]string, timeout time.Duration, outputCap int64) (Execution, []byte, error) {
+	return r.exec(ctx, line, dir, env, timeout, outputCap, nil)
+}
+
+// exec is Exec, handing the command attest (when set) as the attestation
+// descriptor. Only Check commands get it: never setup, which runs
+// Candidate code before the overlay, nor the warm step.
+func (r *Runner) exec(ctx context.Context, line, dir string, env map[string]string, timeout time.Duration, outputCap int64, attest *os.File) (Execution, []byte, error) {
 	argv := []string{"/bin/sh", "-c", line}
+	if r.nice {
+		argv = append([]string{"nice", "-n", "10"}, argv...)
+	}
 	e := Execution{Run: line, Argv: argv, Cwd: dir, Redaction: redact.Rules()}
 	vars := map[string]string{}
 	for _, name := range r.PassEnv {
@@ -93,6 +107,9 @@ func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]stri
 	}
 	for k, v := range env { // the fixed variables always win
 		vars[k] = v
+	}
+	if attest != nil {
+		vars[AttestEnv] = fmt.Sprint(attestFD)
 	}
 	var envList []string
 	for k, v := range vars {
@@ -105,16 +122,25 @@ func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]stri
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir, cmd.Env = dir, envList
+	if attest != nil {
+		cmd.ExtraFiles = []*os.File{attest} // descriptor 3, attestFD
+	}
 	cmd.Cancel = func() error { proc.Kill(cmd); return nil }
 	cmd.WaitDelay = 5 * time.Second
 	stdout, stderr := newCapture(maxParsed), newCapture(outputCap)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 
 	e.StartedAt = time.Now().UTC()
-	if err := proc.Start(cmd); err != nil {
+	var err error
+	if err = proc.Start(cmd); err != nil && ctx.Err() == nil {
 		return e, nil, fmt.Errorf("starting %q: %w", line, err)
+	} else if err == nil {
+		err = proc.Wait(cmd)
+	} else {
+		// Cancelled before it could start (the Run was interrupted, or a
+		// Snapshot control was stopped): data, like a kill.
+		err = context.Cause(ctx)
 	}
-	err := proc.Wait(cmd)
 	e.DurationMs = time.Since(e.StartedAt).Milliseconds()
 	e.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	var exitErr *exec.ExitError
@@ -125,7 +151,7 @@ func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]stri
 		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 			e.Signal = ws.Signal().String()
 		}
-	case e.TimedOut:
+	case e.TimedOut, ctx.Err() != nil:
 		e.ExitCode = -1
 	default:
 		return e, nil, fmt.Errorf("running %q: %w", line, err)
@@ -145,6 +171,8 @@ func (r *Runner) Exec(ctx context.Context, line, dir string, env map[string]stri
 		e.Why = "timed out after " + timeout.String()
 	case e.Signal != "":
 		e.Why = "killed by " + e.Signal
+	case ctx.Err() != nil:
+		e.Why = "cancelled"
 	case e.ExitCode != 0:
 		e.Why = fmt.Sprintf("exit %d", e.ExitCode)
 	}
@@ -190,10 +218,24 @@ func (c *capture) store(blobs *ledger.Blobs, outputCap int64) (Output, error) {
 type Result struct {
 	Pass bool `json:"pass"`
 	// Why is set when the Check failed for a reason no single command
-	// shows: an Oracle path the Candidate blocked, or Oracle tests no
-	// report shows passing (named in Missing).
+	// shows: an Oracle path the Candidate blocked, or Oracle tests that
+	// didn't attest passing (named in Missing).
 	Why     string   `json:"why,omitempty"`
 	Missing []string `json:"missing_tests,omitempty"`
+	// Infra is set when the Check reached no Verdict: the attestation
+	// mechanism failed on the Snapshot control too (ADR-0020).
+	Infra string `json:"infrastructure,omitempty"`
+	// Tests are the expected Oracle tests as attested (ADR-0020).
+	Tests []TestResult `json:"tests,omitempty"`
+	// Skipped are expected tests skipped on both the Snapshot control and
+	// the Candidate: allowed, but not covered.
+	Skipped []string `json:"skipped_on_both,omitempty"`
+	// NotBuilt are expected tests the Check's fixed build context
+	// excludes and that never started on the Snapshot control: not
+	// covered, each as "path — reason".
+	NotBuilt []string `json:"not_built,omitempty"`
+	// Stray counts attestation lines that named no test of this Check.
+	Stray int `json:"stray_attestations,omitempty"`
 	// Cache is how the Check-local caches were made (CacheClone, CacheCopy
 	// or CacheCold), and CacheMs how long that took.
 	Cache    string      `json:"cache"`
@@ -203,11 +245,18 @@ type Result struct {
 	Commands []Execution `json:"commands"`
 }
 
-// Check runs the Oracle on candidate in a fresh Check directory under
-// root: the Candidate, then the setup command, then the Oracle's tests
-// laid over its test paths, then every Check command. The Verdict is pass
-// only if every command passes. root is removed afterwards.
+// Check is CheckAgainst with no Snapshot control.
 func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, setup, root string) (*Result, error) {
+	return r.CheckAgainst(ctx, repo, m, candidate, setup, root, nil)
+}
+
+// CheckAgainst runs the Oracle on candidate in a fresh Check directory
+// under root: the Candidate, then the setup command, then the Oracle's
+// tests laid over its test paths with attestation, then every Check
+// command. The Verdict is pass only if every command passes and every
+// expected Oracle test attests passing, or skips where control shows it
+// skipping on the Snapshot too (ADR-0020). root is removed afterwards.
+func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candidate, setup, root string, control *Control) (*Result, error) {
 	defer RemoveAll(root)
 	dir, env, cache, err := r.prepareCheck(root)
 	if err != nil {
@@ -233,14 +282,28 @@ func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, s
 	// The overlay comes after setup, which runs Candidate code, so nothing
 	// the Candidate controls runs between laying the Oracle down and the
 	// Check commands.
-	if blocked, err := r.overlay(m, dir); err != nil {
+	// The attestation tokens are drawn now, after the Candidate is frozen.
+	att, err := newAttestation()
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Expected) > 0 {
+		att.ctx = buildContext(m, r.checkBuildEnv(ctx, env))
+	}
+	if blocked, err := r.overlay(m, dir, att); err != nil {
 		return nil, err
 	} else if blocked != "" {
 		res.Pass, res.Why = false, blocked
 		return res, nil
 	}
+	ch, err := openChannel()
+	if err != nil {
+		return nil, err
+	}
+	defer ch.finish()
+	var short []int // commands whose report ran fewer tests than expected_tests
 	for _, c := range m.Commands {
-		e, out, err := r.Exec(ctx, c.Run, dir, env, time.Duration(c.TimeoutSec)*time.Second, c.OutputCap)
+		e, out, err := r.exec(ctx, c.Run, dir, env, time.Duration(c.TimeoutSec)*time.Second, c.OutputCap, ch.w)
 		if err != nil {
 			return nil, err
 		}
@@ -254,33 +317,73 @@ func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, s
 				case rep.Failed > 0:
 					e.Pass, e.Why = false, fmt.Sprintf("%d failed", rep.Failed)
 				case rep.Ran < c.ExpectedTests:
-					e.Pass, e.Why = false, fmt.Sprintf("%d ran, %d expected", rep.Ran, c.ExpectedTests)
+					// Judged once the skips are: see minimumRan.
+					short = append(short, len(res.Commands))
 				}
 			}
 		}
 		res.Commands = append(res.Commands, e)
 		res.Pass = res.Pass && e.Pass
 	}
-	// Every Oracle test must pass in some go-test-json report: a package
-	// that silently dropped out of the run (a nested go.mod, a build
-	// constraint) is not a pass.
+	// Every expected Oracle test must attest. One that silently dropped
+	// out of the run (a nested go.mod, a build constraint, an early exit)
+	// is not a pass, whatever the exit codes and reports say.
 	var reports []*Report
 	for _, e := range res.Commands {
 		if e.Report != nil {
 			reports = append(reports, e.Report)
 		}
 	}
-	if len(reports) > 0 {
-		if res.Missing = missingTests(m.Expected, reports); len(res.Missing) > 0 {
-			names := res.Missing
-			if len(names) > 5 {
-				names = append(names[:5:5], "…")
-			}
-			res.Pass = false
-			res.Why = fmt.Sprintf("Oracle tests that never passed (%d): %s", len(res.Missing), strings.Join(names, ", "))
-		}
+	ch.finish()
+	res.Tests, res.Stray = ch.results(att, m.Expected, reports)
+	// TODO(#73-decision): attestation is required whenever the Oracle
+	// has expected Go tests, whether or not a Check command declares a
+	// go-test-json report (main only checked them with a report). Checks
+	// that don't run those tests now can't pass.
+	switch {
+	case res.Pass && len(m.Expected) == 0 && hasGoTests(m):
+		// Fail closed: Go test files Öge can't attest vouch for nothing.
+		res.Pass = false
+		res.Infra = "the Oracle's Go test files declare no test Öge can attest (TestXxx(*testing.T), or an Example with an output comment)"
+	case res.Pass:
+		judge(res, control)
+	}
+	if res.Pass {
+		minimumRan(res, m, short)
 	}
 	return res, nil
+}
+
+// hasGoTests reports whether the Oracle holds Go test files the go
+// command builds.
+func hasGoTests(m *Manifest) bool {
+	for _, f := range m.Tests {
+		if strings.HasSuffix(f.Path, "_test.go") && goPackageDir(path.Dir(f.Path)) {
+			return true
+		}
+	}
+	return false
+}
+
+// minimumRan applies each command's expected_tests minimum once skips are
+// judged (ADR-0020): an Oracle test skipped on both the Snapshot control
+// and the Candidate is excused from the count, so the minimum holds only
+// for tests that ran on the Snapshot. A Candidate-made skip never gets
+// here: judge has already failed the Check.
+func minimumRan(res *Result, m *Manifest, short []int) {
+	for _, i := range short {
+		e, c := &res.Commands[i], m.Commands[i]
+		excused := 0
+		for _, t := range res.Tests {
+			if t.Attested == AttestSkip && t.Snapshot == AttestSkip && e.Report.outcome(t.TestID) == AttestSkip {
+				excused++
+			}
+		}
+		if need := c.ExpectedTests - excused; e.Report.Ran < need {
+			e.Pass, e.Why = false, fmt.Sprintf("%d ran, %d expected", e.Report.Ran, c.ExpectedTests)
+			res.Pass = false
+		}
+	}
 }
 
 // Prepare makes root's fresh tree/ plus private home, temp and caches, and
@@ -308,7 +411,7 @@ func (r *Runner) Prepare(root string) (string, map[string]string, error) {
 // It never writes outside dir: an Oracle path the Candidate blocks with a
 // symlink (or a non-directory) anywhere along it is returned as a reason
 // the Check fails, and nothing is written for it.
-func (r *Runner) overlay(m *Manifest, dir string) (blocked string, err error) {
+func (r *Runner) overlay(m *Manifest, dir string, att *attestation) (blocked string, err error) {
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -330,25 +433,45 @@ func (r *Runner) overlay(m *Manifest, dir string) (blocked string, err error) {
 		if err != nil {
 			return "", err
 		}
-		dst := filepath.Join(dir, filepath.FromSlash(f.Path))
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		// test_config files declare no expected tests, so they pass
+		// through uninstrumented.
+		if b, err = att.instrument(f, b); err != nil {
 			return "", err
 		}
-		// O_EXCL: the removal pass cleared every test path, so anything
-		// here now is not ours to write through.
-		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
+		if err := writeNew(dir, f.Path, b); err != nil {
 			return "", err
 		}
-		_, err = out.Write(b)
-		if cerr := out.Close(); err == nil {
-			err = cerr
+	}
+	// The attestation helpers have unguessable names, so no Candidate
+	// file is in their way unless a path to them is blocked.
+	for p, b := range att.helperFiles() {
+		if why, err := blockedPath(dir, p); err != nil || why != "" {
+			return why, err
 		}
-		if err != nil {
+		if err := writeNew(dir, p, b); err != nil {
 			return "", err
 		}
 	}
 	return "", nil
+}
+
+// writeNew writes a file the overlay owns at rel under dir.
+func writeNew(dir, rel string, b []byte) error {
+	dst := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	// O_EXCL: the removal pass cleared every test path, so anything
+	// here now is not ours to write through.
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(b)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // blockedPath Lstats every existing component of rel under dir and says
@@ -397,7 +520,8 @@ type Report struct {
 	FailedTests []string `json:"failed_tests,omitempty"`
 	Error       string   `json:"error,omitempty"` // missing or malformed
 
-	outcomes map[TestID]string // top-level tests' terminal actions, by package
+	outcomes    map[TestID]string // tests' and subtests' terminal actions, by package
+	buildFailed map[string]bool   // packages whose test binary didn't build
 }
 
 // outcome is id's terminal action in the report ("" when it never ran);
@@ -415,6 +539,19 @@ func (r *Report) outcome(id TestID) string {
 	return got
 }
 
+// subtests are the names of id's subtests whose terminal action is
+// action.
+func (r *Report) subtests(id TestID, action string) []string {
+	var out []string
+	for k, o := range r.outcomes {
+		if o == action && strings.HasPrefix(k.Name, id.Name+"/") && (id.Package == "" || k.Package == id.Package) {
+			out = append(out, k.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ParseGoTestJSON reads `go test -json` output. Every non-empty line must
 // be a JSON event; tests count by their terminal pass, fail or skip
 // action. Unknown actions are ignored.
@@ -428,16 +565,22 @@ func ParseGoTestJSON(b []byte) Report {
 		if len(line) == 0 {
 			continue
 		}
-		var ev struct{ Action, Package, Test string }
+		var ev struct{ Action, Package, Test, FailedBuild string }
 		if err := json.Unmarshal(line, &ev); err != nil || ev.Action == "" {
 			rep.Error = fmt.Sprintf("line %q is not a go test -json event", truncate(string(line), 80))
 			return rep
 		}
 		events++
 		if ev.Test == "" {
+			if ev.Action == "fail" && ev.FailedBuild != "" {
+				if rep.buildFailed == nil {
+					rep.buildFailed = map[string]bool{}
+				}
+				rep.buildFailed[ev.Package] = true
+			}
 			continue
 		}
-		if (ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip") && !strings.Contains(ev.Test, "/") {
+		if ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip" {
 			if rep.outcomes == nil {
 				rep.outcomes = map[TestID]string{}
 			}

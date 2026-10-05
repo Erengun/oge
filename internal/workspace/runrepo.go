@@ -383,12 +383,20 @@ func (r *RunRepo) Checkout(commit, dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	idx := filepath.Join(r.Dir, "index-checkout-"+filepath.Base(dir))
+	// Checkouts can run concurrently (a Check beside the Snapshot
+	// control), so each gets its own index.
+	tmp, err := os.CreateTemp(r.Dir, "index-checkout-*")
+	if err != nil {
+		return err
+	}
+	idx := tmp.Name()
+	tmp.Close()
+	os.Remove(idx) // git writes it fresh; an empty file isn't an index
 	defer os.Remove(idx)
 	if _, err := r.git(dir, idx, nil, "read-tree", commit); err != nil {
 		return err
 	}
-	_, err := r.git(dir, idx, nil, "checkout-index", "-a", "-f")
+	_, err = r.git(dir, idx, nil, "checkout-index", "-a", "-f")
 	return err
 }
 

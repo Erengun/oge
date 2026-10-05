@@ -485,22 +485,23 @@ func TestEnvelopeRules(t *testing.T) {
 		}, warn: "MCP servers: gh"},
 		"residue isn't a warning": {role: "implementer", edit: func(f *initFrame) {
 			f.Skills, f.Agents = []string{"deep-research"}, []string{"reviewer"}
-			f.Plugins = append(f.Plugins, struct {
-				Name   string `json:"name"`
-				Source string `json:"source"`
-			}{"org", "org@corp"})
+			f.Plugins = append(f.Plugins, initPlugin{Name: "org", Path: "/home/user/.claude/plugins/org", Source: "org@corp"})
 		}},
 		"residue fails verifier": {role: "verifier", edit: func(f *initFrame) {
 			f.Skills, f.Agents = []string{"deep-research"}, []string{"reviewer"}
-			f.Plugins = append(f.Plugins, struct {
-				Name   string `json:"name"`
-				Source string `json:"source"`
-			}{"org", "org@corp"})
+			f.Plugins = append(f.Plugins, initPlugin{Name: "org", Path: "/home/user/.claude/plugins/org", Source: "org@corp"})
 		}, fatal: "the verifier would load 1 plugins, 1 skills, 1 subagents that Öge can't remove"},
 		"built-in subagents don't fail verifier":         {role: "verifier", edit: func(f *initFrame) { f.Agents = builtinAgents }},
 		"the pinned builtin plugins don't fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Plugins = pluginsOf(builtinPlugins...) }},
 		"fewer builtin plugins fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Plugins = pluginsOf(builtinPlugins[1:]...) },
 			fatal: "the verifier would load 3 plugins"},
+		"a repeated builtin plugin fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins = pluginsOf(builtinPlugins[0], builtinPlugins[0], builtinPlugins[1], builtinPlugins[2])
+		}, fatal: "the verifier would load 4 plugins"},
+		"a user marketplace named builtin fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins = pluginsOf(builtinPlugins...)
+			f.Plugins[0].Path = "/home/user/.claude/plugins/marketplaces/builtin/cc-plugin-agents-md"
+		}, fatal: "the verifier would load 4 plugins"},
 		"another builtin plugin fails verifier": {role: "verifier", edit: func(f *initFrame) {
 			f.Plugins = pluginsOf(append(append([]string{}, builtinPlugins...), "cc-plugin-new@builtin")...)
 		}, fatal: "the verifier would load 5 plugins"},
@@ -656,8 +657,14 @@ func TestAuthAndQuotaSignalsAreInfrastructureStops(t *testing.T) {
 func TestPermissionRequestsFollowThePolicy(t *testing.T) {
 	h := open(t, expect(fixture(t, "hook_decider.ndjson"), "allow", "allow", "allow", "allow", "deny", "deny", "allow"))
 	evs := h.turn("do the steps")
-	if s := settled(t, evs); s.Exit != "done" {
+	s := settled(t, evs)
+	if s.Exit != "done" {
 		t.Fatalf("settled %+v (the fake rejects a wrong answer)", s)
+	}
+	// Recorded wire order: two denied Bash calls, each in a turn of its
+	// own with nothing allowed (#90).
+	if want := (agent.Friction{Denied: 2, LostTurns: 2}); s.Friction == nil || *s.Friction != want {
+		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 	var got []string
 	for _, e := range evs {
@@ -743,8 +750,13 @@ func TestNoAuthorisationBeforeTheEnvelopePasses(t *testing.T) {
 	if first == nil || first.Decision != "deny" || first.Rule != ruleUnchecked {
 		t.Errorf("early request = %+v", first)
 	}
-	if s := settled(t, evs); s.Exit != "done" {
+	s := settled(t, evs)
+	if s.Exit != "done" {
 		t.Errorf("settled %+v", s)
+	}
+	// A refusal for timing isn't policy friction (#90).
+	if want := (agent.Friction{EnvelopeRefusals: 1}); s.Friction == nil || *s.Friction != want {
+		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 }
 
@@ -1013,10 +1025,7 @@ func TestResidueAndCapabilities(t *testing.T) {
 		Skills: []string{"design", "deep-research"}, Agents: append([]string{"reviewer"}, builtinAgents...),
 		Version: "2.1.289", Capabilities: []string{"interrupt_receipt_v1"},
 	}
-	in.Plugins = append(in.Plugins, struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
-	}{"cc-plugin-agents-md", "cc-plugin-agents-md@builtin"})
+	in.Plugins = append(in.Plugins, initPlugin{Name: "cc-plugin-agents-md", Path: "builtin", Source: "cc-plugin-agents-md@builtin"})
 	r := residueOf(in)
 	if r == nil || strings.Join(r.Plugins, ",") != "cc-plugin-agents-md@builtin" || strings.Join(r.Skills, ",") != "deep-research,design" ||
 		strings.Join(r.Agents, ",") != "reviewer" {
@@ -1107,6 +1116,9 @@ func TestVerifierPolicy(t *testing.T) {
 }
 
 func TestToolTargetsAreShortAndRedacted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the targets are POSIX paths; Runs are refused on Windows (ADR-0017)")
+	}
 	ws := "/w"
 	// Built at run time, so the source holds no key-shaped string.
 	key := "sk" + "-ant-" + strings.Repeat("q", 24)
@@ -1119,8 +1131,22 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 		t.Errorf("Edit target = %q", got)
 	}
 	sp := "/srv/Application Support/w"
-	if got := target("Bash", map[string]any{"command": `cd /srv/Application\ Support/w && go test ./...`}, []string{sp}); got != "go test ./..." {
-		t.Errorf("cd target = %q", got)
+	// The cd prefix stays, so a denied "cd <ws> && go test" reads apart
+	// from an allowed "go test"; the Workspace itself shortens to ".".
+	for cmd, want := range map[string]string{
+		`cd /srv/Application\ Support/w && go test ./...`:  "cd . && go test ./...",
+		`cd "/srv/Application Support/w" && go test ./...`: "cd . && go test ./...",
+		`cd /srv/Application\ Support/w/pkg && go test`:    "cd pkg && go test",
+		`go test /srv/Application\ Support/w/pkg`:          "go test pkg",
+		`ls /srv/Application\ Support/wx`:                  `ls /srv/Application\ Support/wx`,
+	} {
+		if got := target("Bash", map[string]any{"command": cmd}, []string{sp}); got != want {
+			t.Errorf("target(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+	// No control character reaches a target: no terminal escapes.
+	if got := target("Bash", map[string]any{"command": "ls \x1b[31mred\x07\u009b"}, []string{ws}); got != "ls [31mred" {
+		t.Errorf("control target = %q", got)
 	}
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {
@@ -1128,19 +1154,10 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 	}
 }
 
-func pluginsOf(sources ...string) []struct {
-	Name   string `json:"name"`
-	Source string `json:"source"`
-} {
-	var out []struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
-	}
+func pluginsOf(sources ...string) []initPlugin {
+	var out []initPlugin
 	for _, src := range sources {
-		out = append(out, struct {
-			Name   string `json:"name"`
-			Source string `json:"source"`
-		}{src, src})
+		out = append(out, initPlugin{Name: src, Path: "builtin", Source: src})
 	}
 	return out
 }

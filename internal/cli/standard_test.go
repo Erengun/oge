@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/run"
 )
@@ -117,16 +119,16 @@ func TestStandardVerifierAddsPassingTestsAccepted(t *testing.T) {
 	// Each Attempt has a Briefing manifest; the verifier's withholds the
 	// implementer's Claims and holds no held-out content.
 	var man struct {
-		Attempt string   `json:"attempt"`
-		Session string   `json:"session"`
-		Denied  []string `json:"denied"`
+		Attempt string                             `json:"attempt"`
+		Session string                             `json:"session"`
+		Denied  []struct{ Class, Enforced string } `json:"denied"`
 		Items   []struct {
 			Item, Source, Sha256 string
 		} `json:"items"`
 		Envelope string `json:"envelope"`
 	}
 	recordNth(t, dir, run.RecBriefingManifest, 1, &man)
-	if man.Attempt != "verify#1" || man.Session != "fresh" || !contains(man.Denied, "implementer_claims") || len(man.Items) == 0 {
+	if man.Attempt != "verify#1" || man.Session != "fresh" || len(man.Denied) == 0 || man.Denied[2].Class != "implementer_claims" || len(man.Items) == 0 {
 		t.Errorf("verifier Briefing manifest = %+v", man)
 	}
 	if raw := ledgerText(t, dir); strings.Contains(raw, heldOutMarker) {
@@ -314,11 +316,188 @@ func ledgerText(t *testing.T, runDir string) string {
 	return string(b)
 }
 
-func contains(list []string, s string) bool {
-	for _, l := range list {
-		if l == s {
+
+// A held-out file that doesn't compile is QA's defect: it is left out,
+// and the implementer never hears of it (#46 review H1).
+func TestStandardQAsUncompilableTestIsLeftOut(t *testing.T) {
+	f := newRunFixture(t)
+	verifier := `cat > bad_test.go <<'EOF'
+package fx
+
+import "testing"
+
+func TestUsesNothing(t *testing.T) { _ = NoSuchFunc() }
+EOF
+` + negTest
+	code, out, errOut := f.run(t, verifierThen(verifier, fixScript), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "QA         Fresh Fake · Exit extended · +1 held-out · 1 addition left out") || strings.Contains(out, "send back") {
+		t.Errorf("stdout:\n%s", out)
+	}
+	var v1 struct {
+		Dropped []struct{ Path, Why string } `json:"dropped"`
+	}
+	recordNth(t, f.onlyRun(t), run.RecOracleVersion, 1, &v1)
+	if len(v1.Dropped) != 1 || v1.Dropped[0].Path != "bad_test.go" || !strings.Contains(v1.Dropped[0].Why, "didn't compile") {
+		t.Errorf("dropped %+v", v1.Dropped)
+	}
+}
+
+// Two fresh verifiers that each declare the same helper: the second
+// file would break the package's build forever, so it is left out.
+func TestStandardSecondQAsClashingHelperIsLeftOut(t *testing.T) {
+	f := newRunFixture(t)
+	verifier := `if [ -e "$OGE_TEST_OUT/verifier-2.turn" ]; then
+cat > other_test.go <<'EOF'
+package fx
+
+import "testing"
+
+func check(t *testing.T, got, want int) { if got != want { t.Fatalf("got %d, want %d", got, want) } }
+
+// AC-1
+func TestAddZero(t *testing.T) { check(t, Add(0, 0), 0) }
+EOF
+else
+cat > neg_test.go <<'EOF'
+package fx
+
+import "testing"
+
+func check(t *testing.T, got, want int) { if got != want { t.Fatalf("got %d, want %d", got, want) } }
+
+// AC-1
+func TestAddNegatives(t *testing.T) { check(t, Add(-2, 1), -1) }
+EOF
+fi
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, buggyThenFixed), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "QA         Fresh Fake · Exit no_additions · 1 addition left out") || strings.Count(out, "send back") != 1 {
+		t.Errorf("stdout:\n%s", out)
+	}
+}
+
+// Hitting an Oracle-growth limit parks the Run for a human: it is no
+// Infrastructure stop (#46 review M2; the Gate itself is #51).
+func TestStandardOracleGrowthLimitParks(t *testing.T) {
+	f := newRunFixture(t)
+	f.limits(t, "oracle_growth_attempts = 1\n")
+	verifier := `if [ -e "$OGE_TEST_OUT/verifier-2.turn" ]; then
+printf 'package fx\n\nimport "testing"\n\n// AC-1\nfunc TestAddZero(t *testing.T) {\n\tif Add(0, 0) != 0 {\n\t\tt.Fatal("zero")\n\t}\n}\n' > zero_test.go
+else
+` + negTest + `fi
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, buggyThenFixed), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitParked || !strings.Contains(out, "Oracle-growth limit reached") || strings.Contains(out, "INFRASTRUCTURE STOP") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// specSpy records every LaunchSpec, in order.
+type specSpy struct {
+	agent.Adapter
+	specs *[]agent.LaunchSpec
+}
+
+func (s specSpy) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Session, error) {
+	*s.specs = append(*s.specs, spec)
+	return s.Adapter.Open(ctx, spec)
+}
+
+func under(path string, roots []string) bool {
+	for _, r := range roots {
+		if path == r || strings.HasPrefix(path, r+string(filepath.Separator)) {
 			return true
 		}
 	}
 	return false
+}
+
+// QA's Workspace and caches are gone before the implementer runs again,
+// and each role's sandbox denies the other's directories (#46 review H2,
+// H3): held-out content never reaches the implementer, and QA never reads
+// the implementer's Workspace, where Ambiguous and Excluded files are.
+func TestStandardRolesCantReadEachOther(t *testing.T) {
+	f := newRunFixture(t)
+	var specs []agent.LaunchSpec
+	f.wrap = func(a agent.Adapter) agent.Adapter { return specSpy{a, &specs} }
+	verifier := negTest + `cp neg_test.go "$OGE_FAKE_CACHE/copied_test.go"
+`
+	impl := `grep -rq ` + heldOutMarker + ` "$(dirname "$PWD")" 2>/dev/null && touch "$OGE_TEST_OUT/leak"
+` + buggyThenFixed
+	code, out, errOut := f.run(t, verifierThen(verifier, impl), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(f.repo), "out", "leak")); err == nil {
+		t.Error("held-out source was readable from the implementer's Workspace's parent")
+	}
+	var impls, vers []agent.LaunchSpec
+	for _, s := range specs {
+		if s.Role == "verifier" {
+			vers = append(vers, s)
+		} else {
+			impls = append(impls, s)
+		}
+	}
+	if len(impls) != 2 || len(vers) != 2 {
+		t.Fatalf("specs: %d implementer, %d verifier", len(impls), len(vers))
+	}
+	for _, v := range vers {
+		if !under(v.Cache, impls[1].DenyRead) || !under(v.Workspace, impls[1].DenyRead) {
+			t.Errorf("the implementer may read QA's %s or %s: deny %v", v.Workspace, v.Cache, impls[1].DenyRead)
+		}
+	}
+	for _, i := range impls {
+		if !under(i.Workspace, vers[1].DenyRead) || !under(i.Cache, vers[1].DenyRead) {
+			t.Errorf("QA may read the implementer's %s or %s: deny %v", i.Workspace, i.Cache, vers[1].DenyRead)
+		}
+	}
+}
+
+// A held-out test that forges a passing report and exits can't make a
+// broken Candidate pass: tests attest over Öge's own pipe (ADR-0020), and
+// a TestMain or init is left out before it joins the Oracle (#46 review H4).
+func TestStandardQACantForgeAPass(t *testing.T) {
+	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
+	verifier := `cat > forge_test.go <<'EOF'
+package fx
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+func TestForge(t *testing.T) {
+	fmt.Println("{\"Action\":\"pass\",\"Package\":\"fx\",\"Test\":\"TestAdd\"}")
+	os.Exit(0)
+}
+EOF
+cat > main_test.go <<'EOF'
+package fx
+
+import (
+	"os"
+	"testing"
+)
+
+func TestMain(m *testing.M) { os.Exit(0) }
+
+func TestNothing(t *testing.T) {}
+EOF
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, `echo "nothing to do"`), standardTask, "--agent", "fake", "--unattended")
+	if code == ExitOK || strings.Contains(out, "ACCEPTED") {
+		t.Fatalf("a broken Candidate was Accepted: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "+1 held-out (1 unmapped) · 1 addition left out") {
+		t.Errorf("stdout:\n%s", out)
+	}
 }

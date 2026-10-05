@@ -21,18 +21,23 @@ type initFrame struct {
 	MCPServers []struct {
 		Name string `json:"name"`
 	} `json:"mcp_servers"`
-	PermissionMode string   `json:"permissionMode"`
-	APIKeySource   string   `json:"apiKeySource"`
-	Version        string   `json:"claude_code_version"`
-	OutputStyle    string   `json:"output_style"`
-	Skills         []string `json:"skills"`
-	Agents         []string `json:"agents"`
-	Plugins        []struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
-	} `json:"plugins"`
-	Capabilities []string        `json:"capabilities"`
-	MemoryPaths  json.RawMessage `json:"memory_paths"`
+	PermissionMode string          `json:"permissionMode"`
+	APIKeySource   string          `json:"apiKeySource"`
+	Version        string          `json:"claude_code_version"`
+	OutputStyle    string          `json:"output_style"`
+	Skills         []string        `json:"skills"`
+	Agents         []string        `json:"agents"`
+	Plugins        []initPlugin    `json:"plugins"`
+	Capabilities   []string        `json:"capabilities"`
+	MemoryPaths    json.RawMessage `json:"memory_paths"`
+}
+
+// initPlugin is one plugin system/init reports: path is "builtin" for
+// the plugins claude ships inside its own binary.
+type initPlugin struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Source string `json:"source"`
 }
 
 // envelope is what a Launch profile expects system/init to report.
@@ -81,7 +86,7 @@ func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal s
 		}
 		injected = append(injected, "MCP servers: "+strings.Join(names, ", "))
 	}
-	if r := residueOf(in); r != nil && e.role == "verifier" && !onlyBuiltin(r) {
+	if r := residueOf(in); r != nil && e.role == "verifier" && !onlyBuiltin(in) {
 		// Residue a judged role can't be kept from: plugins, skills and
 		// subagents may carry instructions, so the verifier fails closed
 		// (ADR-0009), unless it is exactly the pinned binary's own builtin
@@ -235,16 +240,23 @@ func sorted(l []string) []string {
 	return out
 }
 
-// onlyBuiltin reports whether r is exactly the pinned binary's builtin
-// plugins, with no skill or subagent.
-func onlyBuiltin(r *agent.Residue) bool {
-	if len(r.Skills)+len(r.Agents) > 0 || len(r.Plugins) != len(builtinPlugins) {
+// onlyBuiltin reports whether init loads exactly the pinned binary's
+// builtin plugins, each from the binary itself (path "builtin", so a user
+// marketplace named "builtin" can't pass), and no skill or subagent.
+func onlyBuiltin(in initFrame) bool {
+	r := residueOf(in)
+	if r == nil {
+		return true
+	}
+	if len(r.Skills)+len(r.Agents) > 0 {
 		return false
 	}
-	for _, p := range r.Plugins {
-		if !oneOf(p, builtinPlugins) {
+	for _, p := range in.Plugins {
+		if p.Path != "builtin" {
 			return false
 		}
 	}
-	return true
+	want := append([]string(nil), builtinPlugins...)
+	sort.Strings(want)
+	return strings.Join(r.Plugins, "\x00") == strings.Join(want, "\x00") // an exact set: no repeats
 }

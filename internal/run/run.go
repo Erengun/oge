@@ -59,6 +59,7 @@ const (
 	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
+	RecControlEnded      = "ControlEnded"
 	RecVerdict           = "Verdict"
 	RecRunEnded          = "RunEnded"
 )
@@ -145,6 +146,9 @@ type Attempt struct {
 	Envelope string
 	// QA is set on a verifier Attempt: what it added to the Oracle.
 	QA *QA
+	// Friction is the Attempt's policy friction, summed over its turns
+	// (ADR-0019), when its adapter measures it.
+	Friction *agent.Friction
 }
 
 // Result is what a Run ended with.
@@ -168,6 +172,11 @@ type Result struct {
 	Decision *gate.Decision
 	// QA is the latest verifier Attempt's, in Standard mode.
 	QA *QA
+	// Tripwires are the static tripwires the Candidate's changes set off
+	// (ADR-0020): signals, not proof.
+	Tripwires []string
+	// Friction is the Run's policy friction, summed over its Attempts.
+	Friction *agent.Friction
 }
 
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
@@ -347,6 +356,8 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	p.Observe(Event{Kind: EvPreflight, Result: res})
+	control := startControl(ctx, runner, seed, repo, m, snap, f.Setup.Run, res.Dir)
+	defer control.Stop()
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
 	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
@@ -356,7 +367,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	var qa *qaStage
 	if verifier != nil {
 		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
-			snap: snap, workDir: workDir, m: m, mBlob: mBlob}
+			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, seed: seed, runDir: res.Dir}
 	}
 	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
 	for check := 1; ; check++ {
@@ -366,6 +377,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		res.Attempt = a
+		res.Friction = agent.SumFriction(res.Friction, a.Friction)
 		p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
 		if a.Stop != "" {
 			return end(InfrastructureStop, a.Stop)
@@ -382,6 +394,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
 		}
 		res.Candidate = a.Candidate
+		if err := recordTripwires(l, repo, res, a); err != nil {
+			return nil, err
+		}
 		// A Tamper event stays unacknowledged for the rest of the Run,
 		// whatever later Attempts do (ADR-0019 #2).
 		w.addTamper(a)
@@ -421,7 +436,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := l.Append(RecCheckStarted, map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 			return nil, err
 		}
-		cr, err := runner.Check(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)))
+		cr, err := runner.CheckAgainst(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
 		if err != nil {
 			return nil, err
 		}
@@ -438,6 +453,17 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		}
 		if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true}); err != nil {
 			return nil, err
+		}
+		// TODO(#73-decision): the Snapshot control is recorded once a Check
+		// has consulted it; one no Verdict needed is stopped unrecorded at
+		// the end of the Run.
+		if rec, ok := control.Consulted(); ok {
+			if err := l.Append(RecControlEnded, rec); err != nil {
+				return nil, err
+			}
+		}
+		if cr.Infra != "" {
+			return end(InfrastructureStop, cr.Infra)
 		}
 		if err := l.Append(RecVerdict, map[string]any{"check": check, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
 			return nil, err
@@ -493,6 +519,7 @@ type attemptSpec struct {
 	ws    string
 
 	// A verifier Attempt sets these.
+	denyRead   []string // more paths its agent's sandbox denies reading
 	brief      string   // the whole Briefing
 	base       string   // what its scope check compares with (the Snapshot when empty)
 	writeGlobs []string // its Write scope: new files matching these
@@ -524,8 +551,13 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	}
 	spec := agent.LaunchSpec{
 		Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network, RunID: runID,
-		RepoInstructions: instructions, CheckCommands: checks, DenyRead: []string{p.State.Private}, Cache: cache,
+		RepoInstructions: instructions, CheckCommands: checks, DenyRead: append([]string{p.State.Private}, at.denyRead...), Cache: cache,
 		WriteGlobs: at.writeGlobs,
+	}
+	if stage.Role == "implementer" {
+		// QA's Workspaces and caches, where held-out tests are written,
+		// even before Öge removes them (#46).
+		spec.DenyRead = append(spec.DenyRead, filepath.Join(filepath.Dir(ws), qaDir))
 	}
 	// TODO(#44): a send-back Attempt may continue the implementer's
 	// Session; every Attempt is a fresh one for now, briefed again with
@@ -543,6 +575,11 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 		"launch_profile": map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network},
 		"briefing":       briefingBlob, "repo_instructions": instructions != "",
 	}); err != nil {
+		return nil, err
+	}
+	// The Briefing manifest is written ahead of the Attempt: what the
+	// agent is about to be given and denied (ADR-0009).
+	if err := l.Append(RecBriefingManifest, briefingManifest(p, a, at, brief, instructions, spec.DenyRead)); err != nil {
 		return nil, err
 	}
 	launched := time.Now()
@@ -563,6 +600,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	enc := json.NewEncoder(&stream)
 	settled := false
 	hosts := map[string]int{}
+	var turn *agent.Friction // the turn in flight's friction so far
 	timeout := time.NewTimer(p.Frozen.Limits.StageTimeout)
 	defer timeout.Stop()
 loop:
@@ -600,9 +638,14 @@ loop:
 				if ev.Host != nil {
 					hosts[ev.Host.Rule]++
 				}
+				if ev.Friction != nil {
+					turn = ev.Friction // the turn's so far
+				}
 			case agent.TurnSettled:
 				settled = true
 				a.Exit, a.Failure, a.Stop = ev.Exit, ev.Failure, ev.Stop
+				a.Friction = agent.SumFriction(a.Friction, ev.Friction)
+				turn = nil
 				break loop
 			}
 		case <-timeout.C:
@@ -617,6 +660,8 @@ loop:
 			break loop
 		}
 	}
+	// A turn that never settled still had its friction.
+	a.Friction = agent.SumFriction(a.Friction, turn)
 	if !settled && a.Failure == "" {
 		a.Failure = "lost_subprocess: the turn never settled"
 	}
@@ -641,6 +686,9 @@ loop:
 	if a.FirstActivity > 0 {
 		obs["first_activity_ms"] = a.FirstActivity.Milliseconds()
 	}
+	if f := a.Friction; f != nil {
+		obs["policy_friction"] = map[string]int{"lost_turns": f.LostTurns, "denied": f.Denied, "envelope_refusals": f.EnvelopeRefusals}
+	}
 	if err := l.Append(RecObservation, obs); err != nil {
 		return nil, err
 	}
@@ -657,9 +705,6 @@ loop:
 		if err := commitCandidate(l, repo, a, snap, at.start, fmt.Sprintf("c%d", at.n), ws, protected); err != nil {
 			return nil, err
 		}
-	}
-	if err := l.Append(RecBriefingManifest, briefingManifest(p, a, at, brief, instructions)); err != nil {
-		return nil, err
 	}
 	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
 	if a.Stop != "" {

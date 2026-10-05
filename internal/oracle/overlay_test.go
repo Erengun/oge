@@ -32,7 +32,11 @@ func TestOverlayNeverWritesThroughASymlink(t *testing.T) {
 	}
 	r := &Runner{Blobs: blobs}
 	m := &Manifest{TestGlobs: []string{"**/*_test.go"}, Tests: []File{{Path: "sub/x_test.go", Blob: id}}}
-	why, err := r.overlay(m, dir)
+	att, err := newAttestation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	why, err := r.overlay(m, dir, att)
 	if err != nil || !strings.Contains(why, "Oracle path sub/x_test.go is blocked by a symlink in the Candidate") {
 		t.Fatalf("overlay = %q, %v", why, err)
 	}

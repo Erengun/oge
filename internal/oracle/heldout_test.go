@@ -128,3 +128,57 @@ not json
 		t.Errorf("got %q\nwant %q", got, want)
 	}
 }
+
+// A verifier file that would change how every test runs, or adds no test,
+// is QA's own defect: it never joins the Oracle (#46 review H1, M1).
+func TestNewVersionScreensQAsDefects(t *testing.T) {
+	blobs, err := ledger.OpenBlobs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v0 := &Manifest{Format: ManifestFormat, TestGlobs: []string{"**/*_test.go"}}
+	hdr := "package fx\n\nimport \"testing\"\n\n"
+	adds := []Addition{
+		{Path: "main_test.go", Data: []byte(hdr + "func TestMain(m *testing.M) {}\nfunc TestA(t *testing.T) {}\n")},
+		{Path: "init_test.go", Data: []byte(hdr + "func init() {}\nfunc TestB(t *testing.T) {}\n")},
+		{Path: "helper_test.go", Data: []byte(hdr + "func check(t *testing.T) {}\n")},
+		{Path: "broken_test.go", Data: []byte(hdr + "func TestC(")},
+		{Path: "ok_test.go", Data: []byte(hdr + "func TestD(t *testing.T) {}\n")},
+	}
+	m, _, dropped, err := NewVersion(v0, "p", "verify#1", adds, fakeSource{"go.mod": "module fx\n"}, "c", nil, blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(m.Added, []string{"ok_test.go"}) {
+		t.Errorf("added %v", m.Added)
+	}
+	why := map[string]string{}
+	for _, d := range dropped {
+		why[d.Path] = d.Why
+	}
+	for p, want := range map[string]string{"main_test.go": "declares TestMain", "init_test.go": "declares init",
+		"helper_test.go": "declares no TestXxx", "broken_test.go": "doesn't parse"} {
+		if !strings.Contains(why[p], want) {
+			t.Errorf("%s: %q, want %q", p, why[p], want)
+		}
+	}
+	if f := m.Tests[0]; len(f.Expected) != 1 || f.Expected[0].Name != "TestD" {
+		t.Errorf("the held-out file attests nothing: %+v", f)
+	}
+	// Without takes a file back out, with its tests.
+	w, _, err := m.Without([]string{"ok_test.go"}, blobs)
+	if err != nil || len(w.Tests)+len(w.Added)+len(w.HeldOut)+len(w.Expected) != 0 {
+		t.Errorf("Without left %+v (%v)", w, err)
+	}
+}
+
+// Attestation, not the report, decides whether a held-out test passed.
+func TestHeldOutFailuresTrustAttestation(t *testing.T) {
+	m := &Manifest{HeldOut: []HeldOut{{Test: TestID{"fx", "TestNeg"}}}}
+	out := `{"Action":"pass","Package":"fx","Test":"TestNeg"}` + "\n"
+	rep := ParseGoTestJSON([]byte(out))
+	r := &Result{Commands: []Execution{{Report: &rep}}, Tests: []TestResult{{TestID: TestID{"fx", "TestNeg"}, Attested: AttestExited}}}
+	if got := m.HeldOutFailures(r); len(got) != 1 {
+		t.Errorf("a forged PASS frame counted: %v", got)
+	}
+}

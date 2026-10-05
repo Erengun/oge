@@ -14,5 +14,5 @@ Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
 ✓ check      go test -json ./... · 3 ran · 0 failed · pass · 1s
 
 ACCEPTED   Candidate 77aa31d · Oracle v1 · 7.3s
-Not covered Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges
+Not covered Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges
 Nothing was written to your repository.

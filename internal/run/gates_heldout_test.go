@@ -22,6 +22,8 @@ func TestSendBackKeepsHeldOutTestsOut(t *testing.T) {
 {"Action":"output","Package":"fx","Test":"TestNeg","Output":"    secret_test.go:7: Add(-2, 1) = 0, want -1\n"}
 {"Action":"fail","Package":"fx","Test":"TestNeg"}
 {"Action":"output","Package":"fx","Output":"panic in fx.TestNeg at secret_test.go:7\n"}
+{"Action":"output","Package":"fx","Output":"fx.checkSecret(0x1)\n"}
+{"Action":"output","Package":"fx","Output":"\t/tmp/x/add_v2_test.go:3 +0x1\n"}
 {"Action":"output","Package":"fx","Output":"FAIL\tfx\t0.1s\n"}
 {"Action":"fail","Package":"fx"}
 `
@@ -29,10 +31,11 @@ func TestSendBackKeepsHeldOutTestsOut(t *testing.T) {
 	rep := oracle.ParseGoTestJSON([]byte(out))
 	cr := &oracle.Result{Why: "Oracle tests that never passed (2): fx.TestGone, fx.TestHidden", Missing: []string{"fx.TestGone", "fx.TestHidden"},
 		Commands: []oracle.Execution{{Run: "go test -json ./...", Why: "2 failed", Report: &rep, Stdout: oracle.Output{Blob: id}}}}
+	helper, _ := blobs.Put([]byte("package fx\n\nimport \"testing\"\n\nfunc checkSecret(t *testing.T) {}\n\nfunc TestHidden(t *testing.T) { checkSecret(t) }\n"))
 	m := &oracle.Manifest{HeldOut: []oracle.HeldOut{
 		{Test: oracle.TestID{Package: "fx", Name: "TestNeg"}, File: "secret_test.go", Criteria: []string{"AC-1"}},
-		{Test: oracle.TestID{Package: "fx", Name: "TestHidden"}, File: "secret_test.go"},
-	}}
+		{Test: oracle.TestID{Package: "fx", Name: "TestHidden"}, File: "add_v2_test.go"},
+	}, Tests: []oracle.File{{Path: "add_v2_test.go", Blob: helper, HeldOut: true}}}
 	got := sendBackTurn(cr, blobs, nil, m)
 	for _, want := range []string{"TestNegate", "Negate(1) = 1, want -1", "FAIL\tfx", "fx.TestGone",
 		"2 held-out tests failed: AC-1 ×1, unmapped ×1.", "Öge left it out"} {
@@ -40,7 +43,7 @@ func TestSendBackKeepsHeldOutTestsOut(t *testing.T) {
 			t.Errorf("the send-back lacks %q:\n%s", want, got)
 		}
 	}
-	for _, never := range []string{"TestNeg ", "TestNeg\n", "TestHidden", "secret_test.go", "Add(-2, 1)"} {
+	for _, never := range []string{"TestNeg ", "TestNeg\n", "TestHidden", "secret_test.go", "Add(-2, 1)", "checkSecret", "add_v2_test.go"} {
 		if strings.Contains(got, never) {
 			t.Errorf("the send-back reveals %q:\n%s", never, got)
 		}

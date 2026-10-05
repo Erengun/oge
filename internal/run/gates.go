@@ -311,7 +311,7 @@ func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision, m *o
 	}
 	if cr != nil && !cr.Pass {
 		b.WriteString("\nÖge's Check failed on it:\n")
-		b.WriteString(failureOutput(cr, blobs, newHeldOutFilter(m, cr)))
+		b.WriteString(failureOutput(cr, blobs, newHeldOutFilter(m, cr, blobs)))
 	}
 	return b.String()
 }
@@ -327,7 +327,7 @@ type heldOutFilter struct {
 
 // newHeldOutFilter is nil when the Oracle has no held-out tests, so a
 // Fast-mode send-back is exactly what it was.
-func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result) *heldOutFilter {
+func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result, blobs *ledger.Blobs) *heldOutFilter {
 	if m == nil || len(m.HeldOut) == 0 {
 		return nil
 	}
@@ -338,6 +338,19 @@ func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result) *heldOutFilter {
 		files[path.Base(h.File)] = true
 	}
 	var alts []string
+	// Every function a held-out file declares: a helper's name in a stack
+	// trace names held-out source too.
+	for _, t := range m.Tests {
+		if !t.HeldOut {
+			continue
+		}
+		files[path.Base(t.Path)] = true
+		if src, err := blobs.Get(t.Blob); err == nil {
+			for _, n := range oracle.FuncNames(src) {
+				alts = append(alts, regexp.QuoteMeta(n))
+			}
+		}
+	}
 	for n := range f.names {
 		alts = append(alts, regexp.QuoteMeta(n))
 	}
