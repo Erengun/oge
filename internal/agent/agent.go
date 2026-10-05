@@ -96,6 +96,38 @@ type Event struct {
 	// authentication or quota: an Infrastructure stop, not an Attempt
 	// failure (ADR-0012).
 	Stop string `json:",omitempty"`
+	// Friction is set by an adapter that measures policy friction
+	// (ADR-0019): on a settled turn, the turn's; on a Host request, the
+	// turn's so far, for a turn that never settles. nil when it doesn't.
+	Friction *Friction `json:",omitempty"`
+}
+
+// Friction is a turn's policy friction (ADR-0019, #90).
+type Friction struct {
+	// Denied counts the tool requests the policy denied.
+	Denied int
+	// LostTurns counts the model turns lost to policy: those with a
+	// denied tool request and no allowed one.
+	LostTurns int
+	// EnvelopeRefusals counts requests refused because the startup
+	// envelope hadn't passed: timing, not policy, so in neither count.
+	EnvelopeRefusals int
+}
+
+// SumFriction is a and b added up; nil when both are.
+func SumFriction(a, b *Friction) *Friction {
+	if a == nil && b == nil {
+		return nil
+	}
+	var s Friction
+	for _, f := range []*Friction{a, b} {
+		if f != nil {
+			s.Denied += f.Denied
+			s.LostTurns += f.LostTurns
+			s.EnvelopeRefusals += f.EnvelopeRefusals
+		}
+	}
+	return &s
 }
 
 // Host-request families (ADR-0005).
@@ -115,6 +147,8 @@ type HostDecision struct {
 	// Decision is "allow", "deny" or "cancel".
 	Decision string
 	Reason   string `json:",omitempty"`
+	// Hint is a denial's one-line recovery hint, also in Reason (#90).
+	Hint string `json:",omitempty"`
 	// By is who answered, e.g. "launch_profile:<hash>" or "policy".
 	By string
 	// Rule names the policy rule that decided, e.g. "pre_authorised",

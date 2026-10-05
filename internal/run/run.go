@@ -134,6 +134,9 @@ type Attempt struct {
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration
+	// Friction is the Attempt's policy friction, summed over its turns
+	// (ADR-0019), when its adapter measures it.
+	Friction *agent.Friction
 }
 
 // Result is what a Run ended with.
@@ -155,6 +158,8 @@ type Result struct {
 	// ended it.
 	Gate     string
 	Decision *gate.Decision
+	// Friction is the Run's policy friction, summed over its Attempts.
+	Friction *agent.Friction
 }
 
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
@@ -331,6 +336,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		res.Attempt = a
+		res.Friction = agent.SumFriction(res.Friction, a.Friction)
 		p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
 		if a.Stop != "" {
 			return end(InfrastructureStop, a.Stop)
@@ -497,6 +503,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	enc := json.NewEncoder(&stream)
 	settled := false
 	hosts := map[string]int{}
+	var turn *agent.Friction // the turn in flight's friction so far
 	timeout := time.NewTimer(p.Frozen.Limits.StageTimeout)
 	defer timeout.Stop()
 loop:
@@ -533,9 +540,14 @@ loop:
 				if ev.Host != nil {
 					hosts[ev.Host.Rule]++
 				}
+				if ev.Friction != nil {
+					turn = ev.Friction // the turn's so far
+				}
 			case agent.TurnSettled:
 				settled = true
 				a.Exit, a.Failure, a.Stop = ev.Exit, ev.Failure, ev.Stop
+				a.Friction = agent.SumFriction(a.Friction, ev.Friction)
+				turn = nil
 				break loop
 			}
 		case <-timeout.C:
@@ -550,6 +562,8 @@ loop:
 			break loop
 		}
 	}
+	// A turn that never settled still had its friction.
+	a.Friction = agent.SumFriction(a.Friction, turn)
 	if !settled && a.Failure == "" {
 		a.Failure = "lost_subprocess: the turn never settled"
 	}
@@ -573,6 +587,9 @@ loop:
 	obs := map[string]any{"attempt": a.ID, "kind": "responsiveness", "duration_ms": time.Since(launched).Milliseconds(), "host_requests": hosts}
 	if a.FirstActivity > 0 {
 		obs["first_activity_ms"] = a.FirstActivity.Milliseconds()
+	}
+	if f := a.Friction; f != nil {
+		obs["policy_friction"] = map[string]int{"lost_turns": f.LostTurns, "denied": f.Denied, "envelope_refusals": f.EnvelopeRefusals}
 	}
 	if err := l.Append(RecObservation, obs); err != nil {
 		return nil, err

@@ -241,6 +241,9 @@ func (r *renderer) observe(ev run.Event) {
 		if step, ok := agentStep(ev.Agent, ev.Attempt.Cause); ok {
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
+		if f := ev.Agent.Friction; f != nil && ev.Agent.Kind == agent.TurnSettled {
+			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, frictionText(*f))
+		}
 	case run.EvNotice:
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
@@ -289,6 +292,11 @@ func agentStep(e agent.Event, cause string) (string, bool) {
 	if step, ok := activityStep(e); ok {
 		if e.Kind == agent.Claim && e.Tool == "" {
 			step = fmt.Sprintf("%q", step) // what the agent says, as said
+		}
+		if h := e.Host; e.Kind == agent.HostRequest && h.Decision == "deny" {
+			if why := denialWhy(h); why != "" {
+				step += clean(" (" + why + ")")
+			}
 		}
 		return step, true
 	}
@@ -409,6 +417,7 @@ func (r *renderer) summary(res *run.Result) {
 				r.p("%-10s the Check passed, but %s", "", clean(w))
 			}
 		}
+		r.friction(res)
 		// TODO(#63): the Receipt replaces these lines.
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
 		if r.warn != "" {
@@ -425,7 +434,46 @@ func (r *renderer) summary(res *run.Result) {
 		for _, w := range res.Why {
 			r.p("  %s", clean(w))
 		}
+		r.friction(res)
 	}
+}
+
+// friction is the Run's policy friction line, for every outcome.
+// TODO(#90-decision): shown only when there was friction, so the happy
+// path stays quiet; -v always shows each Attempt's.
+func (r *renderer) friction(res *run.Result) {
+	if f := res.Friction; f != nil && (f.Denied > 0 || f.LostTurns > 0) {
+		r.p("%-10s %s", "friction", frictionText(*f))
+	}
+}
+
+// denialWhy is why a request was denied, in short: its recovery hint,
+// or the reason's first sentence (#90).
+func denialWhy(h *agent.HostDecision) string {
+	if h.Hint != "" {
+		return h.Hint
+	}
+	why := strings.TrimPrefix(h.Reason, "Öge denied this: ")
+	if first, _, ok := strings.Cut(why, ". "); ok {
+		why = first
+	}
+	return strings.TrimSuffix(why, ".")
+}
+
+// frictionText is an Attempt's policy friction (ADR-0019).
+func frictionText(f agent.Friction) string {
+	s := fmt.Sprintf("policy friction %s (%d denied)", plural(f.LostTurns, "turn"), f.Denied)
+	if f.EnvelopeRefusals > 0 {
+		s += fmt.Sprintf(" · %d refused before the envelope passed", f.EnvelopeRefusals)
+	}
+	return s
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
 }
 
 func files(n int) string {
