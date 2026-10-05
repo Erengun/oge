@@ -447,7 +447,11 @@ func failureOutput(cr *oracle.Result, blobs *ledger.Blobs, hf *heldOutFilter) st
 	if cr.Setup != nil && !cr.Setup.Pass {
 		fmt.Fprintf(&b, "- setup %q failed (%s)\n", cr.Setup.Run, cr.Setup.Why)
 	}
-	switch why := cr.Why; {
+	why := cr.Why
+	if i := strings.Index(why, "held-out: "); hf != nil && i >= 0 {
+		why = strings.TrimSuffix(strings.TrimSpace(why[:i]), ";")
+	}
+	switch {
 	case why == "":
 	case hf != nil && len(cr.Missing) > 0:
 		// The Oracle tests that never passed, minus the held-out ones.
@@ -466,7 +470,9 @@ func failureOutput(cr *oracle.Result, blobs *ledger.Blobs, hf *heldOutFilter) st
 		fmt.Fprintf(&b, "- %s\n", why)
 	}
 	for _, e := range cr.Commands {
-		if e.Pass {
+		if e.Pass || e.Part == oracle.PartHeldOut {
+			// The held-out execution's output never goes back, only the
+			// count and criterion ids below (ADR-0009).
 			continue
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", e.Run, e.Why)
@@ -533,7 +539,8 @@ func goTestOutput(raw []byte) []byte {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		var ev struct{ Action, Output string }
-		if json.Unmarshal(sc.Bytes(), &ev) == nil && ev.Action == "output" {
+		// build-output carries the compiler's errors (go test -json, go1.24+).
+		if json.Unmarshal(sc.Bytes(), &ev) == nil && (ev.Action == "output" || ev.Action == "build-output") {
 			out.WriteString(ev.Output)
 		}
 	}

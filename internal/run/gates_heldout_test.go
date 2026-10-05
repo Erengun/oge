@@ -111,3 +111,55 @@ func TestSendBackKeepsVisibleLinesWithCommonHelperNames(t *testing.T) {
 		t.Errorf("a held-out-only helper leaked:\n%s", got)
 	}
 }
+
+// go test -json reports compile errors as build-output events: a
+// Candidate that doesn't build gets the compiler's words back, in Fast
+// and Standard mode alike (#46 final review).
+func TestSendBackCarriesCompilerErrors(t *testing.T) {
+	blobs, err := ledger.OpenBlobs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := `{"ImportPath":"fx [fx.test]","Action":"build-output","Output":"# fx [fx.test]\n"}
+{"ImportPath":"fx [fx.test]","Action":"build-output","Output":"./add.go:3:30: undefined: b2\n"}
+{"ImportPath":"fx [fx.test]","Action":"build-fail"}
+{"Action":"start","Package":"fx"}
+{"Action":"output","Package":"fx","Output":"FAIL\tfx [build failed]\n"}
+{"Action":"fail","Package":"fx","FailedBuild":"fx [fx.test]"}
+`
+	id, _ := blobs.Put([]byte(out))
+	rep := oracle.ParseGoTestJSON([]byte(out))
+	cr := &oracle.Result{Commands: []oracle.Execution{{Run: "go test -json ./...", Why: "exit 1", Report: &rep, Stdout: oracle.Output{Blob: id}}}}
+	for name, m := range map[string]*oracle.Manifest{"fast": nil, "standard": {HeldOut: []oracle.HeldOut{{Test: oracle.TestID{Package: "other", Name: "TestNeg"}, File: "other/neg_test.go"}}}} {
+		if got := sendBackTurn(cr, blobs, nil, m); !strings.Contains(got, "./add.go:3:30: undefined: b2") {
+			t.Errorf("%s: the compiler error is missing:\n%s", name, got)
+		}
+	}
+}
+
+// The held-out execution's output never goes back: only whether it
+// passed, and the count with criterion ids.
+func TestSendBackLeavesOutTheHeldOutExecutionsOutput(t *testing.T) {
+	blobs, err := ledger.OpenBlobs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := `{"Action":"output","Package":"fx","Output":"anything at all from the held-out run\n"}
+{"Action":"fail","Package":"fx","Test":"TestNeg"}
+`
+	id, _ := blobs.Put([]byte(out))
+	rep := oracle.ParseGoTestJSON([]byte(out))
+	cr := &oracle.Result{Why: "held-out: Oracle tests not attested passing (1): fx.TestNeg failed",
+		Commands: []oracle.Execution{{Run: "go test -json ./...", Part: oracle.PartHeldOut, Why: "1 failed", Report: &rep, Stdout: oracle.Output{Blob: id}}},
+		Tests:    []oracle.TestResult{{TestID: oracle.TestID{Package: "fx", Name: "TestNeg"}, Attested: oracle.AttestFail}}}
+	m := &oracle.Manifest{HeldOut: []oracle.HeldOut{{Test: oracle.TestID{Package: "fx", Name: "TestNeg"}, File: "neg_test.go", Criteria: []string{"AC-1"}}}}
+	got := sendBackTurn(cr, blobs, nil, m)
+	for _, never := range []string{"anything at all", "1 failed", "attested"} {
+		if strings.Contains(got, never) {
+			t.Errorf("the send-back carries %q:\n%s", never, got)
+		}
+	}
+	if !strings.Contains(got, "1 held-out test failed: AC-1 ×1.") {
+		t.Errorf("no held-out count:\n%s", got)
+	}
+}

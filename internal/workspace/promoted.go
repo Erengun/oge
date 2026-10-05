@@ -144,3 +144,16 @@ func (r *RunRepo) entries(commit string) (map[string]treeEntry, error) {
 	}
 	return m, nil
 }
+
+// BlobIDs maps commit's files to their git blob ids.
+func (r *RunRepo) BlobIDs(commit string) (map[string]string, error) {
+	es, err := r.entries(commit)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(es))
+	for p, e := range es {
+		out[p] = e.oid
+	}
+	return out, nil
+}

@@ -304,3 +304,21 @@ func TestExcludedByTheBuildContext(t *testing.T) {
 		}
 	}
 }
+
+// Code that rewrites the Candidate in the Check directory while the Check
+// runs (a test, or a process a test left behind) fails the Check closed:
+// the tree judged must be the Candidate (#46 final review).
+func TestCheckTreeChangedDuringTheCheckFailsClosed(t *testing.T) {
+	r := newCacheRunner(t)
+	repo := with(goFixture, map[string]string{
+		"add.go":       "package fx\n\nfunc Add(a, b int) int { return a + b }\n",
+		"zz_test.go":   "package fx\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestZRewrites(t *testing.T) {\n\tos.WriteFile(\"add.go\", []byte(\"package fx\\n\\nfunc Add(a, b int) int { return 0 }\\n\"), 0o644)\n}\n",
+	})
+	res, err := r.Check(context.Background(), repo, v0(t, r, repo), "c", "", filepath.Join(t.TempDir(), "check"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pass || !strings.Contains(res.Infra, "the Check tree changed during the Check") || !strings.Contains(res.Infra, "add.go") {
+		t.Fatalf("pass %v, infra %q, why %q", res.Pass, res.Infra, res.Why)
+	}
+}

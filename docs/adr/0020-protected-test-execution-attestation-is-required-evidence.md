@@ -73,7 +73,7 @@ A determined hostile program running in the same process can still inspect memor
 
 A held-out test compiles into the same test binary as the visible Oracle when they share a package, so held-out code could change the visible tests' environment. During the review of PR #96, a held-out file reset a package global and made a broken Candidate pass.
 
-**Invariant:** protected QA code must never be able to alter the execution environment used to prove that the visible Oracle passes.
+**Invariant:** protected QA code that isn't deliberately hostile must never be able to alter the execution environment used to prove that the visible Oracle passes. Code that is deliberately hostile with the user's privileges stays outside this ADR's threat model. An example is a held-out test that starts a detached daemon to rewrite later Check trees. As a cheap guard, each execution re-hashes its tree's Candidate files when it ends: any change fails the Check closed ("the Check tree changed during the Check"). Each execution's directory is removed as soon as it has been judged.
 
 So when the Oracle holds held-out tests, a Check has two independent executions against the exact same Candidate:
 

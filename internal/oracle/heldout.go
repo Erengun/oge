@@ -330,9 +330,13 @@ func SplitGoTestOutput(raw []byte) []OutputLine {
 	sc := bufio.NewScanner(bytes.NewReader(raw))
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
-		var ev struct{ Action, Package, Test, Output string }
-		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Action != "output" {
+		var ev struct{ Action, Package, ImportPath, Test, Output string }
+		if json.Unmarshal(sc.Bytes(), &ev) != nil || (ev.Action != "output" && ev.Action != "build-output") {
 			continue
+		}
+		if ev.Package == "" {
+			// A build-output event names its package as "fx [fx.test]".
+			ev.Package, _, _ = strings.Cut(ev.ImportPath, " ")
 		}
 		top, _, _ := strings.Cut(ev.Test, "/")
 		out = append(out, OutputLine{Test: TestID{Package: ev.Package, Name: top}, Text: ev.Output})

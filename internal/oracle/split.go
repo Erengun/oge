@@ -9,8 +9,11 @@ import (
 )
 
 // The two executions of a Check whose Oracle holds held-out tests (#46).
-// Invariant: protected QA code never alters the execution environment
-// that proves the visible Oracle passes. So the visible Oracle (v0's
+// Invariant: protected QA code that isn't deliberately hostile never
+// alters the execution environment that proves the visible Oracle passes.
+// (Code deliberately hostile with the user's privileges, such as a
+// detached daemon, is outside ADR-0020's threat model; the tree guard in
+// treeguard.go only detects its cheapest form.) So the visible Oracle (v0's
 // tests and test configuration) runs in its own Check directory, cache
 // copy and process tree with no held-out file in its build, and the
 // held-out tests run in another; each must pass and attest on its own.
