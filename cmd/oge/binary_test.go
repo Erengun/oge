@@ -9,6 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/erengun/oge/internal/oracle"
+	"github.com/erengun/oge/internal/oracle/seedtest"
 )
 
 // These tests run the built binary in temp git repositories with a synthetic
@@ -17,7 +20,7 @@ import (
 
 // binary is the release build; testBinary is built with -tags ogetest and
 // carries the scripted fake adapter.
-var binary, testBinary, goCache string
+var binary, testBinary, goCache, testSeed string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "oge-bin-")
@@ -41,8 +44,11 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "env", "GOCACHE").Output(); err == nil {
 		goCache = strings.TrimSpace(string(out))
 	}
+	if err := seedtest.Warm(filepath.Join(dir, "seed")); err == nil {
+		testSeed = seedtest.GoCache(filepath.Join(dir, "seed"))
+	}
 	code := m.Run()
-	os.RemoveAll(dir)
+	oracle.RemoveAll(dir)
 	os.Exit(code)
 }
 

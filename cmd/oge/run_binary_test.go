@@ -25,8 +25,6 @@ report = "go-test-json"
 // runFixture makes the fixture repository and an environment with a
 // synthetic HOME (the state root takes its default place under it), a
 // private TMPDIR beside it, and PATH holding git, go and the system tools.
-// OGE_TEST_SHARED_GOCACHE (honoured only by the ogetest build) gives Checks
-// the shared GOCACHE, only to keep tests fast.
 func runFixture(t *testing.T) (repo string, env []string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -51,7 +49,7 @@ func runFixture(t *testing.T) (repo string, env []string) {
 	env = []string{
 		"HOME=" + home, "TMPDIR=" + tmp, "XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
 		"PATH=" + filepath.Dir(gitPath) + ":" + filepath.Dir(goPath) + ":/usr/bin:/bin",
-		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GOCACHE=" + goCache, "OGE_TEST_SHARED_GOCACHE=" + goCache,
+		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GOCACHE=" + goCache, "OGE_TEST_CACHE_SEED=" + testSeed,
 	}
 	write := func(rel, s string) {
 		p := filepath.Join(repo, rel)

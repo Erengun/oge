@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/fake"
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -103,29 +105,19 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 	var stdout, stderr bytes.Buffer
 	env := Env{
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
-		Dir:         f.repo,
-		Interactive: func() bool { return f.interactive },
-		LookPath:    exec.LookPath,
-		Edit:        func(string) error { t.Fatal("editor opened"); return nil },
-		GOOS:        runtime.GOOS,
-		Version:     "test",
-		Getenv:      os.Getenv,
-		Agents:      map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
-		// A shared GOCACHE keeps these tests fast; real Runs never share.
-		CheckGoCache: hostGoCache,
+		Dir:               f.repo,
+		Interactive:       func() bool { return f.interactive },
+		LookPath:          exec.LookPath,
+		Edit:              func(string) error { t.Fatal("editor opened"); return nil },
+		GOOS:              runtime.GOOS,
+		Version:           "test",
+		Getenv:            os.Getenv,
+		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
+		CacheSeedTemplate: testSeed,
 	}
 	code := Main(env, args)
 	return code, stdout.String(), stderr.String()
 }
-
-// hostGoCache is the developer's GOCACHE, read before any test swaps HOME.
-var hostGoCache = func() string {
-	out, err := exec.Command("go", "env", "GOCACHE").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}()
 
 // assertUntouched checks the user's checkout was never written.
 func (f *runFixture) assertUntouched(t *testing.T) {
@@ -169,7 +161,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
 	run.RecAttemptStarting, run.RecProcessStarted, run.RecAttemptEnded,
-	run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
+	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
 // writeAheadScript fails the Attempt unless the Ledger already records it
@@ -221,6 +213,52 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	if left, _ := filepath.Glob(filepath.Join(dir, "checks", "*")); len(left) != 0 {
 		t.Errorf("Check directories left behind: %v", left)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "cache-seed")); err == nil {
+		t.Error("the cache seed was left behind")
+	}
+
+	// The Check started from a private copy of the seed the warm step
+	// filled on the Snapshot, and its Evidence says so (ADR-0021).
+	var seeded struct {
+		Warm *struct {
+			Run  string
+			Pass bool
+		} `json:"warm"`
+		WaitedMs *int64 `json:"waited_ms"`
+	}
+	var ended struct {
+		Result struct {
+			Cache   string `json:"cache"`
+			CacheMs *int64 `json:"cache_materialise_ms"`
+		} `json:"result"`
+	}
+	recordData(t, dir, run.RecCacheSeeded, &seeded)
+	recordData(t, dir, run.RecCheckEnded, &ended)
+	if seeded.Warm == nil || !strings.HasPrefix(seeded.Warm.Run, "go list ") || !seeded.Warm.Pass || seeded.WaitedMs == nil {
+		t.Errorf("CacheSeeded = %+v, want the passing warm step and the wait", seeded)
+	}
+	want := map[bool]string{true: oracle.CacheClone, false: ""}[runtime.GOOS == "darwin"]
+	if c := ended.Result.Cache; c == oracle.CacheCold || c == "" || (want != "" && c != want) || ended.Result.CacheMs == nil {
+		t.Errorf("CheckEnded cache = %q (%v ms), want a seeded cache", c, ended.Result.CacheMs)
+	}
+}
+
+// recordData decodes the data of the Run's only record of type typ.
+func recordData(t *testing.T, runDir, typ string, v any) {
+	t.Helper()
+	recs, err := ledger.Replay(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if r.Type == typ {
+			if err := json.Unmarshal(r.Data, v); err != nil {
+				t.Fatalf("%s: %v", typ, err)
+			}
+			return
+		}
+	}
+	t.Fatalf("no %s record", typ)
 }
 
 func TestRunRejectsWhenTheOracleFails(t *testing.T) {

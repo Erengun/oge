@@ -46,6 +46,7 @@ const (
 	RecAttemptStarting   = "AttemptStarting"
 	RecProcessStarted    = "ProcessStarted"
 	RecAttemptEnded      = "AttemptEnded"
+	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
 	RecVerdict           = "Verdict"
@@ -64,9 +65,9 @@ type Params struct {
 	State   *ledger.StateRoot
 	Version string
 	Getenv  func(string) string
-	// CheckGoCache, when set, is the GOCACHE Checks share. Only tests set
-	// it; see cli.Env.CheckGoCache.
-	CheckGoCache string
+	// CacheSeedTemplate is a build cache the Run's seed starts from. Only
+	// tests set it; see cli.Env.CacheSeedTemplate.
+	CacheSeedTemplate string
 	// Observe receives progress as it happens, for rendering.
 	Observe func(Event)
 }
@@ -230,13 +231,17 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 
-	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, GoCache: p.CheckGoCache}
+	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, SeedTemplate: p.CacheSeedTemplate}
 	pre := map[string]any{"checks": []string{"submodules", "lfs", "unmerged", "operation_in_progress"}}
-	if f.Setup.Run != "" {
-		e, err := setupOnSnapshot(ctx, runner, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "preflight"))
-		if err != nil {
-			return nil, err
-		}
+	// Setup runs on the Snapshot into the Run's cache seed, whose warm
+	// step then overlaps the implementer's Attempt (ADR-0021).
+	seed, setup, err := runner.NewSeed(ctx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
+	if err != nil {
+		return nil, err
+	}
+	defer seed.Close()
+	if setup != nil {
+		e := *setup
 		pre["setup"] = e
 		if ctx.Err() != nil {
 			if err := l.Append(RecPreflightObserved, pre); err != nil {
@@ -281,6 +286,18 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if ctx.Err() != nil {
 		return end(InfrastructureStop, interrupted)
 	}
+	if seed != nil {
+		waitStart := time.Now()
+		warm, werr := seed.Wait()
+		rec := map[string]any{"warm": warm, "waited_ms": time.Since(waitStart).Milliseconds()}
+		if werr != nil {
+			rec["error"] = string(redact.Redact([]byte(werr.Error())))
+		}
+		if err := l.Append(RecCacheSeeded, rec); err != nil {
+			return nil, err
+		}
+		runner.Seed = seed
+	}
 	if err := l.Append(RecCheckStarted, map[string]any{"check": 1, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 		return nil, err
 	}
@@ -313,19 +330,6 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	// #40 asks. ADR-0007 reserves Rejected for a human and routes a fail
 	// Verdict to a send-back, then the bound-exhaustion Gate (#43).
 	return end(Rejected)
-}
-
-func setupOnSnapshot(ctx context.Context, r *oracle.Runner, repo *workspace.RunRepo, snap, setup, root string) (oracle.Execution, error) {
-	defer oracle.RemoveAll(root)
-	dir, env, err := r.Prepare(root)
-	if err != nil {
-		return oracle.Execution{}, err
-	}
-	if err := repo.Checkout(snap, dir); err != nil {
-		return oracle.Execution{}, err
-	}
-	e, _, err := r.Exec(ctx, setup, dir, env, 10*time.Minute, 1<<20)
-	return e, err
 }
 
 // implement runs the first implementer Attempt: AttemptStarting before the
