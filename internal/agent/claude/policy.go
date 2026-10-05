@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/redact"
 )
 
@@ -24,6 +25,10 @@ import (
 //   - Bash running one simple command from bashShapes (bash.go), with
 //     only that command's positive flag set and every other word a
 //     contained path.
+//
+// For the verifier, the same, except that Edit and Write are allowed only
+// on a new file matching the test globs (one this Session created), and
+// no Bash command may write.
 //
 // Policy rules, as recorded on each HostDecision.
 const (
@@ -46,10 +51,19 @@ type policy struct {
 	checks  []string
 	by      string // "launch_profile:<hash>"
 	hash    string
+	role    string
+	// writeGlobs, when set, confine Edit and Write to new files matching
+	// them; created are the ones this Session created.
+	writeGlobs []string
+	created    map[string]bool
 }
 
 func newPolicy(spec agent.LaunchSpec, hash string) *policy {
-	p := &policy{checks: spec.CheckCommands, by: "launch_profile:" + hash, hash: hash}
+	p := &policy{checks: spec.CheckCommands, by: "launch_profile:" + hash, hash: hash, role: spec.Role,
+		writeGlobs: spec.WriteGlobs, created: map[string]bool{}}
+	if p.role == "" {
+		p.role = "implementer"
+	}
 	p.ws = withReal(spec.Workspace)
 	for _, d := range spec.DenyRead {
 		p.private = append(p.private, withReal(d)...)
@@ -113,7 +127,10 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		if path == "" {
 			return answer(vOutside, "it names no file in the Workspace", "")
 		}
-		return answer(p.path(path, true), "it writes outside the Workspace or under .git", "")
+		if v := p.path(path, true); v != vOK || p.writeGlobs == nil {
+			return answer(v, "it writes outside the Workspace or under .git", "")
+		}
+		return answer(p.newTest(tool, path), "QA may only create new test files matching "+strings.Join(p.writeGlobs, ", ")+", never change existing files", "")
 	case "Bash":
 		cmd := strings.TrimSpace(str("command"))
 		v := p.bash(cmd)
@@ -134,7 +151,28 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		d.Reason = "No one can answer questions during this Run. Make a reasonable, minimal and reversible assumption, say what you assumed, and continue."
 		return d
 	}
-	return answer(vOutside, tool+" isn't one of the implementer's tools", "")
+	return answer(vOutside, tool+" isn't one of the "+p.role+"'s tools", "")
+}
+
+// newTest classifies a verifier's write to a contained path: only a new
+// file matching the write globs, or one this Session created.
+func (p *policy) newTest(tool, path string) verdict {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.ws[0], path)
+	}
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(p.ws[0], path)
+	if err != nil || tool == "NotebookEdit" || !oracle.MatchAny(p.writeGlobs, filepath.ToSlash(rel)) {
+		return vOutside
+	}
+	if _, err := os.Lstat(path); err == nil && !p.created[path] {
+		return vOutside // an existing file
+	}
+	if tool != "Write" && !p.created[path] {
+		return vOutside
+	}
+	p.created[path] = true
+	return vOK
 }
 
 // refuse answers a request that arrives while no envelope has passed.

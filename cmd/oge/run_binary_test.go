@@ -119,10 +119,10 @@ func TestReleaseBinaryCannotReachTheFake(t *testing.T) {
 	}
 }
 
-func TestReleaseBinaryRefusesAStandardRun(t *testing.T) {
+func TestReleaseBinaryRefusesABlindRun(t *testing.T) {
 	repo, env := runFixture(t)
-	code, _, errOut := runBinary(t, repo, env, "fix Add", "--agent", "claude", "--unattended")
-	if code != 2 || !strings.Contains(errOut, "Standard mode needs a verifier") {
+	code, _, errOut := runBinary(t, repo, env, "fix Add", "--blind", "--agent", "claude", "--unattended")
+	if code != 2 || !strings.Contains(errOut, "Blind mode isn't built yet") {
 		t.Fatalf("exit %d, stderr: %s", code, errOut)
 	}
 }

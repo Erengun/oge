@@ -21,18 +21,23 @@ type initFrame struct {
 	MCPServers []struct {
 		Name string `json:"name"`
 	} `json:"mcp_servers"`
-	PermissionMode string   `json:"permissionMode"`
-	APIKeySource   string   `json:"apiKeySource"`
-	Version        string   `json:"claude_code_version"`
-	OutputStyle    string   `json:"output_style"`
-	Skills         []string `json:"skills"`
-	Agents         []string `json:"agents"`
-	Plugins        []struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
-	} `json:"plugins"`
-	Capabilities []string        `json:"capabilities"`
-	MemoryPaths  json.RawMessage `json:"memory_paths"`
+	PermissionMode string          `json:"permissionMode"`
+	APIKeySource   string          `json:"apiKeySource"`
+	Version        string          `json:"claude_code_version"`
+	OutputStyle    string          `json:"output_style"`
+	Skills         []string        `json:"skills"`
+	Agents         []string        `json:"agents"`
+	Plugins        []initPlugin    `json:"plugins"`
+	Capabilities   []string        `json:"capabilities"`
+	MemoryPaths    json.RawMessage `json:"memory_paths"`
+}
+
+// initPlugin is one plugin system/init reports: path is "builtin" for
+// the plugins claude ships inside its own binary.
+type initPlugin struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Source string `json:"source"`
 }
 
 // envelope is what a Launch profile expects system/init to report.
@@ -80,6 +85,22 @@ func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal s
 			names = append(names, s.Name)
 		}
 		injected = append(injected, "MCP servers: "+strings.Join(names, ", "))
+	}
+	if r := residueOf(in); r != nil && e.role == "verifier" && !onlyBuiltin(in) {
+		// Residue a judged role can't be kept from: plugins, skills and
+		// subagents may carry instructions, so the verifier fails closed
+		// (ADR-0009), unless it is exactly the pinned binary's own builtin
+		// plugins. For other roles it is recorded and shown once.
+		var parts []string
+		for _, x := range []struct {
+			what string
+			l    []string
+		}{{"plugins", r.Plugins}, {"skills", r.Skills}, {"subagents", r.Agents}} {
+			if len(x.l) > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", len(x.l), x.what))
+			}
+		}
+		fatals = append(fatals, "the verifier would load "+strings.Join(parts, ", ")+" that Öge can't remove (residue "+r.Fingerprint+")")
 	}
 	if len(injected) > 0 {
 		msg := "unexpected context in the agent's startup envelope: " + strings.Join(injected, "; ")
@@ -217,4 +238,25 @@ func sorted(l []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// onlyBuiltin reports whether init loads exactly the pinned binary's
+// builtin plugins, each from the binary itself (path "builtin", so a user
+// marketplace named "builtin" can't pass), and no skill or subagent.
+func onlyBuiltin(in initFrame) bool {
+	r := residueOf(in)
+	if r == nil {
+		return true
+	}
+	if len(r.Skills)+len(r.Agents) > 0 {
+		return false
+	}
+	for _, p := range in.Plugins {
+		if p.Path != "builtin" {
+			return false
+		}
+	}
+	want := append([]string(nil), builtinPlugins...)
+	sort.Strings(want)
+	return strings.Join(r.Plugins, "\x00") == strings.Join(want, "\x00") // an exact set: no repeats
 }

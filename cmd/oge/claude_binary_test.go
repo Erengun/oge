@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,5 +166,94 @@ func TestBinaryClaudeResidueIsShownOnce(t *testing.T) {
 	}
 	if l := findLedger(t, env); !strings.Contains(l, `"residue":{"Plugins":[],"Skills":["`) {
 		t.Error("the residue isn't in the session Observation")
+	}
+}
+
+// verifierSession is a synthetic recording of one verifier turn: it tries
+// to edit add.go (denied: QA writes only new tests), writes a new held-out
+// test through Öge's hook, and finishes with Exit: extended. skills is
+// what its system/init reports.
+func verifierSession(skills string) string {
+	const test = "package fx\n\nimport \"testing\"\n\n// AC-1: negatives.\nfunc TestAddNegatives(t *testing.T) {\n\tif Add(-2, 1) != -1 {\n\t\tt.Fatal(\"Add(-2, 1) != -1\")\n\t}\n}\n"
+	write, _ := json.Marshal(map[string]any{"file_path": "/home/user/project/neg_test.go", "content": test})
+	act, _ := json.Marshal(map[string]any{"dir": "act", "write": map[string]string{"path": "neg_test.go", "content": test}})
+	frames := []string{
+		`{"dir": "meta", "argv": ["claude"]}`,
+		`{"dir": "in", "msg": {"type": "control_request", "request_id": "req_1", "request": {"subtype": "initialize"}}}`,
+		`{"dir": "out", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "req_1", "response": {"account": "<redacted>"}}}}`,
+		`{"dir": "in", "msg": {"type": "user"}}`,
+		`{"dir": "out", "msg": {"type": "system", "subtype": "init", "cwd": "/home/user/project", "session_id": "s-2", "tools": ["Bash", "Edit", "Glob", "Grep", "Read", "Write"], "mcp_servers": [], "model": "claude-haiku-4-5", "permissionMode": "default", "apiKeySource": "none", "claude_code_version": "2.1.289", "output_style": "default", "plugins": [], "skills": ` + skills + `, "capabilities": ["interrupt_receipt_v1"]}}`,
+		`{"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_1", "name": "Edit", "input": {"file_path": "/home/user/project/add.go", "old_string": "a + b", "new_string": "0"}}]}}}`,
+		`{"dir": "out", "msg": {"type": "control_request", "request_id": "h1", "request": {"subtype": "hook_callback", "callback_id": "oge_pre_tool_use", "input": {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "/home/user/project/add.go", "old_string": "a + b", "new_string": "0"}, "tool_use_id": "toolu_1"}}}}`,
+		`{"dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "h1"}}, "expect": "deny"}`,
+		`{"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_2", "name": "Write", "input": ` + string(write) + `}]}}}`,
+		`{"dir": "out", "msg": {"type": "control_request", "request_id": "h2", "request": {"subtype": "hook_callback", "callback_id": "oge_pre_tool_use", "input": {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": ` + string(write) + `, "tool_use_id": "toolu_2"}}}}`,
+		`{"dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "h2"}}, "expect": "allow"}`,
+		string(act),
+		`{"dir": "out", "msg": {"type": "assistant", "parent_tool_use_id": null, "message": {"content": [{"type": "text", "text": "Added a test for negative numbers.\nExit: extended"}]}}}`,
+		`{"dir": "out", "msg": {"type": "result", "subtype": "success", "is_error": false, "result": "Added a test for negative numbers.\nExit: extended", "num_turns": 2, "terminal_reason": "completed"}}`,
+		`{"dir": "meta", "exit": 0}`,
+	}
+	return strings.Join(frames, "\n") + "\n"
+}
+
+const standardTask = "# Fix Add\n\n## Acceptance criteria\n- Add returns the sum of any two ints\n"
+
+// Standard mode on the real Claude adapter: the implementer, then a fresh
+// verifier Session with the verifier's Launch profile, then the Check.
+func TestBinaryClaudeStandardAccepted(t *testing.T) {
+	repo, env := runFixture(t)
+	env = withFakeClaude(t, env, claudeSession(true))
+	path := filepath.Join(t.TempDir(), "verifier.ndjson")
+	if err := os.WriteFile(path, []byte(verifierSession(`[]`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env = append(env, "OGE_FAKE_CLAUDE_FIXTURE_VERIFIER="+path)
+	code, out, errOut := runExe(t, testBinary, repo, env, standardTask, "--agent", "claude", "--unattended", "-v")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"· Standard mode · ",
+		"[verify #1 claude] started (cause: first) · fresh Session",
+		"[verify #1 claude] denied: Edit add.go",
+		"[verify #1 claude] allow Write neg_test.go · pre-authorised by Launch profile ",
+		"QA         Fresh Claude · Exit extended · +1 held-out",
+		"check      visible Oracle · go test -json ./... · 1 ran · 0 failed · pass",
+		"check      held-out · go test -json ./... · 1 ran · 0 failed · pass",
+		"ACCEPTED   Candidate ", "Oracle v1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout lacks %q:\n%s", want, out)
+		}
+	}
+	// QA's own words stay off the screen.
+	if strings.Contains(out, "negative numbers") {
+		t.Errorf("the verifier's text reached the terminal:\n%s", out)
+	}
+	ledger := findLedger(t, env)
+	for _, want := range []string{`"role":"verifier"`, `"type":"BriefingManifest"`, `"class":"implementer_transcript"`} {
+		if !strings.Contains(ledger, want) {
+			t.Errorf("the Ledger lacks %s", want)
+		}
+	}
+}
+
+// A verifier whose isolated launch still loads skills fails closed: no
+// Verdict without an independent QA pass (ADR-0009).
+func TestBinaryClaudeVerifierResidueFailsClosed(t *testing.T) {
+	repo, env := runFixture(t)
+	env = withFakeClaude(t, env, claudeSession(true))
+	path := filepath.Join(t.TempDir(), "verifier.ndjson")
+	if err := os.WriteFile(path, []byte(verifierSession(`["deep-research"]`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env = append(env, "OGE_FAKE_CLAUDE_FIXTURE_VERIFIER="+path)
+	code, out, errOut := runExe(t, testBinary, repo, env, standardTask, "--agent", "claude", "--unattended")
+	if code != 11 || !strings.Contains(out, "INFRASTRUCTURE STOP") || !strings.Contains(out, "the verifier would load 1 skills") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if strings.Contains(out, "ACCEPTED") || strings.Contains(out, "check      ") {
+		t.Errorf("a Check ran without QA:\n%s", out)
 	}
 }

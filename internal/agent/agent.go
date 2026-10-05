@@ -26,6 +26,10 @@ type LaunchSpec struct {
 	// CheckCommands are the Run's Check commands, which a Launch profile
 	// may pre-authorise the implementer to run (ADR-0019).
 	CheckCommands []string
+	// WriteGlobs, when set, limit the Session to creating new files that
+	// match them: the verifier's Write scope (spec #35). Unset, the role
+	// may write anywhere in its Workspace.
+	WriteGlobs []string
 	// DenyRead are absolute paths no agent may read: Öge's private state.
 	DenyRead []string
 	// Cache is a Run-private directory, outside the Workspace, for the

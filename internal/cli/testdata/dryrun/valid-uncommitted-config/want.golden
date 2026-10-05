@@ -7,7 +7,7 @@ Criteria   none
 
 Mode       Fast: implementer, then Öge's Check. No independent verifier and no held-out tests
 Config     .oge/oge.toml from the Snapshot, schema 1
-Pipeline   default (frozen, compiled graph b756e8d8979d)
+Pipeline   default (frozen, compiled graph d4b2b7e9629e)
            implement ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
   implement  claude         network off   (installed)

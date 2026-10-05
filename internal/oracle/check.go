@@ -69,6 +69,9 @@ type Execution struct {
 	Report     *Report   `json:"report,omitempty"`
 	Pass       bool      `json:"pass"`
 	Why        string    `json:"why,omitempty"` // why it didn't pass
+	// Part is which execution of a split Check ran it: PartVisible or
+	// PartHeldOut; empty when the Check isn't split.
+	Part string `json:"part,omitempty"`
 }
 
 // Output is one captured stream: the redacted, capped copy's blob plus the
@@ -243,6 +246,10 @@ type Result struct {
 	CacheMs  int64       `json:"cache_materialise_ms"`
 	Setup    *Execution  `json:"setup,omitempty"`
 	Commands []Execution `json:"commands"`
+	// VisibleMs and HeldOutMs time the two executions of a split Check
+	// (SplitCheck); an unsplit Check has only VisibleMs.
+	VisibleMs int64  `json:"visible_ms"`
+	HeldOutMs *int64 `json:"heldout_ms,omitempty"`
 }
 
 // Check is CheckAgainst with no Snapshot control.
@@ -266,6 +273,10 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 		return nil, err
 	}
 	res := &Result{Pass: true, Cache: cache.strategy, CacheWhy: cache.why, CacheMs: cache.ms}
+	guard, err := newTreeGuard(repo, candidate, dir, m)
+	if err != nil {
+		return nil, err
+	}
 	if setup != "" {
 		e, _, err := r.Exec(ctx, setup, dir, env, 10*time.Minute, 1<<20)
 		if err != nil {
@@ -296,6 +307,7 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 		res.Pass, res.Why = false, blocked
 		return res, nil
 	}
+	guard.settle()
 	ch, err := openChannel()
 	if err != nil {
 		return nil, err
@@ -335,6 +347,11 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 		}
 	}
 	ch.finish()
+	if changed := guard.changed(); len(changed) > 0 {
+		// Neutral Evidence: no one is blamed, and there is no Verdict.
+		res.Pass, res.Infra = false, treeChangedWhy(changed)
+		return res, nil
+	}
 	res.Tests, res.Stray = ch.results(att, m.Expected, reports)
 	// TODO(#73-decision): attestation is required whenever the Oracle
 	// has expected Go tests, whether or not a Check command declares a

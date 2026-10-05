@@ -20,8 +20,8 @@ var modeNotes = map[pipeline.Mode]string{
 }
 
 // renderDryRun prints what a Run would do. It is the startup summary
-// without a Run id or Preflight.
-func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig bool, warn string) {
+// without a Run id or Preflight; verbose adds the whole compiled graph.
+func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig bool, warn string, verbose bool) {
 	p := func(format string, a ...any) { fmt.Fprintf(w, format+"\n", a...) }
 
 	p("Dry run: nothing was started.")
@@ -47,6 +47,19 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 	p("Pipeline   default (frozen, compiled graph %s)", f.Hash[:12])
 	p("           %s", f.Graph.Shape(f.Verify))
 	p("           mandatory Gates: %s", strings.Join(f.Graph.MandatoryGates(), " · "))
+	if verbose {
+		p("           edges, in precedence order (the first that holds is taken):")
+		for _, e := range f.Graph.Edges {
+			line := fmt.Sprintf("             %-22s ─▶ %-22s on %s", e.From, e.To, e.On)
+			if e.Bound != "" {
+				line += " · bound " + e.Bound
+			}
+			if e.Outcome != "" {
+				line += " · " + e.Outcome
+			}
+			p("%s", line)
+		}
+	}
 	for _, s := range f.Stages {
 		bind := s.Agent
 		if s.Model != "" {

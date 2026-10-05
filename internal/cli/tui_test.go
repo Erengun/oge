@@ -368,7 +368,7 @@ func TestTUIMatchesStagesByName(t *testing.T) {
 	m.Update(batchMsg{progressOf(run.Event{Kind: run.EvAttempt, Attempt: v}, f, now)})
 	got := m.render()
 	for _, want := range []string{
-		"✓ verify     codex · Exit done · Candidate abcdef0 · 1 file changed",
+		"✓ QA         codex · Exit done · Candidate abcdef0 · 1 file changed",
 		"⠋ implement  claude",
 	} {
 		if !strings.Contains(got, want) {

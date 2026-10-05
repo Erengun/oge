@@ -14,7 +14,7 @@ import (
 // ProfileVersion versions the Launch profile: its flags, environment
 // lists, policy JSON and pre-authorised operations. Bump it with any change
 // to them, so the profile hash recorded with each decision changes too.
-const ProfileVersion = 2
+const ProfileVersion = 4
 
 // MinVersion is the oldest claude this adapter supports; LastTested is the
 // newest it was tested against (#35). A newer one only warns.
@@ -27,6 +27,23 @@ const (
 // keep the model from reaching for find and grep through Bash, which the
 // policy doesn't pre-authorise.
 var implementerTools = []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
+
+// verifierTools is the verifier's: the same tools, which its policy
+// confines to reading and to creating new test files (spec #35).
+var verifierTools = []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
+
+// builtinPlugins are the @builtin plugins claude LastTested ships inside
+// its own binary and loads even isolated (observed live on #46). They are
+// part of the pinned binary, so a verifier may start with exactly this
+// set; any other set, or any other plugin, skill or subagent, fails it
+// closed (envelope.go).
+// TODO(#46-decision): an allowlist of the pinned version's builtin
+// plugins, hashed into the Launch profile; skills are removed with
+// --disable-slash-commands.
+var builtinPlugins = []string{
+	"cc-plugin-agents-md@builtin", "cc-plugin-plugin-authoring@builtin",
+	"cc-plugin-sec-default@builtin", "cc-plugin-telemetry@builtin",
+}
 
 // stripEnv are the session markers removed from the child environment
 // (ADR-0006): exact names, never a prefix, except CLAUDE_CODE_REMOTE*.
@@ -69,9 +86,14 @@ func profileFor(role string) (profile, error) {
 	switch role {
 	case "implementer":
 		return profile{role: role, tools: implementerTools}, nil
+	case "verifier":
+		// A one-shot, fresh Session like every MVP Session; its envelope
+		// fails closed on injected context and residue (envelope.go).
+		// TODO(#46-decision): the Write scope is Öge's policy (Write and
+		// Edit only on new files matching the test globs) plus the
+		// revert after the Attempt, not native Edit(<glob>) allow rules.
+		return profile{role: role, tools: verifierTools}, nil
 	}
-	// TODO(#46): the verifier's profile (test-glob allow rules, an absolute
-	// deny-list) comes with the verifier Stage.
 	return profile{}, fmt.Errorf("claude adapter: no Launch profile for the %s role yet", role)
 }
 
@@ -94,6 +116,10 @@ func (p profile) args(spec agent.LaunchSpec, sessionID string, parent []string) 
 		// ADR-0016), so the implementer also runs without persistence, as
 		// decided on #44: nothing lands in the user's Claude config dir.
 		"--no-session-persistence",
+	}
+	if p.role == "verifier" {
+		// A judged role loads no skills at all (ADR-0009).
+		a = append(a, "--disable-slash-commands")
 	}
 	if spec.Model != "" {
 		a = append(a, "--model", spec.Model)
@@ -206,6 +232,7 @@ func (p profile) hash() string {
 		"version": ProfileVersion, "role": p.role, "tools": p.tools,
 		"strip": stripEnv, "strip_prefix": stripEnvPrefix, "set": setEnv,
 		"bash_shapes": describeShapes(), "deny_read_home": homeSecrets,
+		"builtin_plugins": builtinPlugins,
 	}
 	b, _ := json.Marshal(def)
 	sum := sha256.Sum256(b)

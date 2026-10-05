@@ -86,6 +86,9 @@ func newRunFixture(t *testing.T) *runFixture {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 	f := &runFixture{repo: filepath.Join(base, "repo"), state: filepath.Join(home, ".local", "state", "oge")}
+	if err := os.MkdirAll(filepath.Join(base, "out"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	initRepo(t, f.repo)
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig))
 	writeFile(t, filepath.Join(f.repo, "go.mod"), []byte("module fx\n\ngo 1.22\n"))
@@ -122,7 +125,7 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		GOOS:              runtime.GOOS,
 		Version:           "test",
 		Getenv:            os.Getenv,
-		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state}}},
+		Agents:            map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{"OGE_TEST_STATE=" + f.state, "OGE_TEST_OUT=" + filepath.Join(filepath.Dir(f.repo), "out")}}},
 		CacheSeedTemplate: map[bool]string{false: testSeed}[f.coldSeed],
 	}
 	if f.wrap != nil {
@@ -173,7 +176,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
-	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecScopeObserved, run.RecScopeReverted, run.RecAttemptEnded,
+	run.RecAttemptStarting, run.RecBriefingManifest, run.RecProcessStarted, run.RecObservation, run.RecScopeObserved, run.RecScopeReverted, run.RecAttemptEnded,
 	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
@@ -388,8 +391,7 @@ func TestRunRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		"standard needs a verifier": {[]string{"fix Add", "--agent", "fake", "--unattended"}, "Standard mode needs a verifier"},
-		"blind needs a verifier":    {[]string{"fix Add", "--blind", "--agent", "fake", "--unattended"}, "Blind mode needs a verifier"},
+		"blind isn't built":         {[]string{"fix Add", "--blind", "--agent", "fake", "--unattended"}, "Blind mode isn't built yet"},
 		"no adapter for claude":     {[]string{"fix Add", "--fast", "--agent", "claude", "--unattended"}, "running a Task with claude isn't implemented yet"},
 		"attended needs a terminal": {[]string{"fix Add", "--fast", "--agent", "fake"}, "pass --unattended"},
 	} {

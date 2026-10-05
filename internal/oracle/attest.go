@@ -543,6 +543,11 @@ func judge(res *Result, control *Control) {
 	for i := range res.Tests {
 		t := &res.Tests[i]
 		t.Snapshot = snap[t.TestID]
+		// A held-out test joined the Oracle after the Snapshot control
+		// started, so the control never ran it: it is judged on the
+		// Candidate alone, and anything but a pass fails (#46).
+		_, inControl := snap[t.TestID]
+		heldOut := snap != nil && !inControl
 		name := t.TestID.String()
 		switch t.Attested {
 		case AttestPass:
@@ -551,6 +556,8 @@ func judge(res *Result, control *Control) {
 			failed = append(failed, name+" failed")
 		case AttestSkip:
 			switch {
+			case heldOut:
+				failed = append(failed, name+" skipped")
 			case snap == nil:
 				infra = append(infra, name+" skipped, and "+ctlWhy)
 			case t.Snapshot == AttestSkip:
@@ -574,7 +581,7 @@ func judge(res *Result, control *Control) {
 				why += "; the report claims " + t.Report
 			}
 			switch {
-			case snap == nil || started(t.Snapshot):
+			case heldOut, snap == nil || started(t.Snapshot):
 				failed = append(failed, why)
 			case t.Snapshot == AttestUnattested:
 				infra = append(infra, why+", and attestation failed on the Snapshot control")

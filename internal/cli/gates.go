@@ -12,15 +12,28 @@ import (
 	"time"
 
 	"github.com/erengun/oge/internal/gate"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
 // The Gate texts below are shared by both views (ADR-0022).
 
-func sendBackText(ev run.Event) string {
+func sendBackText(ev run.Event, f *pipeline.Frozen) string {
 	n := fmt.Sprintf("%d of %d", ev.SendBack, ev.SendBacks)
 	if ev.SendBack > ev.SendBacks {
 		n = fmt.Sprintf("%d (limit %d, extended at the Gate)", ev.SendBack, ev.SendBacks)
+	}
+	passed := ev.Result != nil && ev.Result.Check != nil && ev.Result.Check.Pass
+	switch d := ev.Decision; {
+	case d != nil && passed:
+		// The Check passed: there is no failure output, only the human's
+		// note, if they wrote one.
+		if strings.TrimSpace(d.Reason+d.Note) != "" {
+			return n + " · the Candidate goes back to the implementer with your note"
+		}
+		return n + " · the Candidate goes back to the implementer"
+	case d == nil && f != nil && f.Mode != pipeline.Fast:
+		return n + " · Repairing automatically…"
 	}
 	return n + " · the Candidate goes back to the implementer with the failure output"
 }

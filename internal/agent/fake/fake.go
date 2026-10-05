@@ -4,9 +4,11 @@
 //
 // A Session runs a POSIX shell script in the Workspace as the "agent". The
 // script starts at Open and waits for the first turn, which it gets in
-// $OGE_FAKE_TURN. Each line it prints is a Claim; a line "exit: <name>"
-// declares an Exit. A script that exits 0 without declaring one settles
-// with Exit done; a nonzero exit is an Attempt failure.
+// $OGE_FAKE_TURN, its Role kind in $OGE_FAKE_ROLE and its cache directory
+// in $OGE_FAKE_CACHE. Each line it
+// prints is a Claim; a line "exit: <name>" declares an Exit. A script that
+// exits 0 without declaring one settles with Exit done; a nonzero exit is
+// an Attempt failure.
 package fake
 
 import (
@@ -47,7 +49,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	}
 	cmd := exec.Command("/bin/sh", "-c", wrapper, "oge-fake", a.Script)
 	cmd.Dir = spec.Workspace
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}, a.Env...)
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "OGE_FAKE_ROLE=" + spec.Role, "OGE_FAKE_CACHE=" + spec.Cache}, a.Env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

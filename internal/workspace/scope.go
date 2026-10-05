@@ -52,6 +52,10 @@ type ScopeRules struct {
 	// when the role may write it. A write to a protected path is a Tamper
 	// event.
 	Protected func(path string) string
+	// Tamper reports whether a write to a path of this protected class is
+	// a Tamper event; nil means every one is. A role that isn't judged
+	// (the verifier) commits ordinary scope violations instead (spec #35).
+	Tamper func(class string) bool
 	// Enforcement names a path's enforcement class; nil means revert-only.
 	Enforcement func(path string) string
 	// Put stores a patch and returns its blob id.
@@ -159,7 +163,7 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 			continue
 		}
 		if unreadable[p] || !sameAsSnapshot(ws, p, before[p], after[p]) {
-			plan(p, class, true)
+			plan(p, class, rules.Tamper == nil || rules.Tamper(class))
 		}
 	}
 	for p, mode := range after {

@@ -1,7 +1,8 @@
 // Package run is the orchestrator: Preflight, the Run's private state, and
-// the walk of the frozen graph. So far it walks Fast mode: implementer →
-// Check, the send-back loop and the Gates it reaches (ADR-0019), writing
-// every step ahead to the Ledger (ADR-0012).
+// the walk of the frozen graph. It walks Fast mode (implementer → Check)
+// and Standard mode (implementer → fresh verifier → Check), the send-back
+// loop and the Gates they reach (ADR-0019), writing every step ahead to
+// the Ledger (ADR-0012).
 package run
 
 import (
@@ -53,6 +54,7 @@ const (
 	RecAttemptStarting   = "AttemptStarting"
 	RecProcessStarted    = "ProcessStarted"
 	RecObservation       = "Observation"
+	RecBriefingManifest  = "BriefingManifest"
 	RecAttemptEnded      = "AttemptEnded"
 	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
@@ -96,7 +98,7 @@ const (
 	EvAgent                      // an agent's normalised event during an Attempt
 	EvAttempt                    // an Attempt ended
 	EvCheck                      // a Check ended with a Verdict
-	EvSendBack                   // the Candidate goes back to the implementer
+	EvSendBack                   // the Candidate goes back to the implementer; Decision is set when a Gate sent it
 	EvDecided                    // a Gate decision is recorded
 	EvNotice                     // something the user is told once, in Notice
 )
@@ -114,12 +116,20 @@ type Event struct {
 	Gate     *gate.Request
 	Decision *gate.Decision
 	Notice   string
+	// EvCheck in Standard mode: one line per failing held-out test, its
+	// name and first failure message. For the human's terminal only: the
+	// implementer never gets them (ADR-0009).
+	Issues []string
+	// Conflicts are packages whose held-out tests no longer build against
+	// the Candidate: no one's finding, shown neutrally.
+	Conflicts []string
 }
 
 // Attempt is one execution of a Stage.
 type Attempt struct {
 	ID      string
 	Stage   string
+	Role    string
 	Cause   string // first | send_back
 	Agent   string
 	Exit    string
@@ -135,6 +145,10 @@ type Attempt struct {
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration
+	// Envelope is the startup envelope check's status ("ok", "warn").
+	Envelope string
+	// QA is set on a verifier Attempt: what it added to the Oracle.
+	QA *QA
 	// Friction is the Attempt's policy friction, summed over its turns
 	// (ADR-0019), when its adapter measures it.
 	Friction *agent.Friction
@@ -159,12 +173,20 @@ type Result struct {
 	// ended it.
 	Gate     string
 	Decision *gate.Decision
+	// QA is the latest verifier Attempt's, in Standard mode.
+	QA *QA
 	// Tripwires are the static tripwires the Candidate's changes set off
 	// (ADR-0020): signals, not proof.
 	Tripwires []string
 	// Friction is the Run's policy friction, summed over its Attempts.
 	Friction *agent.Friction
 }
+
+// gateHeldOutConflict is where a Run parks when QA's held-out test no
+// longer builds against the Candidate. It isn't in the frozen graph yet.
+// TODO(#46-decision): until a Gate offers `remove <test>`, a human
+// resolves it outside the Run.
+const gateHeldOutConflict = "gate.held_out_conflict"
 
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
 // warm step is stopped and the Check starts from the partial seed, so a
@@ -181,17 +203,32 @@ const interrupted = "interrupted: the Run was cancelled"
 // ErrNoAdapter means the Stage's agent has no adapter in this build.
 var ErrNoAdapter = errors.New("no adapter")
 
-// Start runs a Fast-mode Run until it ends or parks. An error means Öge itself
-// failed; the Run's Ledger then ends without RunEnded.
+// Start runs a Fast or Standard Run until it ends or parks. An error means
+// Öge itself failed; the Run's Ledger then ends without RunEnded.
 func Start(ctx context.Context, p Params) (*Result, error) {
 	f := p.Frozen
-	if f.Mode != pipeline.Fast {
-		return nil, fmt.Errorf("%s mode needs a verifier, which isn't built yet", f.Mode)
+	if f.Mode == pipeline.Blind {
+		// TODO(#52): verify = "before".
+		return nil, fmt.Errorf("blind mode isn't built yet")
 	}
-	impl := f.Stages[0]
+	var impl, ver pipeline.Stage
+	for _, s := range f.Stages {
+		switch s.Role {
+		case "implementer":
+			impl = s
+		case "verifier":
+			ver = s
+		}
+	}
 	adapter := p.Agents[impl.Agent]
 	if adapter == nil {
 		return nil, fmt.Errorf("%w for %s", ErrNoAdapter, impl.Agent)
+	}
+	var verifier agent.Adapter
+	if f.Mode == pipeline.Standard {
+		if verifier = p.Agents[ver.Agent]; verifier == nil {
+			return nil, fmt.Errorf("%w for %s", ErrNoAdapter, ver.Agent)
+		}
 	}
 
 	if p.Observe == nil {
@@ -333,7 +370,14 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
 	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
+	// The implementer's protected set is Oracle v0's: held-out tests never
+	// enter its Workspace (ADR-0009).
 	scope := implementerScope(m, f)
+	var qa *qaStage
+	if verifier != nil {
+		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
+			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, seed: seed, runDir: res.Dir}
+	}
 	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
 	for check := 1; ; check++ {
 		w.attempts++
@@ -366,6 +410,21 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// whatever later Attempts do (ADR-0019 #2).
 		w.addTamper(a)
 
+		// QA: a fresh verifier on the Promoted view of the Candidate adds
+		// held-out tests to a new Oracle version (ADR-0009, ADR-0010).
+		if qa != nil {
+			s, err := qa.review(ctx, w, res, a)
+			if err != nil {
+				return nil, err
+			}
+			if s.stop != "" {
+				res.Gate = s.gate
+				return end(s.stop, s.why...)
+			}
+			m, mBlob = qa.m, qa.mBlob
+			res.Oracle = m.Version
+		}
+
 		// The Check, from the cache seed once it is warm. A cancelled Run
 		// never reaches a Verdict: the Check it killed didn't fail.
 		if seed != nil && runner.Seed == nil {
@@ -386,7 +445,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := l.Append(RecCheckStarted, map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 			return nil, err
 		}
-		cr, err := runner.CheckAgainst(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
+		// With held-out tests, two executions: the visible Oracle in a build
+		// no held-out file enters, and the held-out tests on their own
+		// (#46); both must pass.
+		cr, err := runner.SplitCheck(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
 		if err != nil {
 			return nil, err
 		}
@@ -419,7 +481,25 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		w.check = check
-		p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
+		ev := Event{Kind: EvCheck, Result: res, Check: cr}
+		if qa != nil {
+			ev.Issues, ev.Conflicts = issues(m, cr, blobs), m.HeldOutBuildConflicts(cr)
+		}
+		p.Observe(ev)
+		if len(ev.Conflicts) > 0 {
+			// QA's held-out test no longer builds against the Candidate. The
+			// implementer can't see it, so a send-back can't fix it, and
+			// only a human removes an Oracle test (ADR-0007): the Run parks,
+			// naming QA and the package, never a held-out name or source.
+			// TODO(#46-decision): a Gate offering `remove <test>` is post-M1;
+			// until then this parks with no choice to make here.
+			var why []string
+			for _, pkg := range ev.Conflicts {
+				why = append(why, "QA's held-out test in package "+pkg+" no longer builds against the Candidate; the implementer isn't sent back over it, and only a human removes an Oracle test")
+			}
+			res.Gate = gateHeldOutConflict
+			return end(Parked, why...)
+		}
 
 		// TODO(#47, #48): failing own tests and Ambiguous files become
 		// conditions here.
@@ -444,9 +524,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		d := s.decision
 		// A send-back Attempt, from the Candidate it sends back.
 		w.sendBacks++
-		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks})
+		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks, Decision: d})
 		next = attemptSpec{n: next.n + 1, cause: "send_back", start: a.Candidate,
-			extra: sendBackTurn(cr, blobs, d), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
+			extra: sendBackTurnFrom(cr, blobs, d, m, goSources(repo, a.Candidate)), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
 		if err := repo.Checkout(a.Candidate, next.ws); err != nil {
 			return nil, err
 		}
@@ -463,6 +543,15 @@ type attemptSpec struct {
 	start string // the revision its Workspace holds
 	extra string // what the Briefing adds: why the Candidate came back
 	ws    string
+
+	// A verifier Attempt sets these.
+	denyRead   []string // more paths its agent's sandbox denies reading
+	brief      string   // the whole Briefing
+	base       string   // what its scope check compares with (the Snapshot when empty)
+	writeGlobs []string // its Write scope: new files matching these
+	collect    bool     // no Candidate: the caller collects the Workspace
+	view       string   // the Promoted view it works on
+	withheld   []workspace.Withheld
 }
 
 // implement runs one implementer Attempt: AttemptStarting before the
@@ -470,7 +559,7 @@ type attemptSpec struct {
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
 	adapter agent.Adapter, stage pipeline.Stage, runID, snap string, at attemptSpec, protected func(string) string) (*Attempt, error) {
-	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Agent: stage.Agent, Cause: at.cause}
+	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Role: stage.Role, Agent: stage.Agent, Cause: at.cause}
 	ws := at.ws
 	instructions, err := repoInstructions(repo, snap)
 	if err != nil {
@@ -488,21 +577,35 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	}
 	spec := agent.LaunchSpec{
 		Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network, RunID: runID,
-		RepoInstructions: instructions, CheckCommands: checks, DenyRead: []string{p.State.Private}, Cache: cache,
+		RepoInstructions: instructions, CheckCommands: checks, DenyRead: append([]string{p.State.Private}, at.denyRead...), Cache: cache,
+		WriteGlobs: at.writeGlobs,
+	}
+	if stage.Role == "implementer" {
+		// QA's Workspaces and caches, where held-out tests are written,
+		// even before Öge removes them (#46).
+		spec.DenyRead = append(spec.DenyRead, filepath.Join(filepath.Dir(ws), qaDir))
 	}
 	// TODO(#44): a send-back Attempt may continue the implementer's
 	// Session; every Attempt is a fresh one for now, briefed again with
 	// why its Candidate came back.
-	brief := briefing.Implementer(p.Task, checks) + at.extra
+	brief := at.brief
+	if brief == "" {
+		brief = briefing.Implementer(p.Task, checks) + at.extra
+	}
 	briefingBlob, err := blobs.Put([]byte(brief))
 	if err != nil {
 		return nil, err
 	}
 	if err := l.Append(RecAttemptStarting, map[string]any{
-		"attempt": a.ID, "stage": stage.Name, "cause": at.cause, "start_revision": at.start, "session": "fresh",
+		"attempt": a.ID, "stage": stage.Name, "role": stage.Role, "cause": at.cause, "start_revision": at.start, "session": "fresh",
 		"launch_profile": map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network},
 		"briefing":       briefingBlob, "repo_instructions": instructions != "",
 	}); err != nil {
+		return nil, err
+	}
+	// The Briefing manifest is written ahead of the Attempt: what the
+	// agent is about to be given and denied (ADR-0009).
+	if err := l.Append(RecBriefingManifest, briefingManifest(p, a, at, brief, instructions, spec.DenyRead)); err != nil {
 		return nil, err
 	}
 	launched := time.Now()
@@ -549,10 +652,11 @@ loop:
 					if r := ev.Session.Residue; r != nil {
 						obs["residue"] = r
 					}
+					a.Envelope = ev.Session.Envelope
 					if err := l.Append(RecObservation, obs); err != nil {
 						return nil, err
 					}
-					if note := residueNotice(p.State.Private, stage.Agent, ev.Session.Residue); note != "" {
+					if note := residueNotice(p.State.Private, stage.Agent, stage.Role, ev.Session.Residue); note != "" {
 						p.Observe(Event{Kind: EvNotice, Attempt: a, Notice: note})
 					}
 				}
@@ -616,10 +720,14 @@ loop:
 	}
 	// The scope check runs after every Attempt whose agent ran, failed or
 	// not, and before the Candidate is committed.
-	if err := enforceScope(l, blobs, repo, a, snap, ws, protected); err != nil {
+	base := snap
+	if at.base != "" {
+		base = at.base
+	}
+	if err := enforceScope(l, blobs, repo, a, base, ws, protected); err != nil {
 		return nil, err
 	}
-	if a.Failure == "" && a.Stop == "" {
+	if a.Failure == "" && a.Stop == "" && !at.collect {
 		if err := commitCandidate(l, repo, a, snap, at.start, fmt.Sprintf("c%d", at.n), ws, protected); err != nil {
 			return nil, err
 		}
@@ -637,9 +745,15 @@ loop:
 // residueNotice is what to tell the user about an agent's startup residue:
 // the first time it appears, and whenever it changes, never on every Run
 // (#44). The last-seen residue is kept in the state root, where doctor
-// can report it.
-func residueNotice(private, agentName string, r *agent.Residue) string {
-	path := filepath.Join(private, "agents", agentName+".residue.json")
+// can report it. Each Role kind keeps its own: a verifier launches with
+// fewer skills than an implementer, and the two must not take turns
+// "changing" it.
+func residueNotice(private, agentName, role string, r *agent.Residue) string {
+	key := agentName
+	if role != "" && role != "implementer" {
+		key += "." + role
+	}
+	path := filepath.Join(private, "agents", key+".residue.json")
 	var last struct{ Fingerprint string }
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &last)

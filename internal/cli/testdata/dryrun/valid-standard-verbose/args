@@ -1,0 +1,4 @@
+--dry-run
+--task-file
+task.md
+-v

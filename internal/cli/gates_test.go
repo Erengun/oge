@@ -242,7 +242,7 @@ func TestResultGate(t *testing.T) {
 		},
 		{
 			name: "send back with a note", stdin: "send back keep it shorter\nt\n", script: "echo \"$OGE_FAKE_TURN\" | grep -q 'keep it shorter' && echo 'got the note'\n" + fixScript, code: ExitOK,
-			want: []string{"note: keep it shorter", "send back  1 of 3 · ", `"got the note"`},
+			want: []string{"note: keep it shorter", "send back  1 of 3 · the Candidate goes back to the implementer with your note\n", `"got the note"`},
 			records: "GateOpened gate.result|GateDecided gate.result send back|" +
 				"GateOpened gate.result|GateDecided gate.result take|RunEnded Accepted",
 		},

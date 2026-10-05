@@ -25,20 +25,19 @@ import (
 // startRun refuses what this build can't run yet, then runs the Task and
 // maps the outcome to its exit code (ADR-0015).
 func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Frozen, cfgData []byte) int {
-	impl := frozen.Stages[0]
 	for _, s := range frozen.Stages {
-		if s.Role == "implementer" {
-			impl = s
+		if env.Agents[s.Agent] == nil {
+			fmt.Fprintf(env.Stderr, "oge: running a Task with %s isn't implemented yet; use --dry-run to see what it would do\n", s.Agent)
+			return ExitRefused
 		}
 	}
-	if env.Agents[impl.Agent] == nil {
-		fmt.Fprintf(env.Stderr, "oge: running a Task with %s isn't implemented yet; use --dry-run to see what it would do\n", impl.Agent)
+	if frozen.Mode == pipeline.Blind {
+		// TODO(#52): verify = "before".
+		fmt.Fprintln(env.Stderr, "oge: Blind mode isn't built yet. Leave out --blind (and verify = \"before\") for Standard mode, or pass --fast")
 		return ExitRefused
 	}
-	if frozen.Mode != pipeline.Fast {
-		fmt.Fprintf(env.Stderr, "oge: %s mode needs a verifier, which isn't built yet. Pass --fast to run the implementer, then Öge's Check\n", frozen.Mode)
-		return ExitRefused
-	}
+	// TODO(#46-decision): no report_path key yet: held-out collection is
+	// go-test-json on stdout only, until a non-Go held-out runner needs junit.
 	for _, c := range frozen.Checks {
 		if c.Report != "" && c.Report != oracle.ReportGoTestJSON {
 			fmt.Fprintf(env.Stderr, "oge: Check %q declares a %s report, which Öge can't read yet; use go-test-json\n", c.Run, c.Report)
@@ -242,10 +241,14 @@ func (r *renderer) observe(ev run.Event) {
 	case run.EvPreflight:
 		r.p("%-10s %s", "preflight", preflightText(r.frozen))
 	case run.EvAgent:
-		if !r.verbose {
+		if !r.verbose || (ev.Attempt.Role == "verifier" && !qaStep(ev.Agent)) {
 			return
 		}
 		if step, ok := agentStep(ev.Agent, ev.Attempt.Cause); ok {
+			if ev.Attempt.Role == "verifier" {
+				step = strings.Replace(step, "Workspace from Snapshot", "Workspace: the Promoted view of the Candidate", 1)
+				step = strings.Replace(step, "Workspace from the Candidate sent back", "Workspace: the Promoted view of the Candidate", 1)
+			}
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
 		if f := ev.Agent.Friction; f != nil && ev.Agent.Kind == agent.TurnSettled {
@@ -254,12 +257,19 @@ func (r *renderer) observe(ev run.Event) {
 	case run.EvNotice:
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
+		if ev.Attempt.Role == "verifier" {
+			r.p("%-10s %s", qaLabel, qaText(ev.Attempt))
+			if s := qaScopeText(ev.Attempt); s != "" {
+				r.p("%-10s %s", "scope", s)
+			}
+			return
+		}
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
 		if s := scopeText(ev.Attempt); s != "" {
 			r.p("%-10s %s", "scope", s)
 		}
 	case run.EvSendBack:
-		r.p("%-10s %s", "send back", sendBackText(ev))
+		r.p("%-10s %s", "send back", sendBackText(ev, r.frozen))
 	case run.EvDecided:
 		r.p("%-10s %s", "decision", decidedText(ev))
 	case run.EvCheck:
@@ -269,6 +279,9 @@ func (r *renderer) observe(ev run.Event) {
 		}
 		for _, l := range checkLines(ev.Check) {
 			r.p("%-10s %s", "check", l)
+		}
+		for _, l := range issueLines(ev.Issues, ev.Conflicts) {
+			r.p("%-10s %s", "", l)
 		}
 		if r.verbose {
 			verdict := "FAIL"
@@ -378,8 +391,25 @@ func checkLines(c *oracle.Result) []string {
 	if c.Setup != nil && !c.Setup.Pass {
 		lines = append(lines, clean(fmt.Sprintf("setup %q failed on the Candidate (%s)", c.Setup.Run, c.Setup.Why)))
 	}
+	// A report Candidate code can forge claimed a pass the attestation
+	// channel didn't confirm (ADR-0020): the line says so, not "pass".
+	forged := ""
+	if !c.Pass && len(c.Missing) > 0 && strings.HasPrefix(c.Why, "Oracle tests not attested") {
+		first, _, _ := strings.Cut(c.Missing[0], "; the report claims")
+		forged = "the report claims a pass; attestation: " + first
+	}
 	for _, e := range c.Commands {
-		lines = append(lines, commandLine(e))
+		l := commandLine(e)
+		switch e.Part {
+		case oracle.PartVisible:
+			l = "visible Oracle · " + l
+		case oracle.PartHeldOut:
+			l = "held-out · " + l
+		}
+		if forged != "" && e.Pass {
+			l = strings.Replace(l, " · pass · ", " · "+clean(forged)+" · ", 1)
+		}
+		lines = append(lines, l)
 	}
 	if c.Why != "" {
 		lines = append(lines, clean(fmt.Sprintf("fail (%s)", c.Why)))
@@ -439,7 +469,7 @@ func (r *renderer) summary(res *run.Result) {
 				}
 			}
 		}
-		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges", label)
+		r.p("%-10s %s", label, notCovered(r.frozen, res))
 		r.observed(res)
 		if r.warn != "" {
 			r.p("! %s", r.warn)

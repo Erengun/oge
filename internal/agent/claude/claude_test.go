@@ -483,13 +483,31 @@ func TestEnvelopeRules(t *testing.T) {
 				Name string `json:"name"`
 			}{"gh"})
 		}, warn: "MCP servers: gh"},
-		"residue isn't a warning": {role: "verifier", edit: func(f *initFrame) {
+		"residue isn't a warning": {role: "implementer", edit: func(f *initFrame) {
 			f.Skills, f.Agents = []string{"deep-research"}, []string{"reviewer"}
-			f.Plugins = append(f.Plugins, struct {
-				Name   string `json:"name"`
-				Source string `json:"source"`
-			}{"org", "org@corp"})
+			f.Plugins = append(f.Plugins, initPlugin{Name: "org", Path: "/home/user/.claude/plugins/org", Source: "org@corp"})
 		}},
+		"residue fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Skills, f.Agents = []string{"deep-research"}, []string{"reviewer"}
+			f.Plugins = append(f.Plugins, initPlugin{Name: "org", Path: "/home/user/.claude/plugins/org", Source: "org@corp"})
+		}, fatal: "the verifier would load 1 plugins, 1 skills, 1 subagents that Öge can't remove"},
+		"built-in subagents don't fail verifier":         {role: "verifier", edit: func(f *initFrame) { f.Agents = builtinAgents }},
+		"the pinned builtin plugins don't fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Plugins = pluginsOf(builtinPlugins...) }},
+		"fewer builtin plugins fail verifier": {role: "verifier", edit: func(f *initFrame) { f.Plugins = pluginsOf(builtinPlugins[1:]...) },
+			fatal: "the verifier would load 3 plugins"},
+		"a repeated builtin plugin fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins = pluginsOf(builtinPlugins[0], builtinPlugins[0], builtinPlugins[1], builtinPlugins[2])
+		}, fatal: "the verifier would load 4 plugins"},
+		"a user marketplace named builtin fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins = pluginsOf(builtinPlugins...)
+			f.Plugins[0].Path = "/home/user/.claude/plugins/marketplaces/builtin/cc-plugin-agents-md"
+		}, fatal: "the verifier would load 4 plugins"},
+		"another builtin plugin fails verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins = pluginsOf(append(append([]string{}, builtinPlugins...), "cc-plugin-new@builtin")...)
+		}, fatal: "the verifier would load 5 plugins"},
+		"builtin plugins with a skill fail verifier": {role: "verifier", edit: func(f *initFrame) {
+			f.Plugins, f.Skills = pluginsOf(builtinPlugins...), []string{"debug"}
+		}, fatal: "4 plugins, 1 skills"},
 		"wrong cwd":   {role: "implementer", edit: func(f *initFrame) { f.Cwd = "/elsewhere" }, fatal: "working directory"},
 		"too old":     {role: "implementer", edit: func(f *initFrame) { f.Version = "2.1.200" }, fatal: "older than the oldest supported"},
 		"newer warns": {role: "implementer", edit: func(f *initFrame) { f.Version = "2.2.0" }, warn: "newer than the last tested"},
@@ -1007,10 +1025,7 @@ func TestResidueAndCapabilities(t *testing.T) {
 		Skills: []string{"design", "deep-research"}, Agents: append([]string{"reviewer"}, builtinAgents...),
 		Version: "2.1.289", Capabilities: []string{"interrupt_receipt_v1"},
 	}
-	in.Plugins = append(in.Plugins, struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
-	}{"cc-plugin-agents-md", "cc-plugin-agents-md@builtin"})
+	in.Plugins = append(in.Plugins, initPlugin{Name: "cc-plugin-agents-md", Path: "builtin", Source: "cc-plugin-agents-md@builtin"})
 	r := residueOf(in)
 	if r == nil || strings.Join(r.Plugins, ",") != "cc-plugin-agents-md@builtin" || strings.Join(r.Skills, ",") != "deep-research,design" ||
 		strings.Join(r.Agents, ",") != "reviewer" {
@@ -1037,9 +1052,66 @@ func TestExitOf(t *testing.T) {
 		"": "done", "Fixed it.": "done", "Fixed.\nExit: done": "done", "Can't.\n**Exit: infeasible**": "infeasible",
 		"exit: infeasible.": "infeasible", "Exit: bogus": "done",
 	} {
-		if got := exitOf(in); got != want {
+		if got := exitOf(in, "implementer"); got != want {
 			t.Errorf("exitOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+	for in, want := range map[string]string{
+		"": "", "Added tests.\nExit: extended": "extended", "Exit: no_additions": "no_additions",
+		"Exit: conflicts_with_oracle": "conflicts_with_oracle", "Exit: done": "",
+	} {
+		if got := exitOf(in, "verifier"); got != want {
+			t.Errorf("verifier exitOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestVerifierPolicy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX paths")
+	}
+	ws, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(ws, "add.go"), []byte("package fx\n"), 0o644)
+	os.WriteFile(filepath.Join(ws, "add_test.go"), []byte("package fx\n"), 0o644)
+	p := newPolicy(agent.LaunchSpec{Role: "verifier", Workspace: ws, CheckCommands: []string{"go test -json ./..."},
+		WriteGlobs: []string{"**/*_test.go"}}, "abc")
+	fp := func(k, v string) string { b, _ := json.Marshal(map[string]string{k: v}); return string(b) }
+	bash := func(cmd string) string { b, _ := json.Marshal(map[string]string{"command": cmd}); return string(b) }
+	for _, c := range []struct{ tool, input, want string }{
+		{"Read", fp("file_path", "add.go"), "allow"},
+		{"Write", fp("file_path", "add.go"), "deny"},       // production code
+		{"Edit", fp("file_path", "add_test.go"), "deny"},   // an existing test
+		{"Write", fp("file_path", "add_test.go"), "deny"},  // overwriting it
+		{"Write", fp("file_path", "neg_test.go"), "allow"}, // a new test
+		{"Edit", fp("file_path", "neg_test.go"), "allow"},  // the test it created
+		{"Edit", fp("file_path", "other_test.go"), "deny"}, // Edit can't create
+		{"Write", fp("file_path", "NOTES.md"), "deny"},     // not a test
+		{"NotebookEdit", fp("notebook_path", "x_test.go"), "deny"},
+		{"Bash", bash("go test -json ./..."), "allow"},
+		{"Bash", bash("gofmt -l ."), "allow"},
+		{"Bash", bash("gofmt -w add.go"), "deny"},
+		{"Bash", bash("go build -o out ."), "deny"},
+	} {
+		in := json.RawMessage(c.input)
+		if c.input == "" {
+			in = nil
+		}
+		// A Write the policy allows is then made, as claude would.
+		d := p.decide(c.tool, in)
+		if d.Decision != c.want {
+			t.Errorf("%s %s: %s (%s), want %s", c.tool, c.input, d.Decision, d.Reason, c.want)
+		}
+		if c.tool == "Write" && d.Decision == "allow" {
+			var m map[string]string
+			json.Unmarshal(in, &m)
+			os.WriteFile(filepath.Join(ws, m["file_path"]), []byte("package fx\n"), 0o644)
+		}
+	}
+	if d := p.decide("WebFetch", nil); !strings.Contains(d.Reason, "verifier's tools") {
+		t.Errorf("reason %q", d.Reason)
 	}
 }
 
@@ -1079,5 +1151,29 @@ func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 	long := strings.Repeat("x", 200)
 	if got := target("Bash", map[string]any{"command": long}, []string{ws}); len([]rune(got)) != 80 {
 		t.Errorf("long target has %d runes", len([]rune(got)))
+	}
+}
+
+func pluginsOf(sources ...string) []initPlugin {
+	var out []initPlugin
+	for _, src := range sources {
+		out = append(out, initPlugin{Name: src, Path: "builtin", Source: src})
+	}
+	return out
+}
+
+func TestVerifierLaunchDisablesSkills(t *testing.T) {
+	for role, want := range map[string]bool{"verifier": true, "implementer": false} {
+		p, err := profileFor(role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args, err := p.args(agent.LaunchSpec{Role: role, Workspace: t.TempDir()}, "id", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(strings.Join(args, " "), "--disable-slash-commands"); got != want {
+			t.Errorf("%s: --disable-slash-commands = %v", role, got)
+		}
 	}
 }

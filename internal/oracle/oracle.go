@@ -32,6 +32,10 @@ type Manifest struct {
 	// Expected are the top-level Go tests in Tests; each must pass in a
 	// go-test-json report for the Check to pass.
 	Expected []TestID `json:"expected,omitempty"`
+	// HeldOut are the Held-out tests among Tests, with their criterion
+	// mappings; Added are the files this version added to its parent.
+	HeldOut []HeldOut `json:"held_out,omitempty"`
+	Added   []string  `json:"added,omitempty"`
 }
 
 // Command is one Check command as the Oracle pins it.
@@ -47,6 +51,10 @@ type Command struct {
 type File struct {
 	Path string `json:"path"`
 	Blob string `json:"blob"`
+	// HeldOut marks a verifier addition: private, never in any
+	// implementer Briefing or Workspace.
+	HeldOut bool   `json:"held_out,omitempty"`
+	Attempt string `json:"attempt,omitempty"` // the verifier Attempt that added it
 	// Expected are the expected tests the file declares; each attests its
 	// execution in a Check (ADR-0020).
 	Expected []TestID `json:"expected,omitempty"`

@@ -6,6 +6,8 @@
 // Environment:
 //
 //	OGE_FAKE_CLAUDE_FIXTURE  the transcript to replay (testdata format)
+//	OGE_FAKE_CLAUDE_FIXTURE_<ROLE>  the one to replay instead for $OGE_ROLE,
+//	                         e.g. OGE_FAKE_CLAUDE_FIXTURE_VERIFIER
 //	OGE_FAKE_CLAUDE_RECORD   where to write its argv and environment as JSON
 //	OGE_FAKE_CLAUDE_STDIN    where to append every line it reads
 //
@@ -85,6 +87,9 @@ func main() {
 		}
 	}
 	fixture := os.Getenv("OGE_FAKE_CLAUDE_FIXTURE")
+	if f := os.Getenv("OGE_FAKE_CLAUDE_FIXTURE_" + strings.ToUpper(os.Getenv("OGE_ROLE"))); f != "" && os.Getenv("OGE_ROLE") != "" {
+		fixture = f
+	}
 	if fixture == "" {
 		fail("no OGE_FAKE_CLAUDE_FIXTURE")
 	}

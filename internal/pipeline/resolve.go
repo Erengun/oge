@@ -47,11 +47,15 @@ type Limits struct {
 
 // DefaultLimits are the spec's provisional defaults (#35).
 var DefaultLimits = Limits{
-	Retries:                2,
-	SendBacks:              3,
-	UserRequests:           3,
-	Attempts:               12,
-	OracleGrowthAttempts:   3,
+	Retries:      2,
+	SendBacks:    3,
+	UserRequests: 3,
+	Attempts:     12,
+	// One verifier Attempt follows every implementer Attempt the send-back
+	// budget allows, so the growth limit on verifier Attempts never trips
+	// on the normal repair loop (see resolveLimits).
+	// TODO(#51): the Oracle-growth Gate; revisit these provisional values.
+	OracleGrowthAttempts:   4,
 	OracleGrowthPerAttempt: 20,
 	OracleGrowthPerRun:     50,
 	StageTimeout:           60 * time.Minute,
@@ -205,6 +209,9 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	if len(f.Project.TestGlobs) == 0 {
 		add("project.test_globs", "no test globs: the Oracle's tests must be named. Set project.test_globs in %s or pass --tests", ConfigPath)
 	}
+	// TODO(#46-decision): no --check-report flag. A CLI-only --check gets
+	// a report only when inferReport recognises it (go test -json); any
+	// other held-out runner declares its report in the config.
 	if f.Mode != Fast {
 		for i, c := range f.Checks {
 			if c.Report == "" {
@@ -428,6 +435,10 @@ func resolveLimits(c LimitsConfig) Limits {
 		if i.src != nil {
 			*i.dst = *i.src
 		}
+	}
+	if c.OracleGrowthAttempts == nil && l.OracleGrowthAttempts < l.SendBacks+1 {
+		// A raised send-back budget raises the default with it.
+		l.OracleGrowthAttempts = l.SendBacks + 1
 	}
 	if d, err := parseDuration(c.StageTimeout); err == nil {
 		l.StageTimeout = d
