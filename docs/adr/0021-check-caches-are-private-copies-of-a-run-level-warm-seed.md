@@ -15,7 +15,7 @@ Snapshot → Öge setup → Run cache seed → private copy per Check → Check 
 ```
 
 - **Seed.** Öge's setup command and Öge's own offline warm step populate the seed, on the trusted Snapshot: Run-level seeds for the build cache and module cache.
-  - The warm step compiles the Snapshot's packages and tests without linking or running them, with the module proxy off. It runs niced, in the background, overlapping the implementer's Attempt. A Check waits for it only up to a bound, then stops it and starts from the partial seed.
+  - The warm step compiles the Snapshot's packages and tests without linking or running them, with the module proxy off. It also vets them with go test's own analyzer set, so a Check doesn't vet the standard library again; a toolexec wrapper refuses every link, so no test binary exists to run ([#112](https://github.com/Erengun/oge/issues/112)). It runs niced, in the background, overlapping the implementer's Attempt. A Check waits for it only up to a bound, then stops it and starts from the partial seed.
   - Candidate code never runs with a seed directory as a writable cache. Once warm, the seed is read-only, so a stray write from an uncontained Check fails.
   - The seed lives in Öge's private state, outside Candidate access. A later Run sweeps the seeds and Check directories that a Run stopped without cleanup left behind.
 - **Per-Check copy.** Before each Check, Öge materialises a private, Check-local warm cache from the seed.
