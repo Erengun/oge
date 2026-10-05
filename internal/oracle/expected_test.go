@@ -14,6 +14,8 @@ func TestExpectedTestsComeFromTheOracle(t *testing.T) {
 		"mod2/go.mod":         "module \"example.com/two\"\n",
 		"mod2/deep/y_test.go": "package deep\n\nimport \"testing\"\n\nfunc TestY(t *testing.T) {}\n",
 		"broken_test.go":      "package fx\n\nfunc TestBroken(",
+		"testdata/t_test.go":  "package t\n\nimport \"testing\"\n\nfunc TestFixture(t *testing.T) {}\n",
+		"_old/o_test.go":      "package o\n\nimport \"testing\"\n\nfunc TestOld(t *testing.T) {}\n",
 	}
 	var files, tests []string
 	for p := range snap {
@@ -29,10 +31,8 @@ func TestExpectedTestsComeFromTheOracle(t *testing.T) {
 		}
 		return []byte(s), nil
 	})
-	want := []TestID{
-		{"example.com/fx", "Test"}, {"example.com/fx", "TestAdd"},
-		{"example.com/fx/sub", "TestX"}, {"example.com/two/deep", "TestY"},
-	}
+	// testdata, _old and the nested module mod2 are outside ./...
+	want := []TestID{{"example.com/fx", "Test"}, {"example.com/fx", "TestAdd"}, {"example.com/fx/sub", "TestX"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}

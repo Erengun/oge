@@ -47,7 +47,7 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 	seen := map[TestID]bool{}
 	var ids []TestID
 	for _, f := range tests {
-		if !strings.HasSuffix(f, "_test.go") {
+		if !strings.HasSuffix(f, "_test.go") || !inDotDotDot(path.Dir(f), mods) {
 			continue
 		}
 		src, err := show(f)
@@ -65,6 +65,28 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 	return ids
+}
+
+// inDotDotDot reports whether go test ./... from the root would build
+// dir: not under testdata, vendor or a _ or . directory, and, when the
+// root has a go.mod, not inside a nested module.
+func inDotDotDot(dir string, mods map[string]string) bool {
+	if dir == "." {
+		return true
+	}
+	for _, part := range strings.Split(dir, "/") {
+		if part == "testdata" || part == "vendor" || strings.HasPrefix(part, "_") || strings.HasPrefix(part, ".") {
+			return false
+		}
+	}
+	if _, ok := mods["."]; ok {
+		for d := dir; d != "."; d = path.Dir(d) {
+			if _, nested := mods[d]; nested {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // importPath is dir's import path under the nearest go.mod above it.
