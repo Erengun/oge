@@ -114,7 +114,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"dir":"rest","shard":1,"total":1},{"dir":"internal/cli","shard":1,"total":4}]' || '[{"dir":"rest","shard":1,"total":1},{"dir":"internal/cli","shard":1,"total":4},{"dir":"internal/cli","shard":2,"total":4},{"dir":"internal/cli","shard":3,"total":4},{"dir":"internal/cli","shard":4,"total":4},{"dir":"cmd/oge","shard":1,"total":1}]') }}
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"dir":"rest","shard":1,"total":1},{"dir":"internal/cli","shard":1,"total":4}]' || '[{"dir":"rest","shard":1,"total":1},{"dir":"internal/cli","shard":1,"total":4},{"dir":"internal/cli","shard":2,"total":4},{"dir":"internal/cli","shard":3,"total":4},{"dir":"internal/cli","shard":4,"total":4},{"dir":"cmd/oge","shard":1,"total":2},{"dir":"cmd/oge","shard":2,"total":2}]') }}
     env:
       CGO_ENABLED: "1"
     steps:
