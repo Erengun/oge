@@ -170,7 +170,8 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 		"implement  fake · Exit done · Candidate ", "· 1 file changed",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
 		"ACCEPTED   Candidate ", "Oracle v0",
-		"Not covered", "Nothing was written to your repository.",
+		"Not covered", "Checks run Candidate code uncontained; a hostile Candidate can forge test results",
+		"Nothing was written to your repository.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)

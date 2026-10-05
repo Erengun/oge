@@ -195,7 +195,7 @@ func (r *renderer) summary(res *run.Result) {
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
 		// TODO(#63): the Receipt replaces these lines.
-		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks ran uncontained, with your privileges", "Not covered")
+		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results", "Not covered")
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")
