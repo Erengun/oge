@@ -28,6 +28,9 @@ type tui struct {
 	stderr io.Writer
 	plain  *renderer // prints the summary once the live view has gone
 	m      *model
+	// gone is closed once the live view has stopped; a Gate opened after
+	// that is asked in plain lines.
+	gone chan struct{}
 }
 
 const (
@@ -43,7 +46,8 @@ const (
 func newTUI(env Env, t task.Task, f *pipeline.Frozen, plain *renderer) *tui {
 	return &tui{
 		in: env.Stdin, out: env.Stdout, stderr: env.Stderr, plain: plain,
-		m: newModel(t, f, newStyles(colorAllowed(env.Getenv)), time.Now),
+		m:    newModel(t, f, newStyles(colorAllowed(env.Getenv)), time.Now),
+		gone: make(chan struct{}),
 	}
 }
 
@@ -63,6 +67,10 @@ func (u *tui) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
 	q := &queue{wake: make(chan struct{}, 1)}
 	u.m.queue, u.m.interrupt = q, in.interrupt
+	u.plain.intr = in
+	if u.gone == nil {
+		u.gone = make(chan struct{})
+	}
 	done := runAsync(ctx, start, func(ev run.Event) { q.push(progressOf(ev, u.m.frozen, time.Now())) }, func(e ended) {
 		q.push(doneMsg{at: time.Now(), res: e.res, failed: e.err != nil || e.panicked != nil})
 	})
@@ -88,6 +96,7 @@ func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.R
 		}
 	}()
 	_, err := p.Run()
+	close(u.gone)
 	select {
 	case <-in.forced:
 		return nil, errForced
@@ -325,8 +334,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			// The first Ctrl-C cancels the Run, which then ends and shows
 			// its summary; the view quits only after that. A second one
-			// stops Öge without waiting.
-			m.cancelling = true
+			// stops Öge without waiting. An open Gate closes with it.
+			m.cancelling, m.gate = true, nil
 			if m.interrupt != nil {
 				m.interrupt()
 			}

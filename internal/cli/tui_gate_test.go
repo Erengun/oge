@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,11 @@ func TestTUIBoundExhaustionGate(t *testing.T) {
 	noDecision(t, reply)
 
 	h.typeLine("reject")
+	h.typeLine("e")
+	if got := h.m.render(); !strings.Contains(got, "the editor isn't available in the live view yet") {
+		t.Errorf("e was taken as a reason:\n%s", got)
+	}
+	noDecision(t, reply)
 	h.typeLine("the test can't pass as written")
 	select {
 	case d := <-reply:
@@ -151,4 +157,31 @@ func TestTUISendBack(t *testing.T) {
 	h.send(run.Event{Kind: run.EvCheck, Result: h.res, Check: &oracle.Result{Pass: true, Commands: []oracle.Execution{
 		{Run: "go test -json ./...", DurationMs: 1020, Pass: true, Report: &oracle.Report{Ran: 1}}}}})
 	golden(t, "send-back-accepted", h.end(run.Accepted))
+}
+
+// Once the live view has stopped, a Gate is asked in plain lines rather
+// than waiting on a view nobody draws.
+func TestTUIGateAfterTheViewStoppedFallsBackToPlain(t *testing.T) {
+	var out syncBuf
+	u := &tui{plain: &renderer{w: &out, input: &lines{in: strings.NewReader("q\n")}}, m: &model{queue: &queue{wake: make(chan struct{}, 1)}},
+		gone: make(chan struct{})}
+	close(u.gone)
+	d, err := u.gate(context.Background(), boundExhaustionRequest())
+	if err != nil || d.Choice != "quit" || !strings.Contains(out.b.String(), "bound-exhaustion Gate") {
+		t.Fatalf("%+v %v\n%s", d, err, out.b.String())
+	}
+}
+
+func TestTUICtrlCAtTheChoiceCancelsAndClosesTheGate(t *testing.T) {
+	h := newTUIHarness(t, false, 100)
+	cancelled := 0
+	h.m.interrupt = func() { cancelled++ }
+	h.working()
+	h.implemented("")
+	h.checked(false)
+	h.openGate(boundExhaustionAt(h))
+	h.m.Update(ctrlKey('c'))
+	if cancelled != 1 || strings.Contains(h.m.render(), "bound-exhaustion Gate") {
+		t.Errorf("cancelled %d\n%s", cancelled, h.m.render())
+	}
 }

@@ -26,12 +26,20 @@ type gateState struct {
 }
 
 // gate opens r in the live view and waits for the human, or for ctx.
+// If the live view has stopped, the Gate is asked in plain lines.
 func (u *tui) gate(ctx context.Context, r gate.Request) (gate.Decision, error) {
+	select {
+	case <-u.gone:
+		return u.plain.gate(ctx, r)
+	default:
+	}
 	reply := make(chan gate.Decision, 1)
 	u.m.queue.push(gateMsg{req: r, reply: reply})
 	select {
 	case d := <-reply:
 		return d, nil
+	case <-u.gone:
+		return u.plain.gate(ctx, r)
 	case <-ctx.Done():
 		return gate.Decision{}, ctx.Err()
 	}
@@ -85,6 +93,13 @@ func (m *model) gateEnter() {
 		}
 		g.choice, text = &c, rest
 	}
+	if strings.TrimSpace(text) == "e" {
+		// TODO(#43-decision): $EDITOR from the live view needs the view
+		// to hand over the terminal; plain mode has it.
+		g.msg = "the editor isn't available in the live view yet; type the " + label(g.choice)
+		g.input = ""
+		return
+	}
 	d, err := g.choice.Decide(text)
 	if err != nil {
 		g.msg = "a reason is required for " + g.choice.Word
@@ -113,11 +128,11 @@ func (m *model) gateLines() []string {
 	}
 	out = append(out, "")
 	if g.choice != nil {
-		label := "reason"
+		l := label(g.choice)
 		if !g.choice.Reason {
-			label = "note, optional"
+			l += ", optional"
 		}
-		out = append(out, "  "+g.choice.Word+" · "+label+": "+g.input+st.accent("▏"))
+		out = append(out, "  "+g.choice.Word+" · "+l+": "+g.input+st.accent("▏"))
 		out = append(out, st.dim("  Enter to record it · ctrl+c goes back to the Gate"))
 	} else {
 		out = append(out, "  > "+g.input+st.accent("▏"))
@@ -158,4 +173,11 @@ func (m *model) again() {
 			break
 		}
 	}
+}
+
+func label(c *gate.Choice) string {
+	if c.Reason {
+		return "reason"
+	}
+	return "note"
 }
