@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "run": "20261005T090000-a1b2c3",
+  "mode": "Standard",
+  "task": "fix Add",
+  "outcome": "Interrupted",
+  "headline": "■ Interrupted: the Run was cancelled before a Verdict",
+  "oracle_version": 0,
+  "checks": [],
+  "protected": {
+    "reverted": []
+  },
+  "scope": {
+    "reverted": [],
+    "qa_discarded": []
+  },
+  "decisions": [],
+  "supervision": {
+    "approved_automatically": 0,
+    "denied": 0,
+    "cancelled": 0,
+    "sent_back": 0,
+    "human_interruptions": 0
+  },
+  "time": {
+    "total_ms": 2100,
+    "stages": [
+      {
+        "stage": "preflight",
+        "ms": 400
+      },
+      {
+        "stage": "implement",
+        "ms": 1500
+      }
+    ],
+    "human_attention_ms": 0
+  },
+  "not_covered": [
+    "No Check reached a Verdict: there is no Evidence on any Candidate"
+  ],
+  "deliveries": [],
+  "ledger_head": "e67fdc31c615141bb1726c2c1d6ae3c91c3035742dfa033cbfcbc878b0993a99"
+}

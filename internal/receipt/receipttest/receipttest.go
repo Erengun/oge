@@ -1,0 +1,401 @@
+// Package receipttest builds synthetic Ledgers, in the record shapes the
+// run, gate and delivery packages write, on a fixed clock: the Receipt's
+// goldens come from them. Only tests import it.
+package receipttest
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/delivery"
+	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/oracle"
+	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/receipt"
+	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/workspace"
+)
+
+// T0 is when every synthetic Run starts.
+var T0 = time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+
+// RunID is every synthetic Run's id.
+const RunID = "20261005T090000-a1b2c3"
+
+// Snapshot is every synthetic Run's Snapshot commit.
+const Snapshot = "84ca1bd0e1f2a3b4c5d6e7f8091a2b3c4d5e6f70"
+
+// Builder is a synthetic Ledger, its blobs and its Run repository's
+// changed files.
+type Builder struct {
+	recs    []ledger.Record
+	prev    string
+	blobs   map[string][]byte
+	changed map[string][]string
+	// V0 and Manifests are the Oracle manifests' blob ids by version.
+	Manifests map[int]string
+}
+
+// New starts a Run in mode with the Task "fix Add" and Oracle v0 (the
+// visible TestAdd), its Preflight done at 0.4s.
+func New(mode pipeline.Mode, weakening ...pipeline.Weakening) *Builder {
+	b := &Builder{blobs: map[string][]byte{}, changed: map[string][]string{}, Manifests: map[int]string{}}
+	frozen, _ := json.Marshal(pipeline.Frozen{Mode: mode, TrustWeakening: weakening})
+	b.Add(0, run.RecRunStarted, map[string]any{"run": RunID, "oge_version": "test", "created": T0, "source": "/repo",
+		"task": b.Blob([]byte("fix Add\n\nAdd returns 0 for every input.\n")), "frozen": b.Blob(frozen), "mode": mode})
+	b.Add(100*time.Millisecond, run.RecSnapshotTaken, map[string]any{"commit": Snapshot, "head": "84ca1bd0e1f2", "branch": "main", "modified": 0, "untracked": 1})
+	b.Oracle(150*time.Millisecond, 0, "", nil, 0)
+	b.Add(400*time.Millisecond, run.RecPreflightObserved, map[string]any{"checks": []string{"submodules"}})
+	return b
+}
+
+// Blob stores data and returns its id.
+func (b *Builder) Blob(data []byte) string {
+	sum := sha256.Sum256(data)
+	id := "sha256:" + hex.EncodeToString(sum[:])
+	b.blobs[id] = data
+	return id
+}
+
+// Add appends a record at d after T0.
+func (b *Builder) Add(d time.Duration, typ string, data any) {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		panic(err)
+	}
+	r := ledger.Record{Format: ledger.Format, Seq: len(b.recs), Prev: b.prev, At: T0.Add(d), Type: typ, Data: raw}
+	line, _ := json.Marshal(r)
+	sum := sha256.Sum256(append(line, '\n'))
+	b.prev = hex.EncodeToString(sum[:])
+	b.recs = append(b.recs, r)
+}
+
+// Records are the Ledger so far; Head is its head.
+func (b *Builder) Records() []ledger.Record { return append([]ledger.Record(nil), b.recs...) }
+func (b *Builder) Head() string             { return b.prev }
+
+// Receipt builds the Receipt of the Ledger so far.
+func (b *Builder) Receipt() *receipt.Receipt {
+	return receipt.FromRecords(b.Records(), b.Head(), source{b})
+}
+
+// Source reads the Builder's blobs and changed files.
+func (b *Builder) Source() receipt.Source { return source{b} }
+
+type source struct{ b *Builder }
+
+func (s source) Blob(id string) ([]byte, error) {
+	if d, ok := s.b.blobs[id]; ok {
+		return d, nil
+	}
+	return nil, fmt.Errorf("no blob %s", id)
+}
+
+func (s source) Changed(from, to string) ([]string, error) { return s.b.changed[from+".."+to], nil }
+
+// Oracle records Oracle version v. A version a verifier Attempt added
+// holds heldOut, the held-out tests (each "Name" or "Name:AC-1"), of
+// which unmapped name no criterion.
+func (b *Builder) Oracle(d time.Duration, v int, attempt string, heldOut []oracle.HeldOut, unmapped int) {
+	m := oracle.Manifest{Format: 1, Version: v, Expected: []oracle.TestID{{Package: "fx", Name: "TestAdd"}}, HeldOut: heldOut}
+	raw, _ := json.Marshal(m)
+	id := b.Blob(raw)
+	b.Manifests[v] = id
+	data := map[string]any{"version": v, "manifest": id, "tests": 1 + len(heldOut)}
+	if attempt != "" {
+		data["attempt"], data["held_out"], data["unmapped"], data["parent"] = attempt, len(heldOut), unmapped, v-1
+	}
+	b.Add(d, run.RecOracleVersion, data)
+}
+
+// Attempt is one Attempt's records.
+type Attempt struct {
+	ID, Role, Stage, Cause string
+	From, To               time.Duration
+	Candidate              string
+	Changed                []string // since the Snapshot
+	Exit, Failure          string
+	// Claims are what the agent said, in order.
+	Claims []string
+	// HostRequests are its Host requests by policy rule.
+	HostRequests map[string]int
+	Friction     *agent.Friction
+	Reverted     []workspace.Revert
+	Withheld     []workspace.Withheld
+	Enforcement  string
+}
+
+// Attempt appends a's records.
+func (b *Builder) Attempt(a Attempt) {
+	if a.Role == "" {
+		a.Role, a.Stage = "implementer", "implement"
+	}
+	if a.Cause == "" {
+		a.Cause = "first"
+	}
+	b.Add(a.From, run.RecAttemptStarting, map[string]any{"attempt": a.ID, "stage": a.Stage, "role": a.Role, "cause": a.Cause, "session": "fresh"})
+	b.Add(a.From, run.RecBriefingManifest, map[string]any{"attempt": a.ID, "role": a.Role, "withheld": nonNil(a.Withheld)})
+	obs := map[string]any{"attempt": a.ID, "kind": "responsiveness", "duration_ms": (a.To - a.From).Milliseconds(), "host_requests": nonNilMap(a.HostRequests)}
+	if f := a.Friction; f != nil {
+		obs["policy_friction"] = map[string]int{"lost_turns": f.LostTurns, "denied": f.Denied, "envelope_refusals": f.EnvelopeRefusals}
+	}
+	b.Add(a.To-30*time.Millisecond, run.RecObservation, obs)
+	enf := a.Enforcement
+	if enf == "" {
+		enf = workspace.RevertOnly
+	}
+	tamper := 0
+	for _, r := range a.Reverted {
+		if r.Tamper {
+			tamper++
+		}
+	}
+	rev := a.Reverted
+	if rev == nil {
+		rev = []workspace.Revert{}
+	}
+	b.Add(a.To-20*time.Millisecond, run.RecScopeObserved, map[string]any{"attempt": a.ID, "role": a.Role, "state": "planned", "reverted": rev, "tamper": tamper, "enforcement": enf})
+	n := 0
+	for _, r := range a.Reverted {
+		if r.Tamper {
+			n++
+			b.Add(a.To-10*time.Millisecond, run.RecTamperEvent, map[string]any{"id": fmt.Sprintf("%s/tamper-%d", a.ID, n), "attempt": a.ID,
+				"path": r.Path, "class": r.Class, "change": r.Change, "reverted": true, "acknowledged": false})
+		}
+	}
+	var events bytes.Buffer
+	enc := json.NewEncoder(&events)
+	_ = enc.Encode(agent.Event{Kind: agent.SessionOpened})
+	for _, c := range a.Claims {
+		_ = enc.Encode(agent.Event{Kind: agent.Claim, Text: c})
+	}
+	_ = enc.Encode(agent.Event{Kind: agent.TurnSettled, Exit: a.Exit, Failure: a.Failure})
+	ended := map[string]any{"attempt": a.ID, "events": b.Blob(events.Bytes()), "exit": a.Exit, "failure": a.Failure}
+	if a.Candidate != "" {
+		ended["candidate"] = a.Candidate
+		b.changed[Snapshot+".."+a.Candidate] = a.Changed
+	}
+	b.Add(a.To, run.RecAttemptEnded, ended)
+}
+
+// Test is one expected test's attested disposition.
+type Test struct {
+	Name, Attested, Snapshot string
+}
+
+// Check appends Check n of candidate on Oracle version v, from..to, with
+// the tests' dispositions; its Verdict follows unless the Check reached
+// none (infra set).
+func (b *Builder) Check(n int, candidate string, v int, from, to time.Duration, tests []Test, extra func(*oracle.Result)) {
+	b.Add(from, run.RecCheckStarted, map[string]any{"check": n, "candidate": candidate, "oracle_version": v, "manifest": b.Manifests[v]})
+	res := oracle.Result{Pass: true, Cache: oracle.CacheClone, CacheMs: 210, VisibleMs: (to - from).Milliseconds()}
+	cmd := oracle.Execution{Run: "go test -json ./...", Pass: true, DurationMs: (to - from).Milliseconds()}
+	for _, t := range tests {
+		res.Tests = append(res.Tests, oracle.TestResult{TestID: oracle.TestID{Package: "fx", Name: t.Name}, Attested: t.Attested, Snapshot: t.Snapshot})
+		if t.Attested != "pass" && t.Attested != "skip" {
+			res.Pass, cmd.Pass, cmd.Why = false, false, "exit 1"
+		}
+	}
+	res.Commands = []oracle.Execution{cmd}
+	if extra != nil {
+		extra(&res)
+	}
+	b.Add(to-10*time.Millisecond, run.RecCheckEnded, map[string]any{"check": n, "result": res, "uncontained": true})
+	if res.Infra != "" {
+		return
+	}
+	verdict := "fail"
+	if res.Pass {
+		verdict = "pass"
+	}
+	b.Add(to, run.RecVerdict, map[string]any{"check": n, "verdict": verdict, "candidate": candidate, "oracle_version": v})
+}
+
+// Gate opens node at from and, unless choice is "", records the human's
+// decision at to.
+func (b *Builder) Gate(node string, from, to time.Duration, choice, reason string, tamperIDs ...string) {
+	pins := map[string]any{"gate": node, "attempt": "implement#1", "candidate": "", "oracle_version": 0, "verdicts": []int{1}}
+	b.Add(from, run.RecGateOpened, map[string]any{"pins": pins, "choices": []string{choice}})
+	if choice == "" {
+		return
+	}
+	rec := map[string]any{"pins": pins, "actor": "human", "choice": choice, "reason": reason, "note": ""}
+	if len(tamperIDs) > 0 {
+		rec["tamper_ids"] = tamperIDs
+	}
+	b.Add(to, run.RecGateDecided, rec)
+}
+
+// End records RunEnded with outcome at d.
+func (b *Builder) End(d time.Duration, o run.Outcome, candidate string, why ...string) {
+	b.Add(d, run.RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": candidate})
+}
+
+// Park records RunParked at gate.
+func (b *Builder) Park(d time.Duration, gate string, why ...string) {
+	b.Add(d, run.RecRunParked, map[string]any{"gate": gate, "why": why})
+}
+
+// Deliver records a Delivery.
+func (b *Builder) Deliver(d time.Duration, kind string, files int) {
+	b.Add(d, delivery.RecDelivery, map[string]any{"kind": kind, "files": files, "flag": ""})
+}
+
+func nonNil(w []workspace.Withheld) []workspace.Withheld {
+	if w == nil {
+		return []workspace.Withheld{}
+	}
+	return w
+}
+
+func nonNilMap(m map[string]int) map[string]int {
+	if m == nil {
+		return map[string]int{}
+	}
+	return m
+}
+
+// Candidates the scenarios use.
+const (
+	C1 = "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5"
+	C2 = "5a1bd801f27ab642a46d7c5efe8d105508e4a498"
+)
+
+var ms = time.Millisecond
+
+// Scenario is a named synthetic Run.
+type Scenario struct {
+	Name  string
+	Build func() *Builder
+}
+
+// fastAttempt is the happy-path implementer Attempt: 18 operations
+// pre-authorised, 2 denied.
+func fastAttempt() Attempt {
+	return Attempt{ID: "implement#1", From: 500 * ms, To: 6100 * ms, Candidate: C1, Changed: []string{"add.go"}, Exit: "done",
+		Claims: []string{"fixing Add in add.go", "Done. All tests pass."}, HostRequests: map[string]int{"pre_authorised": 18, "outside_role": 2}}
+}
+
+// Scenarios are one synthetic Run per outcome variant.
+func Scenarios() []Scenario {
+	return []Scenario{
+		{"accepted-fast", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
+			return b
+		}},
+		{"accepted-repaired", func() *Builder {
+			// Standard: the implementer says all tests pass, QA's held-out
+			// test fails, one send-back repairs it.
+			b := New(pipeline.Standard)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 4 * time.Second, Candidate: C1, Changed: []string{"add.go"}, Exit: "done",
+				Claims: []string{"fixing Add in add.go", "Done. All tests pass."}, HostRequests: map[string]int{"pre_authorised": 12}})
+			b.Attempt(Attempt{ID: "verify#1", Role: "verifier", Stage: "verify", From: 4100 * ms, To: 9 * time.Second, Exit: "extended",
+				Claims: []string{"Wrote a held-out test for negative numbers."}, HostRequests: map[string]int{"pre_authorised": 6}})
+			b.Oracle(9100*ms, 1, "verify#1", []oracle.HeldOut{{Test: oracle.TestID{Package: "fx", Name: "TestAddNegatives"}, File: "neg_test.go", Attempt: "verify#1", Criteria: []string{"AC-2"}}}, 0)
+			b.Check(1, C1, 1, 9200*ms, 13*time.Second, []Test{{"TestAdd", "pass", ""}, {"TestAddNegatives", "fail", ""}}, nil)
+			b.Attempt(Attempt{ID: "implement#2", Cause: "send_back", From: 13100 * ms, To: 20 * time.Second, Candidate: C2, Changed: []string{"add.go"}, Exit: "done",
+				Claims: []string{"Handled negative numbers too."}})
+			b.Attempt(Attempt{ID: "verify#2", Role: "verifier", Stage: "verify", Cause: "send_back", From: 20100 * ms, To: 24 * time.Second, Exit: "no_additions"})
+			b.Check(2, C2, 1, 24100*ms, 28*time.Second, []Test{{"TestAdd", "pass", ""}, {"TestAddNegatives", "pass", ""}}, nil)
+			b.End(28100*ms, run.Accepted, C2)
+			return b
+		}},
+		{"accepted-degraded", func() *Builder {
+			// Standard with a reverted, acknowledged test change, a
+			// trust-weakening option, Degraded scope enforcement and
+			// coverage gaps the Snapshot already had.
+			b := New(pipeline.Standard, pipeline.Weakening{Option: "setup network = on", Source: pipeline.FromProject})
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 4 * time.Second, Candidate: C1, Changed: []string{"add.go", "notes/plan.md"}, Exit: "done",
+				Claims: []string{"Fixed Add."}, Enforcement: workspace.Degraded,
+				Reverted: []workspace.Revert{{Path: "add_test.go", Change: "modified", Class: run.ClassOracleTest, Tamper: true}, {Path: ".oge/oge.toml", Change: "modified", Class: run.ClassOgeConfig, Tamper: true}, {Path: "../escape", Change: "added", Class: workspace.ClassSymlinkEscape}}})
+			b.Attempt(Attempt{ID: "verify#1", Role: "verifier", Stage: "verify", From: 4100 * ms, To: 9 * time.Second, Exit: "extended",
+				Withheld: []workspace.Withheld{{Path: "notes/plan.md", Class: workspace.ClassAmbiguous}},
+				Reverted: []workspace.Revert{{Path: "add.go", Change: "modified", Class: "outside_write_scope"}}})
+			b.Oracle(9100*ms, 1, "verify#1", []oracle.HeldOut{
+				{Test: oracle.TestID{Package: "fx", Name: "TestAddNegatives"}, File: "neg_test.go", Criteria: []string{"AC-1"}},
+				{Test: oracle.TestID{Package: "fx", Name: "TestAddOverflow"}, File: "neg_test.go"}}, 1)
+			b.Check(1, C1, 1, 9200*ms, 13*time.Second, []Test{{"TestAdd", "pass", ""}, {"TestAddNegatives", "pass", ""}, {"TestAddOverflow", "pass", ""}, {"TestNeedsTool", "skip", "skip"}},
+				func(r *oracle.Result) {
+					r.Skipped = []string{"fx.TestNeedsTool"}
+					r.NotBuilt = []string{"add_windows_test.go — GOOS=windows only"}
+				})
+			b.Gate("gate.tamper", 13100*ms, 25100*ms, "acknowledge", "the agent tidied a test; reverted is fine", "implement#1/tamper-1", "implement#1/tamper-2")
+			b.End(25200*ms, run.Accepted, C1)
+			return b
+		}},
+		{"rejected", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.Attempt(Attempt{ID: "implement#2", Cause: "send_back", From: 7300 * ms, To: 11 * time.Second, Candidate: C2, Changed: []string{"add.go"}, Exit: "done",
+				Claims: []string{"Fixed it for real this time."}})
+			b.Check(2, C2, 0, 11100*ms, 12*time.Second, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.Gate("gate.bound_exhaustion", 12100*ms, 30100*ms, "reject", "wrong approach")
+			b.End(30200*ms, run.Rejected, C2)
+			return b
+		}},
+		{"overridden", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.Gate("gate.bound_exhaustion", 7300*ms, 19300*ms, "override", "the flaky test is wrong")
+			b.End(19400*ms, run.Overridden, C1)
+			return b
+		}},
+		{"parked", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.Gate("gate.bound_exhaustion", 7300*ms, 0, "", "")
+			b.Park(7400*ms, "gate.bound_exhaustion", "The Check failed and the send-back limit (0) is used up.")
+			return b
+		}},
+		{"cancelled", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.Gate("gate.result", 7300*ms, 9300*ms, "quit", "")
+			b.End(9400*ms, run.Cancelled, C1)
+			return b
+		}},
+		{"infeasible", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 3 * time.Second, Exit: "infeasible", Claims: []string{"This can't be done without changing the API."}})
+			b.End(3100*ms, run.Infeasible, "", "the implementer declared Exit \"infeasible\"")
+			return b
+		}},
+		{"infrastructure-stop", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 6100 * ms, Exit: "", Failure: "timeout"})
+			b.End(6200*ms, run.InfrastructureStop, "", "the implementer Attempt failed: timeout")
+			return b
+		}},
+		{"interrupted", func() *Builder {
+			b := New(pipeline.Standard)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 2 * time.Second, Failure: "interrupted"})
+			b.End(2100*ms, run.InfrastructureStop, "", "interrupted: the Run was cancelled")
+			return b
+		}},
+		{"not-ended", func() *Builder {
+			b := New(pipeline.Standard)
+			b.Add(500*ms, run.RecAttemptStarting, map[string]any{"attempt": "implement#1", "stage": "implement", "role": "implementer", "cause": "first"})
+			return b
+		}},
+		{"accepted-delivered", func() *Builder {
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
+			b.Deliver(60*time.Second, "apply", 1)
+			return b
+		}},
+	}
+}

@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "run": "20261005T090000-a1b2c3",
+  "mode": "Standard",
+  "task": "fix Add",
+  "outcome": "Not ended",
+  "headline": "… Not ended: the Ledger has no end yet (the Run is still going, or Öge stopped mid-Run)",
+  "oracle_version": 0,
+  "checks": [],
+  "protected": {
+    "reverted": []
+  },
+  "scope": {
+    "reverted": [],
+    "qa_discarded": []
+  },
+  "decisions": [],
+  "supervision": {
+    "approved_automatically": 0,
+    "denied": 0,
+    "cancelled": 0,
+    "sent_back": 0,
+    "human_interruptions": 0
+  },
+  "time": {
+    "total_ms": 500,
+    "stages": [
+      {
+        "stage": "preflight",
+        "ms": 400
+      }
+    ],
+    "human_attention_ms": 0
+  },
+  "not_covered": [
+    "No Check reached a Verdict: there is no Evidence on any Candidate"
+  ],
+  "deliveries": [],
+  "ledger_head": "cebb54448ca0418bb43de67616f1ae66de34cc0b7e554e96a94359d64342c484"
+}

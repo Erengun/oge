@@ -83,9 +83,17 @@ var ErrBrokenChain = errors.New("ledger hash chain is broken")
 // Replay reads every record of runDir's Ledger, verifying the chain and the
 // format version.
 func Replay(runDir string) ([]Record, error) {
+	recs, _, err := ReplayHead(runDir)
+	return recs, err
+}
+
+// ReplayHead is Replay that also returns the head: the hex SHA-256 of the
+// last record's line, which the next record's Prev would name. It
+// identifies the Ledger's state; it is no proof the Ledger wasn't rewritten.
+func ReplayHead(runDir string) ([]Record, string, error) {
 	b, err := os.ReadFile(filepath.Join(runDir, LedgerFile))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var recs []Record
 	prev := ""
@@ -95,18 +103,18 @@ func Replay(runDir string) ([]Record, error) {
 		line := append(sc.Bytes(), '\n')
 		var r Record
 		if err := json.Unmarshal(line, &r); err != nil {
-			return recs, fmt.Errorf("record %d: %w", len(recs), err)
+			return recs, prev, fmt.Errorf("record %d: %w", len(recs), err)
 		}
 		if r.Format > Format {
-			return recs, fmt.Errorf("record %d has format %d, newer than this oge reads (%d)", len(recs), r.Format, Format)
+			return recs, prev, fmt.Errorf("record %d has format %d, newer than this oge reads (%d)", len(recs), r.Format, Format)
 		}
 		if r.Seq != len(recs) || r.Prev != prev {
-			return recs, fmt.Errorf("record %d: %w", len(recs), ErrBrokenChain)
+			return recs, prev, fmt.Errorf("record %d: %w", len(recs), ErrBrokenChain)
 		}
 		recs = append(recs, r)
 		prev = hashHex(line)
 	}
-	return recs, sc.Err()
+	return recs, prev, sc.Err()
 }
 
 func hashHex(b []byte) string {

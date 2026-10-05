@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "run": "20261005T090000-a1b2c3",
+  "mode": "Fast",
+  "task": "fix Add",
+  "outcome": "Rejected",
+  "headline": "✗ Not accepted: 1 test still failing (fx.TestAdd) after 1 send-back; you chose \"reject\" at the bound-exhaustion Gate",
+  "candidate": {
+    "commit": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
+    "files_changed": 1,
+    "files": [
+      "add.go"
+    ]
+  },
+  "oracle_version": 0,
+  "checks": [
+    {
+      "check": 1,
+      "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
+      "oracle_version": 0,
+      "verdict": "fail",
+      "tests_passed": 0,
+      "tests_failed": 1,
+      "held_out": 0,
+      "held_out_failed": 0,
+      "failing": [
+        {
+          "test": "fx.TestAdd",
+          "held_out": false
+        }
+      ],
+      "commands": [
+        {
+          "run": "go test -json ./...",
+          "pass": false,
+          "why": "exit 1",
+          "duration_ms": 1000
+        }
+      ],
+      "visible_ms": 1000,
+      "cache": "seeded-clone",
+      "cache_materialise_ms": 210,
+      "uncontained": true
+    },
+    {
+      "check": 2,
+      "candidate": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
+      "oracle_version": 0,
+      "verdict": "fail",
+      "tests_passed": 0,
+      "tests_failed": 1,
+      "held_out": 0,
+      "held_out_failed": 0,
+      "failing": [
+        {
+          "test": "fx.TestAdd",
+          "held_out": false
+        }
+      ],
+      "commands": [
+        {
+          "run": "go test -json ./...",
+          "pass": false,
+          "why": "exit 1",
+          "duration_ms": 900
+        }
+      ],
+      "visible_ms": 900,
+      "cache": "seeded-clone",
+      "cache_materialise_ms": 210,
+      "uncontained": true
+    }
+  ],
+  "protected": {
+    "reverted": []
+  },
+  "scope": {
+    "reverted": [],
+    "qa_discarded": []
+  },
+  "decisions": [
+    {
+      "gate": "gate.bound_exhaustion",
+      "actor": "human",
+      "choice": "reject",
+      "reason": "wrong approach"
+    }
+  ],
+  "supervision": {
+    "approved_automatically": 18,
+    "denied": 2,
+    "cancelled": 0,
+    "sent_back": 1,
+    "human_interruptions": 1
+  },
+  "time": {
+    "total_ms": 30200,
+    "stages": [
+      {
+        "stage": "preflight",
+        "ms": 400
+      },
+      {
+        "stage": "implement",
+        "ms": 9300
+      },
+      {
+        "stage": "Check",
+        "ms": 1880
+      }
+    ],
+    "human_attention_ms": 18000
+  },
+  "claim": {
+    "label": "Claim",
+    "attempt": "implement#2",
+    "exit": "done",
+    "text": "Fixed it for real this time."
+  },
+  "oge_found": [
+    "Check #2 failed on its Candidate 5a1bd80: 1 test failing (fx.TestAdd)"
+  ],
+  "not_covered": [
+    "No independent tests (fast mode): no QA and no held-out tests",
+    "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
+  ],
+  "deliveries": [],
+  "ledger_head": "b1f65d94f653ede87bdce79dbb4d45eb4141f5a8f2ebfc29b355cd9c0db26876"
+}

@@ -1,0 +1,21 @@
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Standard mode
+Result        ✓ Accepted
+Task          fix Add
+Agent claimed "Fixed Add." (Claim, implement#1)
+Öge found     2 protected-file changes reverted: add_test.go, .oge/oge.toml
+Candidate     6d1231d · 2 files changed · Oracle v1
+Checks        Check #1 passed · 3 of 3 Oracle tests attested passing · 2 held out from the implementer
+QA            +2 held-out (1 unmapped)
+Protected     no test changes kept (2 reverted: add_test.go, .oge/oge.toml) · acknowledged
+Scope         1 out-of-scope write reverted: ../escape · 1 discarded write outside QA's scope: add.go
+Decisions     acknowledge at the tamper Gate · reason: the agent tidied a test; reverted is fine
+Handled       0 operations approved automatically · Human interruptions: 1
+Time          25.2s · preflight 400ms · implement 3.5s · QA 4.9s · Check 3.8s · your attention 12s
+Not covered   1 held-out test names no acceptance criterion
+              1 new file QA never saw (no output glob matches): notes/plan.md
+              Oracle tests skipped on the Snapshot and the Candidate (1): fx.TestNeedsTool
+              Oracle test files this machine doesn't build (1): add_windows_test.go — GOOS=windows only
+              trust-weakening option in effect: setup network = on (from .oge/oge.toml)
+              Degraded: Write scope enforcement was Degraded (implement#1)
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        head 1625b1d52f4d · identifies this Receipt; not tamper-proof
