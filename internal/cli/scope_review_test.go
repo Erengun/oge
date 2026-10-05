@@ -117,7 +117,7 @@ func TestRunAgentAttributesCannotRewriteProtectedBlobs(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "add_test.go"), []byte(test))
 	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
 	script := fixScript + "printf 'add_test.go working-tree-encoding=ISO-8859-1\\n' > .gitattributes\n"
-	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended", "--output", ".gitattributes")
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
@@ -218,7 +218,7 @@ for (1..2000) {
   select(undef, undef, undef, 0.001);
 }'
 `
-	code, out, errOut := f.run(t, escaped+fixScript+"ln -s add.go kept\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
+	code, out, errOut := f.run(t, escaped+fixScript+"ln -s add.go kept\n", "fix Add", "--fast", "--agent", "fake", "--unattended", "--output", "kept")
 	dir, committed := raced(t, f, code, out, errOut)
 	if !committed {
 		return

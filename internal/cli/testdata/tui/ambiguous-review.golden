@@ -14,9 +14,9 @@ Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
   Candidate 6d1231d · Attempt implement#1 · Oracle v1 · Verdicts #1
 
 ATTENTION NEEDED: 3 new files need a decision
-    p  promote    promote the selected files, or all: they join the Candidate, …
-    d  drop       drop the selected files, or all: they leave the Candidate, th…
-    i  inspect    show a file's content: i <number>; this decides nothing
+    p  promote    selected/all join the Candidate: fresh QA, then final Check
+    d  drop       selected/all leave the Candidate, then the final Check
+    i  inspect    show a file: i <number> (decides nothing)
     reject        end the Run Rejected (type the word and a reason)
     q  quit       end the Run Cancelled
     p or d alone covers every file; p 1 3 or d 2 covers only those.

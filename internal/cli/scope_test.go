@@ -181,7 +181,7 @@ func TestRunSymlinkEscapeIsRemoved(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(f.repo), "outside")
 	writeFile(t, filepath.Join(outside, "secret.txt"), []byte("host file\n"))
 	script := fixScript + "ln -s '" + outside + "' out\nln -s ../../../.. up\nmkdir -p d && ln -s ../out d/via\nln -s add.go in\n"
-	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended", "--output", "in")
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}

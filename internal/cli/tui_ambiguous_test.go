@@ -19,7 +19,7 @@ func ambiguousRequest() gate.Request {
 		"tmp/result.json":        "{\"ok\": true}\n",
 	}
 	promote, drop := gate.Choices["promote"], gate.Choices["drop"]
-	promote.Says = "selected/all join the Candidate: fresh QA, then the final Check"
+	promote.Says = "selected/all join the Candidate: fresh QA, then final Check"
 	drop.Says = "selected/all leave the Candidate, then the final Check"
 	reject, quit := gate.Choices["reject"], gate.Choices["quit"]
 	reject.Says, quit.Says = "end the Run Rejected (type the word and a reason)", "end the Run Cancelled"

@@ -226,7 +226,7 @@ func TestAmbiguousPromoteAllThenQA(t *testing.T) {
 	t.Logf("stdout:\n%s", out)
 	for _, want := range []string{
 		"1 new file was not covered by the declared output/test globs:", "  1  helper.go",
-		"  p  promote    selected/all join the Candidate: fresh QA, then the final Check",
+		"  p  promote    selected/all join the Candidate: fresh QA, then final Check",
 		"decision   promote · recorded at the Ambiguous-file Gate · helper.go",
 		"resolved   1 promoted · Candidate ",
 		"fresh QA, then the final Check",

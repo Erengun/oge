@@ -88,7 +88,7 @@ func gateSpecs(l pipeline.Limits) map[string]gateSpec {
 		// What and need are worded for its files (ambiguousRequest).
 		gateAmbiguous: {
 			says: map[string]string{
-				"promote": "selected/all join the Candidate: fresh QA, then the final Check",
+				"promote": "selected/all join the Candidate: fresh QA, then final Check",
 				"drop":    "selected/all leave the Candidate, then the final Check",
 				"reject":  "end the Run Rejected (type the word and a reason)",
 				"quit":    "end the Run Cancelled",

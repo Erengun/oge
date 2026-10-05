@@ -256,7 +256,7 @@ func TestApplyNewDeletedAndBinaryFiles(t *testing.T) {
 	gitIn(t, f.repo, "add", "old", "logo.bin")
 	gitIn(t, f.repo, "commit", "-q", "-m", "files")
 	f.statusBefore = gitOut(t, f.repo, "status", "--porcelain")
-	f.accepted(t, fixScript+"rm old/gone.txt\nmkdir -p pkg\necho new > pkg/new.txt\nprintf '\\000\\001\\002new\\377' > logo.bin\nprintf '\\000blob' > fresh.bin\nchmod +x pkg/new.txt\n")
+	f.accepted(t, fixScript+"rm old/gone.txt\nmkdir -p pkg\necho new > pkg/new.txt\nprintf '\\000\\001\\002new\\377' > logo.bin\nprintf '\\000blob' > fresh.bin\nchmod +x pkg/new.txt\n", "--output", "pkg/*", "--output", "*.bin")
 
 	code, patch, _ := f.deliver(t, "diff")
 	for _, want := range []string{"Binary files a/logo.bin and b/logo.bin differ", "Binary files /dev/null and b/fresh.bin differ",
@@ -471,7 +471,7 @@ func TestUnattendedRunOnATerminalOffersNoActionBar(t *testing.T) {
 // bidi overrides. Without a terminal the patch stays exact.
 func TestDiffToATerminalIsAlwaysCleaned(t *testing.T) {
 	f := newRunFixture(t)
-	f.accepted(t, fixScript+`printf 'title \033]0;pwned\007 \342\200\256evil\n' > note.txt`+"\n")
+	f.accepted(t, fixScript+`printf 'title \033]0;pwned\007 \342\200\256evil\n' > note.txt`+"\n", "--output", "note.txt")
 	f.interactive = true
 	for _, c := range []struct {
 		term string
