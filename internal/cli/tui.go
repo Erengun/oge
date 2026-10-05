@@ -90,13 +90,11 @@ func (u *tui) show(ctx context.Context, cancel context.CancelFunc, start startFu
 	}()
 
 	out, opts := u.out, []tea.ProgramOption{tea.WithFPS(tuiFPS), tea.WithoutSignalHandler()}
-	if f, ok := out.(*os.File); ok {
+	if !sized(out) {
 		// A terminal that reports no size would get an empty frame, so it
 		// is drawn as a plain writer at 80x24 instead.
-		if w, h, err := term.GetSize(int(f.Fd())); err != nil || w <= 0 || h <= 0 {
-			out = struct{ io.Writer }{f}
-			opts = append(opts, tea.WithWindowSize(80, 24))
-		}
+		out = struct{ io.Writer }{out}
+		opts = append(opts, tea.WithWindowSize(80, 24))
 	}
 	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
 	p := tea.NewProgram(u.m, opts...)
@@ -111,6 +109,16 @@ func (u *tui) show(ctx context.Context, cancel context.CancelFunc, start startFu
 		u.plain.summary(e.res)
 	}
 	return e.res, e.err
+}
+
+// sized reports whether w is a terminal that knows its size.
+func sized(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	cols, rows, err := term.GetSize(int(f.Fd()))
+	return err == nil && cols > 0 && rows > 0
 }
 
 // queue carries progress from the Run to the view without blocking the
@@ -216,6 +224,7 @@ type model struct {
 
 	expanded   bool
 	cancelling bool
+	still      bool // no spinner ticks: tests draw only on events
 	finished   bool
 
 	width, height int
@@ -246,6 +255,9 @@ func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) 
 }
 
 func (m *model) Init() tea.Cmd {
+	if m.still {
+		return m.waitCmd()
+	}
 	return tea.Batch(m.waitCmd(), tick())
 }
 
