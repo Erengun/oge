@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/workspace"
 )
@@ -68,4 +69,32 @@ func pathText(p string) string {
 		return strconv.Quote(p)
 	}
 	return p
+}
+
+// testConfigWarning is the warning for a Go project that leaves
+// project.test_config empty, or "": the Oracle then doesn't hold go.mod or
+// go.sum, so setup and Candidate code can change what the Check reads.
+//
+// TODO(#41-decision): a warning, not a refusal; Go only, from the
+// Snapshot's root go.mod or go.sum.
+func testConfigWarning(root string, f *pipeline.Frozen) string {
+	if len(f.Project.TestConfig) > 0 {
+		return ""
+	}
+	for _, p := range []string{"go.mod", "go.sum"} {
+		if sf, err := workspace.ReadSnapshotFile(root, p); err == nil && sf.InSnapshot {
+			return "test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads"
+		}
+	}
+	return ""
+}
+
+// withWarning has v's summary show warn.
+func withWarning(v view, warn string) {
+	switch v := v.(type) {
+	case *renderer:
+		v.warn = warn
+	case *tui:
+		v.plain.warn = warn
+	}
 }

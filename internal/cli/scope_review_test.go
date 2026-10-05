@@ -205,3 +205,24 @@ for (1..2000) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
+
+const wantTestConfigWarning = "! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads"
+
+// A Go project with no test_config is warned, in the dry run and in the
+// Run's summary; once test_config is set, it isn't.
+func TestRunWarnsWhenTestConfigIsEmpty(t *testing.T) {
+	f := newRunFixture(t)
+	for _, args := range [][]string{{"--dry-run"}, nil} {
+		code, out, errOut := f.run(t, fixScript, append([]string{"fix Add", "--fast", "--agent", "fake", "--unattended"}, args...)...)
+		if code != ExitOK || !strings.Contains(out, wantTestConfigWarning) {
+			t.Fatalf("%v: exit %d\nstdout:\n%s\nstderr:\n%s", args, code, out, errOut)
+		}
+	}
+	f.useConfig(t, cfgGoModProtected)
+	for _, args := range [][]string{{"--dry-run"}, nil} {
+		_, out, _ := f.run(t, fixScript, append([]string{"fix Add", "--fast", "--agent", "fake", "--unattended"}, args...)...)
+		if strings.Contains(out, "test_config is empty") {
+			t.Errorf("%v: warned with test_config set:\n%s", args, out)
+		}
+	}
+}

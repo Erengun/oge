@@ -72,7 +72,9 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	defer cancel()
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
-	res, err := selectView(env, f, t, frozen).show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
+	v := selectView(env, f, t, frozen)
+	withWarning(v, testConfigWarning(root, frozen))
+	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		return run.Start(ctx, run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 			State: state, Version: env.Version, Getenv: env.Getenv, CheckGoCache: env.CheckGoCache, Observe: observe,
@@ -162,6 +164,7 @@ type renderer struct {
 	w       io.Writer
 	verbose bool
 	frozen  *pipeline.Frozen
+	warn    string // shown with the summary
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
@@ -387,6 +390,9 @@ func (r *renderer) summary(res *run.Result) {
 		}
 		// TODO(#63): the Receipt replaces these lines.
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
+		if r.warn != "" {
+			r.p("! %s", r.warn)
+		}
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")
