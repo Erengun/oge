@@ -108,6 +108,10 @@ Run flags:
   --output <glob>          add an output glob for this Run
   --unattended             never prompt
   -v                       show the event stream
+
+Environment:
+  OGE_STATE_DIR            where Öge keeps private Run state (default
+                           $XDG_STATE_HOME/oge, or the platform's state dir)
 `
 
 // Main runs oge with args (without the program name) and returns the exit

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -84,6 +85,9 @@ func TestBlobsAreContentAddressed(t *testing.T) {
 }
 
 func TestStateRootRefusals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TMPDIR isn't the system temp directory on Windows")
+	}
 	base := t.TempDir()
 	repo := filepath.Join(base, "repo")
 	os.MkdirAll(repo, 0o755)

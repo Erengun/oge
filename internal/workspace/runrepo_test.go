@@ -118,10 +118,23 @@ func TestPreflightRefusals(t *testing.T) {
 	write(t, filepath.Join(merge, ".git", "MERGE_HEAD"), "0000000000000000000000000000000000000000\n")
 	bisect := newRepo(t)
 	write(t, filepath.Join(bisect, ".git", "BISECT_LOG"), "\n")
+	pick := newRepo(t)
+	write(t, filepath.Join(pick, ".git", "CHERRY_PICK_HEAD"), strings.Repeat("0", 40)+"\n")
+	rebase := newRepo(t)
+	os.MkdirAll(filepath.Join(rebase, ".git", "rebase-merge"), 0o755)
+	unmerged := newRepo(t)
+	blob := strings.TrimSpace(gitT(t, unmerged, "hash-object", "-w", "a.txt"))
+	gitT(t, unmerged, "update-index", "--force-remove", "a.txt")
+	cmd := exec.Command("git", "-C", unmerged, "update-index", "--index-info")
+	cmd.Stdin = strings.NewReader("100644 " + blob + " 1\ta.txt\n100644 " + blob + " 2\ta.txt\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
 	sub := newRepo(t)
 	gitT(t, sub, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("1", 40)+",vendor/lib")
 
-	for repo, want := range map[string]string{lfs: "Git LFS", merge: "a merge", bisect: "a bisect", sub: "submodules"} {
+	for repo, want := range map[string]string{lfs: "Git LFS", merge: "a merge", bisect: "a bisect", sub: "submodules",
+		pick: "a cherry-pick", rebase: "a rebase", unmerged: "unmerged"} {
 		why, err := Preflight(repo)
 		if err != nil || len(why) == 0 || !strings.Contains(strings.Join(why, ";"), want) {
 			t.Errorf("want %q, got %v %v", want, why, err)
