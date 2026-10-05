@@ -14,7 +14,7 @@ import (
 // ProfileVersion versions the Launch profile: its flags, environment
 // lists, policy JSON and pre-authorised operations. Bump it with any change
 // to them, so the profile hash recorded with each decision changes too.
-const ProfileVersion = 2
+const ProfileVersion = 3
 
 // MinVersion is the oldest claude this adapter supports; LastTested is the
 // newest it was tested against (#35). A newer one only warns.
@@ -27,6 +27,10 @@ const (
 // keep the model from reaching for find and grep through Bash, which the
 // policy doesn't pre-authorise.
 var implementerTools = []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
+
+// verifierTools is the verifier's: the same tools, which its policy
+// confines to reading and to creating new test files (spec #35).
+var verifierTools = []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
 
 // stripEnv are the session markers removed from the child environment
 // (ADR-0006): exact names, never a prefix, except CLAUDE_CODE_REMOTE*.
@@ -69,9 +73,14 @@ func profileFor(role string) (profile, error) {
 	switch role {
 	case "implementer":
 		return profile{role: role, tools: implementerTools}, nil
+	case "verifier":
+		// A one-shot, fresh Session like every MVP Session; its envelope
+		// fails closed on injected context and residue (envelope.go).
+		// TODO(#46-decision): the Write scope is Öge's policy (Write and
+		// Edit only on new files matching the test globs) plus the
+		// revert after the Attempt, not native Edit(<glob>) allow rules.
+		return profile{role: role, tools: verifierTools}, nil
 	}
-	// TODO(#46): the verifier's profile (test-glob allow rules, an absolute
-	// deny-list) comes with the verifier Stage.
 	return profile{}, fmt.Errorf("claude adapter: no Launch profile for the %s role yet", role)
 }
 

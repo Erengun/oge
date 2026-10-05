@@ -1,0 +1,11 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
+
+✓ preflight  ok · 0.4s
+✓ implement  claude · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+⠸ QA         Fresh Claude · reviewing · 1.9s
+  ⎿ Write neg_test.go
+· check      go test -json ./...
+
+Nothing needs you.
+ctrl+c to cancel

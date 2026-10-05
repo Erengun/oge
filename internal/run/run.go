@@ -1,7 +1,8 @@
 // Package run is the orchestrator: Preflight, the Run's private state, and
-// the walk of the frozen graph. So far it walks Fast mode: implementer →
-// Check, the send-back loop and the Gates it reaches (ADR-0019), writing
-// every step ahead to the Ledger (ADR-0012).
+// the walk of the frozen graph. It walks Fast mode (implementer → Check)
+// and Standard mode (implementer → fresh verifier → Check), the send-back
+// loop and the Gates they reach (ADR-0019), writing every step ahead to
+// the Ledger (ADR-0012).
 package run
 
 import (
@@ -53,6 +54,7 @@ const (
 	RecAttemptStarting   = "AttemptStarting"
 	RecProcessStarted    = "ProcessStarted"
 	RecObservation       = "Observation"
+	RecBriefingManifest  = "BriefingManifest"
 	RecAttemptEnded      = "AttemptEnded"
 	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
@@ -95,7 +97,7 @@ const (
 	EvAgent                      // an agent's normalised event during an Attempt
 	EvAttempt                    // an Attempt ended
 	EvCheck                      // a Check ended with a Verdict
-	EvSendBack                   // the Candidate goes back to the implementer
+	EvSendBack                   // the Candidate goes back to the implementer; Decision is set when a Gate sent it
 	EvDecided                    // a Gate decision is recorded
 	EvNotice                     // something the user is told once, in Notice
 )
@@ -113,12 +115,17 @@ type Event struct {
 	Gate     *gate.Request
 	Decision *gate.Decision
 	Notice   string
+	// EvCheck in Standard mode: one line per failing held-out test, its
+	// name and first failure message. For the human's terminal only: the
+	// implementer never gets them (ADR-0009).
+	Issues []string
 }
 
 // Attempt is one execution of a Stage.
 type Attempt struct {
 	ID      string
 	Stage   string
+	Role    string
 	Cause   string // first | send_back
 	Agent   string
 	Exit    string
@@ -134,6 +141,10 @@ type Attempt struct {
 	// FirstActivity is the time from launch to the agent's first visible
 	// activity (ADR-0022); zero when it showed none.
 	FirstActivity time.Duration
+	// Envelope is the startup envelope check's status ("ok", "warn").
+	Envelope string
+	// QA is set on a verifier Attempt: what it added to the Oracle.
+	QA *QA
 }
 
 // Result is what a Run ended with.
@@ -155,6 +166,8 @@ type Result struct {
 	// ended it.
 	Gate     string
 	Decision *gate.Decision
+	// QA is the latest verifier Attempt's, in Standard mode.
+	QA *QA
 }
 
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
@@ -172,17 +185,32 @@ const interrupted = "interrupted: the Run was cancelled"
 // ErrNoAdapter means the Stage's agent has no adapter in this build.
 var ErrNoAdapter = errors.New("no adapter")
 
-// Start runs a Fast-mode Run until it ends or parks. An error means Öge itself
-// failed; the Run's Ledger then ends without RunEnded.
+// Start runs a Fast or Standard Run until it ends or parks. An error means
+// Öge itself failed; the Run's Ledger then ends without RunEnded.
 func Start(ctx context.Context, p Params) (*Result, error) {
 	f := p.Frozen
-	if f.Mode != pipeline.Fast {
-		return nil, fmt.Errorf("%s mode needs a verifier, which isn't built yet", f.Mode)
+	if f.Mode == pipeline.Blind {
+		// TODO(#52): verify = "before".
+		return nil, fmt.Errorf("blind mode isn't built yet")
 	}
-	impl := f.Stages[0]
+	var impl, ver pipeline.Stage
+	for _, s := range f.Stages {
+		switch s.Role {
+		case "implementer":
+			impl = s
+		case "verifier":
+			ver = s
+		}
+	}
 	adapter := p.Agents[impl.Agent]
 	if adapter == nil {
 		return nil, fmt.Errorf("%w for %s", ErrNoAdapter, impl.Agent)
+	}
+	var verifier agent.Adapter
+	if f.Mode == pipeline.Standard {
+		if verifier = p.Agents[ver.Agent]; verifier == nil {
+			return nil, fmt.Errorf("%w for %s", ErrNoAdapter, ver.Agent)
+		}
 	}
 
 	if p.Observe == nil {
@@ -322,7 +350,14 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
 	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
+	// The implementer's protected set is Oracle v0's: held-out tests never
+	// enter its Workspace (ADR-0009).
 	scope := implementerScope(m, f)
+	var qa *qaStage
+	if verifier != nil {
+		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
+			snap: snap, workDir: workDir, m: m, mBlob: mBlob}
+	}
 	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
 	for check := 1; ; check++ {
 		w.attempts++
@@ -350,6 +385,21 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// A Tamper event stays unacknowledged for the rest of the Run,
 		// whatever later Attempts do (ADR-0019 #2).
 		w.addTamper(a)
+
+		// QA: a fresh verifier on the Promoted view of the Candidate adds
+		// held-out tests to a new Oracle version (ADR-0009, ADR-0010).
+		if qa != nil {
+			s, err := qa.review(ctx, w, res, a)
+			if err != nil {
+				return nil, err
+			}
+			if s.stop != "" {
+				res.Gate = s.gate
+				return end(s.stop, s.why...)
+			}
+			m, mBlob = qa.m, qa.mBlob
+			res.Oracle = m.Version
+		}
 
 		// The Check, from the cache seed once it is warm. A cancelled Run
 		// never reaches a Verdict: the Check it killed didn't fail.
@@ -393,7 +443,11 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		w.check = check
-		p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
+		ev := Event{Kind: EvCheck, Result: res, Check: cr}
+		if qa != nil {
+			ev.Issues = issues(m, cr, blobs)
+		}
+		p.Observe(ev)
 
 		// TODO(#47, #48): failing own tests and Ambiguous files become
 		// conditions here.
@@ -418,9 +472,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		d := s.decision
 		// A send-back Attempt, from the Candidate it sends back.
 		w.sendBacks++
-		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks})
+		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks, Decision: d})
 		next = attemptSpec{n: next.n + 1, cause: "send_back", start: a.Candidate,
-			extra: sendBackTurn(cr, blobs, d), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
+			extra: sendBackTurn(cr, blobs, d, m), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
 		if err := repo.Checkout(a.Candidate, next.ws); err != nil {
 			return nil, err
 		}
@@ -437,6 +491,14 @@ type attemptSpec struct {
 	start string // the revision its Workspace holds
 	extra string // what the Briefing adds: why the Candidate came back
 	ws    string
+
+	// A verifier Attempt sets these.
+	brief      string   // the whole Briefing
+	base       string   // what its scope check compares with (the Snapshot when empty)
+	writeGlobs []string // its Write scope: new files matching these
+	collect    bool     // no Candidate: the caller collects the Workspace
+	view       string   // the Promoted view it works on
+	withheld   []workspace.Withheld
 }
 
 // implement runs one implementer Attempt: AttemptStarting before the
@@ -444,7 +506,7 @@ type attemptSpec struct {
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
 	adapter agent.Adapter, stage pipeline.Stage, runID, snap string, at attemptSpec, protected func(string) string) (*Attempt, error) {
-	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Agent: stage.Agent, Cause: at.cause}
+	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Role: stage.Role, Agent: stage.Agent, Cause: at.cause}
 	ws := at.ws
 	instructions, err := repoInstructions(repo, snap)
 	if err != nil {
@@ -463,17 +525,21 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	spec := agent.LaunchSpec{
 		Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network, RunID: runID,
 		RepoInstructions: instructions, CheckCommands: checks, DenyRead: []string{p.State.Private}, Cache: cache,
+		WriteGlobs: at.writeGlobs,
 	}
 	// TODO(#44): a send-back Attempt may continue the implementer's
 	// Session; every Attempt is a fresh one for now, briefed again with
 	// why its Candidate came back.
-	brief := briefing.Implementer(p.Task, checks) + at.extra
+	brief := at.brief
+	if brief == "" {
+		brief = briefing.Implementer(p.Task, checks) + at.extra
+	}
 	briefingBlob, err := blobs.Put([]byte(brief))
 	if err != nil {
 		return nil, err
 	}
 	if err := l.Append(RecAttemptStarting, map[string]any{
-		"attempt": a.ID, "stage": stage.Name, "cause": at.cause, "start_revision": at.start, "session": "fresh",
+		"attempt": a.ID, "stage": stage.Name, "role": stage.Role, "cause": at.cause, "start_revision": at.start, "session": "fresh",
 		"launch_profile": map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network},
 		"briefing":       briefingBlob, "repo_instructions": instructions != "",
 	}); err != nil {
@@ -522,6 +588,7 @@ loop:
 					if r := ev.Session.Residue; r != nil {
 						obs["residue"] = r
 					}
+					a.Envelope = ev.Session.Envelope
 					if err := l.Append(RecObservation, obs); err != nil {
 						return nil, err
 					}
@@ -579,13 +646,20 @@ loop:
 	}
 	// The scope check runs after every Attempt whose agent ran, failed or
 	// not, and before the Candidate is committed.
-	if err := enforceScope(l, blobs, repo, a, snap, ws, protected); err != nil {
+	base := snap
+	if at.base != "" {
+		base = at.base
+	}
+	if err := enforceScope(l, blobs, repo, a, base, ws, protected); err != nil {
 		return nil, err
 	}
-	if a.Failure == "" && a.Stop == "" {
+	if a.Failure == "" && a.Stop == "" && !at.collect {
 		if err := commitCandidate(l, repo, a, snap, at.start, fmt.Sprintf("c%d", at.n), ws, protected); err != nil {
 			return nil, err
 		}
+	}
+	if err := l.Append(RecBriefingManifest, briefingManifest(p, a, at, brief, instructions)); err != nil {
+		return nil, err
 	}
 	ended := map[string]any{"attempt": a.ID, "events": streamBlob, "exit": a.Exit, "failure": a.Failure}
 	if a.Stop != "" {

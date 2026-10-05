@@ -179,6 +179,11 @@ func (p *policy) shape(sh shape, args []word) verdict {
 		}
 	}
 	write := sh.writes != nil && sh.writes(flags)
+	if write && p.writeGlobs != nil {
+		// The verifier writes only new test files, never through a
+		// command (gofmt -w, go build -o).
+		return vOutside
+	}
 	for _, path := range paths {
 		v = worst(v, p.path(path, write))
 	}

@@ -1,0 +1,62 @@
+exit: 0
+--- stdout
+Dry run: nothing was started.
+
+Task       Rate-limit /api/login
+Criteria   AC-1  After 5 failed logins for one account within 15 minutes, further attempts get HTTP 429.
+           AC-2  A successful login clears that account's failure count.
+
+Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
+Config     .oge/oge.toml from the Snapshot, schema 1
+Pipeline   default (frozen, compiled graph 605090a522b3)
+           implement ─▶ verify (after) ─▶ Check
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
+           edges, in precedence order (the first that holds is taken):
+             implement              ─▶ implement              on attempt_failure · bound retries
+             verify                 ─▶ verify                 on attempt_failure · bound retries
+             implement              ─▶ verify                 on exit:done
+             implement              ─▶ gate.infeasible        on exit:infeasible
+             verify                 ─▶ check                  on exit:extended
+             verify                 ─▶ check                  on exit:no_additions
+             verify                 ─▶ gate.infeasible        on exit:conflicts_with_oracle
+             verify                 ─▶ gate.oracle_growth     on limit:oracle_growth
+             check                  ─▶ implement              on verdict:fail · bound send_backs
+             check                  ─▶ gate.bound_exhaustion  on verdict:fail+limit:send_backs
+             check                  ─▶ implement              on verdict:pass+own_tests:fail · bound send_backs
+             check                  ─▶ gate.own_test_failure  on verdict:pass+own_tests:fail+limit:send_backs
+             check                  ─▶ gate.tamper            on verdict:pass+tamper_event
+             check                  ─▶ gate.ambiguous_file    on verdict:pass+ambiguous_files
+             check                  ─▶ end                    on verdict:pass · Accepted
+             gate.tamper            ─▶ check                  on choice:acknowledge
+             gate.tamper            ─▶ end                    on choice:reject · Rejected
+             gate.tamper            ─▶ end                    on choice:quit · Cancelled
+             gate.infeasible        ─▶ end                    on choice:infeasible · Infeasible
+             gate.infeasible        ─▶ implement              on choice:send back · bound send_backs
+             gate.infeasible        ─▶ end                    on choice:reject · Rejected
+             gate.infeasible        ─▶ end                    on choice:quit · Cancelled
+             gate.bound_exhaustion  ─▶ implement              on choice:send back
+             gate.bound_exhaustion  ─▶ end                    on choice:reject · Rejected
+             gate.bound_exhaustion  ─▶ end                    on choice:quit · Cancelled
+             gate.oracle_growth     ─▶ end                    on choice:reject · Rejected
+             gate.oracle_growth     ─▶ end                    on choice:quit · Cancelled
+             gate.own_test_failure  ─▶ implement              on choice:send back
+             gate.own_test_failure  ─▶ end                    on choice:override · Overridden
+             gate.own_test_failure  ─▶ end                    on choice:reject · Rejected
+             gate.own_test_failure  ─▶ end                    on choice:quit · Cancelled
+             gate.ambiguous_file    ─▶ verify                 on choice:promote
+             gate.ambiguous_file    ─▶ check                  on choice:drop
+             gate.ambiguous_file    ─▶ end                    on choice:reject · Rejected
+             gate.ambiguous_file    ─▶ end                    on choice:quit · Cancelled
+  implement  claude         network off   (installed)
+  verify     claude         network off   fresh Session every Attempt   (inherits implement)
+  Check      go test -json ./...   go-test-json · timeout 5m · network off   (project)
+  tests      **/*_test.go  testdata/**
+  output     internal/**/*.go
+  setup      go mod download   network on
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 3 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+
+! Trust-weakening options in effect
+!   setup network = on       from .oge/oge.toml   (setup = "go mod download")
+
+Valid. A Run would start from here.
+--- stderr

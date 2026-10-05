@@ -81,6 +81,22 @@ func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal s
 		}
 		injected = append(injected, "MCP servers: "+strings.Join(names, ", "))
 	}
+	if r := residueOf(in); r != nil && e.role == "verifier" {
+		// Residue a judged role can't be kept from: plugins, skills and
+		// subagents may carry instructions, so the verifier fails closed
+		// (ADR-0009). For other roles it is recorded and shown once.
+		// TODO(#46-decision): no allowlist, not even for @builtin plugins.
+		var parts []string
+		for _, x := range []struct {
+			what string
+			l    []string
+		}{{"plugins", r.Plugins}, {"skills", r.Skills}, {"subagents", r.Agents}} {
+			if len(x.l) > 0 {
+				parts = append(parts, fmt.Sprintf("%d %s", len(x.l), x.what))
+			}
+		}
+		fatals = append(fatals, "the verifier would load "+strings.Join(parts, ", ")+" that Öge can't remove (residue "+r.Fingerprint+")")
+	}
 	if len(injected) > 0 {
 		msg := "unexpected context in the agent's startup envelope: " + strings.Join(injected, "; ")
 		if e.role == "verifier" {

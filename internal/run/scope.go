@@ -74,7 +74,13 @@ func implementerScope(m *oracle.Manifest, f *pipeline.Frozen) func(string) strin
 // every Tamper event found reaches the Ledger either way.
 func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo, a *Attempt, snap, ws string,
 	protected func(string) string) error {
-	s, err := repo.CheckScope(ws, snap, workspace.ScopeRules{Protected: protected, Put: blobs.Put})
+	rules := workspace.ScopeRules{Protected: protected, Put: blobs.Put}
+	if a.Role == "verifier" {
+		// Not a judged role: a write outside its scope is an ordinary
+		// violation, discarded and recorded, never a Tamper event (spec #35).
+		rules.Tamper = func(string) bool { return false }
+	}
+	s, err := repo.CheckScope(ws, snap, rules)
 	if err != nil {
 		a.Failure = failAttempt(a.Failure, "scope_check_failed: "+err.Error())
 		return nil
@@ -82,7 +88,7 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 	// TODO(#44): an adapter that enforces paths natively reports them, and
 	// those paths are native-enforced. The fake enforces nothing.
 	if err := l.Append(RecScopeObserved, map[string]any{
-		"attempt": a.ID, "role": "implementer", "state": "planned", "compared": s.Compared,
+		"attempt": a.ID, "role": a.Role, "state": "planned", "compared": s.Compared,
 		"reverted": nonNil(s.Reverts), "tamper": s.Tamper(), "enforcement": workspace.RevertOnly,
 	}); err != nil {
 		return err

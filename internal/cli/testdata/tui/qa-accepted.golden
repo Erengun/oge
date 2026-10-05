@@ -1,0 +1,18 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
+
+✓ preflight  ok · 0.4s
+✓ implement  claude · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+✓ QA         Fresh Claude · Exit extended · +2 held-out · 2.9s
+✗ check      go test -json ./... · 3 ran · 2 failed: TestAddNegatives, TestAddO…
+             QA found 2 issues
+             · TestAddNegatives: Add(-2, 1) = 0, want -1
+             · TestAddOverflow: Add(max, 1) didn't wrap
+↻ send back  1 of 3 · Repairing automatically…
+✓ implement  claude · Exit done · Candidate 77aa31d · 1 file changed · 3.8s
+✓ QA         Fresh Claude · Exit no_additions · 2.0s
+✓ check      go test -json ./... · 3 ran · 0 failed · pass · 1s
+
+ACCEPTED   Candidate 77aa31d · Oracle v1 · 7.3s
+Not covered Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges
+Nothing was written to your repository.

@@ -191,7 +191,7 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	case run.EvCheck:
 		m.stage = "check"
 	case run.EvSendBack:
-		m.stage, m.text = "send back", sendBackText(ev)
+		m.stage, m.text = "send back", sendBackText(ev, f)
 	case run.EvDecided:
 		m.stage, m.text = "decision", decidedText(ev)
 	}
@@ -203,7 +203,9 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	case run.EvAgent:
 		// Only what the agent says it's doing; the Session and Exit
 		// bookkeeping stays in -v (ADR-0019).
-		m.step, _ = activityStep(ev.Agent)
+		if ev.Attempt.Role != "verifier" || qaStep(ev.Agent) {
+			m.step, _ = activityStep(ev.Agent)
+		}
 	case run.EvNotice:
 		m.step = "note: " + clean(ev.Notice)
 	case run.EvAttempt:
@@ -211,9 +213,16 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		if s := scopeText(ev.Attempt); s != "" {
 			m.sub = []string{"scope " + s}
 		}
-		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Stop != "" || ev.Attempt.Exit != "done"
+		if ev.Attempt.Role == "verifier" {
+			m.text, m.sub = qaText(ev.Attempt), nil
+			if s := qaScopeText(ev.Attempt); s != "" {
+				m.sub = []string{"scope " + s}
+			}
+		}
+		m.fail = ev.Attempt.Failure != "" || ev.Attempt.Stop != "" || (ev.Attempt.Role != "verifier" && ev.Attempt.Exit != "done")
 	case run.EvCheck:
 		lines := checkLines(ev.Check)
+		lines = append(lines, issueLines(ev.Issues)...)
 		if len(lines) > 0 {
 			m.text, m.sub = lines[0], lines[1:]
 		}
@@ -274,11 +283,19 @@ func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) 
 		if f.Mode == pipeline.Fast && s.Role != "implementer" {
 			continue
 		}
-		m.stages = append(m.stages, stage{name: s.Name, text: s.Agent})
+		m.stages = append(m.stages, m.stageFor(s))
 	}
 	m.stages = append(m.stages, stage{name: "check", text: m.checkText()})
 	m.stages[0].state, m.stages[0].start = running, now()
 	return m
+}
+
+// stageFor is a frozen Stage as the view lists it before it runs.
+func (m *model) stageFor(s pipeline.Stage) stage {
+	if s.Role == "verifier" {
+		return stage{name: s.Name, text: reviewingText(s.Agent)}
+	}
+	return stage{name: s.Name, text: s.Agent}
 }
 
 // checkText is the Check's line before it runs: its commands.
@@ -467,7 +484,7 @@ func (m *model) render() string {
 	add(st.dim(m.head))
 	add("")
 	for i, s := range m.stages {
-		name := fmt.Sprintf("%-10s", s.name)
+		name := fmt.Sprintf("%-10s", stageLabel(s.name, m.frozen))
 		switch s.state {
 		case pending:
 			text := s.text

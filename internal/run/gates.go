@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/erengun/oge/internal/briefing"
 	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
@@ -293,11 +297,10 @@ func (w *walk) open(ctx context.Context, r gate.Request) (gate.Decision, error) 
 }
 
 // sendBackTurn is what a send-back adds to the implementer's Briefing:
-// why the Candidate came back.
-// TODO(#44): Öge's Briefing builder takes this over. In Fast mode the
-// whole Oracle is visible, so its failure output may reach the
-// implementer; held-out output never may.
-func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision) string {
+// why the Candidate came back. Visible failures go back in full; held-out
+// ones only as a count plus criterion ids (ADR-0009).
+// TODO(#44): Öge's Briefing builder takes this over.
+func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision, m *oracle.Manifest) string {
 	var b strings.Builder
 	b.WriteString("\n\n---\nÖge sent your Candidate back.")
 	if d != nil {
@@ -308,23 +311,110 @@ func sendBackTurn(cr *oracle.Result, blobs *ledger.Blobs, d *gate.Decision) stri
 	}
 	if cr != nil && !cr.Pass {
 		b.WriteString("\nÖge's Check failed on it:\n")
-		b.WriteString(failureOutput(cr, blobs))
+		b.WriteString(failureOutput(cr, blobs, newHeldOutFilter(m, cr)))
 	}
 	return b.String()
+}
+
+// heldOutFilter keeps held-out tests out of what the implementer is told:
+// their names, files, source, assertions and output (ADR-0009).
+type heldOutFilter struct {
+	names   map[string]bool // held-out tests' names
+	words   *regexp.Regexp  // names and file base names a line must not mention
+	failing [][]string      // each failing held-out test's criterion ids
+	dropped bool            // some output was withheld
+}
+
+// newHeldOutFilter is nil when the Oracle has no held-out tests, so a
+// Fast-mode send-back is exactly what it was.
+func newHeldOutFilter(m *oracle.Manifest, cr *oracle.Result) *heldOutFilter {
+	if m == nil || len(m.HeldOut) == 0 {
+		return nil
+	}
+	f := &heldOutFilter{names: map[string]bool{}}
+	files := map[string]bool{}
+	for _, h := range m.HeldOut {
+		f.names[h.Test.Name] = true
+		files[path.Base(h.File)] = true
+	}
+	var alts []string
+	for n := range f.names {
+		alts = append(alts, regexp.QuoteMeta(n))
+	}
+	for n := range files {
+		alts = append(alts, regexp.QuoteMeta(n))
+	}
+	sort.Strings(alts)
+	// Whole words: a held-out TestNeg never hides a visible TestNegate.
+	f.words = regexp.MustCompile(`(^|[^\pL\pN_])(` + strings.Join(alts, "|") + `)($|[^\pL\pN_])`)
+	for _, h := range m.HeldOutFailures(cr) {
+		f.failing = append(f.failing, h.Criteria)
+	}
+	return f
+}
+
+// mentions reports whether s names a held-out test or file.
+func (f *heldOutFilter) mentions(s string) bool {
+	return f.words.MatchString(s)
+}
+
+// text drops the lines of s that name a held-out test or file.
+func (f *heldOutFilter) text(s string) string {
+	var keep []string
+	for _, line := range strings.SplitAfter(s, "\n") {
+		if f.mentions(line) {
+			f.dropped = true
+			continue
+		}
+		keep = append(keep, line)
+	}
+	return strings.Join(keep, "")
+}
+
+// goTest is the visible tests' and the package's own output text: every
+// line a held-out test printed, or that names one, is left out.
+func (f *heldOutFilter) goTest(raw []byte) []byte {
+	var out bytes.Buffer
+	for _, ol := range oracle.SplitGoTestOutput(raw) {
+		if f.names[ol.Test.Name] || f.mentions(ol.Text) {
+			if ol.Test.Name == "" {
+				f.dropped = true
+			}
+			continue
+		}
+		out.WriteString(ol.Text)
+	}
+	return out.Bytes()
 }
 
 // failureTail bounds each command's output in a send-back turn.
 const failureTail = 4 << 10
 
 // failureOutput is what failed in a Check: each failing command, its
-// failed tests and the tail of its output.
-func failureOutput(cr *oracle.Result, blobs *ledger.Blobs) string {
+// failed tests and the tail of its output. With held-out tests in the
+// Oracle, hf keeps them out of it and adds their count and criteria.
+func failureOutput(cr *oracle.Result, blobs *ledger.Blobs, hf *heldOutFilter) string {
 	var b strings.Builder
 	if cr.Setup != nil && !cr.Setup.Pass {
 		fmt.Fprintf(&b, "- setup %q failed (%s)\n", cr.Setup.Run, cr.Setup.Why)
 	}
-	if cr.Why != "" {
-		fmt.Fprintf(&b, "- %s\n", cr.Why)
+	switch why := cr.Why; {
+	case why == "":
+	case hf != nil && len(cr.Missing) > 0:
+		// The Oracle tests that never passed, minus the held-out ones.
+		var visible []string
+		for _, id := range cr.Missing {
+			if !hf.mentions(id) {
+				visible = append(visible, id)
+			}
+		}
+		if len(visible) > 0 {
+			fmt.Fprintf(&b, "- Oracle tests that never passed (%d): %s\n", len(visible), strings.Join(visible, ", "))
+		}
+	case hf != nil && hf.mentions(why):
+		b.WriteString("- the Check failed on a held-out test path\n")
+	default:
+		fmt.Fprintf(&b, "- %s\n", why)
 	}
 	for _, e := range cr.Commands {
 		if e.Pass {
@@ -332,7 +422,18 @@ func failureOutput(cr *oracle.Result, blobs *ledger.Blobs) string {
 		}
 		fmt.Fprintf(&b, "- %s: %s\n", e.Run, e.Why)
 		if e.Report != nil && len(e.Report.FailedTests) > 0 {
-			fmt.Fprintf(&b, "  failed tests: %s\n", strings.Join(e.Report.FailedTests, ", "))
+			failed := e.Report.FailedTests
+			if hf != nil {
+				failed = nil
+				for _, t := range e.Report.FailedTests {
+					if top, _, _ := strings.Cut(t, "/"); !hf.names[top] {
+						failed = append(failed, t)
+					}
+				}
+			}
+			if len(failed) > 0 {
+				fmt.Fprintf(&b, "  failed tests: %s\n", strings.Join(failed, ", "))
+			}
 		}
 		for _, o := range []oracle.Output{e.Stdout, e.Stderr} {
 			if o.Blob == "" {
@@ -342,8 +443,14 @@ func failureOutput(cr *oracle.Result, blobs *ledger.Blobs) string {
 			if err != nil {
 				continue
 			}
-			if e.Report != nil && e.Report.Format == oracle.ReportGoTestJSON {
+			switch {
+			case hf != nil && e.Report != nil && e.Report.Format == oracle.ReportGoTestJSON && o == e.Stdout:
+				raw = hf.goTest(raw)
+			case e.Report != nil && e.Report.Format == oracle.ReportGoTestJSON:
 				raw = goTestOutput(raw)
+			}
+			if hf != nil {
+				raw = []byte(hf.text(string(raw)))
 			}
 			if len(raw) > failureTail {
 				raw = raw[len(raw)-failureTail:]
@@ -353,6 +460,12 @@ func failureOutput(cr *oracle.Result, blobs *ledger.Blobs) string {
 				b.WriteByte('\n')
 			}
 		}
+	}
+	if hf != nil && len(hf.failing) > 0 {
+		b.WriteString("- " + briefing.HeldOutFeedback(hf.failing) + "\n")
+	}
+	if hf != nil && hf.dropped {
+		b.WriteString("- Some output names held-out tests, so Öge left it out.\n")
 	}
 	return b.String()
 }

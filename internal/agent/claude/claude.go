@@ -739,8 +739,11 @@ func (s *session) assistant(f frame) error {
 	return nil
 }
 
-// Exits the implementer may declare (ADR-0007).
-var implementerExits = []string{"done", "infeasible"}
+// Exits each role may declare (ADR-0007, ADR-0008).
+var (
+	implementerExits = []string{"done", "infeasible"}
+	verifierExits    = []string{"extended", "no_additions", "conflicts_with_oracle"}
+)
 
 func (s *session) result(f frame) {
 	s.emit(agent.Event{Kind: agent.Usage, Text: fmt.Sprintf("%d model turns", f.NumTurns)})
@@ -749,7 +752,7 @@ func (s *session) result(f frame) {
 	s.mu.Unlock()
 	switch {
 	case !f.IsError && f.Subtype == "success":
-		s.settle(agent.Event{Exit: exitOf(f.Result)})
+		s.settle(agent.Event{Exit: exitOf(f.Result, s.env.role)})
 	case interrupted:
 		s.settle(agent.Event{Failure: "interrupted"})
 	case transientErrors[apiErr]:
@@ -764,20 +767,25 @@ func (s *session) result(f frame) {
 }
 
 // exitOf is the Exit a final message declares on its last line, as
-// "Exit: <name>"; done when it declares none.
+// "Exit: <name>": for the implementer done when it declares none, for the
+// verifier "" (Öge then decides from what it added).
 // TODO(#44-decision): Claude declares an Exit in prose, as the Briefing
 // asks; an unknown name counts as none.
-func exitOf(result string) string {
+func exitOf(result, role string) string {
+	exits, none := implementerExits, "done"
+	if role == "verifier" {
+		exits, none = verifierExits, ""
+	}
 	lines := strings.Split(strings.TrimSpace(result), "\n")
 	last := strings.ToLower(strings.TrimSpace(lines[len(lines)-1]))
 	last = strings.Trim(last, "*`_ ")
 	if name, ok := strings.CutPrefix(last, "exit:"); ok {
 		name = strings.Trim(strings.TrimSpace(name), "*`_. ")
-		if oneOf(name, implementerExits) {
+		if oneOf(name, exits) {
 			return name
 		}
 	}
-	return "done"
+	return none
 }
 
 // tail keeps the end of claude's stderr in memory, for a failure's reason.

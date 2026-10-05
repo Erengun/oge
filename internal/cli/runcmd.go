@@ -25,18 +25,15 @@ import (
 // startRun refuses what this build can't run yet, then runs the Task and
 // maps the outcome to its exit code (ADR-0015).
 func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Frozen, cfgData []byte) int {
-	impl := frozen.Stages[0]
 	for _, s := range frozen.Stages {
-		if s.Role == "implementer" {
-			impl = s
+		if env.Agents[s.Agent] == nil {
+			fmt.Fprintf(env.Stderr, "oge: running a Task with %s isn't implemented yet; use --dry-run to see what it would do\n", s.Agent)
+			return ExitRefused
 		}
 	}
-	if env.Agents[impl.Agent] == nil {
-		fmt.Fprintf(env.Stderr, "oge: running a Task with %s isn't implemented yet; use --dry-run to see what it would do\n", impl.Agent)
-		return ExitRefused
-	}
-	if frozen.Mode != pipeline.Fast {
-		fmt.Fprintf(env.Stderr, "oge: %s mode needs a verifier, which isn't built yet. Pass --fast to run the implementer, then Öge's Check\n", frozen.Mode)
+	if frozen.Mode == pipeline.Blind {
+		// TODO(#52): verify = "before".
+		fmt.Fprintln(env.Stderr, "oge: Blind mode isn't built yet. Leave out --blind (and verify = \"before\") for Standard mode, or pass --fast")
 		return ExitRefused
 	}
 	for _, c := range frozen.Checks {
@@ -235,21 +232,32 @@ func (r *renderer) observe(ev run.Event) {
 	case run.EvPreflight:
 		r.p("%-10s %s", "preflight", preflightText(r.frozen))
 	case run.EvAgent:
-		if !r.verbose {
+		if !r.verbose || (ev.Attempt.Role == "verifier" && !qaStep(ev.Agent)) {
 			return
 		}
 		if step, ok := agentStep(ev.Agent, ev.Attempt.Cause); ok {
+			if ev.Attempt.Role == "verifier" {
+				step = strings.Replace(step, "Workspace from Snapshot", "Workspace: the Promoted view of the Candidate", 1)
+				step = strings.Replace(step, "Workspace from the Candidate sent back", "Workspace: the Promoted view of the Candidate", 1)
+			}
 			r.p("[%s %s] %s", strings.Replace(ev.Attempt.ID, "#", " #", 1), ev.Attempt.Agent, step)
 		}
 	case run.EvNotice:
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
+		if ev.Attempt.Role == "verifier" {
+			r.p("%-10s %s", qaLabel, qaText(ev.Attempt))
+			if s := qaScopeText(ev.Attempt); s != "" {
+				r.p("%-10s %s", "scope", s)
+			}
+			return
+		}
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
 		if s := scopeText(ev.Attempt); s != "" {
 			r.p("%-10s %s", "scope", s)
 		}
 	case run.EvSendBack:
-		r.p("%-10s %s", "send back", sendBackText(ev))
+		r.p("%-10s %s", "send back", sendBackText(ev, r.frozen))
 	case run.EvDecided:
 		r.p("%-10s %s", "decision", decidedText(ev))
 	case run.EvCheck:
@@ -259,6 +267,9 @@ func (r *renderer) observe(ev run.Event) {
 		}
 		for _, l := range checkLines(ev.Check) {
 			r.p("%-10s %s", "check", l)
+		}
+		for _, l := range issueLines(ev.Issues) {
+			r.p("%-10s %s", "", l)
 		}
 		if r.verbose {
 			verdict := "FAIL"
@@ -410,7 +421,7 @@ func (r *renderer) summary(res *run.Result) {
 			}
 		}
 		// TODO(#63): the Receipt replaces these lines.
-		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
+		r.p("%-10s %s", "Not covered", notCovered(r.frozen, res))
 		if r.warn != "" {
 			r.p("! %s", r.warn)
 		}

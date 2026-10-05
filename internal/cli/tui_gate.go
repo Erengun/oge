@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/erengun/oge/internal/gate"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -179,8 +180,8 @@ func (m *model) note(msg progressMsg) {
 func (m *model) again() {
 	at := m.now()
 	for _, s := range m.frozen.Stages {
-		if s.Role == "implementer" {
-			m.stages = append(m.stages, stage{name: s.Name, text: s.Agent})
+		if s.Role == "implementer" || (s.Role == "verifier" && m.frozen.Mode == pipeline.Standard) {
+			m.stages = append(m.stages, m.stageFor(s))
 		}
 	}
 	m.stages = append(m.stages, stage{name: "check", text: m.checkText()})
