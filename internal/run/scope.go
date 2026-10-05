@@ -50,6 +50,11 @@ func implementerScope(m *oracle.Manifest, f *pipeline.Frozen) func(string) strin
 		case p == ".oge" || strings.HasPrefix(p, ".oge/"):
 			return ClassOgeConfig
 		case tests[p]:
+			// TODO(#41-decision): only the Oracle version's own tests are
+			// protected. A new file matching the test globs is the
+			// implementer's own test (spec #35: Promoted; ADR-0010: negative
+			// authority only) and the Check's overlay drops it anyway, so
+			// protecting it would block Accepted on ordinary TDD.
 			return ClassOracleTest
 		case oracle.MatchAny(f.Project.TestConfig, p):
 			return ClassTestConfig

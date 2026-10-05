@@ -25,3 +25,8 @@ func group(cmd *exec.Cmd) int {
 	}
 	return g
 }
+
+// groupGone reports whether no process is left in group pgid.
+func groupGone(pgid int) bool {
+	return syscall.Kill(-pgid, 0) == syscall.ESRCH
+}

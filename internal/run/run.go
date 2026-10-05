@@ -20,6 +20,7 @@ import (
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	procs "github.com/erengun/oge/internal/proc"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -397,6 +398,11 @@ loop:
 		a.Failure = "lost_subprocess: the turn never settled"
 	}
 	_ = sess.Close() // kills the agent's whole process group
+	// The scope check below needs the agent's whole tree gone, so nothing
+	// writes after it. A tree that outlives the kill fails the Attempt.
+	if !procs.WaitGone(proc.PGID, 5*time.Second) && a.Failure == "" {
+		a.Failure = "lost_subprocess: the agent's processes outlived the kill"
+	}
 	// Everything the agent said is redacted before it's persisted; the
 	// Exit name and failure reach AttemptEnded and RunEnded.why.
 	a.Exit = string(redact.Redact([]byte(a.Exit)))

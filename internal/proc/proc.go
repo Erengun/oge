@@ -5,6 +5,7 @@ package proc
 import (
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // live are the commands started and not yet waited for, so KillAll can
@@ -60,4 +61,21 @@ func Group(cmd *exec.Cmd) int {
 		return 0
 	}
 	return group(cmd)
+}
+
+// WaitGone waits until process group pgid has no process left, or the
+// timeout passes, and reports whether it emptied. A zombie still counts
+// until its parent reaps it.
+func WaitGone(pgid int, timeout time.Duration) bool {
+	if pgid <= 0 {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for !groupGone(pgid) {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }
