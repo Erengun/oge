@@ -134,6 +134,17 @@ type SessionInfo struct {
 	// AuthSource is the kind of authentication the agent reports, never
 	// a credential (ADR-0006).
 	AuthSource string `json:",omitempty"`
+	// Residue is what an isolated launch still loads and the user can't
+	// remove from it, such as organisation-managed plugins and skills.
+	Residue *Residue `json:",omitempty"`
+}
+
+// Residue is an agent's known startup residue (#44): recorded in the
+// envelope Evidence, shown once when it first appears or changes.
+type Residue struct {
+	Plugins, Skills, Agents []string
+	// Fingerprint identifies the set, to notice a change.
+	Fingerprint string
 }
 
 // ErrTurnInFlight is returned by Send while a turn is active.

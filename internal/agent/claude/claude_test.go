@@ -216,13 +216,15 @@ func TestLaunchProfileArgvAndEnv(t *testing.T) {
 		t.Errorf("no Öge-chosen --session-id UUID in %q", rec.Argv)
 	}
 	argv = uuid.ReplaceAllString(argv, "--session-id\x00<uuid>\x00")
-	private, cache := h.spec.DenyRead[0], h.spec.Cache
-	settings := `{"permissions":{"deny":["Read(/` + private + `/**)","Edit(/` + private + `/**)"]},` +
-		`"sandbox":{"allowUnsandboxedCommands":false,"enabled":true,"failIfUnavailable":true,` +
-		`"filesystem":{"allowWrite":["` + cache + `"],"denyRead":["` + private + `"]}}}`
+	settings := regexp.MustCompile(`--settings\x00([^\x00]*)\x00`)
+	m := settings.FindStringSubmatch(argv)
+	if m == nil {
+		t.Fatalf("no --settings in %q", rec.Argv)
+	}
+	argv = settings.ReplaceAllString(argv, "--settings\x00<settings>\x00")
 	want := strings.Join([]string{
 		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--setting-sources=", "--strict-mcp-config", "--settings", settings,
+		"--setting-sources=", "--strict-mcp-config", "--settings", "<settings>",
 		"--tools", "Read,Edit,Write,Bash,Glob,Grep",
 		"--permission-mode", "default", "--permission-prompt-tool", "stdio",
 		"--session-id", "<uuid>", "--no-session-persistence",
@@ -232,31 +234,63 @@ func TestLaunchProfileArgvAndEnv(t *testing.T) {
 		t.Errorf("argv\n got %q\nwant %q", strings.Split(argv, "\x00"), strings.Split(want, "\x00"))
 	}
 
+	// The policy JSON: sandbox on and unescapable, the cache the only
+	// extra writable path, private state and home secrets unreadable,
+	// no network domain allowed and the network tools denied.
+	private, cache, home := h.spec.DenyRead[0], h.spec.Cache, "/synthetic/home"
+	var got, wantS any
+	if err := json.Unmarshal([]byte(m[1]), &got); err != nil {
+		t.Fatal(err)
+	}
+	reads := []string{private}
+	for _, s := range homeSecrets {
+		reads = append(reads, home+"/"+s)
+	}
+	reads = append(reads, "/synthetic/claude-config")
+	ws, _ := json.Marshal(map[string]any{
+		"permissions": map[string]any{"deny": []string{"Read(/" + private + "/**)", "Edit(/" + private + "/**)", "WebFetch", "WebSearch"}},
+		"sandbox": map[string]any{
+			"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
+			"filesystem": map[string]any{"allowWrite": []string{cache}, "denyRead": reads},
+			"network":    map[string]any{"allowedDomains": []string{}, "allowLocalBinding": false},
+		},
+	})
+	json.Unmarshal(ws, &wantS)
+	if gb, _ := json.Marshal(got); string(gb) != func() string { b, _ := json.Marshal(wantS); return string(b) }() {
+		t.Errorf("settings\n got %s\nwant %s", gb, ws)
+	}
+	for _, s := range []string{".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".docker/config.json", ".kube"} {
+		if !oneOf(s, homeSecrets) {
+			t.Errorf("%s isn't denied", s)
+		}
+	}
+
 	// Names and values of the synthetic environment only: no real one.
-	got := map[string]string{}
+	env := map[string]string{}
 	for _, kv := range rec.Env {
 		k, v, _ := strings.Cut(kv, "=")
-		got[k] = v
+		env[k] = v
 	}
 	for _, name := range append(append([]string{}, stripEnv...), "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID") {
-		if _, ok := got[name]; ok {
+		if _, ok := env[name]; ok {
 			t.Errorf("session marker %s reached claude", name)
 		}
 	}
 	keep := map[string]string{
 		"CLAUDE_CONFIG_DIR": "/synthetic/claude-config", "CLAUDE_CODE_USE_BEDROCK": "1",
 		"ANTHROPIC_BASE_URL": "https://synthetic.example", "AWS_REGION": "eu-west-1",
-		"CLAUDE_CODE_SUBAGENT_MODEL": "haiku", "HOME": "/synthetic/home",
-		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "GOCACHE": cache, "OGE_RUN_ID": "run-1", "OGE_ROLE": "implementer",
+		"CLAUDE_CODE_SUBAGENT_MODEL": "haiku", "HOME": home,
+		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "GIT_OPTIONAL_LOCKS": "0", "GOCACHE": cache,
+		"OGE_RUN_ID": "run-1", "OGE_ROLE": "implementer",
 	}
 	for k, v := range keep {
-		if got[k] != v {
-			t.Errorf("%s = %q, want %q", k, got[k], v)
+		if env[k] != v {
+			t.Errorf("%s = %q, want %q", k, env[k], v)
 		}
 	}
 	// Öge adds nothing else: the child's names are the parent's, minus the
 	// strip list, plus Öge's own and the fake's test knobs.
-	for k := range got {
+	for k := range env {
 		if strings.HasPrefix(k, "OGE_FAKE_CLAUDE_") || k == "PATH" || k == "PWD" {
 			continue
 		}
@@ -272,6 +306,43 @@ func TestLaunchProfileArgvAndEnv(t *testing.T) {
 	}
 }
 
+// answers are the host's control responses the fake read, by request id.
+func answers(t *testing.T, h *harness) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	sc := bufio.NewScanner(strings.NewReader(readFile(t, h.stdin)))
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var m struct {
+			Type     string
+			Response struct {
+				RequestID string          `json:"request_id"`
+				Response  json.RawMessage `json:"response"`
+			}
+		}
+		if json.Unmarshal(sc.Bytes(), &m) == nil && m.Type == "control_response" {
+			out[m.Response.RequestID] = string(m.Response.Response)
+		}
+	}
+	return out
+}
+
+// expect sets, in order, the decision each "in" control response of
+// frames must carry; the fake fails the replay on any other.
+func expect(frames []string, decisions ...string) []string {
+	out := append([]string{}, frames...)
+	for i, l := range out {
+		if len(decisions) == 0 {
+			break
+		}
+		if strings.Contains(l, `"dir": "in"`) && strings.Contains(l, `"type": "control_response"`) {
+			out[i] = strings.Replace(l, `{"dir": "in",`, `{"dir": "in", "expect": "`+decisions[0]+`",`, 1)
+			decisions = decisions[1:]
+		}
+	}
+	return out
+}
+
 func readFile(t *testing.T, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p)
@@ -284,7 +355,7 @@ func readFile(t *testing.T, p string) string {
 // turns.ndjson: two turns in one process, tool use, can_use_tool, and a
 // recorded envelope whose tool list is narrower than the profile's (warn).
 func TestTwoTurnsWithToolActivityAndAWarnedEnvelope(t *testing.T) {
-	h := open(t, fixture(t, "turns.ndjson"))
+	h := open(t, expect(fixture(t, "turns.ndjson"), "allow", "allow"))
 	evs := h.turn("edit hello.txt")
 	if evs[0].Kind != agent.TurnAccepted {
 		t.Errorf("first event %v, want accepted before anything else", evs[0].Kind)
@@ -308,6 +379,10 @@ func TestTwoTurnsWithToolActivityAndAWarnedEnvelope(t *testing.T) {
 	}
 	if opened == nil || opened.AgentVersion != "2.1.289" || opened.Envelope != "warn" || opened.AuthSource != "apiKeySource:none" {
 		t.Fatalf("SessionOpened = %+v", opened)
+	}
+	// The recording's residue: one plugin, no skills, a built-in agent.
+	if r := opened.Residue; r == nil || strings.Join(r.Plugins, ",") != "example-plugin@builtin" || len(r.Skills)+len(r.Agents) != 0 || r.Fingerprint == "" {
+		t.Errorf("Residue = %+v", opened.Residue)
 	}
 	if strings.Join(opened.Capabilities, ",") != "host_requests,deny_reason_reaches_model,interrupt" {
 		t.Errorf("Capabilities = %v", opened.Capabilities)
@@ -338,8 +413,9 @@ func TestTwoTurnsWithToolActivityAndAWarnedEnvelope(t *testing.T) {
 		t.Errorf("second turn settled %+v", s)
 	}
 	h.sess.Close()
-	if !strings.Contains(readFile(t, h.stdin), `"behavior":"allow","updatedInput":{"file_path":"`+h.ws+`/hello.txt"`) {
-		t.Errorf("the can_use_tool allow didn't carry the tool input:\n%s", readFile(t, h.stdin))
+	a := answers(t, h)
+	if got := a["ff052cc2-c70c-496a-ab3e-85f90ec23913"]; got != `{"behavior":"allow","updatedInput":{"file_path":"`+h.ws+`/hello.txt","old_string":"hi","new_string":"hello","replace_all":false}}` {
+		t.Errorf("the can_use_tool answer = %s", got)
 	}
 	if _, ok := <-h.sess.Events(); ok {
 		t.Error("events still open after Close")
@@ -381,6 +457,11 @@ func TestEnvelopeFailsClosed(t *testing.T) {
 	}
 }
 
+// realMemoryPaths is memory_paths as claude 2.1.289 reports it when
+// memory loads (spike log leak_default.ndjson at ab056605bbb3; isolated
+// launches leave the field out, as in testdata).
+const realMemoryPaths = `{"auto": "/home/user/.claude/projects/-home-user-project/memory/"}`
+
 func TestEnvelopeRules(t *testing.T) {
 	ws := t.TempDir()
 	base := initFrame{Cwd: ws, Tools: implementerTools, PermissionMode: "default", Version: "2.1.289", OutputStyle: "default"}
@@ -392,8 +473,8 @@ func TestEnvelopeRules(t *testing.T) {
 		fatal string
 	}{
 		"pass":                     {role: "implementer", edit: func(*initFrame) {}},
-		"memory warns implementer": {role: "implementer", edit: func(f *initFrame) { f.MemoryPaths = json.RawMessage(`{"auto":"/x"}`) }, warn: "memory is loaded"},
-		"memory fails verifier":    {role: "verifier", edit: func(f *initFrame) { f.MemoryPaths = json.RawMessage(`{"auto":"/x"}`) }, fatal: "memory is loaded"},
+		"memory warns implementer": {role: "implementer", edit: func(f *initFrame) { f.MemoryPaths = json.RawMessage(realMemoryPaths) }, warn: "memory is loaded"},
+		"memory fails verifier":    {role: "verifier", edit: func(f *initFrame) { f.MemoryPaths = json.RawMessage(realMemoryPaths) }, fatal: "memory is loaded"},
 		"hooks fail verifier":      {role: "verifier", edit: func(*initFrame) {}, hooks: true, fatal: "hooks ran at startup"},
 		"output style":             {role: "verifier", edit: func(f *initFrame) { f.OutputStyle = "Learning" }, fatal: `output style "Learning"`},
 		"mcp warns implementer": {role: "implementer", edit: func(f *initFrame) {
@@ -401,17 +482,12 @@ func TestEnvelopeRules(t *testing.T) {
 				Name string `json:"name"`
 			}{"gh"})
 		}, warn: "MCP servers: gh"},
-		"plugin warns": {role: "verifier", edit: func(f *initFrame) {
+		"residue isn't a warning": {role: "verifier", edit: func(f *initFrame) {
+			f.Skills, f.Agents = []string{"deep-research"}, []string{"reviewer"}
 			f.Plugins = append(f.Plugins, struct {
 				Name   string `json:"name"`
 				Source string `json:"source"`
 			}{"org", "org@corp"})
-		}, warn: "1 plugins (org)"},
-		"builtin plugin is fine": {role: "verifier", edit: func(f *initFrame) {
-			f.Plugins = append(f.Plugins, struct {
-				Name   string `json:"name"`
-				Source string `json:"source"`
-			}{"x", "x@builtin"})
 		}},
 		"wrong cwd":   {role: "implementer", edit: func(f *initFrame) { f.Cwd = "/elsewhere" }, fatal: "working directory"},
 		"too old":     {role: "implementer", edit: func(f *initFrame) { f.Version = "2.1.200" }, fatal: "older than the oldest supported"},
@@ -443,6 +519,12 @@ func TestInterruptLeavesTheSessionUsable(t *testing.T) {
 	if err := h.sess.Send(agent.Turn{Text: "again"}); err != agent.ErrTurnInFlight {
 		t.Errorf("a second Send in flight = %v, want ErrTurnInFlight", err)
 	}
+	// The interrupt Capability is known once system/init arrives.
+	for e := range h.sess.Events() {
+		if e.Kind == agent.SessionOpened {
+			break
+		}
+	}
 	if err := h.sess.Interrupt(); err != nil {
 		t.Fatal(err)
 	}
@@ -451,6 +533,18 @@ func TestInterruptLeavesTheSessionUsable(t *testing.T) {
 	}
 	if s := settled(t, h.turn("say alive")); s.Exit != "done" {
 		t.Errorf("turn after the interrupt settled %+v", s)
+	}
+}
+
+// Before system/init reports the Capability, no interrupt is sent.
+func TestNoInterruptBeforeTheEnvelope(t *testing.T) {
+	frames := fixture(t, "interrupt.ndjson")[:4] // initialize, its response, the user turn
+	h := open(t, append(frames, `{"dir": "in", "msg": {"type": "user"}}`))
+	if err := h.sess.Send(agent.Turn{Text: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sess.Interrupt(); err != ErrNoInterrupt {
+		t.Errorf("Interrupt before system/init = %v, want ErrNoInterrupt", err)
 	}
 }
 
@@ -540,10 +634,13 @@ func TestAuthAndQuotaSignalsAreInfrastructureStops(t *testing.T) {
 }
 
 // hook_decider.ndjson: every tool call reaches Öge through the PreToolUse
-// hook, and Öge's policy answers each one, as recorded in the events.
+// hook, and Öge's policy answers each one; the fake checks each answer.
 func TestPermissionRequestsFollowThePolicy(t *testing.T) {
-	h := open(t, fixture(t, "hook_decider.ndjson"))
+	h := open(t, expect(fixture(t, "hook_decider.ndjson"), "allow", "allow", "allow", "allow", "deny", "deny", "allow"))
 	evs := h.turn("do the steps")
+	if s := settled(t, evs); s.Exit != "done" {
+		t.Fatalf("settled %+v (the fake rejects a wrong answer)", s)
+	}
 	var got []string
 	for _, e := range evs {
 		if e.Kind == agent.HostRequest {
@@ -563,109 +660,338 @@ func TestPermissionRequestsFollowThePolicy(t *testing.T) {
 		t.Errorf("decisions\n got %q\nwant %q", got, want)
 	}
 	h.sess.Close()
-	var allows, denies int
-	sc := bufio.NewScanner(strings.NewReader(readFile(t, h.stdin)))
-	sc.Buffer(nil, 1<<20)
-	for sc.Scan() {
-		l := sc.Text()
-		if strings.Contains(l, `"continue":true`) {
-			allows++
-		}
-		if strings.Contains(l, `"permissionDecision":"deny","permissionDecisionReason":"Öge denied this: this command isn't pre-authorised.`) {
-			denies++
-		}
+	a := answers(t, h)
+	if got := a["8f353bbd-b898-492d-81fc-8ae5f166ef75"]; got != `{"continue":true}` {
+		t.Errorf("hook allow = %s", got)
 	}
-	if allows != 5 || denies != 2 {
-		t.Errorf("hook answers: %d allow, %d deny", allows, denies)
+	deny := a["b5740a7a-af7a-4c29-b960-b6d5f29ba72e"]
+	if !strings.HasPrefix(deny, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Öge denied this: this command isn't pre-authorised.`) {
+		t.Errorf("hook deny = %s", deny)
 	}
 }
 
 // A can_use_tool for a call the hook already decided gets the same answer,
 // and isn't a second Host request.
 func TestOneDecisionPerToolUse(t *testing.T) {
-	frames := fixture(t, "hook_decider.ndjson")
+	for _, c := range []struct {
+		hookReq, useID, path, decision, answer string
+	}{
+		// The allowed Read of tests/test_calc.py.
+		{"8f353bbd", "toolu_01CwqJqvrFHcrWFnmVysSd1T", "tests/test_calc.py", "allow", `{"behavior":"allow","updatedInput":{"file_path":"WS/tests/test_calc.py"}}`},
+		// The denied Bash write to src/bash.txt.
+		{"b5740a7a", "toolu_01EyGiytsEL1yqhMuoew4oT4", "src/bash.txt", "deny", `{"behavior":"deny","message":"Öge denied this: this command isn't pre-authorised.`},
+	} {
+		var frames []string
+		for _, l := range expect(fixture(t, "hook_decider.ndjson"), "allow", "allow", "allow", "allow", "deny", "deny", "allow") {
+			frames = append(frames, l)
+			if strings.Contains(l, `"request_id": "`+c.hookReq) && strings.Contains(l, `"dir": "in"`) {
+				frames = append(frames,
+					`{"dir": "out", "msg": {"type": "control_request", "request_id": "cut-1", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "/home/user/project/`+c.path+`"}, "tool_use_id": "`+c.useID+`"}}}`,
+					`{"dir": "in", "expect": "`+c.decision+`", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cut-1", "response": {}}}}`)
+			}
+		}
+		h := open(t, frames)
+		n := 0
+		for _, e := range h.turn("go") {
+			if e.Kind == agent.HostRequest {
+				n++
+			}
+		}
+		if n != 7 {
+			t.Errorf("%d Host requests, want 7", n)
+		}
+		h.sess.Close()
+		want := strings.ReplaceAll(c.answer, "WS", h.ws)
+		if got := answers(t, h)["cut-1"]; !strings.HasPrefix(got, want) {
+			t.Errorf("can_use_tool after the hook = %s, want %s", got, want)
+		}
+	}
+}
+
+// No tool request is authorised before the envelope check passes
+// (ADR-0005 as amended).
+func TestNoAuthorisationBeforeTheEnvelopePasses(t *testing.T) {
+	early := `{"dir": "out", "msg": {"type": "control_request", "request_id": "early", "request": {"subtype": "hook_callback", "callback_id": "oge_pre_tool_use", "input": {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/home/user/project/hello.txt"}, "tool_use_id": "toolu_early"}}}}`
+	frames := insertAfter(firstTurn(t, "turns.ndjson"), `"type": "command_lifecycle", "command_uuid": "e09658db-c6ad-4d29-9b9f-ca79ca4484da", "state": "started"`,
+		early, `{"dir": "in", "expect": "deny", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "early"}}}`)
+	h := open(t, frames)
+	evs := h.turn("hi")
+	var first *agent.HostDecision
+	for _, e := range evs {
+		if e.Kind == agent.HostRequest && first == nil {
+			first = e.Host
+		}
+	}
+	if first == nil || first.Decision != "deny" || first.Rule != ruleUnchecked {
+		t.Errorf("early request = %+v", first)
+	}
+	if s := settled(t, evs); s.Exit != "done" {
+		t.Errorf("settled %+v", s)
+	}
+}
+
+// A request buffered right behind a failing init is refused too: the
+// envelope fails, and nothing is authorised after it.
+func TestNoAuthorisationAfterAFailedEnvelope(t *testing.T) {
+	frames := editInit(t, firstTurn(t, "turns.ndjson"), func(m map[string]any) { m["permissionMode"] = "bypassPermissions" })
+	var initLine string
 	var out []string
 	for _, l := range frames {
-		out = append(out, l)
-		if strings.Contains(l, `"request_id": "8f353bbd`) && strings.Contains(l, `"dir": "in"`) {
-			out = append(out,
-				`{"dir": "out", "msg": {"type": "control_request", "request_id": "cut-1", "request": {"subtype": "can_use_tool", "tool_name": "Read", "input": {"file_path": "/home/user/project/tests/test_calc.py"}, "tool_use_id": "toolu_01CwqJqvrFHcrWFnmVysSd1T"}}}`,
-				`{"dir": "in", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "cut-1", "response": {}}}}`)
+		if strings.Contains(l, `"subtype": "init"`) || strings.Contains(l, `"subtype":"init"`) {
+			var e struct {
+				Msg json.RawMessage `json:"msg"`
+			}
+			json.Unmarshal([]byte(l), &e)
+			initLine = string(e.Msg)
+			// init and a tool request in one write, so both are buffered.
+			hook := `{"type": "control_request", "request_id": "late", "request": {"subtype": "hook_callback", "callback_id": "oge_pre_tool_use", "input": {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/home/user/project/hello.txt"}, "tool_use_id": "toolu_late"}}}`
+			b, _ := json.Marshal(map[string]any{"dir": "raw", "line": initLine + "\n" + hook})
+			out = append(out, string(b))
+			continue
 		}
+		out = append(out, l)
 	}
 	h := open(t, out)
-	n := 0
-	for _, e := range h.turn("go") {
-		if e.Kind == agent.HostRequest {
-			n++
+	if err := h.sess.Send(agent.Turn{Text: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	var hosts []agent.HostDecision
+	var stop string
+	timeout := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case e, ok := <-h.sess.Events():
+			if !ok {
+				done = true
+				break
+			}
+			if e.Kind == agent.HostRequest {
+				hosts = append(hosts, *e.Host)
+			}
+			if e.Kind == agent.TurnSettled {
+				stop = e.Stop
+			}
+		case <-timeout:
+			t.Fatal("the stream never ended")
 		}
 	}
-	if n != 7 {
-		t.Errorf("%d Host requests, want 7", n)
+	if !strings.Contains(stop, "permission mode") {
+		t.Errorf("stop = %q", stop)
+	}
+	if len(hosts) == 0 || hosts[0].Target != "/home/user/project/hello.txt" {
+		t.Errorf("the buffered request wasn't answered: %+v", hosts)
+	}
+	for _, d := range hosts {
+		if d.Decision != "deny" || d.Rule != ruleUnchecked {
+			t.Errorf("a request after the failed envelope got %+v", d)
+		}
 	}
 }
 
 func TestPolicy(t *testing.T) {
-	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Skip("the policy reasons about POSIX paths; Runs are refused on Windows (ADR-0017)")
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The default state dir on macOS has a space in it.
 	ws, private := filepath.Join(dir, "Application Support", "ws"), filepath.Join(dir, "private")
-	esc := strings.ReplaceAll(ws, " ", `\\ `)
-	os.MkdirAll(filepath.Join(ws, "pkg"), 0o755)
+	esc := strings.ReplaceAll(ws, " ", `\ `)
+	os.MkdirAll(filepath.Join(ws, "pkg", ".git"), 0o755)
+	os.MkdirAll(filepath.Join(ws, ".git"), 0o755)
 	os.MkdirAll(private, 0o700)
 	os.Symlink("/etc", filepath.Join(ws, "escape"))
+	os.Symlink("/etc/hosts", filepath.Join(ws, "hosts"))
+	os.Symlink(filepath.Join(ws, "pkg"), filepath.Join(ws, "inner"))
 	p := newPolicy(agent.LaunchSpec{Workspace: ws, DenyRead: []string{private}, CheckCommands: []string{"make check"}}, "abc")
-	cases := []struct {
-		tool, input, decision, rule string
-	}{
-		{"Read", `{"file_path":"` + ws + `/pkg/a.go"}`, "allow", rulePreAuthorised},
-		{"Read", `{"file_path":"/etc/passwd"}`, "deny", ruleOutside},
-		{"Read", `{"file_path":"` + private + `/runs/x/ledger.jsonl"}`, "deny", ruleOutside},
-		{"Read", `{"file_path":"` + ws + `/escape/passwd"}`, "deny", ruleOutside},
-		{"Glob", `{"pattern":"**/*.go"}`, "allow", rulePreAuthorised},
-		{"Grep", `{"pattern":"Add","path":"/"}`, "deny", ruleOutside},
-		{"Edit", `{"file_path":"` + ws + `/add.go"}`, "allow", rulePreAuthorised},
-		{"Write", `{"file_path":"` + ws + `/new/dir/x.go"}`, "allow", rulePreAuthorised},
-		{"Write", `{"file_path":"` + ws + `/../x.go"}`, "deny", ruleOutside},
-		{"Edit", `{"file_path":"` + ws + `/.git/config"}`, "deny", ruleOutside},
-		{"Bash", `{"command":"go test ./..."}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"go test -json ./... 2>&1 | tail -30"}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"cd ` + ws + ` && go vet ./pkg"}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"cd /tmp && go vet ./pkg"}`, "deny", ruleOutside},
-		{"Bash", `{"command":"cd ` + esc + ` && go test -json ./..."}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"cd \"` + ws + `\" && go test ./pkg"}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"ls ` + esc + `/pkg"}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"find . -name '*.go'"}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"gofmt -l ."}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"make check"}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"git diff"}`, "allow", rulePreAuthorised},
-		{"Bash", `{"command":"cat /etc/hosts"}`, "deny", ruleOutside},
-		{"Bash", `{"command":"cat ../secret"}`, "deny", ruleOutside},
-		{"Bash", `{"command":"ls ` + private + `"}`, "deny", ruleOutside},
-		{"Bash", `{"command":"go test -exec=/bin/evil ./..."}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"go build -o /usr/local/bin/x ."}`, "deny", ruleOutside},
-		{"Bash", `{"command":"git diff --output=x"}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"rm -rf ."}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"curl https://example.com"}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"go test ./... && rm -rf ."}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"go test $(evil)"}`, "deny", ruleNoInteractive},
-		{"Bash", `{"command":"go test ./...\nrm x"}`, "deny", ruleNoInteractive},
-		{"WebFetch", `{"url":"https://example.com"}`, "deny", ruleOutside},
-		{"AskUserQuestion", `{"questions":[]}`, "cancel", ruleQuestion},
+	const (
+		allow   = "allow"
+		outside = ruleOutside
+		grey    = ruleNoInteractive
+	)
+	bash := func(cmd string) string { b, _ := json.Marshal(map[string]string{"command": cmd}); return string(b) }
+	fp := func(k, v string) string { b, _ := json.Marshal(map[string]string{k: v}); return string(b) }
+	cases := []struct{ tool, input, want string }{
+		// File tools.
+		{"Read", fp("file_path", ws+"/pkg/a.go"), allow},
+		{"Read", fp("file_path", "pkg/a.go"), allow},
+		{"Read", fp("file_path", "/etc/passwd"), outside},
+		{"Read", fp("file_path", "~/.ssh/id_ed25519"), outside},
+		{"Read", fp("file_path", "$HOME/.netrc"), outside},
+		{"Read", fp("file_path", "pkg/../../x"), outside},
+		{"Read", fp("file_path", "pkg/../a.go"), outside}, // no relative ".." at all
+		{"Read", fp("file_path", private+"/runs/x/ledger.jsonl"), outside},
+		{"Read", fp("file_path", ws+"/escape/passwd"), outside},
+		{"Read", fp("file_path", "C:\\Windows\\win.ini"), outside},
+		{"Read", fp("file_path", `\\\\server\\share`), outside},
+		{"Read", `{}`, outside},
+		{"Glob", `{"pattern":"**/*.go"}`, allow},
+		{"Glob", `{"pattern":"../**"}`, outside},
+		{"Glob", `{"pattern":"pkg/{..,x}/*"}`, outside},
+		{"Glob", `{"pattern":"/etc/*"}`, outside},
+		{"Glob", fp("pattern", ws+"/pkg/*.go"), allow},
+		{"Glob", `{"pattern":"*.go","path":"/"}`, outside},
+		{"Grep", `{"pattern":"Add"}`, allow},
+		{"Grep", `{"pattern":"Add","path":"/"}`, outside},
+		{"Grep", `{"pattern":"Add","glob":"../**/*.go"}`, outside},
+		{"Grep", `{"pattern":"Add","path":"escape"}`, outside},
+		{"Edit", fp("file_path", ws+"/add.go"), allow},
+		{"Write", fp("file_path", ws+"/new/dir/x.go"), allow},
+		{"Write", fp("file_path", ws+"/../x.go"), outside},
+		{"Write", fp("file_path", ws+"/hosts"), outside},
+		{"Edit", fp("file_path", ws+"/.git/config"), outside},
+		{"Edit", fp("file_path", ws+"/.GIT/config"), outside},
+		{"Edit", fp("file_path", ws+"/.Git/hooks/pre-commit"), outside},
+		{"Write", fp("file_path", ws+"/pkg/.git/config"), outside},
+		{"Write", fp("file_path", ws+"/inner/.git/HEAD"), outside},
+		{"WebFetch", `{"url":"https://example.com"}`, outside},
+		{"AskUserQuestion", `{"questions":[]}`, ruleQuestion},
+
+		// Bash: the Check command, exactly.
+		{"Bash", bash("make check"), allow},
+		{"Bash", bash("make install"), grey},
+		// go test, build, vet.
+		{"Bash", bash("go test ./..."), allow},
+		{"Bash", bash("go test -run TestAdd -v -count=1 -race -short -timeout 30s -json -cover ./pkg"), allow},
+		{"Bash", bash("go test -exec=/bin/evil ./..."), grey},
+		{"Bash", bash("go test -toolexec x ./..."), grey},
+		{"Bash", bash("go test -c ./pkg"), grey},
+		{"Bash", bash("go test -o x ./pkg"), grey},
+		{"Bash", bash("go test -ldflags=-extld=/bin/evil ./..."), grey},
+		{"Bash", bash("go test -gcflags=all=-N ./..."), grey},
+		{"Bash", bash("go test -pkgdir=/tmp ./..."), grey},
+		{"Bash", bash("go test ../.."), outside},
+		{"Bash", bash("go build ./..."), allow},
+		{"Bash", bash("go build -o bin/x ."), allow},
+		{"Bash", bash("go build -o /usr/local/bin/x ."), outside},
+		{"Bash", bash("go build -o .git/x ."), outside},
+		{"Bash", bash("go build -ldflags=-extldflags=-x ."), grey},
+		{"Bash", bash("go vet ./..."), allow},
+		{"Bash", bash("go vet -vettool=/bin/evil ./..."), grey},
+		{"Bash", bash("go run ."), grey},
+		// gofmt.
+		{"Bash", bash("gofmt -l ."), allow},
+		{"Bash", bash("gofmt -s -w pkg/a.go"), allow},
+		{"Bash", bash("gofmt -w /etc/x.go"), outside},
+		{"Bash", bash("gofmt -w .git/x.go"), outside},
+		{"Bash", bash("gofmt -r a->b ."), grey},
+		// ls and cat.
+		{"Bash", bash("ls"), allow},
+		{"Bash", bash("ls -la pkg"), allow},
+		{"Bash", bash("ls " + esc + "/pkg"), allow},
+		{"Bash", bash(`ls "` + ws + `/pkg"`), allow},
+		{"Bash", bash("ls .*/"), grey},
+		{"Bash", bash(".[.]/"), grey},
+		{"Bash", bash("ls .[.]/"), grey},
+		{"Bash", bash("cat .*/.*/etc/hosts"), grey},
+		{"Bash", bash("cat -n pkg/a.go"), allow},
+		{"Bash", bash("cat /etc/hosts"), outside},
+		{"Bash", bash("cat ../secret"), outside},
+		{"Bash", bash("cat escape"), outside}, // a bare-word symlink out
+		{"Bash", bash("cat hosts"), outside},
+		{"Bash", bash("ls " + private), outside},
+		{"Bash", bash("cat ~/.ssh/id_ed25519"), grey},
+		{"Bash", bash("cat $HOME/.netrc"), grey},
+		// find, read and search only.
+		{"Bash", bash(`find . -name "*.go"`), allow},
+		{"Bash", bash(`find pkg -type f -iname '*_test.go' -maxdepth 2`), allow},
+		{"Bash", bash(`find . -newer pkg/a.go -print`), allow},
+		{"Bash", bash("find . -name *.go"), grey}, // an unquoted glob
+		{"Bash", bash("find . -exec rm {} ;"), grey},
+		{"Bash", bash("find . -execdir x"), grey},
+		{"Bash", bash("find . -ok rm"), grey},
+		{"Bash", bash("find . -delete"), grey},
+		{"Bash", bash("find . -fprint x"), grey},
+		{"Bash", bash(`find . "-delete"`), grey},
+		{"Bash", bash("find / -name x"), outside},
+		{"Bash", bash("find -L . -name x"), grey},
+		{"Bash", bash("find . -type c"), grey},
+		// git, read-only.
+		{"Bash", bash("git status"), allow},
+		{"Bash", bash("git status --short"), allow},
+		{"Bash", bash("git diff"), allow},
+		{"Bash", bash("git diff --stat -- pkg"), allow},
+		{"Bash", bash("git diff -U3 --no-color"), allow},
+		{"Bash", bash("git diff --output=x"), grey},
+		{"Bash", bash("git diff --ext-diff"), grey},
+		{"Bash", bash("git diff --no-index /etc/hosts pkg/a.go"), grey},
+		{"Bash", bash("git -c core.pager=evil diff"), grey},
+		{"Bash", bash("git add -A"), grey},
+		{"Bash", bash("git commit -m x"), grey},
+		{"Bash", bash("git checkout ."), grey},
+		{"Bash", bash("git reset --hard"), grey},
+		{"Bash", bash("git clean -fd"), grey},
+		{"Bash", bash("git push"), grey},
+		{"Bash", bash("git fetch"), grey},
+		// Shells, chaining, substitution, redirection.
+		{"Bash", bash("sh -c 'go test'"), grey},
+		{"Bash", bash("bash -c ls"), grey},
+		{"Bash", bash("cd " + esc + " && go test ./..."), grey},
+		{"Bash", bash("go test ./... && rm -rf ."), grey},
+		{"Bash", bash("go test ./...; rm x"), grey},
+		{"Bash", bash("go test ./... | tail"), grey},
+		{"Bash", bash("go test ./... 2>&1"), grey},
+		{"Bash", bash("go test ./... > out"), grey},
+		{"Bash", bash("go test $(evil)"), grey},
+		{"Bash", bash("go test `evil`"), grey},
+		{"Bash", bash("ls {a,b}"), grey},
+		{"Bash", bash("ls !x"), grey},
+		{"Bash", bash("go test ./...\nrm x"), grey},
+		{"Bash", bash("ls 'unbalanced"), grey},
+		{"Bash", bash("rm -rf ."), grey},
+		{"Bash", bash("curl https://example.com"), grey},
+		{"Bash", bash(""), grey},
 	}
 	for _, c := range cases {
 		d := p.decide(c.tool, json.RawMessage(c.input))
-		if d.Decision != c.decision || d.Rule != c.rule {
-			t.Errorf("%s %s = %s (%s), want %s (%s)", c.tool, c.input, d.Decision, d.Rule, c.decision, c.rule)
+		got := d.Rule
+		if d.Decision == "allow" {
+			got = allow
+		}
+		if got != c.want {
+			t.Errorf("%s %s = %s (%s), want %s", c.tool, c.input, d.Decision, d.Rule, c.want)
 		}
 		if d.By != "launch_profile:abc" {
 			t.Errorf("By = %q", d.By)
 		}
-		if c.decision == "deny" && !strings.HasPrefix(d.Reason, "Öge denied this: ") {
+		if d.Decision == "deny" && !strings.HasPrefix(d.Reason, "Öge denied this: ") {
 			t.Errorf("deny reason %q", d.Reason)
 		}
 	}
-	if d := p.decide("AskUserQuestion", nil); d.Family != agent.Question || strings.Contains(d.Reason, "Öge denied") {
+	if d := p.decide("AskUserQuestion", nil); d.Family != agent.Question || d.Decision != "cancel" || strings.Contains(d.Reason, "Öge denied") {
 		t.Errorf("question = %+v", d)
+	}
+}
+
+func TestResidueAndCapabilities(t *testing.T) {
+	in := initFrame{
+		Skills: []string{"design", "deep-research"}, Agents: append([]string{"reviewer"}, builtinAgents...),
+		Version: "2.1.289", Capabilities: []string{"interrupt_receipt_v1"},
+	}
+	in.Plugins = append(in.Plugins, struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}{"cc-plugin-agents-md", "cc-plugin-agents-md@builtin"})
+	r := residueOf(in)
+	if r == nil || strings.Join(r.Plugins, ",") != "cc-plugin-agents-md@builtin" || strings.Join(r.Skills, ",") != "deep-research,design" ||
+		strings.Join(r.Agents, ",") != "reviewer" {
+		t.Fatalf("residue = %+v", r)
+	}
+	in.Skills = in.Skills[:1]
+	if r2 := residueOf(in); r2.Fingerprint == r.Fingerprint {
+		t.Error("a changed residue kept its fingerprint")
+	}
+	if residueOf(initFrame{Agents: builtinAgents}) != nil {
+		t.Error("built-in agents alone are residue")
+	}
+	// Capabilities come only from system/init.
+	if got := strings.Join(effective(in), ","); got != "host_requests,deny_reason_reaches_model,interrupt" {
+		t.Errorf("effective = %s", got)
+	}
+	if got := effective(initFrame{}); len(got) != 0 {
+		t.Errorf("an init with no version and no capabilities gives %v", got)
 	}
 }
 
@@ -682,16 +1008,18 @@ func TestExitOf(t *testing.T) {
 
 func TestToolTargetsAreShortAndRedacted(t *testing.T) {
 	ws := "/w"
-	in := map[string]any{"command": "export ANTHROPIC_API_KEY=sk-ant-abcdefghijklmnopqrstuvwx && go test\nsecond line"}
+	// Built at run time, so the source holds no key-shaped string.
+	key := "sk" + "-ant-" + strings.Repeat("q", 24)
+	in := map[string]any{"command": "export ANTHROPIC_API_KEY=" + key + " && go test\nsecond line"}
 	got := target("Bash", in, []string{ws})
-	if strings.Contains(got, "abcdefghij") || strings.Contains(got, "second line") {
+	if strings.Contains(got, key) || strings.Contains(got, "second line") {
 		t.Errorf("target = %q", got)
 	}
 	if got := target("Edit", map[string]any{"file_path": "/w/a/b.go", "old_string": "secret body"}, []string{ws}); got != "a/b.go" {
 		t.Errorf("Edit target = %q", got)
 	}
-	sp := "/Users/u/Application Support/w"
-	if got := target("Bash", map[string]any{"command": `cd /Users/u/Application\ Support/w && go test ./...`}, []string{sp}); got != "go test ./..." {
+	sp := "/srv/Application Support/w"
+	if got := target("Bash", map[string]any{"command": `cd /srv/Application\ Support/w && go test ./...`}, []string{sp}); got != "go test ./..." {
 		t.Errorf("cd target = %q", got)
 	}
 	long := strings.Repeat("x", 200)

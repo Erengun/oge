@@ -1,12 +1,16 @@
 package claude
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/erengun/oge/internal/agent"
 )
 
 // initFrame is the part of system/init the envelope check and the
@@ -17,11 +21,12 @@ type initFrame struct {
 	MCPServers []struct {
 		Name string `json:"name"`
 	} `json:"mcp_servers"`
-	PermissionMode string          `json:"permissionMode"`
-	APIKeySource   string          `json:"apiKeySource"`
-	Version        string          `json:"claude_code_version"`
-	OutputStyle    string          `json:"output_style"`
-	Skills         json.RawMessage `json:"skills"`
+	PermissionMode string   `json:"permissionMode"`
+	APIKeySource   string   `json:"apiKeySource"`
+	Version        string   `json:"claude_code_version"`
+	OutputStyle    string   `json:"output_style"`
+	Skills         []string `json:"skills"`
+	Agents         []string `json:"agents"`
 	Plugins        []struct {
 		Name   string `json:"name"`
 		Source string `json:"source"`
@@ -95,27 +100,6 @@ func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal s
 		}
 		warnings = append(warnings, "tools differ from the Launch profile: "+strings.Join(parts, "; "))
 	}
-	// TODO(#44-decision): plugins and skills a user can't remove from an
-	// isolated launch (organisation-managed ones) are residue, not an
-	// envelope failure; built-in plugins are expected, others warn.
-	var plugins []string
-	for _, p := range in.Plugins {
-		if !strings.HasSuffix(p.Source, "@builtin") {
-			plugins = append(plugins, p.Name)
-		}
-	}
-	var skills []json.RawMessage
-	_ = json.Unmarshal(in.Skills, &skills)
-	var tooling []string
-	if len(plugins) > 0 {
-		tooling = append(tooling, fmt.Sprintf("%d plugins (%s)", len(plugins), strings.Join(plugins, ", ")))
-	}
-	if len(skills) > 0 {
-		tooling = append(tooling, fmt.Sprintf("%d skills", len(skills)))
-	}
-	if len(tooling) > 0 {
-		warnings = append(warnings, "extra installed tooling: "+strings.Join(tooling, ", "))
-	}
 	return warnings, strings.Join(fatals, "; ")
 }
 
@@ -178,15 +162,59 @@ const (
 	CapResume       = "resume"
 )
 
-// effective is the Session's effective Capabilities. Host requests and the
-// deny reason ride on --permission-prompt-tool stdio and the host hook,
-// which the profile always enables; interrupt needs the receipt the agent
-// reports; resume is declared but the profile turns it off
-// (--no-session-persistence).
-func effective(reported []string) []string {
-	caps := []string{CapHostRequests, CapDenyReason}
-	if oneOf("interrupt_receipt_v1", reported) {
+// effective is the Session's effective Capabilities, from system/init
+// only. Claude reports no capability string for host requests or the deny
+// reason, so, as for an agent that reports nothing (ADR-0005), its
+// reported version is the floor: the spike proved both on MinVersion,
+// with the stdio prompt tool and host hook the profile always enables.
+// Interrupt needs the receipt the agent reports. Resume is declared but
+// the profile turns it off (--no-session-persistence).
+func effective(in initFrame) []string {
+	var caps []string
+	if in.Version != "" && !versionLess(in.Version, MinVersion) {
+		caps = append(caps, CapHostRequests, CapDenyReason)
+	}
+	if oneOf("interrupt_receipt_v1", in.Capabilities) {
 		caps = append(caps, CapInterrupt)
 	}
 	return caps
+}
+
+// builtinAgents are the subagents claude 2.1.289 always reports, even
+// isolated.
+var builtinAgents = []string{"claude", "Explore", "general-purpose", "Plan", "statusline-setup"}
+
+// residueOf is what an isolated launch still loads: plugins (including
+// organisation-managed ones, which report a "@builtin" source), skills,
+// and subagents beyond the built-in ones. None of it can run a tool Öge
+// doesn't answer, and the implementer has no Task tool to start a
+// subagent, so it is recorded and shown once, not warned on every Run.
+func residueOf(in initFrame) *agent.Residue {
+	r := &agent.Residue{Skills: sorted(in.Skills)}
+	for _, p := range in.Plugins {
+		r.Plugins = append(r.Plugins, p.Source)
+	}
+	r.Plugins = sorted(r.Plugins)
+	for _, a := range in.Agents {
+		if !oneOf(a, builtinAgents) {
+			r.Agents = append(r.Agents, a)
+		}
+	}
+	r.Agents = sorted(r.Agents)
+	if len(r.Plugins)+len(r.Skills)+len(r.Agents) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal([][]string{r.Plugins, r.Skills, r.Agents})
+	sum := sha256.Sum256(b)
+	r.Fingerprint = hex.EncodeToString(sum[:])[:12]
+	return r
+}
+
+func sorted(l []string) []string {
+	out := make([]string, 0, len(l))
+	for _, x := range l {
+		out = append(out, clip(x))
+	}
+	sort.Strings(out)
+	return out
 }

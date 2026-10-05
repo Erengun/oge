@@ -11,37 +11,33 @@ import (
 	"github.com/erengun/oge/internal/redact"
 )
 
-// TODO(#44-decision): the pre-authorised list (ADR-0019). Until
-// interactive Host requests exist (#45), what isn't on it is denied with a
-// reason, so the list decides what an unattended implementer can do. It
-// is versioned by ProfileVersion and hashed into the Launch profile.
+// TODO(#44-decision): the pre-authorised operations (ADR-0019, as
+// decided on #44): a known operation, in a known-safe shape, on paths
+// contained in the Workspace. Until interactive Host requests exist (#45),
+// anything else is denied with a reason. The set is versioned by
+// ProfileVersion and hashed into the Launch profile.
 //
-// Pre-authorised for the implementer, all inside the Workspace:
+// For the implementer, inside the Workspace:
 //   - Read, Glob and Grep;
-//   - Edit and Write, except under .git;
+//   - Edit and Write, except under any .git (case-folded, at any depth);
 //   - Bash running exactly one of the Run's Check commands;
-//   - Bash running one simple command that starts with one of
-//     preAuthorised, with every path argument inside the Workspace, no
-//     flag that runs another program, and only allowedSuffixes after it.
-var preAuthorised = [][]string{
-	{"go", "build"}, {"go", "vet"}, {"go", "test"}, {"gofmt"},
-	{"ls"}, {"cat"}, {"git", "diff"}, {"git", "status"},
-}
-
-// allowedSuffixes may end a pre-authorised command: they only reshape its
-// output.
-var allowedSuffixes = []string{"2>&1", "| head", "| tail"}
-
+//   - Bash running one simple command from bashShapes (bash.go), with
+//     only that command's positive flag set and every other word a
+//     contained path.
+//
 // Policy rules, as recorded on each HostDecision.
 const (
 	rulePreAuthorised = "pre_authorised"
 	ruleOutside       = "outside_role" // clearly outside the role or the Workspace
 	ruleNoInteractive = "no_interactive_approval"
 	ruleQuestion      = "question_unanswerable"
+	// ruleUnchecked denies every request until the envelope check has
+	// passed, and after it failed (ADR-0005 as amended).
+	ruleUnchecked = "envelope_not_passed"
 )
 
 const denyTail = " Interactive approval isn't available yet, so don't retry this another way. " +
-	"Use Read, Edit, Write, Glob and Grep inside the Workspace, or run the project's Check commands."
+	"Use Read, Edit, Write, Glob and Grep inside the Workspace, or run the project's Check commands from the current directory."
 
 // policy answers one Session's Host requests.
 type policy struct {
@@ -70,62 +66,56 @@ func withReal(dir string) []string {
 	return out
 }
 
+// verdict is how a request, or one of its paths, classifies.
+type verdict int
+
+const (
+	vOK      verdict = iota
+	vGrey            // not pre-authorised: would need approval
+	vOutside         // clearly outside the role or the Workspace
+)
+
+func worst(a, b verdict) verdict { return max(a, b) }
+
 // decide answers one tool call. input is the tool's input object.
 func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 	var in map[string]any
 	_ = json.Unmarshal(input, &in)
 	str := func(k string) string { s, _ := in[k].(string); return s }
 	d := agent.HostDecision{Family: agent.Approval, Tool: tool, Target: target(tool, in, p.ws), By: p.by}
-	allow := func() agent.HostDecision {
-		d.Decision, d.Rule, d.Reason = "allow", rulePreAuthorised, "pre-authorised by Launch profile "+p.hash
-		return d
-	}
-	deny := func(rule, why string) agent.HostDecision {
-		d.Decision, d.Rule, d.Reason = "deny", rule, "Öge denied this: "+why+"."
-		if rule != ruleQuestion {
-			d.Reason += denyTail
+	answer := func(v verdict, outside, grey string) agent.HostDecision {
+		switch v {
+		case vOK:
+			d.Decision, d.Rule, d.Reason = "allow", rulePreAuthorised, "pre-authorised by Launch profile "+p.hash
+			return d
+		case vOutside:
+			d.Decision, d.Rule, d.Reason = "deny", ruleOutside, "Öge denied this: "+outside+"."+denyTail
+			return d
 		}
+		d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: "+grey+"."+denyTail
 		return d
 	}
 	switch tool {
-	case "Read", "Glob", "Grep":
-		path := str("file_path")
-		if tool != "Read" {
-			path = str("path")
+	case "Read":
+		if str("file_path") == "" {
+			return answer(vOutside, "it names no file in the Workspace", "")
 		}
-		if p.isPrivate(path) || (tool == "Glob" && filepath.IsAbs(str("pattern")) && p.isPrivate(str("pattern"))) {
-			return deny(ruleOutside, "Öge's private state is never readable")
-		}
-		if (tool == "Read" && path == "") || !p.inside(path) || (tool == "Glob" && filepath.IsAbs(str("pattern")) && !p.inside(str("pattern"))) {
-			return deny(ruleOutside, "it reads outside the Workspace")
-		}
-		return allow()
+		return answer(p.path(str("file_path"), false), "it reads outside the Workspace", "")
+	case "Glob":
+		return answer(worst(p.path(str("path"), false), p.pattern(str("pattern"))), "it searches outside the Workspace", "")
+	case "Grep":
+		return answer(worst(p.path(str("path"), false), p.pattern(str("glob"))), "it searches outside the Workspace", "")
 	case "Edit", "Write", "NotebookEdit":
 		path := str("file_path")
 		if tool == "NotebookEdit" {
 			path = str("notebook_path")
 		}
-		if path == "" || !p.inside(path) || p.isPrivate(path) {
-			return deny(ruleOutside, "it writes outside the Workspace")
+		if path == "" {
+			return answer(vOutside, "it names no file in the Workspace", "")
 		}
-		if p.underGit(path) {
-			return deny(ruleOutside, "the implementer doesn't write under .git")
-		}
-		return allow()
+		return answer(p.path(path, true), "it writes outside the Workspace or under .git", "")
 	case "Bash":
-		cmd := strings.TrimSpace(str("command"))
-		for _, priv := range p.private {
-			if strings.Contains(cmd, priv) {
-				return deny(ruleOutside, "Öge's private state is never readable")
-			}
-		}
-		switch p.bash(cmd) {
-		case bashOK:
-			return allow()
-		case bashOutside:
-			return deny(ruleOutside, "the command reaches outside the Workspace")
-		}
-		return deny(ruleNoInteractive, "this command isn't pre-authorised")
+		return answer(p.bash(strings.TrimSpace(str("command"))), "the command reaches outside the Workspace", "this command isn't pre-authorised")
 	case "AskUserQuestion":
 		// A question is never answered on the human's behalf (ADR-0019).
 		d.Family = agent.Question
@@ -133,49 +123,100 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		d.Reason = "No one can answer questions during this Run. Make a reasonable, minimal and reversible assumption, say what you assumed, and continue."
 		return d
 	}
-	return deny(ruleOutside, tool+" isn't one of the implementer's tools")
+	return answer(vOutside, tool+" isn't one of the implementer's tools", "")
 }
 
-// inside reports whether path, absolute or relative to the Workspace,
-// resolves inside it, following any symlink that already exists.
-func (p *policy) inside(path string) bool {
+// refuse answers a request that arrives while no envelope has passed.
+func (p *policy) refuse(tool string, input json.RawMessage, why string) agent.HostDecision {
+	var in map[string]any
+	_ = json.Unmarshal(input, &in)
+	d := agent.HostDecision{Family: agent.Approval, Tool: tool, Target: target(tool, in, p.ws), By: p.by,
+		Decision: "deny", Rule: ruleUnchecked, Reason: "Öge denied this: " + why + "."}
+	if tool == "AskUserQuestion" {
+		d.Family, d.Decision = agent.Question, "cancel"
+	}
+	return d
+}
+
+// path classifies one path a tool names, absolute or relative to the
+// Workspace. Empty means the tool's default, the Workspace itself. write
+// also refuses anything under a .git directory.
+func (p *policy) path(path string, write bool) verdict {
+	return p.pathFrom(p.ws[0], path, write)
+}
+
+func (p *policy) pathFrom(cwd, path string, write bool) verdict {
 	if path == "" {
-		return true // the tool's default: the working directory
+		return vOK
+	}
+	// No home or variable expansion, no Windows-style or volume paths,
+	// and no relative "..": a contained path never needs them.
+	if strings.HasPrefix(path, "~") || strings.HasPrefix(path, "$") || strings.Contains(path, "\\") ||
+		filepath.VolumeName(path) != "" || driveLetter(path) || (!filepath.IsAbs(path) && hasDotDot(path)) {
+		return vOutside
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.ws[0], path)
+		path = filepath.Join(cwd, path)
 	}
 	path = filepath.Clean(path)
-	if !under(path, p.ws) {
-		return false
+	if !under(path, p.ws) || p.isPrivate(path) {
+		return vOutside
 	}
-	return under(resolve(path), p.ws)
+	real := resolve(path) // follows any symlink, at any component
+	if !under(real, p.ws) || p.isPrivate(real) {
+		return vOutside
+	}
+	if write && (inGit(path) || inGit(real)) {
+		return vOutside
+	}
+	return vOK
 }
 
-func (p *policy) isPrivate(path string) bool {
-	if path == "" || len(p.private) == 0 {
-		return false
+// pattern classifies a Glob pattern or a Grep glob filter.
+func (p *policy) pattern(pat string) verdict {
+	if pat == "" {
+		return vOK
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.ws[0], path)
+	if strings.HasPrefix(pat, "~") || strings.HasPrefix(pat, "$") || strings.Contains(pat, "..") ||
+		strings.Contains(pat, "\\") || driveLetter(pat) || filepath.VolumeName(pat) != "" {
+		return vOutside
 	}
-	path = filepath.Clean(path)
-	return under(path, p.private) || under(resolve(path), p.private)
+	if !filepath.IsAbs(pat) {
+		return vOK
+	}
+	// An absolute pattern must be inside up to its first wildcard.
+	fixed := pat
+	if i := strings.IndexAny(pat, "*?[{"); i >= 0 {
+		fixed = filepath.Dir(pat[:i] + "x")
+	}
+	return p.path(fixed, false)
 }
 
-func (p *policy) underGit(path string) bool {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.ws[0], path)
-	}
-	for _, ws := range p.ws {
-		if rel, err := filepath.Rel(ws, filepath.Clean(path)); err == nil {
-			first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
-			if first == ".git" {
-				return true
-			}
+func driveLetter(s string) bool {
+	return len(s) >= 2 && s[1] == ':' && (s[0]|0x20 >= 'a' && s[0]|0x20 <= 'z')
+}
+
+func hasDotDot(path string) bool {
+	for _, c := range strings.Split(filepath.ToSlash(path), "/") {
+		if c == ".." {
+			return true
 		}
 	}
 	return false
+}
+
+// inGit reports whether any component of path is a .git, case-folded.
+func inGit(path string) bool {
+	for _, c := range strings.Split(filepath.ToSlash(path), "/") {
+		if strings.EqualFold(c, ".git") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *policy) isPrivate(path string) bool {
+	return len(p.private) > 0 && (under(path, p.private) || under(resolve(path), p.private))
 }
 
 // resolve follows symlinks in path's longest existing prefix.
@@ -199,164 +240,6 @@ func under(path string, roots []string) bool {
 		}
 	}
 	return false
-}
-
-type bashVerdict int
-
-const (
-	bashGrey bashVerdict = iota
-	bashOK
-	bashOutside
-)
-
-// bash classifies a shell command.
-func (p *policy) bash(cmd string) bashVerdict {
-	for _, c := range p.checks {
-		if cmd == strings.TrimSpace(c) {
-			return bashOK
-		}
-	}
-	dir := p.ws[0]
-	// One leading "cd <dir> &&", as models often write.
-	if rest, ok := strings.CutPrefix(cmd, "cd "); ok {
-		d, after, ok := strings.Cut(rest, "&&")
-		d = unquote(strings.TrimSpace(d))
-		if !ok || d == "" {
-			return bashGrey
-		}
-		if !p.inside(d) {
-			return bashOutside
-		}
-		if !filepath.IsAbs(d) {
-			d = filepath.Join(dir, d)
-		}
-		dir, cmd = d, strings.TrimSpace(after)
-		for _, c := range p.checks {
-			if cmd == strings.TrimSpace(c) {
-				return bashOK
-			}
-		}
-	}
-	cmd = trimSuffixes(cmd)
-	if cmd == "" || strings.ContainsAny(cmd, ";&|<>`$\n\r(){}~!") {
-		return bashGrey
-	}
-	words, ok := split(cmd)
-	if !ok || len(words) == 0 {
-		return bashGrey
-	}
-	matched := false
-	for _, pre := range preAuthorised {
-		if len(words) >= len(pre) && equal(words[:len(pre)], pre) {
-			matched = true
-			break
-		}
-	}
-	verdict := bashGrey
-	if matched {
-		verdict = bashOK
-	}
-	for _, w := range words[1:] {
-		lw := strings.ToLower(w)
-		if strings.HasPrefix(w, "-") && (strings.Contains(lw, "exec") || strings.Contains(lw, "vettool") ||
-			strings.Contains(lw, "overlay") || strings.Contains(lw, "output") || strings.Contains(lw, "ext-diff")) {
-			return bashGrey
-		}
-		val := w
-		if strings.HasPrefix(w, "-") {
-			_, v, ok := strings.Cut(w, "=")
-			if !ok {
-				continue
-			}
-			val = v
-		}
-		if !strings.Contains(val, "/") && val != ".." {
-			continue
-		}
-		path := val
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(dir, path)
-		}
-		if !p.inside(path) || p.isPrivate(path) {
-			return bashOutside
-		}
-	}
-	return verdict
-}
-
-// trimSuffixes drops output-only suffixes: "2>&1" and one "| head" or
-// "| tail" with at most a line count.
-func trimSuffixes(cmd string) string {
-	if before, after, ok := strings.Cut(cmd, "|"); ok {
-		f := strings.Fields(after)
-		if len(f) == 0 || (f[0] != "head" && f[0] != "tail") || len(f) > 3 {
-			return cmd
-		}
-		for _, a := range f[1:] {
-			if strings.Trim(a, "-n0123456789") != "" {
-				return cmd
-			}
-		}
-		cmd = strings.TrimSpace(before)
-	}
-	return strings.TrimSpace(strings.TrimSuffix(cmd, "2>&1"))
-}
-
-// split splits a command into words, honouring simple quotes. ok is false
-// for an unbalanced quote.
-func split(s string) (words []string, ok bool) {
-	var cur strings.Builder
-	inWord, escaped := false, false
-	var quote rune
-	for _, r := range s {
-		switch {
-		case escaped:
-			cur.WriteRune(r)
-			escaped = false
-		case r == '\\' && quote != '\'':
-			escaped, inWord = true, true
-		case quote != 0:
-			if r == quote {
-				quote = 0
-			} else {
-				cur.WriteRune(r)
-			}
-		case r == '\'' || r == '"':
-			quote, inWord = r, true
-		case r == ' ' || r == '\t':
-			if inWord {
-				words = append(words, cur.String())
-				cur.Reset()
-				inWord = false
-			}
-		default:
-			cur.WriteRune(r)
-			inWord = true
-		}
-	}
-	if quote != 0 || escaped {
-		return nil, false
-	}
-	if inWord {
-		words = append(words, cur.String())
-	}
-	return words, true
-}
-
-func unquote(s string) string {
-	if w, ok := split(s); ok && len(w) == 1 {
-		return w[0]
-	}
-	return s
-}
-
-func equal(a, b []string) bool {
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return len(a) == len(b)
 }
 
 // target is a tool call's short, redacted target: a Workspace-relative

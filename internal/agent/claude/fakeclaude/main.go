@@ -16,7 +16,9 @@
 // host actually used. "act" frames are test-only: {"dir":"act","write":
 // {"path":...,"content":...}} writes a file if the host allowed the last
 // permission request, {"dir":"raw","line":...} writes a line as is, and
-// {"dir":"die"} exits 1 at once.
+// {"dir":"die"} exits 1 at once, and {"dir":"hang"} ignores stdin EOF and
+// SIGTERM. An "in" frame's "expect" ("allow" or "deny") checks the host's
+// actual decision; an "act" frame's "spawn" starts a background process.
 // At {"dir":"meta","exit":N} it waits for stdin to close, then exits N.
 package main
 
@@ -26,19 +28,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 const recordedCwd = "/home/user/project"
 
 type entry struct {
-	Dir   string          `json:"dir"`
-	Msg   json.RawMessage `json:"msg"`
-	Exit  *int            `json:"exit"`
-	Argv  []string        `json:"argv"`
-	Line  string          `json:"line"`
-	Write *struct {
+	Dir  string          `json:"dir"`
+	Msg  json.RawMessage `json:"msg"`
+	Exit *int            `json:"exit"`
+	Argv []string        `json:"argv"`
+	Line string          `json:"line"`
+	// Expect, on an "in" control response, is the decision the host must
+	// send: "allow" or "deny". A different one fails the replay.
+	Expect string `json:"expect"`
+	// Spawn, on an "act" frame, starts a background process in the
+	// fake's group and writes its pid to this path.
+	Spawn string `json:"spawn"`
+	// NoNewline, on a "raw" frame, leaves the line unterminated.
+	NoNewline bool `json:"no_newline"`
+	Write     *struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	} `json:"write"`
@@ -114,10 +128,25 @@ func main() {
 				os.Exit(*e.Exit)
 			}
 		case "raw":
-			fmt.Println(e.Line)
+			if e.NoNewline {
+				fmt.Print(e.Line)
+			} else {
+				fmt.Println(e.Line)
+			}
 		case "die":
 			os.Exit(1)
+		case "hang":
+			// Ignore stdin EOF and SIGTERM: only SIGKILL ends it.
+			signal.Ignore(syscall.SIGTERM)
+			select {}
 		case "act":
+			if e.Spawn != "" {
+				c := exec.Command("sleep", "60")
+				if err := c.Start(); err != nil {
+					fail("%v", err)
+				}
+				os.WriteFile(e.Spawn, []byte(strconv.Itoa(c.Process.Pid)), 0o600)
+			}
 			if e.Write != nil && allowed {
 				if err := os.WriteFile(filepath.Join(cwd, e.Write.Path), []byte(e.Write.Content), 0o644); err != nil {
 					fail("%v", err)
@@ -159,6 +188,9 @@ func main() {
 					fail("the host answered request %s, expected %s", got.Response.RequestID, want.Response.RequestID)
 				}
 				allowed = permits(got.Response.Response)
+				if e.Expect != "" && (e.Expect == "allow") != allowed {
+					fail("host answered request %s with %s, expected %s", want.Response.RequestID, got.Response.Response, e.Expect)
+				}
 			}
 		}
 	}

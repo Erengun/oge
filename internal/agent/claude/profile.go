@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/erengun/oge/internal/agent"
@@ -13,7 +14,7 @@ import (
 // ProfileVersion versions the Launch profile: its flags, environment
 // lists, policy JSON and pre-authorised operations. Bump it with any change
 // to them, so the profile hash recorded with each decision changes too.
-const ProfileVersion = 1
+const ProfileVersion = 2
 
 // MinVersion is the oldest claude this adapter supports; LastTested is the
 // newest it was tested against (#35). A newer one only warns.
@@ -42,7 +43,17 @@ const stripEnvPrefix = "CLAUDE_CODE_REMOTE"
 
 // setEnv are the only variables Öge sets: the Launch profile's isolation
 // knobs, the Run-private Go cache, and Öge's own markers.
-var setEnv = []string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY", "GOCACHE", "OGE_RUN_ID", "OGE_ROLE"}
+var setEnv = []string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY", "GOCACHE", "GIT_OPTIONAL_LOCKS", "OGE_RUN_ID", "OGE_ROLE"}
+
+// homeSecrets are well-known credential locations under $HOME that the
+// sandbox denies the agent's shell commands (defense in depth, ADR-0020's
+// threat model). The agent's Claude and Codex config dirs are added from
+// CLAUDE_CONFIG_DIR and CODEX_HOME when set. All of $HOME isn't denied:
+// toolchains read parts of it.
+var homeSecrets = []string{
+	".ssh", ".aws", ".gnupg", ".config/gh", ".netrc", ".docker/config.json", ".kube",
+	".claude", ".claude.json", ".codex",
+}
 
 // maxInstructions bounds the CLAUDE.md Öge passes on the command line.
 const maxInstructions = 128 << 10
@@ -63,9 +74,11 @@ func profileFor(role string) (profile, error) {
 	return profile{}, fmt.Errorf("claude adapter: no Launch profile for the %s role yet", role)
 }
 
-// args is the claude argv after the program name.
-func (p profile) args(spec agent.LaunchSpec, sessionID string) ([]string, error) {
-	settings, err := p.settings(spec)
+// args is the claude argv after the program name. parent is the
+// environment the child's is built from; only the locations of $HOME and
+// the agents' config dirs are read from it, never a credential.
+func (p profile) args(spec agent.LaunchSpec, sessionID string, parent []string) ([]string, error) {
+	settings, err := p.settings(spec, parent)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +89,9 @@ func (p profile) args(spec agent.LaunchSpec, sessionID string) ([]string, error)
 		"--tools", strings.Join(p.tools, ","),
 		"--permission-mode", "default", "--permission-prompt-tool", "stdio",
 		"--session-id", sessionID,
-		// TODO(#44-decision): every MVP Session is one-shot (vendor resume
-		// is deferred, ADR-0016), so the implementer also runs without
-		// persistence; nothing lands in the user's Claude config dir.
+		// Every MVP Session is one-shot (vendor resume is deferred,
+		// ADR-0016), so the implementer also runs without persistence, as
+		// decided on #44: nothing lands in the user's Claude config dir.
 		"--no-session-persistence",
 	}
 	if spec.Model != "" {
@@ -93,31 +106,63 @@ func (p profile) args(spec agent.LaunchSpec, sessionID string) ([]string, error)
 	return a, nil
 }
 
+// denyRead is every absolute path the sandbox denies reading: Öge's
+// private state and the home secrets.
+func denyRead(spec agent.LaunchSpec, parent []string) []string {
+	get := func(name string) string {
+		for _, kv := range parent {
+			if k, v, ok := strings.Cut(kv, "="); ok && k == name {
+				return v
+			}
+		}
+		return ""
+	}
+	out := append([]string{}, spec.DenyRead...)
+	if home := get("HOME"); filepath.IsAbs(home) {
+		for _, s := range homeSecrets {
+			out = append(out, filepath.Join(home, filepath.FromSlash(s)))
+		}
+	}
+	for _, v := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME"} {
+		if d := get(v); filepath.IsAbs(d) && !oneOf(filepath.Clean(d), out) {
+			out = append(out, filepath.Clean(d))
+		}
+	}
+	return out
+}
+
 // settings is the --settings policy JSON. Sandbox paths are absolute:
 // relative ones fail silently (ADR-0004).
-func (p profile) settings(spec agent.LaunchSpec) (string, error) {
+func (p profile) settings(spec agent.LaunchSpec, parent []string) (string, error) {
 	fs := map[string]any{}
 	if spec.Cache != "" {
 		fs["allowWrite"] = []string{spec.Cache}
 	}
+	reads := denyRead(spec, parent)
+	if len(reads) > 0 {
+		fs["denyRead"] = reads
+	}
 	var deny []string
-	if len(spec.DenyRead) > 0 {
-		fs["denyRead"] = spec.DenyRead
-		for _, d := range spec.DenyRead {
-			// "//" starts an absolute path in a permission rule.
-			r := "/" + strings.TrimSuffix(d, "/") + "/**"
-			deny = append(deny, "Read("+r+")", "Edit("+r+")")
-		}
+	for _, d := range spec.DenyRead {
+		// "//" starts an absolute path in a permission rule.
+		r := "/" + strings.TrimSuffix(d, "/") + "/**"
+		deny = append(deny, "Read("+r+")", "Edit("+r+")")
 	}
-	s := map[string]any{
-		"sandbox": map[string]any{
-			"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
-			"filesystem": fs,
-		},
+	sandbox := map[string]any{
+		"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false,
+		"filesystem": fs,
 	}
-	if len(deny) > 0 {
-		s["permissions"] = map[string]any{"deny": deny}
+	if spec.Network != "on" {
+		// No domain is allowed, so a shell command's request goes to a
+		// permission prompt, which Öge denies; the network tools are
+		// denied outright. sandbox.network.allowedDomains is in claude
+		// 2.1.289's settings schema.
+		// TODO(#44-decision): that the prompt path is denied is unverified
+		// live; Evidence records network as "sandbox, no domains allowed".
+		sandbox["network"] = map[string]any{"allowedDomains": []string{}, "allowLocalBinding": false}
+		deny = append(deny, "WebFetch", "WebSearch")
 	}
+	s := map[string]any{"sandbox": sandbox, "permissions": map[string]any{"deny": deny}}
 	b, err := json.Marshal(s)
 	return string(b), err
 }
@@ -133,7 +178,7 @@ func (p profile) env(parent []string, spec agent.LaunchSpec) []string {
 		}
 		out = append(out, kv)
 	}
-	out = append(out, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+	out = append(out, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "GIT_OPTIONAL_LOCKS=0")
 	if spec.Cache != "" {
 		out = append(out, "GOCACHE="+spec.Cache)
 	}
@@ -159,7 +204,7 @@ func (p profile) hash() string {
 	def := map[string]any{
 		"version": ProfileVersion, "role": p.role, "tools": p.tools,
 		"strip": stripEnv, "strip_prefix": stripEnvPrefix, "set": setEnv,
-		"pre_authorised": preAuthorised, "suffixes": allowedSuffixes,
+		"bash_shapes": describeShapes(), "deny_read_home": homeSecrets,
 	}
 	b, _ := json.Marshal(def)
 	sum := sha256.Sum256(b)

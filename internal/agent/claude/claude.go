@@ -38,13 +38,16 @@ type Adapter struct {
 	Environ func() []string
 	// StartTimeout bounds the initialize handshake; zero means a minute.
 	StartTimeout time.Duration
+	// CloseGrace is how long Close waits at each step (stdin closed,
+	// SIGTERM, SIGKILL); zero means closeGrace.
+	CloseGrace time.Duration
 }
 
 // New returns the adapter for the claude on PATH.
 func New() *Adapter { return &Adapter{} }
 
 // closeGrace is how long Close waits for claude to exit on its own once
-// stdin is closed, before killing its process group.
+// stdin is closed, and again after SIGTERM, before SIGKILL.
 const closeGrace = 5 * time.Second
 
 // Open spawns claude and completes the initialize handshake, which spends
@@ -62,17 +65,18 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		}
 	}
 	id := newUUID()
-	args, err := prof.args(spec, id)
-	if err != nil {
-		return nil, err
-	}
 	environ := a.Environ
 	if environ == nil {
 		environ = os.Environ
 	}
+	parent := environ()
+	args, err := prof.args(spec, id, parent)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(path, args...)
 	cmd.Dir = spec.Workspace
-	cmd.Env = prof.env(environ(), spec)
+	cmd.Env = prof.env(parent, spec)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -89,6 +93,9 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		env:  envelope{role: spec.Role, cwd: spec.Workspace, tools: prof.tools},
 	}
 	s.policy = newPolicy(spec, s.hash)
+	if s.grace = a.CloseGrace; s.grace == 0 {
+		s.grace = closeGrace
+	}
 	cmd.Stderr = &s.stderr
 	if err := proc.Start(cmd); err != nil {
 		return nil, fmt.Errorf("starting claude: %w", err)
@@ -114,6 +121,7 @@ type session struct {
 	stop    chan struct{} // closed by Close: the reader stops delivering
 	exited  chan struct{} // closed once claude has exited and been waited for
 	stderr  tail
+	grace   time.Duration
 	policy  *policy
 	hash    string
 	env     envelope
@@ -123,6 +131,10 @@ type session struct {
 
 	emu      sync.Mutex // serialises event delivery with closing the stream
 	evClosed bool
+	// accepting holds the reader's events while Send writes a turn, so
+	// TurnAccepted comes first without holding emu during the write.
+	accepting bool
+	held      []agent.Event
 
 	mu        sync.Mutex
 	nextID    int
@@ -130,7 +142,8 @@ type session struct {
 	decided   map[string]agent.HostDecision // by tool_use_id
 	inFlight  bool
 	interrupt bool // an interrupt was sent for the turn in flight
-	opened    bool // SessionOpened was emitted
+	opened    bool // the envelope check passed and SessionOpened was emitted
+	fatal     bool // the envelope check failed
 	caps      []string
 	hooksRan  bool
 	apiError  string // the last structured API error this turn
@@ -217,17 +230,28 @@ func (s *session) Send(t agent.Turn) error {
 		"type": "user", "session_id": "", "parent_tool_use_id": nil, "uuid": newUUID(),
 		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": t.Text}}},
 	}
-	// Accepted goes out before anything the reader sees after the write.
+	// Accepted goes out before anything the reader sees after the write;
+	// the write itself holds no event lock, so a blocked write can't stop
+	// the reader.
+	s.emu.Lock()
+	s.accepting = true
+	s.emu.Unlock()
+	err := s.write(msg)
 	s.emu.Lock()
 	defer s.emu.Unlock()
-	if err := s.write(msg); err != nil {
+	s.accepting = false
+	if err != nil {
 		s.mu.Lock()
 		s.inFlight = false
 		s.mu.Unlock()
-		return err
+	} else {
+		s.deliver(agent.Event{Kind: agent.TurnAccepted})
 	}
-	s.deliver(agent.Event{Kind: agent.TurnAccepted})
-	return nil
+	for _, ev := range s.held {
+		s.deliver(ev)
+	}
+	s.held = nil
+	return err
 }
 
 // ErrNoInterrupt means the agent didn't report a non-terminal interrupt.
@@ -241,7 +265,9 @@ func (s *session) Interrupt() error {
 		s.mu.Unlock()
 		return nil
 	}
-	if s.opened && !oneOf(CapInterrupt, s.caps) {
+	// The Capability is known only from system/init (ADR-0005); before it
+	// arrives an interrupt isn't sent, and Close ends the process instead.
+	if !s.opened || !oneOf(CapInterrupt, s.caps) {
 		s.mu.Unlock()
 		return ErrNoInterrupt
 	}
@@ -252,7 +278,9 @@ func (s *session) Interrupt() error {
 }
 
 // Close closes stdin, which cancels any pending prompt and lets claude
-// exit, then kills its process group if it hasn't within the grace.
+// exit. If it hasn't within the grace, its process group gets SIGTERM,
+// then SIGKILL. Close takes no lock a blocked write could hold, and
+// returns within its deadlines whatever the process does.
 func (s *session) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -261,14 +289,17 @@ func (s *session) Close() error {
 		}
 		s.mu.Unlock()
 		close(s.stop)
-		s.wmu.Lock()
+		// Closing the pipe unblocks a write in progress.
 		_ = s.stdin.Close()
-		s.wmu.Unlock()
-		select {
-		case <-s.exited:
-		case <-time.After(closeGrace):
-			proc.Kill(s.cmd)
-			<-s.exited
+		for _, step := range []func(){nil, func() { proc.Terminate(s.cmd) }, func() { proc.Kill(s.cmd) }} {
+			if step != nil {
+				step()
+			}
+			select {
+			case <-s.exited:
+				return
+			case <-time.After(s.grace):
+			}
 		}
 	})
 	return nil
@@ -288,6 +319,10 @@ func (s *session) kill(why error) {
 func (s *session) emit(ev agent.Event) {
 	s.emu.Lock()
 	defer s.emu.Unlock()
+	if s.accepting {
+		s.held = append(s.held, ev)
+		return
+	}
 	s.deliver(ev)
 }
 
@@ -318,18 +353,32 @@ func (s *session) settle(ev agent.Event) {
 // process and closes the event stream.
 func (s *session) read(stdout io.Reader) {
 	r := bufio.NewReaderSize(stdout, 1<<16)
+	broken := false
 	for {
-		line, err := r.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
+		line, err := readFrame(r)
+		if errors.Is(err, errFrameTooLarge) || (err == io.EOF && len(bytes.TrimSpace(line)) > 0) {
+			why := errFrameTooLarge
+			if err == io.EOF {
+				why = errors.New("the last line has no newline")
+			}
+			s.settle(agent.Event{Failure: "malformed_frame: " + why.Error()})
+			s.kill(why)
+			broken = true
+		} else if len(bytes.TrimSpace(line)) > 0 && !broken {
 			if ferr := s.frame(line); ferr != nil {
 				s.settle(agent.Event{Failure: "malformed_frame: " + ferr.Error()})
 				s.kill(ferr)
+				broken = true
 			}
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, errFrameTooLarge) {
 			break
 		}
 	}
+	// claude has closed its stdout; end whatever its tools left running
+	// in its group. The leader isn't reaped yet, so the group id can't
+	// have been reused.
+	proc.Kill(s.cmd)
 	werr := proc.Wait(s.cmd)
 	why := "agent_crash: claude exited before the turn settled"
 	if werr != nil {
@@ -350,6 +399,34 @@ func (s *session) read(stdout io.Reader) {
 	s.evClosed = true
 	close(s.events)
 	s.emu.Unlock()
+}
+
+// maxFrame bounds one stdout line, so a runaway frame can't take
+// unbounded memory.
+const maxFrame = 16 << 20
+
+var errFrameTooLarge = fmt.Errorf("a line is over %d MiB", maxFrame>>20)
+
+// readFrame reads one line of at most maxFrame bytes. Past that it
+// discards the rest of the line and returns errFrameTooLarge.
+func readFrame(r *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(line)+len(chunk) > maxFrame {
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = r.ReadSlice('\n')
+			}
+			if err != nil && err != io.EOF {
+				return nil, err
+			}
+			return nil, errFrameTooLarge
+		}
+		line = append(line, chunk...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return line, err
+		}
+	}
 }
 
 // frame is the envelope every stream-json line shares.
@@ -529,6 +606,19 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 			"subtype": "error", "request_id": id, "error": "Öge doesn't support " + r.Subtype}})
 	}
 	s.mu.Lock()
+	gate := ""
+	switch {
+	case s.fatal || s.dead != nil:
+		gate = "the agent's startup envelope failed, or the session has ended"
+	case !s.opened:
+		gate = "the agent's startup envelope hasn't been checked yet"
+	}
+	if gate != "" {
+		s.mu.Unlock()
+		d := s.policy.refuse(tool, input, gate)
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
+		return s.answer(id, r.Subtype, d, input)
+	}
 	d, seen := s.decided[useID]
 	if !seen {
 		d = s.policy.decide(tool, input)
@@ -540,7 +630,12 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 	if !seen {
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
 	}
-	if r.Subtype == "hook_callback" {
+	return s.answer(id, r.Subtype, d, input)
+}
+
+// answer writes a decision in the form the request's subtype takes.
+func (s *session) answer(id, subtype string, d agent.HostDecision, input json.RawMessage) error {
+	if subtype == "hook_callback" {
 		if d.Decision == "allow" {
 			// No hook decision: the native rules and sandbox still apply,
 			// and a prompt that follows gets the same answer.
@@ -571,13 +666,23 @@ func (s *session) init(line []byte) error {
 		return errors.New("system/init can't be decoded")
 	}
 	s.mu.Lock()
-	first := !s.opened
-	s.opened = true
 	hooks := s.hooksRan
-	s.caps = effective(in.Capabilities)
-	caps := s.caps
 	s.mu.Unlock()
 	warnings, fatal := s.env.check(in, hooks)
+	res := residueOf(in)
+	// No tool request is authorised until this check passes, nor after it
+	// fails: the reader handles frames in order, so a request buffered
+	// behind this init sees the outcome.
+	s.mu.Lock()
+	first := !s.opened && !s.fatal
+	if fatal != "" {
+		s.fatal, s.opened = true, false
+	} else if !s.fatal {
+		s.opened = true
+	}
+	s.caps = effective(in)
+	caps := s.caps
+	s.mu.Unlock()
 	if first {
 		status := "ok"
 		if fatal != "" {
@@ -587,7 +692,7 @@ func (s *session) init(line []byte) error {
 		}
 		s.emit(agent.Event{Kind: agent.SessionOpened, Session: &agent.SessionInfo{
 			AgentVersion: clip(in.Version), Capabilities: caps, Profile: s.hash, Envelope: status,
-			AuthSource: "apiKeySource:" + clip(in.APIKeySource),
+			AuthSource: "apiKeySource:" + clip(in.APIKeySource), Residue: res,
 		}})
 		for _, w := range warnings {
 			s.emit(agent.Event{Kind: agent.Warning, Text: "envelope: " + w})
