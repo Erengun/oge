@@ -122,6 +122,7 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 				// TODO(#90-decision): a hint replaces denyTail, whose "don't
 				// retry this another way" it would contradict.
 				d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: this command isn't pre-authorised. "+h
+				d.Hint = h
 				return d
 			}
 		}

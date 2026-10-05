@@ -643,9 +643,9 @@ func TestPermissionRequestsFollowThePolicy(t *testing.T) {
 	if s.Exit != "done" {
 		t.Fatalf("settled %+v (the fake rejects a wrong answer)", s)
 	}
-	// Recorded wire order: two different denied Bash calls, each followed
-	// by one turn that moves on (#90).
-	if want := (agent.Friction{Denied: 2, RecoveryTurns: 2}); s.Friction == nil || *s.Friction != want {
+	// Recorded wire order: two denied Bash calls, each in a turn of its
+	// own with nothing allowed (#90).
+	if want := (agent.Friction{Denied: 2, LostTurns: 2}); s.Friction == nil || *s.Friction != want {
 		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 	var got []string
@@ -732,8 +732,13 @@ func TestNoAuthorisationBeforeTheEnvelopePasses(t *testing.T) {
 	if first == nil || first.Decision != "deny" || first.Rule != ruleUnchecked {
 		t.Errorf("early request = %+v", first)
 	}
-	if s := settled(t, evs); s.Exit != "done" {
+	s := settled(t, evs)
+	if s.Exit != "done" {
 		t.Errorf("settled %+v", s)
+	}
+	// A refusal for timing isn't policy friction (#90).
+	if want := (agent.Friction{EnvelopeRefusals: 1}); s.Friction == nil || *s.Friction != want {
+		t.Errorf("friction %+v, want %+v", s.Friction, want)
 	}
 }
 

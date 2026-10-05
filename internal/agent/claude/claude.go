@@ -618,7 +618,7 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 	}
 	if gate != "" {
 		d := s.policy.refuse(tool, input, gate)
-		s.friction.decided(useKey(tool, input), d)
+		s.friction.refused()
 		s.mu.Unlock()
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
 		return s.answer(id, r.Subtype, d, input)
@@ -629,7 +629,7 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		if useID != "" {
 			s.decided[useID] = d
 		}
-		s.friction.decided(useKey(tool, input), d)
+		s.friction.decided(d)
 	}
 	s.mu.Unlock()
 	if !seen {
@@ -732,11 +732,6 @@ func (s *session) assistant(f frame) error {
 	}
 	s.mu.Lock()
 	s.friction.message(m.ID)
-	for _, c := range m.Content {
-		if c.Type == "tool_use" {
-			s.friction.toolUse(useKey(c.Name, c.Input))
-		}
-	}
 	s.mu.Unlock()
 	for _, c := range m.Content {
 		switch c.Type {

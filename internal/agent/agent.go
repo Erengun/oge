@@ -101,15 +101,17 @@ type Event struct {
 	Friction *Friction `json:",omitempty"`
 }
 
-// Friction is a turn's policy friction (ADR-0019, #90): the Host requests
-// Öge denied, and the model turns spent recovering from them.
+// Friction is a turn's policy friction (ADR-0019, #90).
 type Friction struct {
-	Denied        int
-	RecoveryTurns int
+	// Denied counts the tool requests the policy denied.
+	Denied int
+	// LostTurns counts the model turns lost to policy: those with a
+	// denied tool request and no allowed one.
+	LostTurns int
+	// EnvelopeRefusals counts requests refused because the startup
+	// envelope hadn't passed: timing, not policy, so in neither count.
+	EnvelopeRefusals int
 }
-
-// Turns is the friction count: denied requests plus recovery turns.
-func (f Friction) Turns() int { return f.Denied + f.RecoveryTurns }
 
 // Host-request families (ADR-0005).
 const (
@@ -128,6 +130,8 @@ type HostDecision struct {
 	// Decision is "allow", "deny" or "cancel".
 	Decision string
 	Reason   string `json:",omitempty"`
+	// Hint is a denial's one-line recovery hint, also in Reason (#90).
+	Hint string `json:",omitempty"`
 	// By is who answered, e.g. "launch_profile:<hash>" or "policy".
 	By string
 	// Rule names the policy rule that decided, e.g. "pre_authorised",

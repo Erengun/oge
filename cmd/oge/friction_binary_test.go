@@ -26,7 +26,8 @@ func TestBinaryClaudePolicyFriction(t *testing.T) {
 		`{"dir": "in", "expect": "allow", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "h1"}}}`,
 		`{"dir": "act", "write": {"path": "add.go", "content": "package fx\n\nfunc Add(a, b int) int { return a + b }\n"}}`,
 	}
-	frames = append(frames, use("m2", "t2", "cd /home/user/project && go test ./...")...)
+	// Quoted: the Workspace path has a space in it ("Application Support").
+	frames = append(frames, use("m2", "t2", `cd \"/home/user/project\" && go test ./...`)...)
 	frames = append(frames, `{"dir": "in", "expect": "deny", "msg": {"type": "control_response", "response": {"subtype": "success", "request_id": "ht2"}}}`)
 	frames = append(frames, use("m3", "t3", "go test ./...")...)
 	frames = append(frames,
@@ -43,17 +44,17 @@ func TestBinaryClaudePolicyFriction(t *testing.T) {
 	}
 	for _, want := range []string{
 		"[implement #1 claude] Bash cd . && go test ./...\n",
-		"[implement #1 claude] denied: Bash cd . && go test ./...\n",
+		"[implement #1 claude] denied: Bash cd . && go test ./... (Run go test ./... directly; the working directory is already the Workspace.)\n",
 		"[implement #1 claude] Bash go test ./...\n",
 		"[implement #1 claude] allow Bash go test ./... · pre-authorised by Launch profile ",
-		"[implement #1 claude] policy friction 2 (1 denied, 1 recovery turn)\n",
-		"\nfriction   policy friction 2 (1 denied, 1 recovery turn)\n",
+		"[implement #1 claude] policy friction 1 turn (1 denied)\n",
+		"\nfriction   policy friction 1 turn (1 denied)\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}
 	}
-	if ledger := findLedger(t, env); !strings.Contains(ledger, `"policy_friction":{"denied":1,"recovery_turns":1,"turns":2}`) {
+	if ledger := findLedger(t, env); !strings.Contains(ledger, `"policy_friction":{"denied":1,"envelope_refusals":0,"lost_turns":1}`) {
 		t.Errorf("the Ledger lacks the policy friction:\n%s", ledger)
 	}
 }

@@ -498,7 +498,7 @@ loop:
 		obs["first_activity_ms"] = a.FirstActivity.Milliseconds()
 	}
 	if f := a.Friction; f != nil {
-		obs["policy_friction"] = map[string]int{"turns": f.Turns(), "denied": f.Denied, "recovery_turns": f.RecoveryTurns}
+		obs["policy_friction"] = map[string]int{"lost_turns": f.LostTurns, "denied": f.Denied, "envelope_refusals": f.EnvelopeRefusals}
 	}
 	if err := l.Append(RecObservation, obs); err != nil {
 		return nil, err

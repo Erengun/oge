@@ -132,9 +132,8 @@ func TestNoHintElsewhere(t *testing.T) {
 	}
 }
 
-// Policy friction (#90): denied requests, and the model turns from a
-// denial up to and including the next tool use that is allowed or that
-// differs from the denied one.
+// Policy friction (#90): denied requests, and the model turns lost to
+// policy: turns with a denied tool request and no allowed one.
 func TestPolicyFriction(t *testing.T) {
 	cd := "cd /home/user/project && go test ./..."
 	text := func(msg string) step { return step{msg: msg} }
@@ -144,14 +143,16 @@ func TestPolicyFriction(t *testing.T) {
 		want  agent.Friction
 	}{
 		{"none", []step{bashStep("m1", "go test ./...", "allow")}, agent.Friction{}},
-		{"recovered at once", []step{bashStep("m1", cd, "deny"), bashStep("m2", "go test ./...", "allow")}, agent.Friction{Denied: 1, RecoveryTurns: 1}},
-		{"identical retry", []step{bashStep("m1", "curl x", "deny"), bashStep("m2", "curl x", "deny"), bashStep("m3", "ls", "allow")}, agent.Friction{Denied: 2, RecoveryTurns: 2}},
-		{"a turn spent talking", []step{bashStep("m1", "curl x", "deny"), text("m2"), bashStep("m3", "ls", "allow")}, agent.Friction{Denied: 1, RecoveryTurns: 2}},
-		{"a different denied use", []step{bashStep("m1", "curl x", "deny"), bashStep("m2", "curl y", "deny"), bashStep("m3", "ls", "allow")}, agent.Friction{Denied: 2, RecoveryTurns: 2}},
-		// The final answer is a turn after the denial, with no tool use.
-		{"gave up", []step{bashStep("m1", "curl x", "deny")}, agent.Friction{Denied: 1, RecoveryTurns: 1}},
-		// Frames of one message share its id: one model turn.
-		{"one message, many frames", []step{bashStep("m1", "curl x", "deny"), text("m2"), bashStep("m2", "ls", "allow")}, agent.Friction{Denied: 1, RecoveryTurns: 1}},
+		{"recovered at once", []step{bashStep("m1", cd, "deny"), bashStep("m2", "go test ./...", "allow")}, agent.Friction{Denied: 1, LostTurns: 1}},
+		{"identical retry", []step{bashStep("m1", "curl x", "deny"), bashStep("m2", "curl x", "deny"), bashStep("m3", "ls", "allow")}, agent.Friction{Denied: 2, LostTurns: 2}},
+		// A turn that only talks has no denied request: not lost.
+		{"a turn spent talking", []step{bashStep("m1", "curl x", "deny"), text("m2"), bashStep("m3", "ls", "allow")}, agent.Friction{Denied: 1, LostTurns: 1}},
+		{"a different denied use", []step{bashStep("m1", "curl x", "deny"), bashStep("m2", "curl y", "deny"), bashStep("m3", "ls", "allow")}, agent.Friction{Denied: 2, LostTurns: 2}},
+		{"gave up", []step{bashStep("m1", "curl x", "deny")}, agent.Friction{Denied: 1, LostTurns: 1}},
+		// Frames of one message share its id: one model turn, and an
+		// allowed request in it means it wasn't lost.
+		{"denied and allowed in one turn", []step{bashStep("m1", "curl x", "deny"), bashStep("m1", "ls", "allow")}, agent.Friction{Denied: 1}},
+		{"two denied in one turn", []step{bashStep("m1", "curl x", "deny"), bashStep("m1", "curl y", "deny"), bashStep("m2", "ls", "allow")}, agent.Friction{Denied: 2, LostTurns: 1}},
 	} {
 		h := open(t, syntheticSession(c.steps...))
 		s := settled(t, h.turn("go"))
