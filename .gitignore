@@ -8,3 +8,4 @@
 # Skill copies generated for agents this repo does not target (e.g. OpenClaw);
 # the canonical copies live in .agents/skills.
 /skills/
+/fakeclaude
