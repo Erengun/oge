@@ -130,7 +130,8 @@ func countFiles(t *testing.T, dir string) int {
 func TestSeedIsWarmedFromTheSnapshot(t *testing.T) {
 	r := newCacheRunner(t)
 	r.SeedTemplate = "" // from cold, to see the warm step fill it
-	seed, setup, err := r.NewSeed(context.Background(), goFixture, "snap", "", filepath.Join(t.TempDir(), "seed"))
+	// A state directory with a space, like macOS's Application Support.
+	seed, setup, err := r.NewSeed(context.Background(), vetFixture, "snap", "", filepath.Join(t.TempDir(), "state dir", "seed"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +152,8 @@ func TestSeedIsWarmedFromTheSnapshot(t *testing.T) {
 	if !strings.Contains(strings.Join(warm.EnvNames, ","), "GOPROXY") {
 		t.Errorf("the warm step's env %v doesn't pin GOPROXY (it must stay offline)", warm.EnvNames)
 	}
+	r.Seed = seed
+	checkVetsOnlyItsOwnPackages(t, r, vetFixture)
 }
 
 func TestSetupOnTheSnapshotFillsTheSeed(t *testing.T) {
