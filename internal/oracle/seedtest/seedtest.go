@@ -10,8 +10,13 @@ import (
 	"path/filepath"
 )
 
-// Warm fills dir with the build cache a small Go test package needs, the
-// way Öge's warm step would: compiled, never linked or run, and offline.
+// Warm fills dir with the build cache a small Go test package needs: the
+// standard library compiled, the way Öge's warm step would, plus what a
+// Check's go test adds, offline. go test vets the package under test,
+// and vet needs facts about every dependency; with the standard
+// library's in the seed, each test Check vets only its own packages
+// instead of the whole standard library again, which costs more than
+// compiling and linking its test binary.
 func Warm(dir string) error {
 	mod := filepath.Join(dir, "module")
 	files := map[string]string{
@@ -27,12 +32,18 @@ func Warm(dir string) error {
 			return err
 		}
 	}
-	cmd := exec.Command("go", "list", "-e", "-export", "-deps", "-test", "./...")
-	cmd.Dir = mod
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GOCACHE=" + filepath.Join(dir, "gocache"),
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GOCACHE=" + filepath.Join(dir, "gocache"),
 		"GOPATH=" + filepath.Join(dir, "gopath"), "GOTOOLCHAIN=local", "GOWORK=off", "GOPROXY=off"}
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("warming the test cache seed: %v\n%s", err, out)
+	for _, args := range [][]string{
+		{"list", "-e", "-export", "-deps", "-test", "./..."},
+		// go test's own vet, the analyzers a Check's go test runs.
+		{"test", "-count=1", "-run=^$", "./..."},
+	} {
+		cmd := exec.Command("go", args...)
+		cmd.Dir, cmd.Env = mod, env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("warming the test cache seed: %v\n%s", err, out)
+		}
 	}
 	return nil
 }
