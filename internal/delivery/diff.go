@@ -14,7 +14,7 @@ func Diff(r *Run) ([]byte, error) {
 		return nil, refuse("Run %s has no Candidate yet", r.ID)
 	}
 	repo := r.repo()
-	changes, err := repo.Changes(r.Snapshot, r.Candidate)
+	changes, err := candidateChanges(r)
 	if err != nil {
 		return nil, err
 	}
@@ -43,16 +43,23 @@ func Diff(r *Run) ([]byte, error) {
 }
 
 // Clean makes a patch safe to show on a terminal: every control character
-// except tab and newline goes (a CRLF file's CR included), and invalid
-// UTF-8 becomes U+FFFD.
+// except tab and newline goes (a CRLF file's CR included), so do the
+// bidirectional overrides that can make code read other than it runs,
+// and invalid UTF-8 becomes U+FFFD.
 func Clean(patch []byte) string {
 	return strings.Map(func(r rune) rune {
 		if r == '\t' || r == '\n' {
 			return r
 		}
-		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) || bidi(r) {
 			return -1
 		}
 		return r
 	}, strings.ToValidUTF8(string(patch), "�"))
+}
+
+// bidi reports the bidirectional formatting characters: embeddings and
+// overrides (U+202A–U+202E), isolates (U+2066–U+2069) and the marks.
+func bidi(r rune) bool {
+	return (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0x200e || r == 0x200f || r == 0x061c
 }

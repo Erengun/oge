@@ -78,6 +78,9 @@ func newActionBar(env Env, r *delivery.Run, root string, receipt func()) *action
 			if err != nil {
 				return func() {}
 			}
+			// Keys typed before the bar (or in the pager) are dropped:
+			// none of them was meant for it.
+			flushInput(int(f.Fd()))
 			return func() { _ = term.Restore(int(f.Fd()), old) }
 		}
 	}
@@ -142,30 +145,92 @@ func (b *actionBar) run() {
 		draw()
 	}
 	draw()
-	key := make([]byte, 1)
+	var keys keyParser
+	buf := make([]byte, 256)
 	for {
-		n, err := b.in.Read(key)
+		n, err := b.in.Read(buf)
 		if n == 0 && err != nil {
 			clear()
 			return
 		}
-		if n == 0 {
+		got := keys.feed(buf[:n])
+		if keys.interrupted {
+			clear()
+			return
+		}
+		// Only a single real keypress acts: one byte read alone, outside
+		// any escape sequence or paste. An arrow key, a paste or typing
+		// ahead never applies.
+		if n != 1 || len(got) != 1 {
 			continue
 		}
-		switch key[0] {
-		case 'a', 'A':
+		switch got[0] {
+		case 'a':
 			if !b.applied {
 				act(func() { fmt.Fprintln(b.out, b.apply()) })
 			}
-		case 'd', 'D':
+		case 'd':
 			act(b.diff)
-		case 'r', 'R':
+		case 'r':
 			act(b.receipt)
-		case 'q', 'Q', '\r', '\n', 0x03, 0x04:
+		case 'q', '\r', '\n':
 			clear()
 			return
 		}
 	}
+}
+
+// keyParser splits terminal input into plain keys, dropping whole escape
+// sequences (CSI, SS3, Alt+key) and everything in a bracketed paste. Its
+// state carries across reads, so a sequence split over two reads is still
+// one sequence.
+type keyParser struct {
+	state       int // 0 plain, 1 after ESC, 2 in CSI, 3 after SS3
+	params      []byte
+	paste       bool
+	interrupted bool // Ctrl-C or Ctrl-D outside a paste
+}
+
+func (k *keyParser) feed(b []byte) []byte {
+	var keys []byte
+	for _, c := range b {
+		switch k.state {
+		case 1:
+			switch c {
+			case '[':
+				k.state, k.params = 2, k.params[:0]
+			case 'O':
+				k.state = 3
+			default:
+				k.state = 0 // Alt+key: dropped with its ESC
+			}
+		case 2:
+			if c >= 0x40 && c <= 0x7e {
+				switch p := string(k.params); {
+				case c == '~' && p == "200":
+					k.paste = true
+				case c == '~' && p == "201":
+					k.paste = false
+				}
+				k.state = 0
+			} else {
+				k.params = append(k.params, c)
+			}
+		case 3:
+			k.state = 0
+		default:
+			switch {
+			case c == 0x1b:
+				k.state = 1
+			case k.paste:
+			case c == 0x03 || c == 0x04:
+				k.interrupted = true
+			default:
+				keys = append(keys, c)
+			}
+		}
+	}
+	return keys
 }
 
 // plainOf is the plain renderer behind a view: the view itself, or the

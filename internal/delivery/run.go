@@ -205,11 +205,16 @@ func Find(private, repoRoot, id string) (*Run, error) {
 	canon := canonical(repoRoot)
 	for _, n := range names {
 		r, err := Load(filepath.Join(runs, n))
-		if err != nil {
+		if err == nil {
+			if canonical(r.Source) == canon {
+				return r, nil
+			}
 			continue
 		}
-		if canonical(r.Source) == canon {
-			return r, nil
+		// An unreadable Run that may be this repository's newest is
+		// refused, never skipped for an older one.
+		if src, ok := peekSource(filepath.Join(runs, n)); !ok || canonical(src) == canon {
+			return nil, refuse("the latest Run, %s, can't be read (%v); give a Run id to deliver another", n, err)
 		}
 	}
 	return nil, refuse("no Run of this repository yet; run oge \"<task>\" first")
@@ -220,4 +225,22 @@ func canonical(p string) string {
 		return c
 	}
 	return filepath.Clean(p)
+}
+
+// peekSource reads the source repository from a Ledger's first record
+// alone, for a Ledger that doesn't replay in full.
+func peekSource(dir string) (string, bool) {
+	b, err := os.ReadFile(filepath.Join(dir, ledger.LedgerFile))
+	if err != nil {
+		return "", false
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	var rec struct {
+		Type string
+		Data struct{ Source string }
+	}
+	if json.Unmarshal([]byte(first), &rec) != nil || rec.Type != run.RecRunStarted || rec.Data.Source == "" {
+		return "", false
+	}
+	return rec.Data.Source, true
 }

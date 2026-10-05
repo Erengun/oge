@@ -2,10 +2,13 @@ package delivery
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -95,6 +98,17 @@ type Plan struct {
 // Writes is how many paths applying the plan changes.
 func (p *Plan) Writes() int { return len(p.actions) }
 
+// Deletes is how many of them it deletes.
+func (p *Plan) Deletes() int {
+	n := 0
+	for _, a := range p.actions {
+		if !a.to.present {
+			n++
+		}
+	}
+	return n
+}
+
 // PlanApply works out how the Candidate's change since the Snapshot lands
 // on target, the user's working tree as it is now. The Snapshot holds the
 // working tree's bytes, uncommitted and untracked work included, so the
@@ -104,16 +118,22 @@ func (p *Plan) Writes() int { return len(p.actions) }
 // into it.
 func PlanApply(r *Run, target string) (*Plan, error) {
 	repo := r.repo()
-	changes, err := repo.Changes(r.Snapshot, r.Candidate)
+	changes, err := candidateChanges(r)
 	if err != nil {
 		return nil, err
 	}
 	p := &Plan{Changed: len(changes)}
+	folded := map[string]string{}
 	for _, c := range changes {
 		if err := safePath(c.Path); err != nil {
 			p.Conflicts = append(p.Conflicts, fmt.Sprintf("%s: %v", c.Path, err))
 			continue
 		}
+		if other, ok := folded[fold(c.Path)]; ok {
+			p.Conflicts = append(p.Conflicts, fmt.Sprintf("%s: differs from %s only in case or Unicode normalisation, so both may be one file here", c.Path, other))
+			continue
+		}
+		folded[fold(c.Path)] = c.Path
 		base, err := blobState(repo, c.OldMode, c.OldOID)
 		if err != nil {
 			return nil, err
@@ -121,6 +141,10 @@ func PlanApply(r *Run, target string) (*Plan, error) {
 		theirs, err := blobState(repo, c.NewMode, c.NewOID)
 		if err != nil {
 			return nil, err
+		}
+		if theirs.mode == "120000" && linkLeaves(c.Path, string(theirs.data)) {
+			p.Conflicts = append(p.Conflicts, fmt.Sprintf("%s: a symlink to %s, outside the repository, which Öge doesn't deliver", c.Path, theirs.data))
+			continue
 		}
 		ours, err := treeState(target, c.Path)
 		if err != nil {
@@ -303,9 +327,9 @@ func (p *Plan) write(root string) error {
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return err
 		}
+		sweepTemps(full)
+		tmp := tempName(full)
 		if a.to.mode == "120000" {
-			tmp := full + ".oge-tmp"
-			_ = os.Remove(tmp)
 			if err := os.Symlink(filepath.FromSlash(string(a.to.data)), tmp); err != nil {
 				return err
 			}
@@ -315,34 +339,94 @@ func (p *Plan) write(root string) error {
 			}
 			continue
 		}
-		perm := os.FileMode(0o644)
+		// A new file is created with the umask applied, as any tool's
+		// would be; a replaced one keeps the user's permission bits, with
+		// only the exec bit the Candidate's.
+		perm := os.FileMode(0o666)
 		if a.to.mode == "100755" {
-			perm = 0o755
+			perm = 0o777
 		}
-		if fi, err := os.Lstat(full); err == nil && fi.Mode().IsRegular() {
-			// The user's permission bits stay; only the exec bit is the
-			// Candidate's.
-			perm = fi.Mode().Perm() &^ 0o111
+		existing, err := os.Lstat(full)
+		f, err2 := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+		if err2 != nil {
+			return err2
+		}
+		_, werr := f.Write(a.to.data)
+		cerr := f.Close()
+		if err == nil && existing.Mode().IsRegular() {
+			keep := existing.Mode().Perm() &^ 0o111
 			if a.to.mode == "100755" {
-				perm |= (perm & 0o444) >> 2
+				keep |= (keep & 0o444) >> 2
 			}
+			werr = errors.Join(werr, os.Chmod(tmp, keep))
 		}
-		tmp, err := os.CreateTemp(filepath.Dir(full), "."+filepath.Base(full)+".oge-*")
-		if err != nil {
+		if err := errors.Join(werr, cerr); err != nil {
+			os.Remove(tmp)
 			return err
 		}
-		_, werr := tmp.Write(a.to.data)
-		cerr := tmp.Close()
-		if err := errors.Join(werr, cerr, os.Chmod(tmp.Name(), perm)); err != nil {
-			os.Remove(tmp.Name())
-			return err
-		}
-		if err := os.Rename(tmp.Name(), full); err != nil {
-			os.Remove(tmp.Name())
+		if err := os.Rename(tmp, full); err != nil {
+			os.Remove(tmp)
 			return err
 		}
 	}
 	return nil
+}
+
+// tempPrefix is the start of the name a file is written under beside
+// its final place, before the rename.
+func tempPrefix(full string) string {
+	return filepath.Join(filepath.Dir(full), "."+filepath.Base(full)+".oge-")
+}
+
+func tempName(full string) string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return tempPrefix(full) + hex.EncodeToString(b[:])
+}
+
+// sweepTemps removes what a write killed before its rename (SIGKILL,
+// power loss) left beside full.
+func sweepTemps(full string) {
+	leftovers, _ := filepath.Glob(globEscape(tempPrefix(full)) + "*")
+	for _, l := range leftovers {
+		if fi, err := os.Lstat(l); err == nil && !fi.IsDir() {
+			_ = os.Remove(l)
+		}
+	}
+}
+
+func globEscape(s string) string {
+	r := strings.NewReplacer(`*`, `\*`, `?`, `\?`, `[`, `\[`, `\`, `\\`)
+	if filepath.Separator == '\\' {
+		return s
+	}
+	return r.Replace(s)
+}
+
+// linkLeaves reports whether a symlink at rel with target escapes the
+// tree: absolute, or climbing out through "..". The Snapshot never copies
+// such a link (ADR-0010), and delivery never writes one.
+func linkLeaves(rel, target string) bool {
+	if target == "" || strings.HasPrefix(target, "/") || filepath.IsAbs(target) {
+		return true
+	}
+	p := path.Clean(path.Join(path.Dir(rel), target))
+	return p == ".." || strings.HasPrefix(p, "../")
+}
+
+// candidateChanges is what the Candidate changes since the Snapshot,
+// refusing what delivery can't carry.
+func candidateChanges(r *Run) ([]workspace.Change, error) {
+	changes, err := r.repo().Changes(r.Snapshot, r.Candidate)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range changes {
+		if c.NewMode == "160000" || c.OldMode == "160000" {
+			return nil, refuse("%s is a submodule (a nested repository) in Candidate %s, which Öge doesn't deliver", c.Path, Short(r.Candidate))
+		}
+	}
+	return changes, nil
 }
 
 func removeEmptyParents(root, dir string) {

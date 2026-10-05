@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/workspace"
 )
 
@@ -42,6 +43,11 @@ func planFixture(t *testing.T, files map[string]string, change func(ws string)) 
 		t.Fatal(err)
 	}
 	change(ws)
+	l, err := ledger.Create(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
 	cand, err := repo.CommitCandidate(ws, snap, "refs/oge/c1", "c1")
 	if err != nil {
 		t.Fatal(err)
@@ -92,5 +98,112 @@ func TestPlanApplyDeleteAgainstChange(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("conflicts lack %q:\n%s", want, got)
 		}
+	}
+}
+
+// Paths that differ only in case or Unicode normalisation are one file
+// on many filesystems: applying both could delete the one written.
+func TestPlanApplyRefusesPathsThatFoldEqual(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"Readme.txt": "a\n"}, func(string) {})
+	// Built with plumbing: a case-insensitive filesystem can't make it.
+	gd := filepath.Join(r.Dir, "repo.git")
+	gitc := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"--git-dir=" + gd}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	tree := strings.Replace(gitc("", "ls-tree", r.Snapshot), "\tReadme.txt", "\tREADME.txt", 1)
+	tree = gitc(tree+"\n", "mktree")
+	r.Candidate = gitc("", "commit-tree", tree, "-p", r.Snapshot, "-m", "rename")
+	p, err := PlanApply(r, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(p.Conflicts, "\n"); !strings.Contains(got, "Readme.txt: differs from README.txt only in case or Unicode normalisation") {
+		t.Fatalf("conflicts: %q", got)
+	}
+	if fold("cafe\u0301.txt") != fold("CAF\u00c9.txt") {
+		t.Error("fold doesn't normalise")
+	}
+}
+
+// A Candidate symlink that points outside the repository is never
+// written, as the Snapshot never copies one.
+func TestPlanApplyRefusesSymlinksOutOfTheRepository(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.Symlink("/etc", filepath.Join(ws, "abs"))
+		os.Symlink("../../outside", filepath.Join(ws, "up"))
+		os.Symlink("a.txt", filepath.Join(ws, "ok"))
+	})
+	p, err := PlanApply(r, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(p.Conflicts, "\n")
+	for _, want := range []string{"abs: a symlink to /etc, outside the repository", "up: a symlink to ../../outside, outside the repository"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("conflicts lack %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "ok:") {
+		t.Errorf("a link inside the repository conflicts:\n%s", got)
+	}
+}
+
+// Writing a symlink never removes a user file beside it, and leftovers
+// of a write that was killed are swept.
+func TestApplyWritesSymlinksWithoutTouchingNeighbours(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		os.Symlink("a.txt", filepath.Join(ws, "link"))
+		os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
+	})
+	os.WriteFile(filepath.Join(user, "link.oge-tmp"), []byte("mine"), 0o644)
+	os.WriteFile(filepath.Join(user, ".a.txt.oge-123456"), []byte("left over"), 0o600)
+	p, err := PlanApply(r, user)
+	if err != nil || len(p.Conflicts) > 0 {
+		t.Fatal(err, p.Conflicts)
+	}
+	if err := p.write(user); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(user, "link.oge-tmp")); err != nil || string(b) != "mine" {
+		t.Errorf("link.oge-tmp: %q %v", b, err)
+	}
+	if target, err := os.Readlink(filepath.Join(user, "link")); err != nil || target != "a.txt" {
+		t.Errorf("link -> %q %v", target, err)
+	}
+	if _, err := os.Lstat(filepath.Join(user, ".a.txt.oge-123456")); !os.IsNotExist(err) {
+		t.Errorf("the leftover temp file stayed: %v", err)
+	}
+}
+
+// A gitlink (a nested repository) in the Candidate is a named refusal,
+// not an internal error.
+func TestDeliveryRefusesAGitlink(t *testing.T) {
+	user, r := planFixture(t, map[string]string{"a.txt": "a\n"}, func(ws string) {
+		sub := filepath.Join(ws, "sub")
+		os.MkdirAll(sub, 0o755)
+		os.WriteFile(filepath.Join(sub, "f"), []byte("x"), 0o644)
+		for _, args := range [][]string{{"init", "-q"}, {"add", "f"}, {"-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "x"}} {
+			cmd := exec.Command("git", args...)
+			cmd.Dir = sub
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v %s", err, out)
+			}
+		}
+	})
+	changes, _ := r.repo().Changes(r.Snapshot, r.Candidate)
+	if len(changes) != 1 || changes[0].NewMode != "160000" {
+		t.Skipf("no gitlink in the Candidate: %+v", changes)
+	}
+	if _, err := PlanApply(r, user); !IsRefused(err) || !strings.Contains(err.Error(), "sub is a submodule") {
+		t.Errorf("PlanApply: %v", err)
+	}
+	if _, err := Diff(r); !IsRefused(err) || !strings.Contains(err.Error(), "sub is a submodule") {
+		t.Errorf("Diff: %v", err)
 	}
 }

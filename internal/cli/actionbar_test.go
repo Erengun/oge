@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -9,10 +10,34 @@ import (
 )
 
 // barHarness is an action bar whose actions only say what they did.
+// Each chunk of keys arrives as one read, as a terminal delivers one
+// keypress (or one paste).
 func barHarness(keys string, color bool) (*actionBar, *bytes.Buffer, *[]string) {
+	var chunks []string
+	for _, k := range keys {
+		chunks = append(chunks, string(k))
+	}
+	return barChunks(chunks, color)
+}
+
+type chunkReader struct{ chunks []string }
+
+func (c *chunkReader) Read(p []byte) (int, error) {
+	if len(c.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, c.chunks[0])
+	c.chunks[0] = c.chunks[0][n:]
+	if c.chunks[0] == "" {
+		c.chunks = c.chunks[1:]
+	}
+	return n, nil
+}
+
+func barChunks(chunks []string, color bool) (*actionBar, *bytes.Buffer, *[]string) {
 	var out bytes.Buffer
 	var did []string
-	b := &actionBar{in: strings.NewReader(keys), out: &out, st: newStyles(color)}
+	b := &actionBar{in: &chunkReader{chunks: chunks}, out: &out, st: newStyles(color)}
 	b.apply = func() string {
 		did = append(did, "apply")
 		b.applied = true
@@ -71,5 +96,28 @@ func TestNoActionBarUnlessAccepted(t *testing.T) {
 		if code := afterRun(env, runFlags{}, u, t.TempDir(), &run.Result{Outcome: o, Candidate: "6d1231d9f00d"}); code != ExitOK || out.Len() != 0 {
 			t.Errorf("%s: exit %d, %q", o, code, out.String())
 		}
+	}
+}
+
+// Only a single real keypress acts. Arrow keys (CSI and SS3, whole or
+// split across reads), bracketed and unbracketed pastes, and uppercase
+// letters never apply or open the diff.
+func TestActionBarIgnoresEscapeSequencesAndPastes(t *testing.T) {
+	for _, chunks := range [][]string{
+		{"\x1b[A"}, {"\x1bOA"}, {"\x1b[D"}, {"\x1b[1;5D"}, {"\x1b", "[", "A"}, {"\x1b", "O", "a"},
+		{"\x1b[200~a banana\x1b[201~"}, {"\x1b[200~", "a", "\x1b[201~"}, {"banana"}, {"aa"},
+		{"A"}, {"D"}, {"R"}, {"\x1ba"},
+	} {
+		b, _, did := barChunks(append(chunks, "q", "a"), false)
+		b.run()
+		if len(*did) != 0 {
+			t.Errorf("%q: %v", chunks, *did)
+		}
+	}
+	// After a sequence, a real a still applies.
+	b, _, did := barChunks([]string{"\x1b[A", "a", "q"}, false)
+	b.run()
+	if strings.Join(*did, ",") != "apply" {
+		t.Errorf("a after an arrow key: %v", *did)
 	}
 }

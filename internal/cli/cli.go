@@ -40,7 +40,10 @@ type Env struct {
 	Dir            string // working directory
 	// Interactive reports whether a human is at a terminal (stdin and stdout).
 	Interactive func() bool
-	LookPath    func(string) (string, error)
+	// StdoutTTY reports whether stdout alone is a terminal; nil means
+	// Interactive.
+	StdoutTTY func() bool
+	LookPath  func(string) (string, error)
 	// Edit opens path in the user's $EDITOR and waits for it to exit.
 	Edit func(path string) error
 	// Page shows text in the user's pager and waits for it to exit; nil
@@ -67,6 +70,7 @@ func ProcessEnv(version string) Env {
 		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 		Dir:         dir,
 		Interactive: func() bool { return isTerminal(os.Stdin) && isTerminal(os.Stdout) },
+		StdoutTTY:   func() bool { return isTerminal(os.Stdout) },
 		LookPath:    exec.LookPath,
 		Edit:        runEditor,
 		Page:        pageText,

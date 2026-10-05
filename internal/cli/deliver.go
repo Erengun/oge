@@ -198,6 +198,11 @@ func diffCommand(env Env, r *delivery.Run, f deliverFlags) int {
 		return ExitOK
 	}
 	if f.plain || !ttyOut(env) {
+		if stdoutTTY(env) {
+			// A terminal still never gets the agent's bytes raw.
+			_, _ = io.WriteString(env.Stdout, delivery.Clean(patch))
+			return ExitOK
+		}
 		// Not a terminal: the patch exactly as it is.
 		_, _ = env.Stdout.Write(patch)
 		return ExitOK
@@ -217,6 +222,14 @@ func outcomeWord(r *delivery.Run) string {
 		return "Parked"
 	}
 	return "unfinished"
+}
+
+// stdoutTTY reports whether output goes to a terminal at all.
+func stdoutTTY(env Env) bool {
+	if env.StdoutTTY != nil {
+		return env.StdoutTTY()
+	}
+	return env.Interactive()
 }
 
 // ttyOut reports whether output goes to a terminal that can show colour
@@ -341,14 +354,20 @@ func authorize(env Env, r *delivery.Run, flag string) int {
 // appliedLine is apply's one confirmation line.
 func appliedLine(r *delivery.Run, p *delivery.Plan) string {
 	if p.Writes() == 0 {
-		return fmt.Sprintf("Candidate %s is already in your working tree; nothing to change.", delivery.Short(r.Candidate))
+		return fmt.Sprintf("Candidate %s of Run %s is already in your working tree; nothing to change.", delivery.Short(r.Candidate), r.ID)
 	}
-	merged := ""
+	var parts []string
+	if n := p.Writes() - p.Deletes(); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d changed", n))
+	}
+	if n := p.Deletes(); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", n))
+	}
 	if p.Merged > 0 {
-		merged = fmt.Sprintf(", %d merged with your edits", p.Merged)
+		parts = append(parts, fmt.Sprintf("%d merged with your edits", p.Merged))
 	}
-	return fmt.Sprintf("Applied Candidate %s to your working tree (%s%s). Nothing was committed or staged.",
-		delivery.Short(r.Candidate), files(p.Writes()), merged)
+	return fmt.Sprintf("Applied Candidate %s of Run %s to your working tree: %s. Nothing was committed or staged.",
+		delivery.Short(r.Candidate), r.ID, strings.Join(parts, " · "))
 }
 
 func branchCommand(env Env, r *delivery.Run, root, name, flag string) int {
@@ -366,7 +385,7 @@ func branchCommand(env Env, r *delivery.Run, root, name, flag string) int {
 	if b.SnapshotCommit != "" {
 		on += ", over a commit of the Snapshot's uncommitted work"
 	}
-	fmt.Fprintf(env.Stdout, "Created branch %s: Candidate %s as commit %s on %s. Not checked out; git switch %s to use it.\n",
-		b.Name, delivery.Short(r.Candidate), delivery.Short(b.Commit), on, b.Name)
+	fmt.Fprintf(env.Stdout, "Created branch %s from Run %s: Candidate %s as commit %s on %s. Not checked out; git switch %s to use it.\n",
+		b.Name, r.ID, delivery.Short(r.Candidate), delivery.Short(b.Commit), on, b.Name)
 	return ExitOK
 }

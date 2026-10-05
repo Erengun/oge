@@ -34,7 +34,7 @@ func TestBinaryDeliversAnAcceptedRun(t *testing.T) {
 
 	env = append(env, "GIT_AUTHOR_NAME=u", "GIT_AUTHOR_EMAIL=u@example.com", "GIT_COMMITTER_NAME=u", "GIT_COMMITTER_EMAIL=u@example.com")
 	code, out, errOut = runBinary(t, repo, env, "branch", "taken")
-	if code != 0 || !strings.HasPrefix(out, "Created branch taken: ") {
+	if code != 0 || !strings.HasPrefix(out, "Created branch taken from Run ") {
 		t.Fatalf("branch: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if got := git("symbolic-ref", "--short", "HEAD"); got == "taken\n" {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/run"
 )
 
 // accepted runs script to an Accepted Run and returns its id.
@@ -85,7 +86,7 @@ func TestApplyAcceptedOnACleanTree(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("apply: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if !strings.HasPrefix(out, "Applied Candidate ") || !strings.Contains(out, "(1 file changed). Nothing was committed or staged.") || strings.Count(out, "\n") != 1 {
+	if !strings.HasPrefix(out, "Applied Candidate ") || !strings.Contains(out, " of Run "+id+" to your working tree: 1 changed. Nothing was committed or staged.") || strings.Count(out, "\n") != 1 {
 		t.Errorf("apply's confirmation:\n%s", out)
 	}
 	if got := readFile(t, filepath.Join(f.repo, "add.go")); got != fxFixed {
@@ -148,7 +149,7 @@ func TestApplyKeepsUnrelatedEditsMadeSinceTheRun(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "add_test.go"), []byte(userTest))
 
 	code, out, errOut := f.deliver(t, "apply")
-	if code != ExitOK || !strings.Contains(out, "(2 files changed, 1 merged with your edits)") {
+	if code != ExitOK || !strings.Contains(out, ": 2 changed · 1 merged with your edits. ") {
 		t.Fatalf("apply: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if got, want := readFile(t, filepath.Join(f.repo, "long.txt")), longFile(map[int]string{2: "agent edit", 18: "user edit"}); got != want {
@@ -266,7 +267,7 @@ func TestApplyNewDeletedAndBinaryFiles(t *testing.T) {
 	}
 
 	code, out, errOut := f.deliver(t, "apply")
-	if code != ExitOK || !strings.Contains(out, "(5 files changed)") {
+	if code != ExitOK || !strings.Contains(out, ": 4 changed · 1 deleted. ") {
 		t.Fatalf("apply: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if _, err := os.Lstat(filepath.Join(f.repo, "old")); !os.IsNotExist(err) {
@@ -367,7 +368,7 @@ func TestBranchNeverChecksOut(t *testing.T) {
 		t.Fatalf("branch: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	name := "oge/" + id
-	if !strings.HasPrefix(out, "Created branch "+name+": Candidate ") || !strings.Contains(out, "over a commit of the Snapshot's uncommitted work. Not checked out; git switch "+name) {
+	if !strings.HasPrefix(out, "Created branch "+name+" from Run "+id+": Candidate ") || !strings.Contains(out, "over a commit of the Snapshot's uncommitted work. Not checked out; git switch "+name) {
 		t.Errorf("stdout:\n%s", out)
 	}
 	f.assertUntouched(t)
@@ -396,7 +397,7 @@ func TestBranchNeverChecksOut(t *testing.T) {
 		t.Errorf("exit %d: %s", code, errOut)
 	}
 	code, out, _ = f.deliver(t, "branch", id, "mine")
-	if code != ExitOK || !strings.Contains(out, "Created branch mine:") {
+	if code != ExitOK || !strings.Contains(out, "Created branch mine from Run ") {
 		t.Errorf("exit %d: %s", code, out)
 	}
 	if got := deliveries(t, f.onlyRun(t)); strings.Join(got, "|") != "branch|branch" {
@@ -412,7 +413,7 @@ func TestRunApplyFlagAppliesAnAcceptedCandidate(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	if strings.Contains(out, "Nothing was written to your repository.") || !strings.Contains(out, "ACCEPTED") ||
-		!strings.HasSuffix(out, "(1 file changed). Nothing was committed or staged.\n") || strings.Contains(out, "next ") {
+		!strings.HasSuffix(out, ": 1 changed. Nothing was committed or staged.\n") || strings.Contains(out, "next ") {
 		t.Errorf("stdout:\n%s", out)
 	}
 	if got := readFile(t, filepath.Join(f.repo, "add.go")); got != fxFixed {
@@ -462,5 +463,86 @@ func TestUnattendedRunOnATerminalOffersNoActionBar(t *testing.T) {
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK || !strings.Contains(out, "next       oge apply ") || strings.Contains(out, "[a] apply") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// Whenever oge diff writes to a terminal, even with --plain or a dumb
+// TERM, the agent's bytes can't reach it raw: no control characters, no
+// bidi overrides. Without a terminal the patch stays exact.
+func TestDiffToATerminalIsAlwaysCleaned(t *testing.T) {
+	f := newRunFixture(t)
+	f.accepted(t, fixScript+`printf 'title \033]0;pwned\007 \342\200\256evil\n' > note.txt`+"\n")
+	f.interactive = true
+	for _, c := range []struct {
+		term string
+		args []string
+	}{{"dumb", []string{"diff"}}, {"xterm-256color", []string{"diff", "--plain"}}, {"", []string{"diff"}}} {
+		t.Setenv("TERM", c.term)
+		code, out, errOut := f.deliver(t, c.args...)
+		if code != ExitOK || !strings.Contains(out, "+title") || strings.ContainsAny(out, "\x1b\x07\u202e") {
+			t.Errorf("TERM=%q %v: exit %d\n%q\n%s", c.term, c.args, code, out, errOut)
+		}
+	}
+	f.interactive = false
+	if _, out, _ := f.deliver(t, "diff"); !strings.Contains(out, "\x1b]0;pwned\x07") {
+		t.Errorf("the plain patch isn't exact:\n%q", out)
+	}
+}
+
+// overrideRun rewrites a finished Run's Ledger so it ended Overridden, as
+// an override at a Gate would (no Gate offers one yet).
+func overrideRun(t *testing.T, runDir string) {
+	t.Helper()
+	recs, err := ledger.Replay(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(runDir, ledger.LedgerFile)); err != nil {
+		t.Fatal(err)
+	}
+	l, err := ledger.Create(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	for _, r := range recs {
+		var data any = r.Data
+		switch r.Type {
+		case run.RecRunEnded:
+			var d map[string]any
+			json.Unmarshal(r.Data, &d)
+			d["outcome"] = run.Overridden
+			data = d
+		}
+		if err := l.Append(r.Type, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Append(run.RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.bound_exhaustion"},
+		"actor": "human", "choice": "override", "reason": "the flaky test is wrong"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An Overridden Candidate is delivered only with --overridden, after its
+// outcome and why; --rejected names the wrong outcome.
+func TestApplyOverriddenNeedsTheOverriddenFlag(t *testing.T) {
+	f := newRunFixture(t)
+	f.accepted(t, fixScript)
+	overrideRun(t, f.onlyRun(t))
+	for _, args := range [][]string{{"apply"}, {"apply", "--rejected"}} {
+		code, out, errOut := f.deliver(t, args...)
+		if code != ExitRefused || !strings.Contains(errOut, "OVERRIDDEN Candidate ") || !strings.Contains(errOut, `a human chose "override"`) {
+			t.Fatalf("%v: exit %d\nstdout:\n%s\nstderr:\n%s", args, code, out, errOut)
+		}
+	}
+	f.assertUntouched(t)
+	code, out, errOut := f.deliver(t, "apply", "--overridden")
+	if code != ExitOK || !strings.HasPrefix(out, "OVERRIDDEN Candidate ") || !strings.Contains(out, "as --overridden asks\nApplied Candidate ") ||
+		strings.Contains(strings.ToLower(out), "verified") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if got := deliveries(t, f.onlyRun(t)); strings.Join(got, "|") != "apply overridden" {
+		t.Errorf("Delivery records: %v", got)
 	}
 }
