@@ -349,3 +349,38 @@ func TestTUIActivityShowsOnlyClaims(t *testing.T) {
 		t.Errorf("the activity lacks the Claims:\n%s", got)
 	}
 }
+
+// A stage's line lands on the stage the event names, whatever order the
+// stages are listed in (Blind mode runs the verifier first).
+func TestTUIMatchesStagesByName(t *testing.T) {
+	f := &pipeline.Frozen{
+		Mode: pipeline.Blind,
+		Stages: []pipeline.Stage{
+			{Name: "implement", Role: "implementer", Agent: "claude"},
+			{Name: "verify", Role: "verifier", Agent: "codex"},
+		},
+		Checks: []pipeline.CheckCommand{{Run: "go test ./..."}},
+	}
+	now := tuiT0
+	m := newModel(task.Parse("fix Add\n"), f, newStyles(false), func() time.Time { return now })
+	m.Update(batchMsg{progressOf(run.Event{Kind: run.EvPreflight}, f, now)})
+	v := &run.Attempt{ID: "verify#1", Stage: "verify", Agent: "codex", Exit: "done", Candidate: "abcdef0123", Changed: []string{"x_test.go"}}
+	m.Update(batchMsg{progressOf(run.Event{Kind: run.EvAttempt, Attempt: v}, f, now)})
+	got := m.render()
+	for _, want := range []string{
+		"✓ verify     codex · Exit done · Candidate abcdef0 · 1 file changed",
+		"⠋ implement  claude",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("frame lacks %q:\n%s", want, got)
+		}
+	}
+
+	// A stage the graph didn't list shows up before the Check.
+	r := &run.Attempt{ID: "review#1", Stage: "review", Agent: "claude", Failure: "timeout"}
+	m.Update(batchMsg{progressOf(run.Event{Kind: run.EvAttempt, Attempt: r}, f, now)})
+	got = m.render()
+	if i, j := strings.Index(got, "✗ review"), strings.Index(got, "· check"); i < 0 || j < i {
+		t.Errorf("the unlisted stage isn't before the Check:\n%s", got)
+	}
+}

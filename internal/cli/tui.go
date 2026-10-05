@@ -155,12 +155,13 @@ type (
 	// progressMsg is a run.Event already turned into text, on the Run's
 	// goroutine: the view never reads the Run's live Result.
 	progressMsg struct {
-		at   time.Time
-		kind run.EventKind
-		head string   // EvStarted: the Run line
-		text string   // a finished stage's line, as plain mode prints it
-		sub  []string // further lines under it
-		fail bool
+		at    time.Time
+		kind  run.EventKind
+		head  string   // EvStarted: the Run line
+		stage string   // the stage the event belongs to
+		text  string   // a finished stage's line, as plain mode prints it
+		sub   []string // further lines under it
+		fail  bool
 		// timed: the lines carry their own durations (Check commands).
 		timed bool
 		step  string // EvAgent: one line of activity
@@ -174,6 +175,14 @@ type (
 
 func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	m := progressMsg{at: at, kind: ev.Kind}
+	switch ev.Kind {
+	case run.EvPreflight:
+		m.stage = "preflight"
+	case run.EvAgent, run.EvAttempt:
+		m.stage = ev.Attempt.Stage
+	case run.EvCheck:
+		m.stage = "check"
+	}
 	switch ev.Kind {
 	case run.EvStarted:
 		m.head = startedLine(ev.Result, f)
@@ -321,6 +330,11 @@ func (m *model) apply(msg tea.Msg) bool {
 		case run.EvPreflight, run.EvAttempt, run.EvCheck:
 			m.finish(msg)
 		case run.EvAgent:
+			if msg.stage != "" {
+				if i := m.index(msg.stage); m.stages[i].state == pending {
+					m.begin(i, msg.at)
+				}
+			}
 			if msg.step != "" {
 				m.steps = append(m.steps, msg.step)
 				if len(m.steps) > keptSteps {
@@ -343,24 +357,63 @@ func (m *model) apply(msg tea.Msg) bool {
 	return false
 }
 
-// finish ends the running stage with its line, and starts the next one
-// unless this one failed.
-func (m *model) finish(msg progressMsg) {
-	if m.cur >= len(m.stages) {
+// index is the position of the stage named name. A stage the frozen graph
+// didn't list goes in before the Check.
+func (m *model) index(name string) int {
+	for i, s := range m.stages {
+		if s.name == name {
+			return i
+		}
+	}
+	i := max(len(m.stages)-1, 0)
+	m.stages = append(m.stages[:i], append([]stage{{name: name}}, m.stages[i:]...)...)
+	if m.cur >= i {
+		m.cur++
+	}
+	return i
+}
+
+// begin makes the stage at i the running one; one that was running
+// without news goes back to pending.
+func (m *model) begin(i int, at time.Time) {
+	if i == m.cur && m.stages[i].state == running {
 		return
 	}
-	at := msg.at
-	s := &m.stages[m.cur]
-	s.text, s.sub, s.timed, s.end = msg.text, msg.sub, msg.timed, at
+	if m.cur < len(m.stages) && m.stages[m.cur].state == running {
+		m.stages[m.cur].state = pending
+	}
+	m.stages[i].state, m.stages[i].start = running, at
+	m.cur = i
+	m.steps, m.more = nil, 0
+}
+
+// finish ends the stage the message names with its line. Unless it failed,
+// the first stage still pending starts.
+func (m *model) finish(msg progressMsg) {
+	i := m.index(msg.stage)
+	s := &m.stages[i]
+	if s.state != running {
+		// Its start went unseen; it began when the running one did.
+		s.start = m.stages[min(m.cur, len(m.stages)-1)].start
+		if m.cur < len(m.stages) && m.stages[m.cur].state == running && m.cur != i {
+			m.stages[m.cur].state = pending
+		}
+	}
+	s.text, s.sub, s.timed, s.end = msg.text, msg.sub, msg.timed, msg.at
 	s.state = passed
+	m.cur = i
 	if msg.fail {
 		s.state = failed
 		return
 	}
 	m.steps, m.more = nil, 0
-	m.cur++
-	if m.cur < len(m.stages) {
-		m.stages[m.cur].state, m.stages[m.cur].start = running, at
+	m.cur = len(m.stages)
+	for j := range m.stages {
+		if m.stages[j].state == pending {
+			m.stages[j].state, m.stages[j].start = running, msg.at
+			m.cur = j
+			break
+		}
 	}
 }
 
