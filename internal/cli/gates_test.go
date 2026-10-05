@@ -81,6 +81,7 @@ func gateRecords(t *testing.T, runDir string) []string {
 }
 
 func TestAttendedBoundExhaustionGate(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, stdin string
 		code        int
@@ -119,6 +120,7 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			f := newRunFixture(t)
 			f.sendBackLimit(t, 0)
 			f.attended(c.stdin)
@@ -146,6 +148,7 @@ func TestAttendedBoundExhaustionGate(t *testing.T) {
 // with a reason, recorded as one, and its next turn carries the reason
 // with the failure output.
 func TestAttendedSendBackPastTheLimit(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	f.attended("s\nsend back\n\ntry once more\n")
@@ -180,7 +183,9 @@ func TestAttendedSendBackPastTheLimit(t *testing.T) {
 // The Attempt cap is hard: once it is reached nothing can send the
 // Candidate back, at the Check or at the Gate.
 func TestAttemptCapIsEnforced(t *testing.T) {
+	t.Parallel()
 	t.Run("unattended", func(t *testing.T) {
+		t.Parallel()
 		f := newRunFixture(t)
 		f.limits(t, "send_backs = 5\nattempts = 2\n")
 		code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -190,6 +195,7 @@ func TestAttemptCapIsEnforced(t *testing.T) {
 		}
 	})
 	t.Run("attended", func(t *testing.T) {
+		t.Parallel()
 		f := newRunFixture(t)
 		f.limits(t, "send_backs = 0\nattempts = 1\n")
 		f.attended("send back once more\nquit\n")
@@ -202,6 +208,7 @@ func TestAttemptCapIsEnforced(t *testing.T) {
 
 // The reason can be written in $EDITOR; its comment lines are dropped.
 func TestGateReasonFromTheEditor(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	f.attended("reject\ne\n")
@@ -215,6 +222,7 @@ func TestGateReasonFromTheEditor(t *testing.T) {
 }
 
 func TestResultGate(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, stdin, script string
 		code                int
@@ -248,6 +256,7 @@ func TestResultGate(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			f := newRunFixture(t)
 			f.attended(c.stdin)
 			code, out, errOut := f.run(t, c.script, "fix Add", "--fast", "--agent", "fake", "--plain", "--confirm", "-v")
@@ -269,6 +278,7 @@ func TestResultGate(t *testing.T) {
 // Without --confirm, or unattended, a pass ends Accepted with no Gate
 // (ADR-0019).
 func TestNoResultGateByDefaultOrUnattended(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{{"--plain"}, {"--confirm", "--unattended"}} {
 		f := newRunFixture(t)
 		f.interactive = true

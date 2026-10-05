@@ -26,6 +26,7 @@ var cfgGoModProtected = strings.Replace(fxConfig, "[project]\n", "[project]\ntes
 // and rewrites protected files after the comparison never reaches the
 // Candidate: its late writes are Tamper events too.
 func TestRunEscapedWriterCannotRaceTheCandidate(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("perl"); err != nil {
 		t.Skip("perl not on PATH")
 	}
@@ -99,6 +100,7 @@ func raced(t *testing.T, f *runFixture, code int, out, errOut string) (string, b
 // Öge's git operations are byte-exact: a user's own eol attribute on a
 // protected file is no Tamper event.
 func TestRunHonestEolAttributeIsNoTamper(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, ".gitattributes"), []byte("go.mod text eol=crlf\n"))
 	writeFile(t, filepath.Join(f.repo, "go.mod"), []byte("module fx\r\n\r\ngo 1.22\r\n"))
@@ -112,6 +114,7 @@ func TestRunHonestEolAttributeIsNoTamper(t *testing.T) {
 // An attribute the agent adds can't rewrite a protected blob it never
 // touched.
 func TestRunAgentAttributesCannotRewriteProtectedBlobs(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	test := strings.Replace(fxTest, "package fx\n", "package fx\n\n// é\n", 1)
 	writeFile(t, filepath.Join(f.repo, "add_test.go"), []byte(test))
@@ -129,6 +132,7 @@ func TestRunAgentAttributesCannotRewriteProtectedBlobs(t *testing.T) {
 // A protected file the agent made unreadable counts as changed and is
 // restored; it is no internal error.
 func TestRunUnreadableProtectedFileIsReverted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, fixScript+"chmod 000 add_test.go\nmkdir locked && echo x > locked/f && chmod 000 locked\n",
 		"fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -147,6 +151,7 @@ func TestRunUnreadableProtectedFileIsReverted(t *testing.T) {
 
 // Tamper events are recorded reverted only once the revert happened.
 func TestRunTamperEventRecordsTheRevertOutcome(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.run(t, tamperFix, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	dir := f.onlyRun(t)
@@ -163,6 +168,7 @@ func TestRunTamperEventRecordsTheRevertOutcome(t *testing.T) {
 // The Check reads the Snapshot's test configuration, laid down after
 // setup like the Oracle's tests, whatever Candidate code did to it.
 func TestRunCheckReadsTheSnapshotsTestConfig(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	want := filepath.Join(filepath.Dir(f.repo), "go.mod.want")
 	writeFile(t, want, []byte("module fx\n\ngo 1.22\n"))
@@ -179,6 +185,7 @@ func TestRunCheckReadsTheSnapshotsTestConfig(t *testing.T) {
 // Paths in the scope line are escaped, never stripped, so two distinct
 // paths never read as one and no control character reaches the terminal.
 func TestRunScopeLineEscapesPaths(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	script := fixScript + "printf x > \".oge/a$(printf '\\033')[2Jb\"\nprintf x > '.oge/a[2Jb'\n"
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -191,6 +198,7 @@ func TestRunScopeLineEscapesPaths(t *testing.T) {
 // Candidate, however inward its target text looks: l1 -> l2/.. with
 // l2 -> . resolves outside the Workspace's directory.
 func TestRunLateSymlinksAreDropped(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("perl"); err != nil {
 		t.Skip("perl not on PATH")
 	}
@@ -242,6 +250,7 @@ const wantTestConfigWarning = "! test_config is empty: setup and Candidate code 
 // A Go project with no test_config is warned, in the dry run and in the
 // Run's summary; once test_config is set, it isn't.
 func TestRunWarnsWhenTestConfigIsEmpty(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	for _, args := range [][]string{{"--dry-run"}, nil} {
 		code, out, errOut := f.run(t, fixScript, append([]string{"fix Add", "--fast", "--agent", "fake", "--unattended"}, args...)...)

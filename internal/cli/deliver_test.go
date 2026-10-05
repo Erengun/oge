@@ -69,6 +69,7 @@ const (
 // and oge apply lands it in the working tree, unstaged and uncommitted,
 // with the Snapshot's untracked test left as it was.
 func TestApplyAcceptedOnACleanTree(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK {
@@ -134,6 +135,7 @@ func longFile(lines map[int]string) string {
 // Edits made since the Snapshot that the Candidate doesn't touch stay,
 // and edits to other lines of a file it changes are merged.
 func TestApplyKeepsUnrelatedEditsMadeSinceTheRun(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "long.txt"), []byte(longFile(nil)))
 	gitIn(t, f.repo, "add", "long.txt")
@@ -165,6 +167,7 @@ func TestApplyKeepsUnrelatedEditsMadeSinceTheRun(t *testing.T) {
 // An edit since the Snapshot on the lines the Candidate changes refuses
 // the whole apply, exit 2, with nothing written and nothing recorded.
 func TestApplyRefusesConflictingEdits(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "other.txt"), []byte("before\n"))
 	gitIn(t, f.repo, "add", "other.txt")
@@ -203,6 +206,7 @@ func TestApplyRefusesConflictingEdits(t *testing.T) {
 // user's attributes: apply changes one line, oge diff shows one line, and
 // the branch commits normalised LF blobs.
 func TestDeliveryThroughEolCRLFAttributes(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, ".gitattributes"), []byte("*.txt text eol=crlf\n"))
 	writeFile(t, filepath.Join(f.repo, "crlf.txt"), []byte("one\r\ntwo\r\nthree\r\n"))
@@ -250,6 +254,7 @@ func TestDeliveryThroughEolCRLFAttributes(t *testing.T) {
 // New, deleted and binary files all land, byte for byte; a directory the
 // Candidate empties goes with its last file.
 func TestApplyNewDeletedAndBinaryFiles(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "old", "gone.txt"), []byte("bye\n"))
 	writeFile(t, filepath.Join(f.repo, "logo.bin"), []byte("\x00\x01\x02old"))
@@ -286,6 +291,7 @@ func TestApplyNewDeletedAndBinaryFiles(t *testing.T) {
 // A binary file changed both since the Snapshot and by the Candidate
 // can't be merged: refused.
 func TestApplyRefusesABinaryChangedOnBothSides(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "logo.bin"), []byte("\x00old"))
 	gitIn(t, f.repo, "add", "logo.bin")
@@ -302,6 +308,7 @@ func TestApplyRefusesABinaryChangedOnBothSides(t *testing.T) {
 // outcome and why it isn't Accepted; never as "verified". --apply on the
 // Run itself applies nothing.
 func TestApplyRejectedNeedsTheRejectedFlag(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	f.attended("reject the test can't pass\n")
@@ -357,6 +364,7 @@ func TestApplyRejectedNeedsTheRejectedFlag(t *testing.T) {
 // index and the working tree stay. The Snapshot's untracked work is its
 // own commit, so the Candidate's commit shows only the agent's change.
 func TestBranchNeverChecksOut(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	gitIn(t, f.repo, "config", "user.name", "u")
 	gitIn(t, f.repo, "config", "user.email", "u@example.com")
@@ -407,6 +415,7 @@ func TestBranchNeverChecksOut(t *testing.T) {
 
 // --apply applies an Accepted Candidate at the end of the Run.
 func TestRunApplyFlagAppliesAnAcceptedCandidate(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "--apply")
 	if code != ExitOK {
@@ -427,6 +436,7 @@ func TestRunApplyFlagAppliesAnAcceptedCandidate(t *testing.T) {
 // oge diff prints the exact patch without a terminal, and a coloured one
 // with a header on a terminal. Viewing records nothing.
 func TestDiffPlainAndOnATerminal(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	id := f.accepted(t, fixScript)
 	code, out, errOut := f.deliver(t, "diff")
@@ -436,8 +446,8 @@ func TestDiffPlainAndOnATerminal(t *testing.T) {
 	}
 
 	f.interactive = true
-	t.Setenv("TERM", "xterm-256color")
-	t.Setenv("NO_COLOR", "")
+	f.setenv("TERM", "xterm-256color")
+	f.setenv("NO_COLOR", "")
 	code, out, _ = f.deliver(t, "diff", id)
 	if code != ExitOK || !strings.HasPrefix(out, "\x1b[") || !strings.Contains(out, "Run "+id+" · Accepted · Candidate ") ||
 		!strings.Contains(out, "\x1b[32m+func Add(a, b int) int { return a + b }") {
@@ -457,9 +467,10 @@ func TestDiffPlainAndOnATerminal(t *testing.T) {
 // An unattended Run never waits on a key, even on a terminal that draws
 // the live view: it prints the commands instead of the action bar.
 func TestUnattendedRunOnATerminalOffersNoActionBar(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.interactive = true
-	t.Setenv("TERM", "xterm-256color")
+	f.setenv("TERM", "xterm-256color")
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitOK || !strings.Contains(out, "next       oge apply ") || strings.Contains(out, "[a] apply") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
@@ -470,6 +481,7 @@ func TestUnattendedRunOnATerminalOffersNoActionBar(t *testing.T) {
 // TERM, the agent's bytes can't reach it raw: no control characters, no
 // bidi overrides. Without a terminal the patch stays exact.
 func TestDiffToATerminalIsAlwaysCleaned(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.accepted(t, fixScript+`printf 'title \033]0;pwned\007 \342\200\256evil\n' > note.txt`+"\n", "--output", "note.txt")
 	f.interactive = true
@@ -477,7 +489,7 @@ func TestDiffToATerminalIsAlwaysCleaned(t *testing.T) {
 		term string
 		args []string
 	}{{"dumb", []string{"diff"}}, {"xterm-256color", []string{"diff", "--plain"}}, {"", []string{"diff"}}} {
-		t.Setenv("TERM", c.term)
+		f.setenv("TERM", c.term)
 		code, out, errOut := f.deliver(t, c.args...)
 		if code != ExitOK || !strings.Contains(out, "+title") || strings.ContainsAny(out, "\x1b\x07\u202e") {
 			t.Errorf("TERM=%q %v: exit %d\n%q\n%s", c.term, c.args, code, out, errOut)
@@ -527,6 +539,7 @@ func overrideRun(t *testing.T, runDir string) {
 // An Overridden Candidate is delivered only with --overridden, after its
 // outcome and why; --rejected names the wrong outcome.
 func TestApplyOverriddenNeedsTheOverriddenFlag(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.accepted(t, fixScript)
 	overrideRun(t, f.onlyRun(t))

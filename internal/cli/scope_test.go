@@ -60,6 +60,7 @@ const tamperFix = cheatScript + fixScript
 // Tamper event. The reverted Candidate passes, but the Run can't become
 // Accepted until a human acknowledges the event.
 func TestRunTamperWithAnOracleTestIsRevertedAndBlocksAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, tamperFix, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitParked {
@@ -128,6 +129,7 @@ func TestRunTamperWithAnOracleTestIsRevertedAndBlocksAccepted(t *testing.T) {
 // A Tamper event doesn't change a failing Verdict: the fail outranks it,
 // and the Candidate goes back until the bound-exhaustion Gate.
 func TestRunTamperWithAFailingCheckGoesBack(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -139,6 +141,7 @@ func TestRunTamperWithAFailingCheckGoesBack(t *testing.T) {
 
 // .oge/ and the listed test configuration are protected too.
 func TestRunWritesToOgeConfigAndTestConfigAreReverted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	cfg := fxConfig + "\n[[check.commands]]\nrun = \"true\"\n"
 	cfg = strings.Replace(cfg, "[project]\n", "[project]\ntest_config = [\"go.mod\"]\n", 1)
@@ -177,6 +180,7 @@ func TestRunWritesToOgeConfigAndTestConfigAreReverted(t *testing.T) {
 // A symlink out of the Workspace is removed and recorded; it is a scope
 // revert, not a Tamper event, so the Run can still be Accepted.
 func TestRunSymlinkEscapeIsRemoved(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	outside := filepath.Join(filepath.Dir(f.repo), "outside")
 	writeFile(t, filepath.Join(outside, "secret.txt"), []byte("host file\n"))
@@ -213,6 +217,7 @@ func TestRunSymlinkEscapeIsRemoved(t *testing.T) {
 // Replacing a test directory with a symlink out of the Workspace: the
 // link is removed and the Oracle test restored, never through the link.
 func TestRunRevertNeverWritesThroughASymlink(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "sub", "x.go"), []byte("package sub\n"))
 	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n"))
@@ -240,6 +245,7 @@ func TestRunRevertNeverWritesThroughASymlink(t *testing.T) {
 // The agent's whole process tree is gone before the comparison, so a
 // background writer can't change a protected file after its revert.
 func TestRunScopeCheckRunsAfterTheAgentTreeIsKilled(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	script := "( while :; do echo '// more' >> add_test.go; sleep 0.01; done ) >/dev/null 2>&1 &\nsleep 0.1\n" + fixScript
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -259,6 +265,7 @@ func TestRunScopeCheckRunsAfterTheAgentTreeIsKilled(t *testing.T) {
 // Workspace's .git (Öge's copy, which the agent may still write) is
 // ignored: no scope or Tamper record, never in the Candidate.
 func TestRunNewTestsAndAgentGitAreInScope(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	script := fixScript + "printf 'package fx\\n' > more_test.go\ntest -d .git/objects || exit 7\necho x > .git/HEAD && echo y > .git/objects/junk\n"
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -288,6 +295,7 @@ esac
 ` + fixScript
 
 func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		stdin string
@@ -304,6 +312,7 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			f := newRunFixture(t)
 			if c.stdin != "" {
 				f.attended(c.stdin)
@@ -338,6 +347,7 @@ func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
 // passing Verdict on the current, reverted Candidate take its normal edge
 // to Accepted (ADR-0019 #2). The Ledger keeps the event and the decision.
 func TestRunAcknowledgedTamperIsAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.attended("a\nack\nacknowledge\n\nmy edit to the test was a mistake\n")
 	code, out, errOut := f.run(t, tamperFix, "fix Add", "--fast", "--agent", "fake", "--plain")

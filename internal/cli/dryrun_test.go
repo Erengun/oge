@@ -53,7 +53,6 @@ func TestDryRunGoldens(t *testing.T) {
 }
 
 func runCase(t *testing.T, dir string) string {
-	isolate(t)
 	repo := t.TempDir()
 	if !exists(filepath.Join(dir, "norepo")) {
 		initRepo(t, repo)
@@ -99,16 +98,6 @@ func runCase(t *testing.T, dir string) string {
 	code := Main(env, args)
 	out := fmt.Sprintf("exit: %d\n--- stdout\n%s--- stderr\n%s", code, stdout.String(), stderr.String())
 	return strings.ReplaceAll(out, repo, "$REPO")
-}
-
-// isolate gives the test a synthetic HOME/XDG and keeps the user's git
-// config out of the fixture repositories.
-func isolate(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 }
 
 func initRepo(t *testing.T, dir string) {

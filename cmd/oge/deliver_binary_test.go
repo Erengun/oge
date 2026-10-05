@@ -12,6 +12,7 @@ import (
 // prints the plain patch without a terminal, oge branch makes a branch it
 // never checks out, and oge apply writes the working tree only.
 func TestBinaryDeliversAnAcceptedRun(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n")
 	if code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended"); code != 0 || !strings.Contains(out, "next       oge apply ") {
