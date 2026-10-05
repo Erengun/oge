@@ -30,6 +30,8 @@ Every simplification here was audited against one rule: **does this hide complex
    - **Auto-deny** anything clearly outside the role or the Write scope, with a reason.
    - **Raise a Host request** for anything that needs network, scope expansion, an unusual or destructive capability, or any other capability that isn't pre-authorised.
 
+   **Constraint (2026-10-05):** a normal successful task must not require the coding agent to noticeably change its working style because of Öge. Pre-authorisation is measured by its friction: denied and retried tool calls, extra model turns, and time added against native. If policy friction is more than about one wasted turn on a normal task, simplify the interface rather than grow the shell parser. The likely direction is structured capabilities (read_file, search, list_files, run_tests, format, git_diff, git_status), with Bash kept for exceptional cases.
+
    Interactive Host requests should be rare in normal MVP use. After the MVP, the Decider handles this grey zone and escalates only unusual cases. Each pre-authorised operation is recorded as "pre-authorised by Launch profile <hash>". This amends ADR-0005 and ADR-0008.
 
 5. **Agent questions are never answered on the human's behalf.** The Briefing tells every role: *"Make reasonable, minimal and reversible assumptions where possible. Do not ask the user unless missing information genuinely blocks progress or would materially change the Task, acceptance criteria or required authority."* An actual question-type Host request is treated as meaningful. Attended, it goes to the human. Unattended, it is cancelled under the existing semantics (ADR-0008, ADR-0012). Öge never fabricates an answer. This amends ADR-0009 (Briefing content).
