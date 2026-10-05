@@ -8,13 +8,19 @@ Revised after the market review of 2026-10-05, which superseded the #65 headline
 
 > **Öge makes delegation actually feel like delegation.**
 
+Category (what Öge is):
+
+> **Öge is the supervision layer for coding agents.**
+
+It is not another coding agent, not a test runner and not generic multi-agent orchestration. It supervises the native agents you already use, and stays provider-independent, terminal-native and trust-aware.
+
 Supporting thought:
 
 > AI made coding fast. Supervision became the bottleneck.
 
 Product behaviour:
 
-> Give Öge the task. It handles the agent work, checks the result, and interrupts you only for decisions that actually need you.
+> Give Öge the task. It supervises the agents, checks the work, and brings you in only when your judgment is actually needed.
 
 Promise:
 
@@ -54,12 +60,36 @@ Other projects already use these, so Öge doesn't build on them as identity:
 
 They may appear as explanation, never as the headline.
 
+### How supervision works
+
+Öge stays the authority. It never asks another model "looks good?" and calls that verification.
+
+| Situation | Öge's response |
+|---|---|
+| Safe operation | continue (pre-authorised by the Launch profile) |
+| Uncertain permission | the Decider answers within its budget (post-MVP); until then, a recorded deny |
+| Implementation issue | send back to the implementer |
+| QA issue (verifier or Check failure) | automatic repair loop: fix, then QA again |
+| Real ambiguity | ask the human |
+| Trust boundary hit | stop |
+
+**Evidence still decides whether a result can become Accepted.**
+
+The rhythm (from Wayfinder's implementer → independent QA → fixer): Implement → QA (a fresh agent plus Öge's Checks) → issue found? If not, the Receipt. If so, fix, then QA again. The user doesn't orchestrate this.
+
 ## Direction
 
 The coordination roles extend the same identity rather than pivoting it:
-- **Today:** Öge reduces supervision through independent checking and policy.
-- **Next:** the Decider routes decisions.
-- **Then:** the Advisor resolves uncertainty, and Handoff routes around quota and model failures.
+Sequence, by user value (revised 2026-10-05; supersedes the #65 order):
+
+1. **MVP trust loop:** implement → QA → Check → Receipt, zero interruptions on the happy path.
+2. **Supervisor/Decider:** grey-zone permissions answered without the human.
+3. **Stronger QA and fixer loop:** QA findings drive automatic repair rounds, possibly with a separate fixer.
+4. **Handoff:** route around quota and model failures.
+5. **Advisor:** resolves uncertainty at stall points.
+6. **Challenger:** hardens the Oracle.
+
+Supervision turns Öge from "Claude with another verifier" into "I delegate development to Öge, and Öge manages the coding agents for me."
 
 > Eventually: you stop managing agents. You manage intent.
 
