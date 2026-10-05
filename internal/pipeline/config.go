@@ -129,18 +129,9 @@ const credentialRule = "looks like a credential or credential-store setting; Ög
 func Load(data []byte) (*Config, []Problem) {
 	var raw map[string]any
 	if _, err := toml.Decode(string(data), &raw); err != nil {
-		var perr toml.ParseError
-		ok := errors.As(err, &perr)
-		switch {
-		case ok && credentialValue.Match(data):
-			// The parser's message may quote the token; never echo it.
-			return nil, []Problem{{Msg: fmt.Sprintf("not valid TOML: line %d", perr.Position.Line)}}
-		case ok:
-			return nil, []Problem{{Msg: fmt.Sprintf("not valid TOML: line %d: %s", perr.Position.Line, perr.Message)}}
-		case credentialValue.Match(data):
-			return nil, []Problem{{Msg: "not valid TOML"}}
-		}
-		return nil, []Problem{{Msg: "not valid TOML: " + err.Error()}}
+		// The parser's message quotes the offending token, which may be a
+		// credential; report its position only.
+		return nil, []Problem{{Msg: "not valid TOML" + position(err)}}
 	}
 
 	var probs []Problem
@@ -163,10 +154,8 @@ func Load(data []byte) (*Config, []Problem) {
 	md, err := toml.Decode(string(data), &cfg)
 	if err != nil {
 		// Types that don't match the schema, e.g. a string where a list goes.
-		if credentialValue.Match(data) {
-			return nil, append(probs, Problem{Msg: "wrong type for a key"})
-		}
-		return nil, append(probs, Problem{Msg: typeError(err)})
+		// The decoder's message may quote the value; name the key only.
+		return nil, append(probs, typeError(err))
 	}
 	probs = append(probs, undecoded(md.Undecoded())...)
 	probs = append(probs, cfg.validate()...)
@@ -178,12 +167,26 @@ func Load(data []byte) (*Config, []Problem) {
 
 func isInt(v any) bool { _, ok := v.(int64); return ok }
 
-func typeError(err error) string {
+// position renders where a TOML error is, e.g. " at line 2, column 9", or
+// "" when the parser doesn't say.
+func position(err error) string {
 	var perr toml.ParseError
-	if errors.As(err, &perr) {
-		return fmt.Sprintf("wrong type: line %d: %s", perr.Position.Line, perr.Message)
+	if !errors.As(err, &perr) || perr.Position.Line == 0 {
+		return ""
 	}
-	return "wrong type: " + err.Error()
+	if perr.Position.Col > 0 {
+		return fmt.Sprintf(" at line %d, column %d", perr.Position.Line, perr.Position.Col)
+	}
+	return fmt.Sprintf(" at line %d", perr.Position.Line)
+}
+
+func typeError(err error) Problem {
+	var perr toml.ParseError
+	key := ""
+	if errors.As(err, &perr) {
+		key = perr.LastKey
+	}
+	return Problem{key, "wrong type" + position(err)}
 }
 
 func scanCredentials(prefix string, v any) []Problem {
@@ -304,6 +307,16 @@ func (c *Config) validate() []Problem {
 			add(fmt.Sprintf("project.pass_env[%d]", i), "must be a variable name, never a value (ADR-0006)")
 		}
 	}
+	for _, l := range []struct {
+		key   string
+		globs []string
+	}{{"project.test_globs", c.Project.TestGlobs}, {"project.output_globs", c.Project.OutputGlobs}} {
+		for i, g := range l.globs {
+			if strings.TrimSpace(g) == "" {
+				add(fmt.Sprintf("%s[%d]", l.key, i), "must not be empty or whitespace")
+			}
+		}
+	}
 	if !oneOf(c.Setup.Network, "", "off", "on") {
 		add("setup.network", `must be "off" or "on"`)
 	}
@@ -313,7 +326,7 @@ func (c *Config) validate() []Problem {
 			add(key+".run", "required: the command a Check runs")
 		}
 		if cmd.Report != "" && !oneOf(cmd.Report, KnownReports...) {
-			add(key+".report", "unknown report format %q; use one of %s", cmd.Report, strings.Join(KnownReports, ", "))
+			add(key+".report", "unknown report format; use one of %s", strings.Join(KnownReports, ", "))
 		}
 		if cmd.ExpectedTests != nil && *cmd.ExpectedTests < 1 {
 			add(key+".expected_tests", "must be at least 1")
@@ -349,12 +362,12 @@ func (s StageConfig) validate(name, role string) []Problem {
 	switch {
 	case s.Role == "" || s.Role == role:
 	case !roleKinds[s.Role]:
-		probs = append(probs, Problem{key + ".role", fmt.Sprintf("unknown Role kind %q", s.Role)})
+		probs = append(probs, Problem{key + ".role", fmt.Sprintf("unknown Role kind; Stage %s has the fixed Role kind %s", name, role)})
 	default:
 		probs = append(probs, Problem{key + ".role", fmt.Sprintf("Stage %s has the fixed Role kind %s", name, role)})
 	}
 	if s.Agent != "" && !knownAgent(s.Agent) {
-		probs = append(probs, Problem{key + ".agent", fmt.Sprintf("unknown agent %q; use one of %s", s.Agent, strings.Join(KnownAgents, ", "))})
+		probs = append(probs, Problem{key + ".agent", "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
 	}
 	if name == "implement" && !oneOf(s.Network, "", "off", "on") {
 		probs = append(probs, Problem{key + ".network", `must be "off" or "on"`})

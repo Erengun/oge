@@ -12,8 +12,8 @@ oge: .oge/oge.toml isn't valid
   pipelines.default.stages.review: the Stage list is fixed: implement and verify; custom Stages aren't supported
   pipelines.other: only the built-in default Pipeline exists
   project.pass_env[0]: must be a variable name, never a value (ADR-0006)
-  check.commands[0].timeout: "soon" is not a positive duration such as "10m" or "90s"
+  check.commands[0].timeout: not a positive duration such as "10m" or "90s"
   pipelines.default.verify: must be "after" or "before"
-  pipelines.default.stages.implement.role: unknown Role kind "wizard"
+  pipelines.default.stages.implement.role: unknown Role kind; Stage implement has the fixed Role kind implementer
   pipelines.default.stages.verify.role: Stage verify has the fixed Role kind verifier
   pipelines.default.stages.verify.network: a verifier never gets network; judged roles are always off (ADR-0013)

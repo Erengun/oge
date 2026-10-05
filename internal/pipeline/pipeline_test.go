@@ -93,3 +93,85 @@ func TestEveryEdgeJoinsExistingNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredVerifyModelWinsOverInheritance(t *testing.T) {
+	cfg, probs := Load([]byte(`schema = 1
+[project]
+test_globs = ["**/*_test.go"]
+[[check.commands]]
+run    = "go test -json ./..."
+report = "go-test-json"
+[pipelines.default.stages.implement]
+agent = "claude"
+model = "impl-model"
+[pipelines.default.stages.verify]
+model = "verify-model"
+`))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	f, probs := Resolve(cfg, Overrides{}, nil)
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	for _, s := range f.Stages {
+		if s.Name == "verify" && (s.Agent != "claude" || s.Model != "verify-model") {
+			t.Fatalf("verify = %s:%s, want claude:verify-model", s.Agent, s.Model)
+		}
+	}
+}
+
+func TestBlankOracleValuesAreHardErrors(t *testing.T) {
+	ok := Overrides{Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"}}
+	cli := []struct {
+		name string
+		o    Overrides
+		key  string
+	}{
+		{"check", Overrides{Checks: []string{"  "}, Tests: ok.Tests}, "--check"},
+		{"tests", Overrides{Checks: ok.Checks, Tests: []string{" \t"}}, "--tests"},
+		{"output", Overrides{Checks: ok.Checks, Tests: ok.Tests, Outputs: []string{""}}, "--output"},
+	}
+	for _, c := range cli {
+		_, probs := Resolve(nil, c.o, []string{"claude"})
+		if !hasKey(probs, c.key) {
+			t.Errorf("%s: problems = %v, want one for %s", c.name, probs, c.key)
+		}
+	}
+
+	configs := []struct {
+		name, toml, key string
+	}{
+		{"test_globs", `test_globs = ["  "]`, "project.test_globs[0]"},
+		{"output_globs", `test_globs = ["x"]` + "\n" + `output_globs = [""]`, "project.output_globs[0]"},
+	}
+	for _, c := range configs {
+		_, probs := Load([]byte("schema = 1\n[project]\n" + c.toml + "\n[[check.commands]]\nrun = \"go test -json ./...\"\nreport = \"go-test-json\"\n"))
+		if !hasKey(probs, c.key) {
+			t.Errorf("%s: problems = %v, want one for %s", c.name, probs, c.key)
+		}
+	}
+	_, probs := Load([]byte("schema = 1\n[project]\ntest_globs = [\"x\"]\n[[check.commands]]\nrun = \" \\t \"\nreport = \"go-test-json\"\n"))
+	if !hasKey(probs, "check.commands[0].run") {
+		t.Errorf("blank run: problems = %v", probs)
+	}
+}
+
+func TestCLIOracleValuesAreTrimmed(t *testing.T) {
+	f, probs := Resolve(nil, Overrides{Checks: []string{"  go test -json ./...  "}, Tests: []string{" *_test.go "}, Outputs: []string{" out/** "}}, []string{"claude"})
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	if f.Checks[0].Run != "go test -json ./..." || f.Project.TestGlobs[0] != "*_test.go" || f.Project.OutputGlobs[0] != "out/**" {
+		t.Fatalf("not trimmed: %q %q %q", f.Checks[0].Run, f.Project.TestGlobs, f.Project.OutputGlobs)
+	}
+}
+
+func hasKey(probs []Problem, key string) bool {
+	for _, p := range probs {
+		if p.Key == key {
+			return true
+		}
+	}
+	return false
+}

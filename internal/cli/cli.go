@@ -16,6 +16,7 @@ import (
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
+	"golang.org/x/term"
 )
 
 // Exit codes used so far (ADR-0015).
@@ -53,9 +54,10 @@ func ProcessEnv(version string) Env {
 	}
 }
 
+// isTerminal asks the OS whether f is a terminal. A character device such
+// as /dev/null is not one.
 func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func runEditor(path string) error {
@@ -244,6 +246,10 @@ func reportProblems(env Env, what string, probs []pipeline.Problem) {
 // flags alone must carry the Oracle.
 func loadConfig(env Env, root string, f runFlags, attended bool) (*pipeline.Config, int) {
 	sf, err := workspace.ReadSnapshotFile(root, pipeline.ConfigPath)
+	if errors.Is(err, workspace.ErrNotRegular) {
+		fmt.Fprintf(env.Stderr, "oge: %s must be a regular file, not a symlink or directory\n", pipeline.ConfigPath)
+		return nil, ExitRefused
+	}
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: reading %s from the Snapshot: %v\n", pipeline.ConfigPath, err)
 		return nil, ExitInternal

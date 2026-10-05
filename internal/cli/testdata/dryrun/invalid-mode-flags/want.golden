@@ -4,5 +4,5 @@ exit: 2
 oge: this Run isn't valid
   --require held-out: Fast mode doesn't give this guarantee; use Standard (the default) or --blind
   --require magic: unknown guarantee; known: held-out
-  --agent implement=gemini: unknown agent "gemini"; use one of claude, codex
+  --agent implement=gemini: unknown agent; use one of claude, codex
   --verify: no verifier Stage in this mode; use --agent <stage>=<agent>

@@ -2,6 +2,7 @@ package task
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,23 @@ func TestStripCommentsAndEmpty(t *testing.T) {
 	s := StripComments("<!-- note -->\n# Do it\n<!--\nmulti\n-->\nbody")
 	if s != "\n# Do it\n\nbody" {
 		t.Fatalf("StripComments = %q", s)
+	}
+}
+
+func TestParseCRLF(t *testing.T) {
+	md := "# Rate-limit /api/login\r\n\r\n## Acceptance criteria\r\n- After 5 failed logins, get HTTP 429.\r\n- The limit resets\r\n  after 15 minutes.\r\n"
+	got := Parse(md)
+	if got.Title != "Rate-limit /api/login" {
+		t.Fatalf("Title = %q", got.Title)
+	}
+	want := []Criterion{
+		{ID: "AC-1", Text: "After 5 failed logins, get HTTP 429."},
+		{ID: "AC-2", Text: "The limit resets after 15 minutes."},
+	}
+	if !reflect.DeepEqual(got.Criteria, want) {
+		t.Fatalf("Criteria = %#v", got.Criteria)
+	}
+	if strings.Contains(got.Text, "\r") {
+		t.Fatalf("Text keeps CR: %q", got.Text)
 	}
 }

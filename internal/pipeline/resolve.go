@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -171,12 +172,26 @@ func Resolve(cfg *Config, o Overrides, installed []string) (*Frozen, []Problem) 
 	// TODO(#39-decision): --check/--tests/--output append to the project's
 	// values (trust-conservative: a flag can't drop an Oracle command) rather
 	// than replace them.
-	f.Project.TestGlobs = appendCopy(cfg.Project.TestGlobs, o.Tests)
-	f.Project.OutputGlobs = appendCopy(cfg.Project.OutputGlobs, o.Outputs)
+	// Blank values are hard errors, so they can't count towards the rule
+	// that a Run needs at least one Check command and test glob.
+	nonBlank := func(flag string, vals []string) []string {
+		var out []string
+		for _, v := range vals {
+			if v = strings.TrimSpace(v); v == "" {
+				add(flag, "must not be empty or whitespace")
+				continue
+			}
+			out = append(out, v)
+		}
+		return out
+	}
+	f.Project.TestGlobs = appendCopy(trimAll(cfg.Project.TestGlobs), nonBlank("--tests", o.Tests))
+	f.Project.OutputGlobs = appendCopy(trimAll(cfg.Project.OutputGlobs), nonBlank("--output", o.Outputs))
 	for _, c := range cfg.Check.Commands {
+		c.Run = strings.TrimSpace(c.Run)
 		f.Checks = append(f.Checks, resolveCheck(c, src))
 	}
-	for _, run := range o.Checks {
+	for _, run := range nonBlank("--check", o.Checks) {
 		f.Checks = append(f.Checks, resolveCheck(CheckCommandConfig{Run: run, Report: inferReport(run)}, FromCLI))
 	}
 	if len(f.Checks) == 0 {
@@ -245,6 +260,14 @@ func Resolve(cfg *Config, o Overrides, installed []string) (*Frozen, []Problem) 
 	return f, nil
 }
 
+func trimAll(vals []string) []string {
+	var out []string
+	for _, v := range vals {
+		out = append(out, strings.TrimSpace(v))
+	}
+	return out
+}
+
 func appendCopy(a, b []string) []string {
 	return append(append([]string(nil), a...), b...)
 }
@@ -285,7 +308,7 @@ func bind(stages []Stage, o Overrides) []Problem {
 	set := func(flag, stage, spec string) {
 		agent, model, _ := strings.Cut(spec, ":")
 		if !knownAgent(agent) {
-			probs = append(probs, Problem{flag, fmt.Sprintf("unknown agent %q; use one of %s", agent, strings.Join(KnownAgents, ", "))})
+			probs = append(probs, Problem{flag, "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
 			return
 		}
 		for i := range stages {
@@ -349,8 +372,8 @@ func stageNames(stages []Stage) string {
 }
 
 // defaultBindings binds the implementer to the one installed agent when
-// nothing bound it, and the verifier to the implementer's agent and model
-// (always in a fresh Session).
+// nothing bound it, and an unbound verifier to the implementer's agent and,
+// unless one is configured, its model (always in a fresh Session).
 func defaultBindings(stages []Stage, installed []string) []Problem {
 	var impl *Stage
 	for i := range stages {
@@ -370,7 +393,11 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 	}
 	for i := range stages {
 		if stages[i].Role == "verifier" && stages[i].Agent == "" {
-			stages[i].Agent, stages[i].Model, stages[i].Source = impl.Agent, impl.Model, FromInherited
+			// Inherit only what isn't set: a configured verify model wins.
+			stages[i].Agent, stages[i].Source = impl.Agent, FromInherited
+			if stages[i].Model == "" {
+				stages[i].Model = impl.Model
+			}
 		}
 	}
 	return nil
@@ -405,7 +432,7 @@ func resolveLimits(c LimitsConfig) Limits {
 func parseDuration(s string) (time.Duration, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("%q is not a positive duration such as \"10m\" or \"90s\"", s)
+		return 0, errors.New(`not a positive duration such as "10m" or "90s"`)
 	}
 	return d, nil
 }
@@ -423,5 +450,5 @@ func parseSize(s string) (int64, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("%q is not a size such as \"1MiB\", \"512KiB\" or \"4096B\"", s)
+	return 0, errors.New(`not a size such as "1MiB", "512KiB" or "4096B"`)
 }

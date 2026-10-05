@@ -133,3 +133,75 @@ func TestBinaryWithoutTerminalOrConfigRefuses(t *testing.T) {
 		t.Fatalf(".oge was created without a review: %v", err)
 	}
 }
+
+// runRedirected runs the binary with stdin from /dev/null, stdout to
+// stdoutPath (a regular file, or /dev/null) and stderr to a file: character
+// devices and files, but no terminal.
+func runRedirected(t *testing.T, repo string, env []string, stdoutPath string, args ...string) (code int, stderr string) {
+	t.Helper()
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	outF, err := os.OpenFile(stdoutPath, os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outF.Close()
+	errF, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer errF.Close()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir, cmd.Env = repo, env
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, outF, errF
+	err = cmd.Run()
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+	case errors.As(err, &exitErr):
+		code = exitErr.ExitCode()
+	default:
+		t.Fatal(err)
+	}
+	e, _ := os.ReadFile(errF.Name())
+	return code, string(e)
+}
+
+// stdoutTargets are where a non-terminal stdout goes: a file, and /dev/null,
+// which is a character device but not a terminal.
+func stdoutTargets(t *testing.T) []string {
+	return []string{filepath.Join(t.TempDir(), "stdout"), os.DevNull}
+}
+
+func TestBinaryDevNullStdinIsNotATerminal(t *testing.T) {
+	for _, stdout := range stdoutTargets(t) {
+		repo, env := fixtureRepo(t, "")
+		code, errOut := runRedirected(t, repo, env, stdout, "--dry-run", "fix it")
+		if code != 2 || !strings.Contains(errOut, "no terminal") {
+			t.Fatalf("stdout %s: exit %d\nstderr: %s", stdout, code, errOut)
+		}
+	}
+}
+
+func TestBinaryDevNullStdinNeverLaunchesEditor(t *testing.T) {
+	for _, stdout := range stdoutTargets(t) {
+		repo, env := fixtureRepo(t, validConfig)
+		marker := filepath.Join(t.TempDir(), "editor-ran")
+		editor := filepath.Join(t.TempDir(), "editor")
+		script := "#!/bin/sh\ntouch '" + marker + "'\n"
+		if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		env = append(env, "EDITOR="+editor)
+		code, errOut := runRedirected(t, repo, env, stdout, "--dry-run")
+		if _, err := os.Stat(marker); err == nil {
+			t.Fatalf("stdout %s: $EDITOR was launched without a terminal (exit %d)", stdout, code)
+		}
+		if code != 2 || !strings.Contains(errOut, "no Task") {
+			t.Fatalf("stdout %s: exit %d\nstderr: %s", stdout, code, errOut)
+		}
+	}
+}

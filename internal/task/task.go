@@ -42,8 +42,9 @@ var (
 
 // Parse resolves a Markdown Task. Top-level list items under an
 // "## Acceptance criteria" heading become Criteria, numbered in order;
-// indented lines continue the previous item.
+// indented lines continue the previous item. CRLF line endings are read as LF.
 func Parse(markdown string) Task {
+	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	t := Task{Text: strings.TrimSpace(markdown)}
 	inCriteria, inFence := false, false
 	fence := ""
