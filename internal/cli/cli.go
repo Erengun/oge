@@ -22,11 +22,15 @@ import (
 
 // Exit codes used so far (ADR-0015).
 const (
-	ExitOK       = 0
-	ExitInternal = 1
-	ExitRefused  = 2 // usage, config or Preflight refusal
-	ExitRejected = 3
-	ExitInfra    = 11 // Infrastructure stop
+	ExitOK         = 0
+	ExitInternal   = 1
+	ExitRefused    = 2 // usage, config or Preflight refusal
+	ExitRejected   = 3
+	ExitInfeasible = 4
+	ExitOverridden = 5
+	ExitCancelled  = 6
+	ExitParked     = 10 // an unattended Run waits at a mandatory Gate
+	ExitInfra      = 11 // Infrastructure stop
 )
 
 // Env is everything the CLI takes from its process, so tests can drive it.
@@ -221,6 +225,7 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 	attended := env.Interactive() && !f.unattended
+	f.o.Unattended = f.unattended
 
 	root, err := workspace.RepoRoot(env.Dir)
 	if err != nil {

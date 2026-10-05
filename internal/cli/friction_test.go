@@ -98,3 +98,58 @@ func TestFrictionOfASettledTurn(t *testing.T) {
 		t.Errorf("the Ledger lacks the friction:\n%s", ledger)
 	}
 }
+
+// sendBackFrictionAdapter leaves Add broken on its first Attempt, so the
+// Check fails and sends it back, and fixes it on the second. Each Attempt
+// has its own friction.
+type sendBackFrictionAdapter struct {
+	opened   *int
+	friction []agent.Friction
+}
+
+func (a sendBackFrictionAdapter) Open(_ context.Context, spec agent.LaunchSpec) (agent.Session, error) {
+	n := *a.opened
+	*a.opened++
+	if n > 0 {
+		fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+		if err := os.WriteFile(filepath.Join(spec.Workspace, "add.go"), []byte(fixed), 0o644); err != nil {
+			return nil, err
+		}
+	}
+	return &settledSession{events: make(chan agent.Event, 8), friction: a.friction[n]}, nil
+}
+
+type settledSession struct {
+	events   chan agent.Event
+	friction agent.Friction
+}
+
+func (s *settledSession) Process() agent.Process     { return agent.Process{} }
+func (s *settledSession) Events() <-chan agent.Event { return s.events }
+func (s *settledSession) Send(agent.Turn) error {
+	f := s.friction
+	s.events <- agent.Event{Kind: agent.TurnAccepted}
+	s.events <- agent.Event{Kind: agent.TurnSettled, Exit: "done", Friction: &f}
+	return nil
+}
+func (s *settledSession) Interrupt() error { return nil }
+func (s *settledSession) Close() error     { return nil }
+
+// Each Attempt's friction is in the Ledger, and the summary shows the
+// Run's: the sum across the send-back (#90).
+func TestFrictionIsSummedAcrossASendBack(t *testing.T) {
+	opened := 0
+	a := sendBackFrictionAdapter{opened: &opened, friction: []agent.Friction{{Denied: 1, LostTurns: 1}, {Denied: 2, LostTurns: 1, EnvelopeRefusals: 1}}}
+	code, out, ledger := runWithFriction(t, a, "")
+	if code != 0 || opened != 2 || !strings.Contains(out, "send back  1 of ") {
+		t.Fatalf("exit %d, %d Attempts\n%s", code, opened, out)
+	}
+	if !strings.Contains(out, "\nfriction   policy friction 2 turns (3 denied) · 1 refused before the envelope passed\n") {
+		t.Errorf("the summary lacks the Run's friction:\n%s", out)
+	}
+	for _, want := range []string{oneLostTurn, `"policy_friction":{"denied":2,"envelope_refusals":1,"lost_turns":1}`} {
+		if !strings.Contains(ledger, want) {
+			t.Errorf("the Ledger lacks %s:\n%s", want, ledger)
+		}
+	}
+}

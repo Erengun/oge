@@ -68,8 +68,8 @@ func TestRunTamperWithAnOracleTestIsRevertedAndBlocksAccepted(t *testing.T) {
 	for _, want := range []string{
 		"scope      1 protected test change reverted: add_test.go",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
-		"PARKED     Candidate ",
-		"1 Tamper event needs acknowledging before this Run can be Accepted",
+		"PARKED     at the tamper Gate · Candidate ",
+		"an Attempt wrote to a protected file. Öge reverted it and recorded a Tamper event, which must be acknowledged",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
@@ -119,17 +119,20 @@ func TestRunTamperWithAnOracleTestIsRevertedAndBlocksAccepted(t *testing.T) {
 	if len(tampers) != 1 || tampers[0]["path"] != "add_test.go" || tampers[0]["attempt"] != "implement#1" || tampers[0]["reverted"] != true {
 		t.Errorf("Tamper events: %v", tampers)
 	}
-	ended := records(t, dir, run.RecRunEnded)
-	if len(ended) != 1 || ended[0]["outcome"] != string(run.Parked) {
-		t.Errorf("RunEnded: %v", ended)
+	parked := records(t, dir, run.RecRunParked)
+	if len(parked) != 1 || parked[0]["gate"] != "gate.tamper" || len(records(t, dir, run.RecRunEnded)) != 0 {
+		t.Errorf("RunParked: %v", parked)
 	}
 }
 
-// A Tamper event doesn't change a failing Verdict.
-func TestRunTamperWithAFailingCheckIsRejected(t *testing.T) {
+// A Tamper event doesn't change a failing Verdict: the fail outranks it,
+// and the Candidate goes back until the bound-exhaustion Gate.
+func TestRunTamperWithAFailingCheckGoesBack(t *testing.T) {
 	f := newRunFixture(t)
+	f.sendBackLimit(t, 0)
 	code, out, errOut := f.run(t, cheatScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected || !strings.Contains(out, "scope      1 protected test change reverted: add_test.go") {
+	if code != ExitParked || !strings.Contains(out, "scope      1 protected test change reverted: add_test.go") ||
+		!strings.Contains(out, "PARKED     at the bound-exhaustion Gate") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
@@ -240,10 +243,14 @@ func TestRunScopeCheckRunsAfterTheAgentTreeIsKilled(t *testing.T) {
 	f := newRunFixture(t)
 	script := "( while :; do echo '// more' >> add_test.go; sleep 0.01; done ) >/dev/null 2>&1 &\nsleep 0.1\n" + fixScript
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	dir, committed := raced(t, f, code, out, errOut)
+	if !committed {
+		return
+	}
 	if code != ExitParked {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	if got := candidateFile(t, f.onlyRun(t), "add_test.go"); got != fxTest {
+	if got := candidateFile(t, dir, "add_test.go"); got != fxTest {
 		t.Errorf("the Candidate's add_test.go: %q", got)
 	}
 }
@@ -267,5 +274,100 @@ func TestRunNewTestsAndAgentGitAreInScope(t *testing.T) {
 	}
 	if files := gitOut(t, filepath.Join(dir, "repo.git"), "ls-tree", "-r", "--name-only", "refs/oge/candidates/c1"); strings.Contains(files, ".git/") {
 		t.Errorf("the Candidate holds the Workspace .git:\n%s", files)
+	}
+}
+
+// The reviewer's scenario: the agent empties the Oracle's test on its
+// first turn, then fixes Add once sent back. The rewrite is reverted and
+// recorded, so the lineage is clean, but the Run is never Accepted: it
+// stops at the Tamper Gate, attended, or parks there.
+const emptyThenFix = `case "$OGE_FAKE_TURN" in
+*"Add(2, 3) != 5"*) ;;
+*) echo "emptying the test"; : > add_test.go; exit 0 ;;
+esac
+` + fixScript
+
+func TestRunTamperThenAFixIsNeverAccepted(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		stdin string
+		args  []string
+		code  int
+		want  []string
+	}{
+		{"unattended", "", []string{"--unattended"}, ExitParked, []string{"PARKED     at the tamper Gate · Candidate "}},
+		{"attended", "quit\n", []string{"--plain"}, ExitCancelled, []string{
+			"tamper Gate", "a protected file change was reverted", "  reverted: add_test.go (modified)",
+			"  acknowledge   ",
+			"  reject        end the Run Rejected", "  q  quit       end the Run Cancelled",
+			"decision   quit · recorded at the tamper Gate", "CANCELLED  Candidate ",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRunFixture(t)
+			if c.stdin != "" {
+				f.attended(c.stdin)
+			}
+			code, out, errOut := f.run(t, emptyThenFix, append([]string{"fix Add", "--fast", "--agent", "fake"}, c.args...)...)
+			if code != c.code || strings.Contains(out, "ACCEPTED") {
+				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+			}
+			for _, w := range append(c.want, "send back  1 of 3", "check      go test -json ./... · 1 ran · 0 failed · pass") {
+				if !strings.Contains(out, w) {
+					t.Errorf("stdout lacks %q:\n%s", w, out)
+				}
+			}
+			if strings.Contains(out, "  t  take") {
+				t.Errorf("the Tamper Gate offered take:\n%s", out)
+			}
+			dir := f.onlyRun(t)
+			for _, ref := range []string{"refs/oge/candidates/c1", "refs/oge/candidates/c2"} {
+				if got := gitOut(t, filepath.Join(dir, "repo.git"), "show", ref+":add_test.go"); got != fxTest {
+					t.Errorf("%s:add_test.go differs from the Snapshot's: %q", ref, got)
+				}
+			}
+			tampers := records(t, dir, run.RecTamperEvent)
+			if len(tampers) != 1 || tampers[0]["attempt"] != "implement#1" {
+				t.Errorf("Tamper events: %v", tampers)
+			}
+		})
+	}
+}
+
+// Acknowledging the Tamper events (full word, with a reason) lets the
+// passing Verdict on the current, reverted Candidate take its normal edge
+// to Accepted (ADR-0019 #2). The Ledger keeps the event and the decision.
+func TestRunAcknowledgedTamperIsAccepted(t *testing.T) {
+	f := newRunFixture(t)
+	f.attended("a\nack\nacknowledge\n\nmy edit to the test was a mistake\n")
+	code, out, errOut := f.run(t, tamperFix, "fix Add", "--fast", "--agent", "fake", "--plain")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	for _, w := range []string{
+		"  reverted: add_test.go (modified)",
+		`type "acknowledge" in full`, "a reason is required for acknowledge",
+		"decision   acknowledge · recorded at the tamper Gate · reason: my edit to the test was a mistake",
+		"ACCEPTED   Candidate ",
+	} {
+		if !strings.Contains(out, w) {
+			t.Errorf("stdout lacks %q:\n%s", w, out)
+		}
+	}
+	if n := strings.Count(out, `type "acknowledge" in full`); n != 2 {
+		t.Errorf("a and ack: refused %d times", n)
+	}
+	dir := f.onlyRun(t)
+	got := strings.Join(recordTypes(t, dir), ",")
+	if !strings.Contains(got, run.RecTamperEvent) || !strings.HasSuffix(got, run.RecGateOpened+","+run.RecGateDecided+","+run.RecRunEnded) {
+		t.Errorf("Ledger order: %s", got)
+	}
+	d := records(t, dir, run.RecGateDecided)
+	ids, _ := d[0]["tamper_ids"].([]any)
+	if len(d) != 1 || d[0]["choice"] != "acknowledge" || len(ids) != 1 || ids[0] != "implement#1/tamper-1" {
+		t.Errorf("GateDecided: %v", d)
+	}
+	if got := candidateFile(t, dir, "add_test.go"); got != fxTest {
+		t.Errorf("the Accepted Candidate's test isn't the Snapshot's: %q", got)
 	}
 }

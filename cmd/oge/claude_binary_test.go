@@ -96,11 +96,13 @@ func TestBinaryClaudeRunAccepted(t *testing.T) {
 	}
 }
 
-func TestBinaryClaudeRunRejected(t *testing.T) {
+// A Candidate that keeps failing the Check is sent back until the limit,
+// then an unattended Run parks at the bound-exhaustion Gate (ADR-0008).
+func TestBinaryClaudeRunParked(t *testing.T) {
 	repo, env := runFixture(t)
 	env = withFakeClaude(t, env, claudeSession(false))
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
-	if code != 3 || !strings.Contains(out, "REJECTED") || !strings.Contains(out, "1 failed: TestAdd") {
+	if code != 10 || !strings.Contains(out, "PARKED     at the bound-exhaustion Gate") || !strings.Contains(out, "1 failed: TestAdd") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

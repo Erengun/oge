@@ -56,16 +56,44 @@ for (1..2000) {
 }'
 `
 	code, out, errOut := f.run(t, escaped+fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	dir := f.onlyRun(t)
+	dir, committed := raced(t, f, code, out, errOut)
+	if !committed {
+		return
+	}
 	if got := candidateFile(t, dir, "add_test.go"); got != fxTest {
 		t.Errorf("the Candidate took the late add_test.go: %q", got)
 	}
 	if got := candidateFile(t, dir, "go.mod"); got != "module fx\n\ngo 1.22\n" {
 		t.Errorf("the Candidate took the late go.mod: %q", got)
 	}
-	if code != ExitParked || len(records(t, dir, run.RecTamperEvent)) == 0 {
-		t.Fatalf("exit %d, Tamper events %v\nstdout:\n%s\nstderr:\n%s", code, records(t, dir, run.RecTamperEvent), out, errOut)
+	// A late write that git saw is a Tamper event, and the Run parks.
+	// The writer may also miss the window, and then nothing is late.
+	tampers := len(records(t, dir, run.RecTamperEvent))
+	if !(code == ExitParked && tampers > 0) && !(code == ExitOK && tampers == 0) {
+		t.Fatalf("exit %d, %d Tamper events\nstdout:\n%s\nstderr:\n%s", code, tampers, out, errOut)
 	}
+}
+
+// raced checks a Run that raced a writer the agent's group kill can't
+// reach. There are two safe outcomes. Either a Candidate exists, and the
+// caller checks that its protected paths are the Snapshot's. Or the
+// Attempt failed closed, because the writer changed a file while Öge was
+// comparing or committing it (exit 11), and then there is no Candidate at
+// all. It returns the Run's directory and whether a Candidate exists.
+func raced(t *testing.T, f *runFixture, code int, out, errOut string) (string, bool) {
+	t.Helper()
+	dir := f.onlyRun(t)
+	refs := gitOut(t, filepath.Join(dir, "repo.git"), "for-each-ref", "refs/oge/candidates/")
+	if code == ExitInfra && strings.Contains(out, "the implementer Attempt failed") {
+		if refs != "" {
+			t.Errorf("a failed Attempt left a Candidate:\n%s", refs)
+		}
+		return dir, false
+	}
+	if refs == "" {
+		t.Fatalf("exit %d with no Candidate\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	return dir, true
 }
 
 // Öge's git operations are byte-exact: a user's own eol attribute on a
@@ -191,15 +219,13 @@ for (1..2000) {
 }'
 `
 	code, out, errOut := f.run(t, escaped+fixScript+"ln -s add.go kept\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
-	// The writer races git itself: when a link vanishes under git add the
-	// Attempt fails closed, with no Candidate at all.
-	if code == ExitInfra && strings.Contains(out, "candidate_commit_failed") {
+	dir, committed := raced(t, f, code, out, errOut)
+	if !committed {
 		return
 	}
 	if code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
-	dir := f.onlyRun(t)
 	files := "\n" + gitOut(t, filepath.Join(dir, "repo.git"), "ls-tree", "-r", "--name-only", "refs/oge/candidates/c1")
 	for _, p := range []string{"l1", "l2"} {
 		if strings.Contains(files, "\n"+p+"\n") {

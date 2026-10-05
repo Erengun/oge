@@ -1,7 +1,7 @@
 // Package run is the orchestrator: Preflight, the Run's private state, and
-// the walk of the frozen graph. So far it walks Fast mode's main path,
-// implementer → Check (ADR-0019), writing every step ahead to the Ledger
-// (ADR-0012).
+// the walk of the frozen graph. So far it walks Fast mode: implementer →
+// Check, the send-back loop and the Gates it reaches (ADR-0019), writing
+// every step ahead to the Ledger (ADR-0012).
 package run
 
 import (
@@ -20,6 +20,7 @@ import (
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/briefing"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
@@ -80,6 +81,9 @@ type Params struct {
 	CacheWait time.Duration
 	// Observe receives progress as it happens, for rendering.
 	Observe func(Event)
+	// Gates is where a Gate waits for a human. Nil means unattended: a
+	// mandatory Gate parks the Run (ADR-0008).
+	Gates gate.Port
 }
 
 // EventKind names a progress event.
@@ -91,6 +95,8 @@ const (
 	EvAgent                      // an agent's normalised event during an Attempt
 	EvAttempt                    // an Attempt ended
 	EvCheck                      // a Check ended with a Verdict
+	EvSendBack                   // the Candidate goes back to the implementer
+	EvDecided                    // a Gate decision is recorded
 	EvNotice                     // something the user is told once, in Notice
 )
 
@@ -101,13 +107,19 @@ type Event struct {
 	Agent   agent.Event
 	Attempt *Attempt
 	Check   *oracle.Result
-	Notice  string
+	// EvSendBack: the send-backs used, of the limit.
+	SendBack, SendBacks int
+	// EvDecided: the Gate and its recorded decision.
+	Gate     *gate.Request
+	Decision *gate.Decision
+	Notice   string
 }
 
 // Attempt is one execution of a Stage.
 type Attempt struct {
 	ID      string
 	Stage   string
+	Cause   string // first | send_back
 	Agent   string
 	Exit    string
 	Failure string
@@ -138,9 +150,14 @@ type Result struct {
 	Oracle    int
 	Attempt   *Attempt
 	Check     *oracle.Result
+	Checks    int // how many Checks have run
 	Started   time.Time
 	Duration  time.Duration
 	Candidate string
+	// Gate is the Gate a Parked Run waits at, or the one whose decision
+	// ended it.
+	Gate     string
+	Decision *gate.Decision
 	// Friction is the Run's policy friction, summed over its Attempts.
 	Friction *agent.Friction
 }
@@ -160,7 +177,7 @@ const interrupted = "interrupted: the Run was cancelled"
 // ErrNoAdapter means the Stage's agent has no adapter in this build.
 var ErrNoAdapter = errors.New("no adapter")
 
-// Start runs a Fast-mode Run to its Verdict. An error means Öge itself
+// Start runs a Fast-mode Run until it ends or parks. An error means Öge itself
 // failed; the Run's Ledger then ends without RunEnded.
 func Start(ctx context.Context, p Params) (*Result, error) {
 	f := p.Frozen
@@ -210,7 +227,11 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	end := func(o Outcome, why ...string) (*Result, error) {
 		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
-		if err := l.Append(RecRunEnded, map[string]any{"outcome": o, "why": why}); err != nil {
+		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why}
+		if o == Parked {
+			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
+		}
+		if err := l.Append(rec, data); err != nil {
 			return nil, err
 		}
 		return res, nil
@@ -304,94 +325,133 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	p.Observe(Event{Kind: EvPreflight, Result: res})
 
-	// The implementer Attempt.
-	a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, ws, implementerScope(m, f))
-	if err != nil {
-		return nil, err
-	}
-	res.Attempt = a
-	res.Friction = agent.SumFriction(res.Friction, a.Friction)
-	p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
-	if a.Stop != "" {
-		return end(InfrastructureStop, a.Stop)
-	}
-	if a.Failure != "" {
-		// TODO(#40-decision): an Attempt failure should retry on its budget
-		// and then reach the bound-exhaustion Gate (ADR-0012); with neither
-		// built yet the Run stops with no Verdict.
-		return end(InfrastructureStop, "the implementer Attempt failed: "+a.Failure)
-	}
-	if a.Exit != "done" {
-		// TODO(#40-decision): other Exits (e.g. infeasible) route to the
-		// infeasible Gate (#43); until then the Run stops with no Verdict.
-		return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
-	}
-	res.Candidate = a.Candidate
+	// The walk: implementer, Check, then wherever the Verdict's edge goes.
+	w := &walk{p: p, l: l, g: f.Graph, limits: f.Limits}
+	scope := implementerScope(m, f)
+	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
+	for check := 1; ; check++ {
+		w.attempts++
+		a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
+		if err != nil {
+			return nil, err
+		}
+		res.Attempt = a
+		res.Friction = agent.SumFriction(res.Friction, a.Friction)
+		p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
+		if a.Stop != "" {
+			return end(InfrastructureStop, a.Stop)
+		}
+		if a.Failure != "" {
+			// TODO(#40-decision): an Attempt failure should retry on its
+			// budget and then reach the bound-exhaustion Gate (ADR-0012);
+			// with neither built yet the Run stops with no Verdict.
+			return end(InfrastructureStop, "the implementer Attempt failed: "+a.Failure)
+		}
+		if a.Exit != "done" {
+			// TODO(#50): other Exits (e.g. infeasible) route to the
+			// infeasible Gate; until then the Run stops with no Verdict.
+			return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
+		}
+		res.Candidate = a.Candidate
+		// A Tamper event stays unacknowledged for the rest of the Run,
+		// whatever later Attempts do (ADR-0019 #2).
+		w.addTamper(a)
 
-	// The Check, from the cache seed once it is warm. A cancelled Run
-	// never reaches a Verdict: the Check it killed didn't fail.
-	if seed != nil {
-		limit := p.CacheWait
-		if limit <= 0 {
-			limit = DefaultCacheWait
+		// The Check, from the cache seed once it is warm. A cancelled Run
+		// never reaches a Verdict: the Check it killed didn't fail.
+		if seed != nil && runner.Seed == nil {
+			limit := p.CacheWait
+			if limit <= 0 {
+				limit = DefaultCacheWait
+			}
+			sw := seed.WaitFor(limit)
+			sw.Error = string(redact.Redact([]byte(sw.Error)))
+			if err := l.Append(RecCacheSeeded, sw); err != nil {
+				return nil, err
+			}
+			runner.Seed = seed
 		}
-		w := seed.WaitFor(limit)
-		w.Error = string(redact.Redact([]byte(w.Error)))
-		if err := l.Append(RecCacheSeeded, w); err != nil {
+		if ctx.Err() != nil {
+			return end(InfrastructureStop, interrupted)
+		}
+		if err := l.Append(RecCheckStarted, map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 			return nil, err
 		}
-		runner.Seed = seed
-	}
-	if ctx.Err() != nil {
-		return end(InfrastructureStop, interrupted)
-	}
-	if err := l.Append(RecCheckStarted, map[string]any{"check": 1, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
-		return nil, err
-	}
-	cr, err := runner.Check(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", "1"))
-	if err != nil {
-		return nil, err
-	}
-	if ctx.Err() != nil {
-		if err := l.Append(RecCheckEnded, map[string]any{"check": 1, "result": cr, "uncontained": true, "interrupted": true}); err != nil {
+		cr, err := runner.Check(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)))
+		if err != nil {
 			return nil, err
 		}
-		return end(InfrastructureStop, interrupted)
-	}
-	res.Check = cr
-	verdict := "fail"
-	if cr.Pass {
-		verdict = "pass"
-	}
-	if err := l.Append(RecCheckEnded, map[string]any{"check": 1, "result": cr, "uncontained": true}); err != nil {
-		return nil, err
-	}
-	if err := l.Append(RecVerdict, map[string]any{"check": 1, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
-		return nil, err
-	}
-	p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
-	if cr.Pass {
-		if n := a.Tamper(); n > 0 {
-			// TODO(#41-decision): a Tamper event's acknowledgement belongs
-			// to the end-of-run review (ADR-0019 #2), whose Gate isn't
-			// built yet (#43, #49). Until then the Run parks (exit 10)
-			// rather than becoming Accepted without it.
-			return end(Parked, tamperWaiting(n))
+		if ctx.Err() != nil {
+			if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true, "interrupted": true}); err != nil {
+				return nil, err
+			}
+			return end(InfrastructureStop, interrupted)
 		}
-		return end(Accepted)
+		res.Check, res.Checks = cr, check
+		verdict := "fail"
+		if cr.Pass {
+			verdict = "pass"
+		}
+		if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true}); err != nil {
+			return nil, err
+		}
+		if err := l.Append(RecVerdict, map[string]any{"check": check, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
+			return nil, err
+		}
+		w.check = check
+		p.Observe(Event{Kind: EvCheck, Result: res, Check: cr})
+
+		// TODO(#47, #48): failing own tests and Ambiguous files become
+		// conditions here.
+		holds := func(c string) bool {
+			return c == "verdict:"+verdict || (c == "tamper_event" && len(w.unacknowledged()) > 0)
+		}
+		e, ok := f.Graph.Route("check", holds, w.exhausted)
+		if !ok {
+			return nil, fmt.Errorf("the frozen graph has no edge for this Verdict")
+		}
+		s, err := w.follow(ctx, e, a, m.Version, cr, holds)
+		if err != nil {
+			return nil, err
+		}
+		res.Gate, res.Decision = s.gate, s.decision
+		if s.stop != "" {
+			return end(s.stop, s.why...)
+		}
+		if s.edge.To == "end" {
+			return end(Outcome(s.edge.Outcome))
+		}
+		d := s.decision
+		// A send-back Attempt, from the Candidate it sends back.
+		w.sendBacks++
+		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks})
+		next = attemptSpec{n: next.n + 1, cause: "send_back", start: a.Candidate,
+			extra: sendBackTurn(cr, blobs, d), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
+		if err := repo.Checkout(a.Candidate, next.ws); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(next.ws, ledger.WorkspaceMarker), nil, 0o600); err != nil {
+			return nil, err
+		}
 	}
-	// TODO(#40-decision): a fail Verdict ends the Run Rejected (exit 3), as
-	// #40 asks. ADR-0007 reserves Rejected for a human and routes a fail
-	// Verdict to a send-back, then the bound-exhaustion Gate (#43).
-	return end(Rejected)
 }
 
-// implement runs the first implementer Attempt: AttemptStarting before the
+// attemptSpec is what one implementer Attempt starts from.
+type attemptSpec struct {
+	n     int
+	cause string // first | send_back
+	start string // the revision its Workspace holds
+	extra string // what the Briefing adds: why the Candidate came back
+	ws    string
+}
+
+// implement runs one implementer Attempt: AttemptStarting before the
 // spawn, ProcessStarted right after it, AttemptEnded only once the
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
-	adapter agent.Adapter, stage pipeline.Stage, runID, snap, ws string, protected func(string) string) (*Attempt, error) {
-	a := &Attempt{ID: stage.Name + "#1", Stage: stage.Name, Agent: stage.Agent}
+	adapter agent.Adapter, stage pipeline.Stage, runID, snap string, at attemptSpec, protected func(string) string) (*Attempt, error) {
+	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Agent: stage.Agent, Cause: at.cause}
+	ws := at.ws
 	instructions, err := repoInstructions(repo, snap)
 	if err != nil {
 		return nil, err
@@ -410,13 +470,16 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 		Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network, RunID: runID,
 		RepoInstructions: instructions, CheckCommands: checks, DenyRead: []string{p.State.Private}, Cache: cache,
 	}
-	brief := briefing.Implementer(p.Task, checks)
+	// TODO(#44): a send-back Attempt may continue the implementer's
+	// Session; every Attempt is a fresh one for now, briefed again with
+	// why its Candidate came back.
+	brief := briefing.Implementer(p.Task, checks) + at.extra
 	briefingBlob, err := blobs.Put([]byte(brief))
 	if err != nil {
 		return nil, err
 	}
 	if err := l.Append(RecAttemptStarting, map[string]any{
-		"attempt": a.ID, "stage": stage.Name, "cause": "first", "start_revision": snap, "session": "fresh",
+		"attempt": a.ID, "stage": stage.Name, "cause": at.cause, "start_revision": at.start, "session": "fresh",
 		"launch_profile": map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network},
 		"briefing":       briefingBlob, "repo_instructions": instructions != "",
 	}); err != nil {
@@ -537,7 +600,7 @@ loop:
 		return nil, err
 	}
 	if a.Failure == "" && a.Stop == "" {
-		if err := commitCandidate(l, repo, a, snap, ws, protected); err != nil {
+		if err := commitCandidate(l, repo, a, snap, at.start, fmt.Sprintf("c%d", at.n), ws, protected); err != nil {
 			return nil, err
 		}
 	}
@@ -625,14 +688,4 @@ func newID() string {
 	var b [3]byte
 	_, _ = rand.Read(b[:])
 	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
-}
-
-// tamperWaiting is why a Run with Tamper events and a passing Verdict
-// parks.
-func tamperWaiting(n int) string {
-	events := "1 Tamper event needs"
-	if n != 1 {
-		events = fmt.Sprintf("%d Tamper events need", n)
-	}
-	return events + " acknowledging before this Run can be Accepted, and that review isn't built yet"
 }

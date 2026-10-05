@@ -97,6 +97,10 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 			p("!   Add a \"## Acceptance criteria\" list to fix this.")
 		}
 	}
+	for _, n := range f.Notices {
+		p("")
+		p("! %s", n)
+	}
 	if len(f.TrustWeakening) > 0 {
 		p("")
 		p("! Trust-weakening options in effect")
