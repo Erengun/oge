@@ -277,3 +277,48 @@ func TestScopeCaseInsensitiveRename(t *testing.T) {
 		t.Errorf("restored %q", b)
 	}
 }
+
+// Links that appear after the comparison never reach the Candidate,
+// however inward their text looks; the links it let stand do.
+func TestCommitScopedDropsLateLinks(t *testing.T) {
+	f := newScopeFixture(t)
+	if err := os.Symlink("free.txt", filepath.Join(f.ws, "kept")); err != nil {
+		t.Fatal(err)
+	}
+	s := f.check(t)
+	if err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	// Late: l1 -> l2/.. with l2 -> . resolves above the Workspace; and a
+	// late write to a protected file.
+	os.Symlink(".", filepath.Join(f.ws, "l2"))
+	os.Symlink("l2/..", filepath.Join(f.ws, "l1"))
+	write(t, filepath.Join(f.ws, "prot", "a.txt"), "late\n")
+	c, late, err := f.r.CommitScoped(f.ws, f.snap, "c", func(p string) string {
+		if strings.HasPrefix(p, "prot/") {
+			return "prot"
+		}
+		return ""
+	}, s.Links)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := f.r.Files(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := "\n" + strings.Join(files, "\n") + "\n"
+	if strings.Contains(got, "\nl1\n") || strings.Contains(got, "\nl2\n") || !strings.Contains(got, "\nkept\n") {
+		t.Errorf("Candidate files:%s", got)
+	}
+	if b, _, _ := f.r.Show(c, "prot/a.txt"); string(b) != "one\ntwo\nthree\n" {
+		t.Errorf("prot/a.txt in the Candidate: %q", b)
+	}
+	m := map[string]Revert{}
+	for _, r := range late {
+		m[r.Path] = r
+	}
+	if m["l1"].Class != ClassSymlinkEscape || m["l2"].Class != ClassSymlinkEscape || !m["prot/a.txt"].Tamper {
+		t.Errorf("late: %+v", late)
+	}
+}

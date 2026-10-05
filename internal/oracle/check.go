@@ -38,9 +38,14 @@ type Runner struct {
 	Blobs   *ledger.Blobs
 	PassEnv []string // variable names exposed to commands (project.pass_env)
 	Getenv  func(string) string
-	// GoCache, when set, replaces the private GOCACHE. Only test builds
-	// set it, to keep the e2e tests fast (see cli.Env.CheckGoCache).
-	GoCache string
+	// Seed, when set, is the Run's warm cache seed: each Check's caches
+	// start as private copies of it (ADR-0021).
+	Seed *Seed
+	// SeedTemplate, when set, is a build cache each new seed starts as a
+	// private clone or copy of, before setup and the warm step run. Only
+	// tests set it, to skip compiling the standard library every Run
+	// (see cli.Env.CacheSeedTemplate).
+	SeedTemplate string
 }
 
 // Execution is the command-execution Evidence Öge records (ADR-0011).
@@ -187,8 +192,13 @@ type Result struct {
 	// Why is set when the Check failed for a reason no single command
 	// shows: an Oracle path the Candidate blocked, or Oracle tests no
 	// report shows passing (named in Missing).
-	Why      string      `json:"why,omitempty"`
-	Missing  []string    `json:"missing_tests,omitempty"`
+	Why     string   `json:"why,omitempty"`
+	Missing []string `json:"missing_tests,omitempty"`
+	// Cache is how the Check-local caches were made (CacheClone, CacheCopy
+	// or CacheCold), and CacheMs how long that took.
+	Cache    string      `json:"cache"`
+	CacheWhy string      `json:"cache_why,omitempty"` // why it fell back
+	CacheMs  int64       `json:"cache_materialise_ms"`
 	Setup    *Execution  `json:"setup,omitempty"`
 	Commands []Execution `json:"commands"`
 }
@@ -199,14 +209,14 @@ type Result struct {
 // only if every command passes. root is removed afterwards.
 func (r *Runner) Check(ctx context.Context, repo Repo, m *Manifest, candidate, setup, root string) (*Result, error) {
 	defer RemoveAll(root)
-	dir, env, err := r.Prepare(root)
+	dir, env, cache, err := r.prepareCheck(root)
 	if err != nil {
 		return nil, err
 	}
 	if err := repo.Checkout(candidate, dir); err != nil {
 		return nil, err
 	}
-	res := &Result{Pass: true}
+	res := &Result{Pass: true, Cache: cache.strategy, CacheWhy: cache.why, CacheMs: cache.ms}
 	if setup != "" {
 		e, _, err := r.Exec(ctx, setup, dir, env, 10*time.Minute, 1<<20)
 		if err != nil {
@@ -288,9 +298,6 @@ func (r *Runner) Prepare(root string) (string, map[string]string, error) {
 		"PATH": r.Getenv("PATH"), "HOME": dirs["home"], "TMPDIR": dirs["tmp"],
 		"GOCACHE": dirs["gocache"], "GOPATH": dirs["gopath"], "GOMODCACHE": filepath.Join(dirs["gopath"], "pkg", "mod"),
 		"GOTOOLCHAIN": "local", "GOWORK": "off", "XDG_CACHE_HOME": filepath.Join(dirs["home"], ".cache"),
-	}
-	if r.GoCache != "" {
-		env["GOCACHE"] = r.GoCache
 	}
 	return dirs["tree"], env, nil
 }
