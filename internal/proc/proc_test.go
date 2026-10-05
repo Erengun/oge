@@ -35,6 +35,24 @@ func TestKillAllKillsEveryLiveGroup(t *testing.T) {
 	}
 }
 
+// WaitGone returns once a killed group's last process is gone, including
+// a background child the leader left behind.
+func TestWaitGoneWaitsForTheWholeGroup(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "sleep 30 >/dev/null 2>&1 &")
+	if err := Start(cmd); err != nil {
+		t.Fatal(err)
+	}
+	pgid := Group(cmd)
+	_ = Wait(cmd) // the leader exits at once; its sleep stays in the group
+	if WaitGone(pgid, 50*time.Millisecond) {
+		t.Fatal("the group emptied while its sleep ran")
+	}
+	Kill(cmd)
+	if !WaitGone(pgid, 5*time.Second) {
+		t.Fatal("the killed group never emptied")
+	}
+}
+
 // Terminate signals the whole group: a shell that traps nothing and the
 // sleep it forked both end.
 func TestTerminateEndsTheGroup(t *testing.T) {

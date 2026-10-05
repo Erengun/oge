@@ -72,7 +72,9 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	defer cancel()
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
-	res, err := selectView(env, f, t, frozen).show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
+	v := selectView(env, f, t, frozen)
+	withWarning(v, testConfigWarning(root, frozen))
+	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		return run.Start(ctx, run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 			State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
@@ -92,6 +94,8 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 		return ExitOK
 	case run.Rejected:
 		return ExitRejected
+	case run.Parked:
+		return ExitParked
 	case run.Refused:
 		fmt.Fprintln(env.Stderr, "oge: Preflight refused this Run")
 		for _, w := range res.Why {
@@ -160,6 +164,7 @@ type renderer struct {
 	w       io.Writer
 	verbose bool
 	frozen  *pipeline.Frozen
+	warn    string // shown with the summary
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
@@ -228,6 +233,9 @@ func (r *renderer) observe(ev run.Event) {
 		r.p("%-10s %s", "note", clean(ev.Notice))
 	case run.EvAttempt:
 		r.p("%-10s %s", ev.Attempt.Stage, attemptText(ev.Attempt))
+		if s := scopeText(ev.Attempt); s != "" {
+			r.p("%-10s %s", "scope", s)
+		}
 	case run.EvCheck:
 		res := ev.Result
 		if r.verbose {
@@ -371,12 +379,20 @@ func commandLine(e oracle.Execution) string {
 
 func (r *renderer) summary(res *run.Result) {
 	switch res.Outcome {
-	case run.Accepted, run.Rejected:
+	case run.Accepted, run.Rejected, run.Parked:
 		head := strings.ToUpper(string(res.Outcome))
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
+		if res.Outcome == run.Parked {
+			for _, w := range res.Why {
+				r.p("%-10s the Check passed, but %s", "", clean(w))
+			}
+		}
 		// TODO(#63): the Receipt replaces these lines.
 		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
+		if r.warn != "" {
+			r.p("! %s", r.warn)
+		}
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")

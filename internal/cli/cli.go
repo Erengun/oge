@@ -251,7 +251,7 @@ func runCommand(env Env, args []string) int {
 	if !f.dryRun {
 		return startRun(env, f, root, t, frozen, cfgData)
 	}
-	renderDryRun(env.Stdout, t, frozen, cfg != nil)
+	renderDryRun(env.Stdout, t, frozen, cfg != nil, testConfigWarning(root, frozen))
 	return ExitOK
 }
 

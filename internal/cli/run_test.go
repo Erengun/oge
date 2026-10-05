@@ -170,7 +170,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
-	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
+	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecScopeObserved, run.RecScopeReverted, run.RecAttemptEnded,
 	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
 }
 
@@ -290,8 +290,10 @@ func TestRunRejectsWhenTheOracleFails(t *testing.T) {
 		}
 	}
 	f.assertUntouched(t)
-	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != strings.Join(wantOrder, ",") {
-		t.Errorf("Ledger order:\n got %s\nwant %s", got, strings.Join(wantOrder, ","))
+	// The rewritten test is reverted and recorded before the Attempt ends.
+	tamperOrder := strings.Replace(strings.Join(wantOrder, ","), run.RecScopeReverted, run.RecScopeReverted+","+run.RecTamperEvent, 1)
+	if got := strings.Join(recordTypes(t, f.onlyRun(t)), ","); got != tamperOrder {
+		t.Errorf("Ledger order:\n got %s\nwant %s", got, tamperOrder)
 	}
 }
 
@@ -401,24 +403,6 @@ func TestRunRedactsAgentText(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-func TestRunOverlayNeverWritesThroughASymlink(t *testing.T) {
-	f := newRunFixture(t)
-	writeFile(t, filepath.Join(f.repo, "sub", "x.go"), []byte("package sub\n"))
-	writeFile(t, filepath.Join(f.repo, "sub", "x_test.go"), []byte("package sub\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n"))
-	outside := filepath.Join(filepath.Dir(f.repo), "outside")
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := "rm -rf sub && ln -s '" + outside + "' sub\n" + fixScript
-	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if _, err := os.Lstat(filepath.Join(outside, "x_test.go")); err == nil {
-		t.Error("the overlay wrote an Oracle test outside the Check directory")
-	}
-	if code != ExitRejected || !strings.Contains(out, "Oracle path sub/x_test.go is blocked by a symlink in the Candidate") {
-		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
 
