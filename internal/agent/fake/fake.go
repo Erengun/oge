@@ -74,7 +74,7 @@ type session struct {
 	sent bool
 }
 
-func (s *session) Process() agent.Process      { return s.process }
+func (s *session) Process() agent.Process     { return s.process }
 func (s *session) Events() <-chan agent.Event { return s.events }
 
 func (s *session) Send(t agent.Turn) error {
