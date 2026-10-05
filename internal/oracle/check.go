@@ -293,6 +293,7 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 		return nil, err
 	}
 	defer ch.finish()
+	var short []int // commands whose report ran fewer tests than expected_tests
 	for _, c := range m.Commands {
 		e, out, err := r.exec(ctx, c.Run, dir, env, time.Duration(c.TimeoutSec)*time.Second, c.OutputCap, ch.w)
 		if err != nil {
@@ -308,7 +309,8 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 				case rep.Failed > 0:
 					e.Pass, e.Why = false, fmt.Sprintf("%d failed", rep.Failed)
 				case rep.Ran < c.ExpectedTests:
-					e.Pass, e.Why = false, fmt.Sprintf("%d ran, %d expected", rep.Ran, c.ExpectedTests)
+					// Judged once the skips are: see minimumRan.
+					short = append(short, len(res.Commands))
 				}
 			}
 		}
@@ -333,7 +335,31 @@ func (r *Runner) CheckAgainst(ctx context.Context, repo Repo, m *Manifest, candi
 	if res.Pass {
 		judge(res, control)
 	}
+	if res.Pass {
+		minimumRan(res, m, short)
+	}
 	return res, nil
+}
+
+// minimumRan applies each command's expected_tests minimum once skips are
+// judged (ADR-0020): an Oracle test skipped on both the Snapshot control
+// and the Candidate is excused from the count, so the minimum holds only
+// for tests that ran on the Snapshot. A Candidate-made skip never gets
+// here: judge has already failed the Check.
+func minimumRan(res *Result, m *Manifest, short []int) {
+	for _, i := range short {
+		e, c := &res.Commands[i], m.Commands[i]
+		excused := 0
+		for _, t := range res.Tests {
+			if t.Attested == AttestSkip && t.Snapshot == AttestSkip && e.Report.outcome(t.TestID) == AttestSkip {
+				excused++
+			}
+		}
+		if need := c.ExpectedTests - excused; e.Report.Ran < need {
+			e.Pass, e.Why = false, fmt.Sprintf("%d ran, %d expected", e.Report.Ran, c.ExpectedTests)
+			res.Pass = false
+		}
+	}
 }
 
 // Prepare makes root's fresh tree/ plus private home, temp and caches, and
@@ -356,7 +382,8 @@ func (r *Runner) Prepare(root string) (string, map[string]string, error) {
 }
 
 // overlay lays the Oracle version over the Check directory's test paths:
-// files matching the test globs are the Oracle's, never the Candidate's.
+// files matching the test globs or the test-config globs are the Oracle's,
+// never the Candidate's.
 // It never writes outside dir: an Oracle path the Candidate blocks with a
 // symlink (or a non-directory) anywhere along it is returned as a reason
 // the Check fails, and nothing is written for it.
@@ -366,7 +393,7 @@ func (r *Runner) overlay(m *Manifest, dir string, att *attestation) (blocked str
 			return err
 		}
 		rel, _ := filepath.Rel(dir, p)
-		if MatchAny(m.TestGlobs, filepath.ToSlash(rel)) {
+		if rel := filepath.ToSlash(rel); MatchAny(m.TestGlobs, rel) || MatchAny(m.TestConfigGlobs, rel) {
 			return os.Remove(p)
 		}
 		return nil
@@ -374,7 +401,7 @@ func (r *Runner) overlay(m *Manifest, dir string, att *attestation) (blocked str
 	if err != nil {
 		return "", err
 	}
-	for _, f := range m.Tests {
+	for _, f := range append(append([]File(nil), m.Tests...), m.Config...) {
 		if why, err := blockedPath(dir, f.Path); err != nil || why != "" {
 			return why, err
 		}
@@ -382,6 +409,8 @@ func (r *Runner) overlay(m *Manifest, dir string, att *attestation) (blocked str
 		if err != nil {
 			return "", err
 		}
+		// test_config files declare no expected tests, so they pass
+		// through uninstrumented.
 		if b, err = att.instrument(f, b); err != nil {
 			return "", err
 		}

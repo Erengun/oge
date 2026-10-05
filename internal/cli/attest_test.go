@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -241,5 +242,20 @@ func TestRunAttestationFailingOnTheSnapshotIsInfrastructure(t *testing.T) {
 	recordData(t, dir, run.RecControlEnded, &control)
 	if !control.Consulted {
 		t.Error("the Snapshot control wasn't consulted")
+	}
+}
+
+// When every Oracle test skipped on both sides, expected_tests doesn't
+// reject on its own: the minimum holds only for tests that ran on the
+// Snapshot.
+func TestRunAllSkippedOnBothMeetsTheMinimum(t *testing.T) {
+	f := newRunFixture(t)
+	if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(f.repo, "tool_test.go"), []byte(toolTest))
+	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(out, "skipped on the Snapshot and the Candidate (1): fx.TestNeedsTool") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

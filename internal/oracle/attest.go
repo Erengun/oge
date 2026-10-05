@@ -476,6 +476,10 @@ type Control struct {
 func (r *Runner) StartControl(ctx context.Context, repo Repo, m *Manifest, snapshot, setup, root string) *Control {
 	ctx, cancel := context.WithCancel(ctx)
 	c := &Control{Version: m.Version, done: make(chan struct{}), cancel: cancel, started: time.Now()}
+	// Niced: this deviates from "same environment" in scheduling
+	// priority only, so the control never slows the Check or the agent
+	// it overlaps. Setup, environment, overlay (test_config included) and
+	// attestation are the Check's own.
 	ctl := *r
 	ctl.nice = true
 	r = &ctl

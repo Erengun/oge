@@ -24,6 +24,11 @@ type Manifest struct {
 	TestGlobs []string  `json:"test_globs"`
 	Commands  []Command `json:"commands"`
 	Tests     []File    `json:"tests"`
+	// TestConfigGlobs and Config are the test configuration (spec #35:
+	// v0 holds the listed test-config files), laid over a Check directory
+	// like Tests.
+	TestConfigGlobs []string `json:"test_config_globs,omitempty"`
+	Config          []File   `json:"config,omitempty"`
 	// Expected are the top-level Go tests in Tests; each must pass in a
 	// go-test-json report for the Check to pass.
 	Expected []TestID `json:"expected,omitempty"`
@@ -57,7 +62,8 @@ type Source interface {
 // the test globs, stored as blobs, plus the frozen Check commands. It
 // returns the manifest and its blob id.
 func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs) (*Manifest, string, error) {
-	m := &Manifest{Format: ManifestFormat, Version: 0, TestGlobs: append([]string(nil), f.Project.TestGlobs...)}
+	m := &Manifest{Format: ManifestFormat, Version: 0, TestGlobs: append([]string(nil), f.Project.TestGlobs...),
+		TestConfigGlobs: append([]string(nil), f.Project.TestConfig...)}
 	for _, c := range f.Checks {
 		m.Commands = append(m.Commands, Command{Run: c.Run, Report: c.Report, ExpectedTests: c.ExpectedTests,
 			TimeoutSec: int(c.Timeout.Seconds()), OutputCap: c.OutputCap})
@@ -67,7 +73,8 @@ func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs)
 		return nil, "", err
 	}
 	for _, p := range files {
-		if !MatchAny(m.TestGlobs, p) {
+		isTest, isConfig := MatchAny(m.TestGlobs, p), MatchAny(m.TestConfigGlobs, p)
+		if !isTest && !isConfig {
 			continue
 		}
 		b, ok, err := src.Show(snapshot, p)
@@ -78,7 +85,11 @@ func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs)
 		if err != nil {
 			return nil, "", err
 		}
-		m.Tests = append(m.Tests, File{Path: p, Blob: id})
+		if isTest {
+			m.Tests = append(m.Tests, File{Path: p, Blob: id})
+		} else {
+			m.Config = append(m.Config, File{Path: p, Blob: id})
+		}
 	}
 	sort.Slice(m.Tests, func(i, j int) bool { return m.Tests[i].Path < m.Tests[j].Path })
 	var testPaths []string

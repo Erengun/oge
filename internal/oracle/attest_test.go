@@ -197,3 +197,20 @@ func TestTripwires(t *testing.T) {
 		t.Errorf("tripwires:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestMinimumRanExcusesOnlySkipsOnBoth(t *testing.T) {
+	id := TestID{Package: "fx", Name: "TestX"}
+	rep := ParseGoTestJSON([]byte(`{"Action":"skip","Package":"fx","Test":"TestX"}` + "\n"))
+	m := &Manifest{Commands: []Command{{ExpectedTests: 1}}}
+	for _, c := range []struct {
+		snapshot string
+		pass     bool
+	}{{AttestSkip, true}, {"", false}} {
+		res := &Result{Pass: true, Commands: []Execution{{Pass: true, Report: &rep}},
+			Tests: []TestResult{{TestID: id, Attested: AttestSkip, Snapshot: c.snapshot}}}
+		minimumRan(res, m, []int{0})
+		if res.Pass != c.pass || res.Commands[0].Pass != c.pass {
+			t.Errorf("snapshot %q: pass %v, why %q", c.snapshot, res.Pass, res.Commands[0].Why)
+		}
+	}
+}
