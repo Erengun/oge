@@ -171,7 +171,7 @@ func recordTypes(t *testing.T, runDir string) []string {
 var wantOrder = []string{
 	run.RecRunStarted, run.RecSnapshotTaken, run.RecOracleVersion, run.RecPreflightObserved,
 	run.RecAttemptStarting, run.RecProcessStarted, run.RecObservation, run.RecAttemptEnded,
-	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecVerdict, run.RecRunEnded,
+	run.RecCacheSeeded, run.RecCheckStarted, run.RecCheckEnded, run.RecControlEnded, run.RecVerdict, run.RecRunEnded,
 }
 
 // writeAheadScript fails the Attempt unless the Ledger already records it
@@ -191,7 +191,7 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 		"implement  fake · Exit done · Candidate ", "· 1 file changed",
 		"check      go test -json ./... · 1 ran · 0 failed · pass",
 		"ACCEPTED   Candidate ", "Oracle v0",
-		"Not covered", "Checks run Candidate code uncontained; a hostile Candidate can forge test results",
+		"Not covered", "Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges",
 		"Nothing was written to your repository.",
 	} {
 		if !strings.Contains(out, want) {
@@ -241,6 +241,9 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 		Result struct {
 			Cache   string `json:"cache"`
 			CacheMs *int64 `json:"cache_materialise_ms"`
+			Tests   []struct {
+				Name, Attested string
+			} `json:"tests"`
 		} `json:"result"`
 	}
 	recordData(t, dir, run.RecCacheSeeded, &seeded)
@@ -251,6 +254,16 @@ func TestRunAcceptsWhenTheCheckPasses(t *testing.T) {
 	want := map[bool]string{true: oracle.CacheClone, false: ""}[runtime.GOOS == "darwin"]
 	if c := ended.Result.Cache; c == oracle.CacheCold || c == "" || (want != "" && c != want) || ended.Result.CacheMs == nil {
 		t.Errorf("CheckEnded cache = %q (%v ms), want a seeded cache", c, ended.Result.CacheMs)
+	}
+	// The Oracle test attested its own execution (ADR-0020), and the
+	// Verdict never waited for the Snapshot control.
+	if tests := ended.Result.Tests; len(tests) != 1 || tests[0].Name != "TestAdd" || tests[0].Attested != "pass" {
+		t.Errorf("CheckEnded tests = %+v, want TestAdd attested passing", tests)
+	}
+	var control oracle.ControlRecord
+	recordData(t, dir, run.RecControlEnded, &control)
+	if control.Consulted || control.WaitedMs != 0 {
+		t.Errorf("ControlEnded = %+v: the happy path waited for the Snapshot control", control)
 	}
 }
 
@@ -440,7 +453,7 @@ func TestRunEveryOracleTestMustPass(t *testing.T) {
 	// A nested module drops sub out of ./..., so TestX never runs.
 	script := fixScript + "printf 'module sub\\n\\ngo 1.22\\n' > sub/go.mod\n"
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitRejected || !strings.Contains(out, "Oracle tests that never passed (1): fx/sub.TestX") {
+	if code != ExitRejected || !strings.Contains(out, "Oracle tests not attested passing (1): fx/sub.TestX never ran") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }

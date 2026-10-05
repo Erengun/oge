@@ -24,7 +24,7 @@ func TestExpectedTestsComeFromTheOracle(t *testing.T) {
 			tests = append(tests, p)
 		}
 	}
-	got := expectedTests(tests, files, func(p string) ([]byte, error) {
+	got, byFile := expectedTests(tests, files, func(p string) ([]byte, error) {
 		s, ok := snap[p]
 		if !ok {
 			return nil, fmt.Errorf("no %s", p)
@@ -36,22 +36,7 @@ func TestExpectedTestsComeFromTheOracle(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}
-}
-
-func TestMissingTests(t *testing.T) {
-	rep := ParseGoTestJSON([]byte(passing))
-	for _, c := range []struct {
-		id      TestID
-		missing bool
-	}{
-		{TestID{"fx", "TestAdd"}, false},
-		{TestID{"", "TestAdd"}, false},
-		{TestID{"other", "TestAdd"}, true},
-		{TestID{"fx", "TestSub"}, true}, // skipped
-		{TestID{"fx", "TestGone"}, true},
-	} {
-		if got := len(missingTests([]TestID{c.id}, []*Report{&rep})) == 1; got != c.missing {
-			t.Errorf("%v: missing = %v, want %v", c.id, got, c.missing)
-		}
+	if want := []TestID{{"example.com/fx/sub", "TestX"}}; !reflect.DeepEqual(byFile["sub/x_test.go"], want) {
+		t.Errorf("sub/x_test.go declares %v, want %v", byFile["sub/x_test.go"], want)
 	}
 }

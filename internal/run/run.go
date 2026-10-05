@@ -53,6 +53,7 @@ const (
 	RecCacheSeeded       = "CacheSeeded"
 	RecCheckStarted      = "CheckStarted"
 	RecCheckEnded        = "CheckEnded"
+	RecControlEnded      = "ControlEnded"
 	RecVerdict           = "Verdict"
 	RecRunEnded          = "RunEnded"
 )
@@ -132,6 +133,9 @@ type Result struct {
 	Started   time.Time
 	Duration  time.Duration
 	Candidate string
+	// Tripwires are the static tripwires the Candidate's changes set off
+	// (ADR-0020): signals, not proof.
+	Tripwires []string
 }
 
 // DefaultCacheWait bounds the Check's wait for the warm step: past it the
@@ -292,6 +296,8 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	p.Observe(Event{Kind: EvPreflight, Result: res})
+	control := startControl(ctx, runner, seed, repo, m, snap, f.Setup.Run, res.Dir)
+	defer control.Stop()
 
 	// The implementer Attempt.
 	a, err := implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, ws)
@@ -315,6 +321,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
 	}
 	res.Candidate = a.Candidate
+	if err := recordTripwires(l, repo, res, a); err != nil {
+		return nil, err
+	}
 
 	// The Check, from the cache seed once it is warm. A cancelled Run
 	// never reaches a Verdict: the Check it killed didn't fail.
@@ -336,7 +345,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := l.Append(RecCheckStarted, map[string]any{"check": 1, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}); err != nil {
 		return nil, err
 	}
-	cr, err := runner.Check(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", "1"))
+	cr, err := runner.CheckAgainst(ctx, repo, m, a.Candidate, f.Setup.Run, filepath.Join(res.Dir, "checks", "1"), control)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +362,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	if err := l.Append(RecCheckEnded, map[string]any{"check": 1, "result": cr, "uncontained": true}); err != nil {
 		return nil, err
+	}
+	if err := l.Append(RecControlEnded, control.Stop()); err != nil {
+		return nil, err
+	}
+	if cr.Infra != "" {
+		return end(InfrastructureStop, cr.Infra)
 	}
 	if err := l.Append(RecVerdict, map[string]any{"check": 1, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
 		return nil, err

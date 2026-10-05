@@ -376,7 +376,16 @@ func (r *renderer) summary(res *run.Result) {
 		r.p("")
 		r.p("%-10s Candidate %s · Oracle v%d · %s", head, res.Candidate[:7], res.Oracle, res.Duration.Round(100*time.Millisecond))
 		// TODO(#63): the Receipt replaces these lines.
-		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained; a hostile Candidate can forge test results; they run with your privileges", "Not covered")
+		label := "Not covered"
+		if c := res.Check; c != nil && len(c.Skipped) > 0 {
+			// A coverage gap the Snapshot already had: shown first.
+			r.p("%-10s %s", label, clean(fmt.Sprintf("Oracle tests skipped on the Snapshot and the Candidate (%d): %s", len(c.Skipped), strings.Join(c.Skipped, ", "))))
+			label = ""
+		}
+		r.p("%-10s an independent verifier and held-out tests (Fast mode) · Checks run Candidate code uncontained: no isolation against deliberately hostile code running with your privileges", label)
+		if len(res.Tripwires) > 0 {
+			r.p("%-10s %s (tripwires: signals, not proof)", "Observed", clean(strings.Join(res.Tripwires, " · ")))
+		}
 		r.p("Nothing was written to your repository.")
 	case run.InfrastructureStop:
 		r.p("")

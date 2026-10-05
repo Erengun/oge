@@ -29,10 +29,10 @@ func (id TestID) String() string {
 }
 
 // expectedTests reads every top-level func TestXxx(t *testing.T) in the
-// Oracle's Go test files. files is the Snapshot's file list; show reads a
-// Snapshot file. A test file that doesn't parse adds nothing: it fails the
-// Check on its own.
-func expectedTests(tests []string, files []string, show func(string) ([]byte, error)) []TestID {
+// Oracle's Go test files, overall and by file. files is the Snapshot's
+// file list; show reads a Snapshot file. A test file that doesn't parse
+// adds nothing: it fails the Check on its own.
+func expectedTests(tests []string, files []string, show func(string) ([]byte, error)) ([]TestID, map[string][]TestID) {
 	mods := map[string]string{} // directory → module path, from the Snapshot's go.mod files
 	for _, f := range files {
 		if path.Base(f) != "go.mod" {
@@ -46,6 +46,7 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 	}
 	seen := map[TestID]bool{}
 	var ids []TestID
+	byFile := map[string][]TestID{}
 	for _, f := range tests {
 		if !strings.HasSuffix(f, "_test.go") || !inDotDotDot(path.Dir(f), mods) {
 			continue
@@ -57,6 +58,7 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 		pkg := importPath(path.Dir(f), mods)
 		for _, name := range testNames(src) {
 			id := TestID{Package: pkg, Name: name}
+			byFile[f] = append(byFile[f], id)
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)
@@ -64,7 +66,7 @@ func expectedTests(tests []string, files []string, show func(string) ([]byte, er
 		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
-	return ids
+	return ids, byFile
 }
 
 // inDotDotDot reports whether go test ./... from the root would build
@@ -130,6 +132,16 @@ func testNames(src []byte) []string {
 		return nil
 	}
 	var names []string
+	for _, fn := range testFuncs(f) {
+		names = append(names, fn.Name.Name)
+	}
+	return names
+}
+
+// testFuncs are f's top-level func TestXxx(t *testing.T) declarations:
+// the tests go test runs.
+func testFuncs(f *ast.File) []*ast.FuncDecl {
+	var fns []*ast.FuncDecl
 	for _, d := range f.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok || fn.Recv != nil || !isTestName(fn.Name.Name) || fn.Type.TypeParams != nil {
@@ -144,10 +156,10 @@ func testNames(src []byte) []string {
 			continue
 		}
 		if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "T" {
-			names = append(names, fn.Name.Name)
+			fns = append(fns, fn)
 		}
 	}
-	return names
+	return fns
 }
 
 // isTestName follows go test: Test, then nothing or a non-lowercase rune.
@@ -161,25 +173,4 @@ func isTestName(name string) bool {
 	}
 	r, _ := utf8.DecodeRuneInString(rest)
 	return !unicode.IsLower(r)
-}
-
-// missingTests lists the expected tests no report shows passing, leaving
-// out those a report shows failing: their command already failed.
-func missingTests(expected []TestID, reports []*Report) []string {
-	var missing []string
-	for _, id := range expected {
-		passed, failed := false, false
-		for _, rep := range reports {
-			switch rep.outcome(id) {
-			case "pass":
-				passed = true
-			case "fail":
-				failed = true
-			}
-		}
-		if !passed && !failed {
-			missing = append(missing, id.String())
-		}
-	}
-	return missing
 }
