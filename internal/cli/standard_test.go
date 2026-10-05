@@ -597,3 +597,39 @@ printf 'package fx\n\nimport "testing"\n\n// AC-1\nfunc TestAddNeg(t *testing.T)
 		t.Error("a held-out name reached the implementer")
 	}
 }
+
+// oge apply takes a Standard Run's Accepted Candidate, and never a
+// held-out test: those stay in Öge's private state (#46).
+func TestStandardApplyDeliversNoHeldOutFile(t *testing.T) {
+	f := newRunFixture(t)
+	code, out, errOut := f.run(t, verifierThen(negTest, fixScript), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(out, "+1 held-out") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	id := filepath.Base(f.onlyRun(t))
+	if want := "next       oge apply " + id; !strings.Contains(out, want) {
+		t.Errorf("no action bar after a Standard Accepted Run:\n%s", out)
+	}
+	code, out, errOut = f.deliver(t, "apply")
+	if code != ExitOK {
+		t.Fatalf("apply: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if got := readFile(t, filepath.Join(f.repo, "add.go")); got != fxFixed {
+		t.Errorf("add.go = %q", got)
+	}
+	if got := gitOut(t, f.repo, "status", "--porcelain"); got != " M add.go\n?? add_test.go\n" {
+		t.Errorf("git status after apply:\n%s", got)
+	}
+	err := filepath.WalkDir(f.repo, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), heldOutMarker) || filepath.Base(p) == "neg_test.go" {
+			t.Errorf("a held-out file reached the working tree: %s", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
