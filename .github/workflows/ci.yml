@@ -71,13 +71,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { dir: internal/cli, shard: 1, total: 4 }
-          - { dir: internal/cli, shard: 2, total: 4 }
-          - { dir: internal/cli, shard: 3, total: 4 }
-          - { dir: internal/cli, shard: 4, total: 4 }
-          - { dir: cmd/oge, shard: 1, total: 3 }
-          - { dir: cmd/oge, shard: 2, total: 3 }
-          - { dir: cmd/oge, shard: 3, total: 3 }
+          - { dir: internal/cli, shard: 1, total: 3 }
+          - { dir: internal/cli, shard: 2, total: 3 }
+          - { dir: internal/cli, shard: 3, total: 3 }
+          - { dir: cmd/oge, shard: 1, total: 2 }
+          - { dir: cmd/oge, shard: 2, total: 2 }
     env:
       CGO_ENABLED: "0"
     steps:
@@ -111,7 +109,7 @@ jobs:
   # and nightly race everything (ADR-0017). cmd/oge's e2e tests exec
   # binaries built without -race, so they race only the test harness.
   race:
-    name: race (${{ matrix.dir }} ${{ matrix.shard }}/${{ matrix.total }})
+    name: race (${{ matrix.dir == 'rest' && 'non-e2e' || format('{0} {1}/{2}', matrix.dir, matrix.shard, matrix.total) }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

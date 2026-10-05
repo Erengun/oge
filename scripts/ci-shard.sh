@@ -6,7 +6,9 @@
 # with the test binary would run TestMain) and dealt round-robin in sorted
 # order. Shards 1..TOTAL-1 print -run=^(their names)$. The last shard
 # prints -skip=^(every other shard's names)$, so it also runs anything the
-# source scan missed: together the shards always run every test.
+# source scan missed: together the shards always run every test. A scanned
+# name that is no test (say, inside a fixture's source string) only
+# matches nothing.
 #
 # Usage: go test "$(scripts/ci-shard.sh internal/cli 2 4)" ./internal/cli
 set -eu
@@ -35,7 +37,7 @@ if [ "$index" -lt "$total" ]; then
 		echo "ci-shard: shard $index/$total of $dir is empty" >&2
 		exit 1
 	fi
-	printf -- '-run=%s\n' "$(pattern "$names")"
+	printf '%s\n' "-run=$(pattern "$names")"
 	exit 0
 fi
 
@@ -43,5 +45,5 @@ others=$(printf '%s\n' "$all" | awk -v n="$total" 'NF && (NR - 1) % n != n - 1')
 if [ -z "$others" ]; then
 	echo "-run=."
 else
-	printf -- '-skip=%s\n' "$(pattern "$others")"
+	printf '%s\n' "-skip=$(pattern "$others")"
 fi
