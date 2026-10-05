@@ -328,3 +328,14 @@ func TestPlainFlagOnATerminalPrintsPlainLines(t *testing.T) {
 }
 
 func ctrlKey(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl} }
+
+func TestElapsed(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		0: "0.0s", 449 * time.Millisecond: "0.4s", 12340 * time.Millisecond: "12.3s",
+		59960 * time.Millisecond: "1m00s", 65 * time.Second: "1m05s", 61 * time.Minute: "61m00s", -time.Second: "0.0s",
+	} {
+		if got := elapsed(d); got != want {
+			t.Errorf("elapsed(%v) = %q, want %q", d, got, want)
+		}
+	}
+}

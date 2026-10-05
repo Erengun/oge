@@ -462,8 +462,8 @@ func elapsed(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Round(100*time.Millisecond).Seconds())
+	if r := d.Round(100 * time.Millisecond); r < time.Minute {
+		return fmt.Sprintf("%.1fs", r.Seconds())
 	}
 	d = d.Round(time.Second)
 	return fmt.Sprintf("%dm%02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
