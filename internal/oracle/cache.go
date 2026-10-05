@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -21,16 +22,71 @@ const (
 	CacheCold = "cold"
 )
 
-// warmCommand compiles every package and test of the Snapshot's module
-// into the seed's build cache without linking or running anything. It
-// prints only package errors: a Snapshot that doesn't build (the bug may
-// be a compile error) still seeds whatever does.
+// warmCommand fills the seed's build cache from the Snapshot without
+// linking or running anything. go list compiles every package and test of
+// the module. It prints only package errors: a Snapshot that doesn't
+// build (the bug may be a compile error) still seeds whatever does, and
+// its status is the warm step's.
+//
+// Then go test, with its own default analyzer set and flags, vets every
+// package it would test, caching vet facts for the standard library and
+// every module dependency, so a Check vets only the project's own changed
+// packages (#112). Its toolexec wrapper (nolinkScript, named by
+// warmToolexecEnv) refuses every link, so no test binary is ever made and
+// nothing can run. The wrapper is the only guard: an empty -toolexec means
+// no wrapper, and -run '^$' would not stop a linked test binary's init or
+// TestMain, so ${...:?} aborts this leg (a subshell) when the wrapper isn't set (as when
+// its path can't be quoted for go). Every refused link
+// fails its package, so this leg's output and status are discarded. The
+// cache keys don't depend on the wrapper: Go hashes a tool by its version
+// line, which the wrapper passes through.
+//
+// TODO(#112-decision): only the standard library's vet facts (and
+// compiled packages) are reused. Go keys a package outside GOROOT by its
+// directory unless -trimpath is set, and each Check has its own module
+// cache path, so every Check compiles and vets its module dependencies
+// again. Reusing them needs either one module cache path shared by the
+// Run's Checks in turn (a Candidate process outliving its Check could
+// then reach the next Check's cache) or -trimpath on the warm step and
+// every Check (changing file paths the project's tests see).
+//
 // TODO(#74-decision): Öge runs this Go-specific warm step itself, beyond
 // the project's setup command; a project with no go.mod gets no warm step.
 // It runs niced, on about half the cores, so it doesn't slow the
 // implementer it overlaps.
-var warmCommand = fmt.Sprintf(`nice -n 10 go list -p %d -e -export -deps -test -f '{{if .Error}}{{.ImportPath}}: {{.Error}}{{end}}' ./...`,
-	max(1, runtime.NumCPU()/2))
+var warmCommand = fmt.Sprintf(`nice -n 10 go list -p %[1]d -e -export -deps -test -f '{{if .Error}}{{.ImportPath}}: {{.Error}}{{end}}' ./...; s=$?; `+
+	`(nice -n 10 go test -p %[1]d -run '^$' -toolexec "${%[2]s:?}" ./...) >/dev/null 2>&1; exit $s`,
+	max(1, runtime.NumCPU()/2), warmToolexecEnv)
+
+// warmToolexecEnv names the warm step's go test -toolexec value.
+const warmToolexecEnv = "OGE_WARM_TOOLEXEC"
+
+// nolinkScript is the warm step's toolexec wrapper: it runs every Go tool
+// but the linker, which it lets only report its version (Go asks every
+// tool for it to key the cache).
+const nolinkScript = `case "$1" in
+*/link | */link.exe)
+	if [ $# -ne 2 ] || [ "$2" != -V=full ]; then
+		echo "oge warm step: linking refused" >&2
+		exit 1
+	fi ;;
+esac
+exec "$@"
+`
+
+// toolexecValue is go's -toolexec value running script with /bin/sh,
+// quoted for go's own word splitting.
+func toolexecValue(script string) (string, error) {
+	if !strings.ContainsAny(script, " \t\n\r'\"") {
+		return "/bin/sh " + script, nil
+	}
+	for _, q := range []string{"'", `"`} {
+		if !strings.Contains(script, q) {
+			return "/bin/sh " + q + script + q, nil
+		}
+	}
+	return "", fmt.Errorf("the warm step's wrapper path %q can't be quoted for go", script)
+}
 
 // Replaceable for tests, to force each fallback.
 var (
@@ -140,6 +196,14 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 		}
 	}
 	env["GOCACHE"], env["GOMODCACHE"] = s.GoCache(), s.ModCache()
+	nolink := filepath.Join(root, "nolink.sh")
+	if err := os.WriteFile(nolink, []byte(nolinkScript), 0o400); err != nil {
+		return fail(nil, err)
+	}
+	// A path go can't quote leaves the wrapper unset: the warm step then
+	// skips its vet leg (warmCommand) and Checks vet the standard library
+	// themselves, which is slower but no less safe.
+	toolexec, _ := toolexecValue(nolink)
 	if err := repo.Checkout(snapshot, dir); err != nil {
 		return fail(nil, err)
 	}
@@ -165,6 +229,9 @@ func (r *Runner) NewSeed(ctx context.Context, repo Repo, snapshot, setup, root s
 		defer RemoveAll(work)
 		if hasModule {
 			env["GOPROXY"] = "off" // the warm step never fetches
+			// Always set, even empty: an empty value aborts the vet leg, and
+			// pass_env can't supply one from the user's environment.
+			env[warmToolexecEnv] = toolexec
 			e, _, err := r.Exec(wctx, warmCommand, dir, env, 10*time.Minute, 64<<10)
 			s.warm, s.err = &e, err
 		}
