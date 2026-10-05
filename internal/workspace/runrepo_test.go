@@ -180,3 +180,66 @@ func TestPreflightRefusesSymlinksThatLeaveTheTree(t *testing.T) {
 		})
 	}
 }
+
+// The Workspace gets a minimal Öge-owned .git (ADR-0010, #44): the
+// Snapshot as HEAD and index, no remotes, hooks off, nothing pointing at
+// Öge's private state. Candidates never take its contents.
+func TestWorkspaceGitIsMinimalAndNeverInTheCandidate(t *testing.T) {
+	repo := newRepo(t)
+	state := t.TempDir()
+	r, err := InitRunRepo(filepath.Join(state, "private", "repo.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := filepath.Join(state, "ws")
+	snap, _, err := r.TakeSnapshot(repo, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.InitWorkspaceGit(ws); err != nil {
+		t.Fatal(err)
+	}
+	if out := gitT(t, ws, "status", "--porcelain"); out != "" {
+		t.Errorf("a fresh Workspace isn't clean: %q", out)
+	}
+	if head := strings.TrimSpace(gitT(t, ws, "rev-parse", "HEAD")); head != snap {
+		t.Errorf("HEAD = %s, want the Snapshot %s", head, snap)
+	}
+	if out := gitT(t, ws, "remote"); out != "" {
+		t.Errorf("remotes: %q", out)
+	}
+	if out := strings.TrimSpace(gitT(t, ws, "config", "core.hooksPath")); out != os.DevNull {
+		t.Errorf("core.hooksPath = %q", out)
+	}
+	filepath.Walk(filepath.Join(ws, ".git"), func(p string, fi os.FileInfo, err error) error {
+		if err == nil && !fi.IsDir() {
+			if b, _ := os.ReadFile(p); strings.Contains(string(b), filepath.Join(state, "private")) {
+				t.Errorf("%s names Öge's private state", p)
+			}
+		}
+		return nil
+	})
+	if entries, _ := os.ReadDir(filepath.Join(ws, ".git", "hooks")); len(entries) != 0 {
+		t.Errorf("hooks dir isn't empty: %v", entries)
+	}
+
+	write(t, filepath.Join(ws, "a.txt"), "changed\n")
+	if out := gitT(t, ws, "diff", "--name-only"); out != "a.txt\n" {
+		t.Errorf("git diff --name-only = %q", out)
+	}
+	// What the agent might put in .git, at the top or nested, stays out.
+	write(t, filepath.Join(ws, ".git", "agent-note"), "x\n")
+	write(t, filepath.Join(ws, "pkg", ".git", "config"), "[core]\n")
+	write(t, filepath.Join(ws, "pkg", "b.txt"), "b\n")
+	c, err := r.CommitCandidate(ws, snap, "refs/oge/candidates/c1", "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := r.ChangedFiles(snap, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(changed, ","); got != "a.txt,pkg/b.txt" {
+		t.Errorf("Candidate changed %s", got)
+	}
+}

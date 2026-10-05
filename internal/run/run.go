@@ -218,6 +218,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	res.Snapshot, res.Source = snap, info
+	// The agent's git diff and git status see the Snapshot as HEAD.
+	if err := repo.InitWorkspaceGit(ws); err != nil {
+		return nil, err
+	}
 	if err := l.Append(RecSnapshotTaken, map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
 		"modified": info.Modified, "untracked": info.Untracked}); err != nil {
 		return nil, err

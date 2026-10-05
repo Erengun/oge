@@ -429,3 +429,16 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 		})
 	}
 }
+
+// The implementer's Workspace is a git checkout of the Snapshot: git
+// status starts clean there, and the .git never reaches the Candidate.
+func TestRunWorkspaceHasAGitCheckoutOfTheSnapshot(t *testing.T) {
+	f := newRunFixture(t)
+	script := `test -d .git && test -z "$(git status --porcelain)" || exit 7
+` + fixScript + `git diff --name-only | grep -qx add.go || exit 8
+`
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(out, "· 1 file changed") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
