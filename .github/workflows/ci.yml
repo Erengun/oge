@@ -40,7 +40,7 @@ env:
   GORELEASER_VERSION: v2.18.2
 
 jobs:
-  # Blocking. The no-cgo job validates ADR-0001's build invariant, cross-builds
+  # Blocking, and kept to a few minutes. The no-cgo job validates ADR-0001's build invariant, cross-builds
   # every release target (Windows included), and checks DCO and the release config.
   test:
     if: github.event_name != 'push'
@@ -78,7 +78,11 @@ jobs:
             echo "== $target"
             GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/oge
           done
-      - run: go test -timeout 30m ./...
+      # The two e2e packages (internal/cli, cmd/oge) are ~10 of this job's
+      # minutes. vet above still compiles their tests; they run in full on
+      # main (race) and must pass locally before a push.
+      - name: go test (without e2e packages)
+        run: go test -timeout 30m $(go list ./... | grep -v -e '/internal/cli$' -e '/cmd/oge$')
       - run: go run honnef.co/go/tools/cmd/staticcheck@"$STATICCHECK_VERSION" ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@"$GOVULNCHECK_VERSION" ./...
       - uses: goreleaser/goreleaser-action@v7
