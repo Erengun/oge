@@ -9,6 +9,8 @@
 
 **Product constraint:** if Öge is dramatically slower or more annoying than native Claude/Codex workflows without proportional value, we failed. A polished, Claude Code-like terminal experience is a core product goal, not decoration (ADR-0022). The trust architecture stays invisible underneath it.
 
+**Product equation (internal):** value = (assurance + autonomy gained) / (latency + human attention added). The north star is useful agent work per minute of human attention (`docs/positioning.md`). Cautionary tale: someone spent 883 commits and eight months on an overengineered agent harness, then abandoned it because the tooling became more interesting than the work. Build what the next felt UX needs, nothing more.
+
 Implementation priority: get `oge "task"` working end to end as early as possible, first on the fake agent, then on Claude, then with verification. Don't build infrastructure ahead of a felt UX, and don't add architecture unless implementation exposes a real problem. See issue #66 and milestone M1.
 
 Decisions live in `docs/adr/`, vocabulary in `GLOSSARY.md`, and wording in `docs/positioning.md`.

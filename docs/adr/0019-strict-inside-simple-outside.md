@@ -63,6 +63,7 @@ Every simplification here was audited against one rule: **does this hide complex
 
 10. **Speed and interruption metrics** (amends ADR-0016).
     - **Pre-registered**, added to the gate: Standard's median total time ≤ 2× B2; at least 90% of eligible happy-path Runs complete with zero human interruption.
+    - **First-class (amended 2026-10-05, positioning review):** human attention time per completed task, i.e. time the human spends on the Run (prompts, gates, reviews, watching for required input), measured and reported for every arm next to correctness, speed and interruptions.
     - **Reported:** time to first useful change, verifier time, repair loops, model turns, Host-request count, Öge's non-model overhead, verifier overhead vs Fast, and failures caused by auto-denied requests.
 
 ## Audit: hidden vs removed

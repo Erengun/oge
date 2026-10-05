@@ -25,6 +25,7 @@ This sits beside "Trust must earn its overhead" (#66) and the speed and interrup
   - the final Receipt.
 
   The happy path shows minimal complexity, and the trust architecture stays invisible underneath.
+- **Attention routing, not more information.** The live screen always answers three questions: what is happening; does Öge need me (an explicit attention line that reads "Nothing needs you" on the happy path, and "Attention needed: …" when a Gate or Host request opens); and can I trust where this is going (a compact scope/check status). Detail stays behind a key or `-v`.
 - **Plain text and JSON stay first-class for CI and automation.** Without a TTY, or with `--plain`, Öge emits ADR-0019's terse stage lines. The `-v`/`-vv` levels, exit codes and `--json` schemas from ADR-0015 are unchanged.
 - **The TUI is a view, never a source of truth.**
   - It renders Öge's normalised events and Ledger-derived state, and reaches nothing the plain mode can't.
