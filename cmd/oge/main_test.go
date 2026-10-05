@@ -21,6 +21,7 @@ func TestVersionPrintsStampedVersion(t *testing.T) {
 }
 
 func TestUnknownFlagIsARefusal(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"--no-such-flag"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)

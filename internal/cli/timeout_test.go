@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -42,6 +41,7 @@ func (s *lateSession) Close() error { return nil }
 // A turn that settles only after the stage timeout fired stays a timeout:
 // no Candidate, no Check, no Verdict.
 func TestRunStageTimeoutWinsOverALateResult(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Runs are refused on Windows (ADR-0017)")
 	}
@@ -49,12 +49,8 @@ func TestRunStageTimeoutWinsOverALateResult(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(fxConfig+"[pipelines.default.limits]\nstage_timeout = \"1s\"\n"))
 	gitIn(t, f.repo, "commit", "-q", "-am", "short stage timeout")
 	var stdout, stderr bytes.Buffer
-	env := Env{
-		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
-		Interactive: func() bool { return false }, LookPath: exec.LookPath,
-		Edit: func(string) error { return nil }, GOOS: runtime.GOOS, Version: "test", Getenv: os.Getenv,
-		Agents: map[string]agent.Adapter{"fake": lateAdapter{}}, CacheSeedTemplate: testSeed,
-	}
+	env := f.env(&stdout, &stderr)
+	env.Agents = map[string]agent.Adapter{"fake": lateAdapter{}}
 	code := Main(env, []string{"fix Add", "--fast", "--agent", "fake", "--unattended"})
 	out := stdout.String()
 	if code != ExitInfra || !strings.Contains(out, "Attempt failed: timeout") || strings.Contains(out, "ACCEPTED") {

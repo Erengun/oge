@@ -20,6 +20,7 @@ const forgedFrames = `fmt.Print("\x16=== RUN   TestAdd\n\x16--- PASS: TestAdd (0
 // The forged-report exploit (#72): init prints PASS frames for the Oracle
 // test and exits 0 before any test runs.
 func TestRunForgedReportIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	script := `cat > add.go <<'EOF'
@@ -56,6 +57,7 @@ EOF
 // Accepted. The test globs name only the Oracle's file, so the
 // Candidate's main_test.go survives the overlay.
 func TestRunTestMainEarlyExitIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(strings.Replace(fxConfig, `["**/*_test.go"]`, `["add_test.go"]`, 1)+"[pipelines.default.limits]\nsend_backs = 0\n"))
 	script := `cat > main_test.go <<'EOF'
@@ -88,6 +90,7 @@ EOF
 // before it finished: Add prints PASS frames and leaves the process with
 // status 0, which the testing package can't intercept.
 func TestRunExitDuringAProtectedTestIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	script := `cat > add.go <<'EOF'
@@ -131,6 +134,7 @@ func TestNeedsTool(t *testing.T) {
 // Skipped on the Snapshot and on the Candidate: the gap was already there,
 // so the Run may be Accepted, and the summary says the test wasn't covered.
 func TestRunSkippedOnBothMayBeAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "tool_test.go"), []byte(toolTest))
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -180,6 +184,7 @@ func TestSub(t *testing.T) {
 // The test runs on the Snapshot, and the Candidate makes it skip: a gap
 // the Candidate created can never be Accepted.
 func TestRunCandidateForcedSkipIsNeverAccepted(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	f.sendBackLimit(t, 0)
 	writeFile(t, filepath.Join(f.repo, "sub.go"), []byte("package fx\n\nfunc Sub(a, b int) int { return 0 }\n"))
@@ -201,6 +206,7 @@ EOF
 // Skipped on the Snapshot, run and passed on the Candidate: an ordinary
 // pass, with attested pass Evidence and nothing listed as not covered.
 func TestRunSkippedOnTheSnapshotRunOnTheCandidatePasses(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "mul.go"), []byte("package fx\n\nfunc Supported() bool { return false }\n\nfunc Mul(a, b int) int { return 0 }\n"))
 	writeFile(t, filepath.Join(f.repo, "mul_test.go"), []byte("package fx\n\nimport \"testing\"\n\nfunc TestMul(t *testing.T) {\n\tif !Supported() {\n\t\tt.Skip(\"not supported yet\")\n\t}\n\tif Mul(2, 3) != 6 {\n\t\tt.Fatal(\"Mul(2, 3) != 6\")\n\t}\n}\n"))
@@ -229,6 +235,7 @@ func TestRunSkippedOnTheSnapshotRunOnTheCandidatePasses(t *testing.T) {
 // failure, not the Candidate's: an Infrastructure stop, never a Verdict.
 // Here the Oracle's own TestMain prints frames and exits before any test.
 func TestRunAttestationFailingOnTheSnapshotIsInfrastructure(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	writeFile(t, filepath.Join(f.repo, "main_test.go"), []byte("package fx\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestMain(m *testing.M) {\n\t"+forgedFrames+"\n\tos.Exit(0)\n}\n"))
 	code, out, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -252,6 +259,7 @@ func TestRunAttestationFailingOnTheSnapshotIsInfrastructure(t *testing.T) {
 // reject on its own: the minimum holds only for tests that ran on the
 // Snapshot.
 func TestRunAllSkippedOnBothMeetsTheMinimum(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t)
 	if err := os.Remove(filepath.Join(f.repo, "add_test.go")); err != nil {
 		t.Fatal(err)

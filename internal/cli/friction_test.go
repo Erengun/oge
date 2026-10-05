@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,12 +55,8 @@ func runWithFriction(t *testing.T, a agent.Adapter, config string) (int, string,
 		gitIn(t, f.repo, "commit", "-q", "-am", "config")
 	}
 	var stdout, stderr bytes.Buffer
-	env := Env{
-		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
-		Interactive: func() bool { return false }, LookPath: exec.LookPath,
-		Edit: func(string) error { return nil }, GOOS: runtime.GOOS, Version: "test", Getenv: os.Getenv,
-		Agents: map[string]agent.Adapter{"fake": a}, CacheSeedTemplate: testSeed,
-	}
+	env := f.env(&stdout, &stderr)
+	env.Agents = map[string]agent.Adapter{"fake": a}
 	code := Main(env, []string{"fix Add", "--fast", "--agent", "fake", "--unattended"})
 	b, err := os.ReadFile(filepath.Join(f.onlyRun(t), "ledger.jsonl"))
 	if err != nil {
@@ -75,6 +70,7 @@ const oneLostTurn = `"policy_friction":{"denied":1,"envelope_refusals":0,"lost_t
 // Friction the turn showed before a timeout is still recorded, and the
 // summary shows it for a Run that ends without a Verdict (#90).
 func TestFrictionSurvivesATimeout(t *testing.T) {
+	t.Parallel()
 	code, out, ledger := runWithFriction(t, frictionAdapter{}, "[pipelines.default.limits]\nstage_timeout = \"1s\"\n")
 	if code != ExitInfra || !strings.Contains(out, "Attempt failed: timeout") {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -90,6 +86,7 @@ func TestFrictionSurvivesATimeout(t *testing.T) {
 // A settled turn's friction isn't counted twice with what its Host
 // requests already showed.
 func TestFrictionOfASettledTurn(t *testing.T) {
+	t.Parallel()
 	code, out, ledger := runWithFriction(t, frictionAdapter{settle: true}, "")
 	if code != 0 || !strings.Contains(out, "\nfriction   policy friction 1 turn (1 denied)\n") {
 		t.Fatalf("exit %d\n%s", code, out)
@@ -138,6 +135,7 @@ func (s *settledSession) Close() error     { return nil }
 // Each Attempt's friction is in the Ledger, and the summary shows the
 // Run's: the sum across the send-back (#90).
 func TestFrictionIsSummedAcrossASendBack(t *testing.T) {
+	t.Parallel()
 	opened := 0
 	a := sendBackFrictionAdapter{opened: &opened, friction: []agent.Friction{{Denied: 1, LostTurns: 1}, {Denied: 2, LostTurns: 1, EnvelopeRefusals: 1}}}
 	code, out, ledger := runWithFriction(t, a, "")

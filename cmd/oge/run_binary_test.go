@@ -84,6 +84,7 @@ func withScript(t *testing.T, env []string, script string) []string {
 }
 
 func TestBinaryRunAcceptedExitsZero(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n")
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended")
@@ -102,6 +103,7 @@ func TestBinaryRunAcceptedExitsZero(t *testing.T) {
 // A Check that keeps failing uses up the send-backs, and an unattended
 // Run parks at the bound-exhaustion Gate rather than decide (ADR-0008).
 func TestBinaryRunParkedExitsTen(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withScript(t, env, "echo 'nothing to do'\n")
 	code, out, errOut := runExe(t, testBinary, repo, env, "run", "--fast", "--agent", "fake", "--unattended", "fix Add")
@@ -112,6 +114,7 @@ func TestBinaryRunParkedExitsTen(t *testing.T) {
 }
 
 func TestReleaseBinaryCannotReachTheFake(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	code, _, errOut := runBinary(t, repo, env, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != 2 || !strings.Contains(errOut, "unknown agent") {
@@ -120,6 +123,7 @@ func TestReleaseBinaryCannotReachTheFake(t *testing.T) {
 }
 
 func TestReleaseBinaryRefusesABlindRun(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	code, _, errOut := runBinary(t, repo, env, "fix Add", "--blind", "--agent", "claude", "--unattended")
 	if code != 2 || !strings.Contains(errOut, "Blind mode isn't built yet") {
@@ -130,6 +134,7 @@ func TestReleaseBinaryRefusesABlindRun(t *testing.T) {
 // A fixed Candidate whose Attempt also rewrote the Oracle's test parks,
 // exit 10, until the Tamper event is acknowledged.
 func TestBinaryRunTamperParksExitsTen(t *testing.T) {
+	t.Parallel()
 	repo, env := runFixture(t)
 	env = withScript(t, env, "printf 'package fx\\n\\nfunc Add(a, b int) int { return a + b }\\n' > add.go\n"+
 		"printf 'package fx\\n' > add_test.go\n")

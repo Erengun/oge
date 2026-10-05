@@ -23,6 +23,7 @@ const noticesFile = "../../THIRD_PARTY_NOTICES_BINARY"
 // regenerates it and fails when the committed copy is stale, so a go.mod
 // change can't ship without its notices.
 func TestBinaryNotices(t *testing.T) {
+	t.Parallel()
 	got := binaryNotices(t)
 	if *updateNotices {
 		if err := os.WriteFile(noticesFile, []byte(got), 0o644); err != nil {
