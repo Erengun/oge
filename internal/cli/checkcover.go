@@ -91,10 +91,11 @@ func checkCoverage(root string, paths, globs, runs []string) (refusal string, wa
 			continue
 		}
 		// Files that never run here (build-constrained) or expect nothing
-		// (helpers) don't make the Check unable to run the protected tests.
+		// (helpers) don't make the Check unable to run the protected tests;
+		// a file it can't read is no claim either.
 		n := 0
 		for _, f := range fs {
-			if sf, err := workspace.ReadSnapshotFile(root, f); err != nil || !sf.InSnapshot || oracle.PlainlyExpected(f, sf.Data) {
+			if sf, err := workspace.ReadSnapshotFile(root, f); err == nil && sf.InSnapshot && oracle.PlainlyExpected(f, sf.Data) {
 				n++
 			}
 		}

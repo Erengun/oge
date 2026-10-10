@@ -63,32 +63,42 @@ func TestCheckCoverage(t *testing.T) {
 		"a/a_test.go", "b/b_test.go", "b/c/c_test.go", "d/d_test.go", "e/e_test.go", "e/e.go",
 		"a/testdata/_test.go", "d/testdata/g.golden", "go.mod",
 	}
+	repo := t.TempDir()
+	initRepo(t, repo)
+	for _, p := range paths {
+		writeFile(t, filepath.Join(repo, p), []byte("package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n"))
+	}
+	gitIn(t, repo, "add", "-A")
 	globs := []string{"**/*_test.go"}
 	// Four uncovered dirs: the message names three and counts the rest.
-	msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/..."})
+	msg, _ := checkCoverage(repo, paths, globs, []string{"go test ./a/..."})
 	for _, want := range []string{"4 protected test files in 4 package dirs (b, b/c, d and 1 more)", "a/**/*_test.go", "./..."} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal %q lacks %q", msg, want)
 		}
 	}
 	// Any one command covering a dir is enough.
-	if msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/... ./b/... ./d ./e"}); msg != "" {
+	if msg, _ := checkCoverage(repo, paths, globs, []string{"go test ./a/... ./b/... ./d ./e"}); msg != "" {
 		t.Errorf("covered, but refused: %s", msg)
 	}
-	if msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/...", "go test ./..."}); msg != "" {
+	if msg, _ := checkCoverage(repo, paths, globs, []string{"go test ./a/...", "go test ./..."}); msg != "" {
 		t.Errorf("covered by the second command, but refused: %s", msg)
 	}
 	// An opaque command anywhere means no claim.
-	if msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/...", "make test"}); msg != "" {
+	if msg, _ := checkCoverage(repo, paths, globs, []string{"go test ./a/...", "make test"}); msg != "" {
 		t.Errorf("opaque command, but refused: %s", msg)
 	}
-	msg, warns := checkCoverage("", paths, globs, []string{"make test"})
+	msg, warns := checkCoverage(repo, paths, globs, []string{"make test"})
 	if msg != "" || len(warns) != 1 || !strings.Contains(warns[0], "(d)") || !strings.Contains(warns[0], "testdata/") {
 		t.Errorf("testdata warning: %q %q", msg, warns)
 	}
-	_, warns = checkCoverage("", paths, []string{"**/*_test.go", "d/testdata/**"}, []string{"go test -run X ./..."})
+	_, warns = checkCoverage(repo, paths, []string{"**/*_test.go", "d/testdata/**"}, []string{"go test -run X ./..."})
 	if len(warns) != 1 || !strings.Contains(warns[0], "filters tests") {
 		t.Errorf("-run warning only: %q", warns)
+	}
+	// A file it can't read from the Snapshot is no claim, never a refusal.
+	if msg, _ := checkCoverage(repo, []string{"z/z_test.go"}, globs, []string{"go test ./a/..."}); msg != "" {
+		t.Errorf("unreadable file, but refused: %s", msg)
 	}
 }
 
