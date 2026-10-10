@@ -64,16 +64,22 @@ type Receipt struct {
 	// torn last line cut it short; the Receipt is of the records before.
 	LedgerUnreadable string `json:"ledger_unreadable,omitempty"`
 	// WaitingAt is the Gate a parked Run waits at.
-	WaitingAt  string     `json:"waiting_at,omitempty"`
-	Candidate  *Candidate `json:"candidate,omitempty"`
-	Oracle     int        `json:"oracle_version"`
-	Checks     []Check    `json:"checks"`
-	QA         *QA        `json:"qa,omitempty"`
-	Protected  Protected  `json:"protected"`
-	Scope      Scope      `json:"scope"`
-	Decisions  []Decision `json:"decisions"`
-	Supervised Supervised `json:"supervision"`
-	Time       Time       `json:"time"`
+	WaitingAt string     `json:"waiting_at,omitempty"`
+	Candidate *Candidate `json:"candidate,omitempty"`
+	Oracle    int        `json:"oracle_version"`
+	Checks    []Check    `json:"checks"`
+	QA        *QA        `json:"qa,omitempty"`
+	Protected Protected  `json:"protected"`
+	// ImplementerTests counts the implementer-authored tests the final
+	// Candidate delivers that no Check ran (#119): the test funcs the
+	// Candidate adds in new files that match project.test_globs (one per
+	// such file that isn't Go source or doesn't parse), plus the funcs the
+	// implementer added to existing Oracle test files (Protected.Kept).
+	ImplementerTests int        `json:"implementer_tests"`
+	Scope            Scope      `json:"scope"`
+	Decisions        []Decision `json:"decisions"`
+	Supervised       Supervised `json:"supervision"`
+	Time             Time       `json:"time"`
 	// Claim is the agent's own final message, shown only when the
 	// Evidence disagrees with it (Found says how). It is never Evidence.
 	Claim *Claim   `json:"claim,omitempty"`
@@ -164,6 +170,16 @@ type QA struct {
 // Protected is what happened to writes to protected paths.
 type Protected struct {
 	Reverted []Tamper `json:"reverted"`
+	// Kept are the Oracle test files the final Candidate's Attempt only
+	// added to, kept unreverted (#117): not Tamper events.
+	Kept []KeptFile `json:"kept"`
+}
+
+// KeptFile is one Oracle test file with kept additions, and the test
+// funcs added to it.
+type KeptFile struct {
+	Path  string   `json:"path"`
+	Added []string `json:"added"`
 }
 
 // Tamper is one Tamper event.
@@ -260,6 +276,12 @@ type Source interface {
 	Changed(from, to string) ([]string, error)
 }
 
+// fileSource is a Source that can also read a file at a commit. Without
+// it, new test files aren't counted (#119).
+type fileSource interface {
+	Show(commit, path string) (data []byte, ok bool, err error)
+}
+
 type runSource struct {
 	blobs *ledger.Blobs
 	repo  *workspace.RunRepo
@@ -271,6 +293,8 @@ func (s runSource) Blob(id string) ([]byte, error) {
 	}
 	return s.blobs.Get(id)
 }
+
+func (s runSource) Show(commit, path string) ([]byte, bool, error) { return s.repo.Show(commit, path) }
 
 func (s runSource) Changed(from, to string) ([]string, error) { return s.repo.ChangedFiles(from, to) }
 
@@ -321,6 +345,10 @@ type (
 	scopeObserved struct {
 		Attempt, Role, State, Enforcement string
 		Reverted                          []workspace.Revert
+		Kept                              []struct {
+			Path  string
+			Added []string
+		}
 	}
 	tamperEvent struct {
 		ID, Attempt, Path, Change string
@@ -385,7 +413,7 @@ type (
 // head, reading blobs and changed files from src.
 func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 	r := &Receipt{Schema: Schema, LedgerHead: head, Checks: []Check{}, Decisions: []Decision{}, Deliveries: []Delivery{},
-		Protected: Protected{Reverted: []Tamper{}}, Scope: Scope{Reverted: []string{}, QADiscarded: []string{}}}
+		Protected: Protected{Reverted: []Tamper{}, Kept: []KeptFile{}}, Scope: Scope{Reverted: []string{}, QADiscarded: []string{}}}
 	var (
 		frozen    *pipeline.Frozen
 		snapshot  string
@@ -403,6 +431,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		manifests = map[int]*oracle.Manifest{} // check → its manifest
 		attempts  []attemptEnded
 		tamperIdx = map[string]int{}
+		keptBy    = map[string][]KeptFile{} // implementer attempt → its last ScopeObserved's kept
 		openAt    *time.Time
 		abandoned string              // the Gate a human was asked at and never answered
 		resolved  = map[string]bool{} // Ambiguous files promoted or dropped
@@ -533,6 +562,15 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			var d scopeObserved
 			if !get(rec.Data, &d) {
 				continue
+			}
+			if d.Role != "verifier" {
+				// The last record of an Attempt is authoritative: a late
+				// one drops a kept file written after the comparison.
+				kept := []KeptFile{}
+				for _, k := range d.Kept {
+					kept = append(kept, KeptFile{Path: clean(k.Path), Added: cleanAll(k.Added)})
+				}
+				keptBy[d.Attempt] = kept
 			}
 			if d.Enforcement == workspace.Degraded {
 				r.Scope.Degraded = append(r.Scope.Degraded, fmt.Sprintf("Write scope enforcement was Degraded (%s)", val(clean(d.Attempt))))
@@ -698,8 +736,22 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 	}
 	if cand != "" {
 		c := &Candidate{Commit: cand, Files: []string{}}
+		for i := len(attempts) - 1; i >= 0; i-- {
+			if a := attempts[i]; a.Candidate == cand {
+				r.Protected.Kept = append(r.Protected.Kept, keptBy[a.Attempt]...)
+				break
+			}
+		}
+		for _, k := range r.Protected.Kept {
+			r.ImplementerTests += len(k.Added)
+		}
 		if snapshot != "" {
 			if files, err := src.Changed(snapshot, cand); err == nil {
+				var tg []string
+				if frozen != nil {
+					tg = frozen.Project.TestGlobs
+				}
+				r.ImplementerTests += newTests(src, snapshot, cand, files, tg)
 				for _, f := range files {
 					c.Files = append(c.Files, clean(f))
 				}
@@ -1093,6 +1145,9 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 		nc = append(nc, "Degraded: "+d)
 	}
 	nc = append(nc, r.NotCovered...) // from Observations
+	if n := r.ImplementerTests; n > 0 {
+		nc = append(nc, plural(n, "implementer-authored test", "implementer-authored tests")+" delivered, not run by Öge")
+	}
 	ran := false
 	for _, c := range r.Checks {
 		ran = ran || c.Uncontained || c.Verdict != ""

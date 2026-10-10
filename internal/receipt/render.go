@@ -234,8 +234,12 @@ func qaText(q *QA) string {
 }
 
 func protectedText(p Protected) string {
+	kept := keptText(p.Kept)
 	if len(p.Reverted) == 0 {
-		return "no test changes kept"
+		if kept == "" {
+			return "no test changes kept"
+		}
+		return "no test changes reverted · " + kept
 	}
 	var paths []string
 	acked := 0
@@ -246,6 +250,9 @@ func protectedText(p Protected) string {
 		}
 	}
 	s := fmt.Sprintf("no test changes kept (%d reverted: %s)", len(paths), list(paths))
+	if kept != "" {
+		s = fmt.Sprintf("%d reverted: %s", len(paths), list(paths))
+	}
 	switch {
 	case acked == len(paths):
 		s += " · acknowledged"
@@ -254,7 +261,29 @@ func protectedText(p Protected) string {
 	default:
 		s += " · not acknowledged"
 	}
+	if kept != "" {
+		s += " · " + kept
+	}
 	return s
+}
+
+// keptText is "2 test additions kept in a_test.go", or "" when nothing was
+// kept. An addition that adds no test func (a helper) is named as one.
+func keptText(ks []KeptFile) string {
+	if len(ks) == 0 {
+		return ""
+	}
+	var paths []string
+	n := 0
+	for _, k := range ks {
+		paths = append(paths, k.Path)
+		n += len(k.Added)
+	}
+	what := "additions"
+	if n > 0 {
+		what = plural(n, "test addition", "test additions")
+	}
+	return what + " kept in " + list(paths)
 }
 
 func scopeText(s Scope) string {

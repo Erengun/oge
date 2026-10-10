@@ -59,5 +59,6 @@ Decisions:
   - network control.
 - Copy and setup cost dominates fixture runs ([#31](https://github.com/Erengun/oge/issues/31)). Then cache installs that Öge makes from the Snapshot, never ones copied from a Workspace.
 - Toolchains cause frequent false Tamper events. Then narrow the protected set, but keep the Gate.
+  - *Amendment, 2026-10-10 ([#117](https://github.com/Erengun/oge/issues/117)):* this narrowing was applied. The M1 acceptance run showed the revert and Gate firing on Claude's additive test edits, which can't reach the Verdict because the Check runs the Oracle's version of every test file. Additive edits to an existing Oracle test file are kept and disclosed in the Receipt; every other protected write is still reverted and recorded.
 - Agents are seen exfiltrating held-out tests or credentials through Checks. Then OS-level Check sandboxing moves into the MVP.
 - A vendor stops letting agents write a linked worktree's common directory, and the cost of cloning becomes material. Then revisit linked worktrees of the Run repository, never of the user's repository.

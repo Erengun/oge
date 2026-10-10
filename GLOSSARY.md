@@ -27,7 +27,7 @@ The tests, test configuration and Check commands that decide acceptance, protect
 _Avoid_: Test suite (ambiguous), ground truth
 
 **Tamper event**:
-An observed change to the protected Oracle or test configuration by a role being judged, recorded with what changed, by which Attempt and what Öge reverted. It describes the change, not intent, and stays in the Run's record whatever happens next.
+An observed change to the protected Oracle or test configuration by a role being judged, recorded with what changed, by which Attempt and what Öge reverted. It describes the change, not intent, and stays in the Run's record whatever happens next. An additive edit to an existing Oracle test file (see Implementer-authored test) is not a Tamper event: it is kept, and the Receipt discloses it.
 _Avoid_: Cheating, hacking, test tampering (as an accusation)
 
 **Held-out test**:
@@ -174,7 +174,7 @@ A Run's warm build and module caches in Private state, filled on the Snapshot by
 _Avoid_: Shared cache, Run cache (as a cache Checks write to)
 
 **Implementer-authored test**:
-A test the implementer wrote into the Candidate. Passing it never produces or strengthens a pass Verdict, and it never becomes part of the Oracle; a known failure stops the Run at the Own-test-failure gate, and a Candidate taken anyway is Overridden, never Accepted.
+A test the implementer wrote into the Candidate. Passing it never produces or strengthens a pass Verdict, and it never becomes part of the Oracle. It includes tests in new files and additions to an existing Oracle test file (only added declarations, #117): the Check runs the Oracle's version of that file, never the implementer's, and the Receipt says these tests were delivered, not run by Öge. A known failure stops the Run at the Own-test-failure gate, and a Candidate taken anyway is Overridden, never Accepted.
 _Avoid_: Visible test (as the Oracle's), self-test
 
 **Promoted file**:

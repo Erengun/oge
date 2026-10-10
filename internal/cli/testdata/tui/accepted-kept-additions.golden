@@ -1,0 +1,22 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+✓ preflight  ok · 0.4s
+✓ implement  fake · Exit done · Candidate 6d1231d · 1 file changed · 5.7s
+             scope kept 2 test additions in add_test.go
+✓ check      go test -json ./... · 1 ran · 0 failed · pass · 1.2s
+
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Fast mode
+Result        ✓ Accepted
+Task          fix Add
+Candidate     6d1231d · 1 file changed · Oracle v0
+Checks        Check #1 passed · 1 of 1 Oracle tests attested passing
+Protected     no test changes reverted · 2 test additions kept in add_test.go
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          7.4s · preflight 400ms · implement 5.6s · Check 1.2s · your attention 0s
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              2 implementer-authored tests delivered, not run by Öge
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        head 8758746ddfc6 · identifies this Receipt; not tamper-proof
+Nothing was written to your repository.

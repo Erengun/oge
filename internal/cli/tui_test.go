@@ -89,7 +89,7 @@ func (h *tuiHarness) record(ev run.Event) {
 		a := ev.Attempt
 		from, to := h.now()
 		ra := receipttest.Attempt{ID: a.ID, Role: a.Role, Stage: a.Stage, Cause: a.Cause, From: from, To: to, Candidate: a.Candidate,
-			Changed: a.Changed, Exit: a.Exit, Failure: a.Failure, Reverted: a.Reverted}
+			Changed: a.Changed, Exit: a.Exit, Failure: a.Failure, Reverted: a.Reverted, Kept: a.Kept}
 		if a.Role == "verifier" {
 			ra.Stage = "verify"
 		}
