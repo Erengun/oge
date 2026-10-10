@@ -1,0 +1,6 @@
+schema = 1
+[project]
+test_globs = ["**/*_test.go"]
+[[check.commands]]
+run = "go test -json ./..."
+report = "go-test-json"

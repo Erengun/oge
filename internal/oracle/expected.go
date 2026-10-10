@@ -190,3 +190,6 @@ func isTestName(name string) bool {
 	r, _ := utf8.DecodeRuneInString(rest)
 	return !unicode.IsLower(r)
 }
+
+// GoPackageDir reports whether the go command ever builds dir as a package.
+func GoPackageDir(dir string) bool { return goPackageDir(dir) }

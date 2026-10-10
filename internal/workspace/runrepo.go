@@ -553,3 +553,7 @@ type AddError struct{ Err error }
 
 func (e *AddError) Error() string { return e.Err.Error() }
 func (e *AddError) Unwrap() error { return e.Err }
+
+// SnapshotPaths lists the Snapshot's paths under root, sorted: tracked files
+// plus untracked files git doesn't ignore. It reads nothing but the index.
+func SnapshotPaths(root string) ([]string, error) { return snapshotPaths(root) }
