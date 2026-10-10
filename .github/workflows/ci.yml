@@ -31,7 +31,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  STATICCHECK_VERSION: v0.8.1
+  # 2026.2.1 (v0.8.1) can't read Go 1.27.2's export data (version 5);
+  # master at 452d5bb (x/tools v0.51.0) can. Back to a tag once one ships.
+  STATICCHECK_VERSION: v0.7.0-0.dev.0.20261009230814-452d5bb86b45
   GOVULNCHECK_VERSION: v1.8.0
   GORELEASER_VERSION: v2.18.2
   # The e2e packages, sharded across the e2e and race jobs. The test job
