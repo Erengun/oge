@@ -3,6 +3,7 @@ package run
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/erengun/oge/internal/ledger"
@@ -58,7 +59,9 @@ func implementerScope(m *oracle.Manifest, f *pipeline.Frozen) func(string) strin
 			// protected. A new file matching the test globs is the
 			// implementer's own test (spec #35: Promoted; ADR-0010: negative
 			// authority only) and the Check's overlay drops it anyway, so
-			// protecting it would block Accepted on ordinary TDD.
+			// protecting it would block Accepted on ordinary TDD. Likewise an
+			// edit that only adds to an Oracle test file is kept, not a
+			// Tamper event (#117, additiveTestEdit).
 			return ClassOracleTest
 		case oracle.MatchAny(f.Project.TestConfig, p):
 			return ClassTestConfig
@@ -80,19 +83,41 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 		// violation, discarded and recorded, never a Tamper event (spec #35).
 		rules.Tamper = func(string) bool { return false }
 	}
+	added := map[string][]string{}
+	if a.Role == "implementer" {
+		// An edit that only adds to an Oracle test file is the
+		// implementer's own test, as a new test file is (#117): kept, and
+		// no Tamper event. The Check runs the Oracle's version anyway.
+		rules.Additive = func(p string, before, after []byte) bool {
+			if protected(p) != ClassOracleTest {
+				return false
+			}
+			names, ok := additiveTestEdit(p, before, after)
+			if ok {
+				added[p] = nonNilNames(names)
+			}
+			return ok
+		}
+	}
 	s, err := repo.CheckScope(ws, snap, rules)
 	if err != nil {
 		a.Failure = failAttempt(a.Failure, "scope_check_failed: "+err.Error())
 		return nil
 	}
+	kept := []KeptTest{}
+	for p, oid := range s.Kept {
+		kept = append(kept, KeptTest{Path: p, Class: ClassOracleTestAddition, OID: oid, Added: added[p]})
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].Path < kept[j].Path })
 	// TODO(#44): an adapter that enforces paths natively reports them, and
 	// those paths are native-enforced. The fake enforces nothing.
 	if err := l.Append(RecScopeObserved, map[string]any{
 		"attempt": a.ID, "role": a.Role, "state": "planned", "compared": s.Compared,
-		"reverted": nonNil(s.Reverts), "tamper": s.Tamper(), "enforcement": workspace.RevertOnly,
+		"reverted": nonNil(s.Reverts), "kept": kept, "tamper": s.Tamper(), "enforcement": workspace.RevertOnly,
 	}); err != nil {
 		return err
 	}
+	a.Kept, a.kept = kept, s.Kept
 	applyErr := s.Apply()
 	done := map[string]any{"attempt": a.ID, "reverted": applyErr == nil}
 	if applyErr != nil {
@@ -113,11 +138,13 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 
 // commitCandidate commits the reverted Workspace as the Attempt's
 // Candidate, named name, on top of parent: the Snapshot, or the Candidate
-// a send-back started from, whose protected paths are the Snapshot's. Protected paths and escaping links come from the Snapshot by
-// construction, so a write that raced the comparison can't reach the
-// Candidate; one that did is recorded before the Candidate's ref is set.
+// a send-back started from. Protected paths come from the Snapshot snap
+// (or are the very content the scope check kept), and escaping links from
+// parent, by construction, so a write that raced the comparison can't
+// reach the Candidate; one that did is recorded before the Candidate's
+// ref is set.
 func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap, parent, name, ws string, protected func(string) string) error {
-	c, late, err := repo.CommitScoped(ws, parent, "Candidate "+name+" ("+a.ID+")", protected, a.links)
+	c, late, err := repo.CommitScoped(ws, parent, snap, "Candidate "+name+" ("+a.ID+")", protected, a.links, a.kept)
 	var addErr *workspace.AddError
 	if errors.As(err, &addErr) {
 		a.Failure = failAttempt(a.Failure, "candidate_commit_failed: "+addErr.Error())
@@ -127,8 +154,20 @@ func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap
 		return err
 	}
 	if len(late) > 0 {
+		// A kept file written again after the comparison is not kept.
+		gone := map[string]bool{}
+		for _, r := range late {
+			gone[r.Path] = true
+		}
+		kept := []KeptTest{}
+		for _, k := range a.Kept {
+			if !gone[k.Path] {
+				kept = append(kept, k)
+			}
+		}
+		a.Kept = kept
 		if err := l.Append(RecScopeObserved, map[string]any{
-			"attempt": a.ID, "role": "implementer", "state": "late", "reverted": late,
+			"attempt": a.ID, "role": "implementer", "state": "late", "reverted": late, "kept": a.Kept,
 			"tamper": countTamper(late), "enforcement": workspace.RevertOnly,
 		}); err != nil {
 			return err
@@ -180,6 +219,13 @@ func nonNil(rs []workspace.Revert) []workspace.Revert {
 		return []workspace.Revert{}
 	}
 	return rs
+}
+
+func nonNilNames(ns []string) []string {
+	if ns == nil {
+		return []string{}
+	}
+	return ns
 }
 
 func countTamper(rs []workspace.Revert) int {

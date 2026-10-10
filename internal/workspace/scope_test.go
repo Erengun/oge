@@ -294,12 +294,12 @@ func TestCommitScopedDropsLateLinks(t *testing.T) {
 	os.Symlink(".", filepath.Join(f.ws, "l2"))
 	os.Symlink("l2/..", filepath.Join(f.ws, "l1"))
 	write(t, filepath.Join(f.ws, "prot", "a.txt"), "late\n")
-	c, late, err := f.r.CommitScoped(f.ws, f.snap, "c", func(p string) string {
+	c, late, err := f.r.CommitScoped(f.ws, f.snap, f.snap, "c", func(p string) string {
 		if strings.HasPrefix(p, "prot/") {
 			return "prot"
 		}
 		return ""
-	}, s.Links)
+	}, s.Links, s.Kept)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,5 +320,112 @@ func TestCommitScopedDropsLateLinks(t *testing.T) {
 	}
 	if m["l1"].Class != ClassSymlinkEscape || m["l2"].Class != ClassSymlinkEscape || !m["prot/a.txt"].Tamper {
 		t.Errorf("late: %+v", late)
+	}
+}
+
+// appendOnly is a stand-in Additive rule: the new content extends the old.
+func appendOnly(_ string, before, after []byte) bool { return bytes.HasPrefix(after, before) }
+
+func protOnly(p string) string {
+	if strings.HasPrefix(p, "prot/") {
+		return "prot"
+	}
+	return ""
+}
+
+func (f *scopeFixture) checkAdditive(t *testing.T) *Scope {
+	t.Helper()
+	s, err := f.r.CheckScope(f.ws, f.snap, ScopeRules{Protected: protOnly, Additive: appendOnly,
+		Put: func(b []byte) (string, error) { return "blob", nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// An additive edit to a protected file is kept, not reverted, and the
+// Candidate takes exactly the content judged.
+func TestScopeKeepsAnAdditiveEdit(t *testing.T) {
+	f := newScopeFixture(t)
+	added := "one\ntwo\nthree\nfour\n"
+	write(t, filepath.Join(f.ws, "prot", "a.txt"), added)
+	s := f.checkAdditive(t)
+	if len(s.Reverts) != 0 || s.Kept["prot/a.txt"] != gitOID([]byte(added)) {
+		t.Fatalf("reverts %+v, kept %v", s.Reverts, s.Kept)
+	}
+	if err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	c, late, err := f.r.CommitScoped(f.ws, f.snap, f.snap, "c", protOnly, s.Links, s.Kept)
+	if err != nil || len(late) != 0 {
+		t.Fatalf("late %+v, err %v", late, err)
+	}
+	if b, _, _ := f.r.Show(c, "prot/a.txt"); string(b) != added {
+		t.Errorf("prot/a.txt in the Candidate: %q", b)
+	}
+}
+
+// A write to a kept file after the comparison, even another additive one,
+// is a late revert: the Candidate holds the Snapshot's content.
+func TestCommitScopedRevertsALateWriteToAKeptFile(t *testing.T) {
+	f := newScopeFixture(t)
+	write(t, filepath.Join(f.ws, "prot", "a.txt"), "one\ntwo\nthree\nfour\n")
+	s := f.checkAdditive(t)
+	if len(s.Kept) != 1 {
+		t.Fatalf("kept %v", s.Kept)
+	}
+	write(t, filepath.Join(f.ws, "prot", "a.txt"), "one\ntwo\nthree\nfour\nfive\n")
+	c, late, err := f.r.CommitScoped(f.ws, f.snap, f.snap, "c", protOnly, s.Links, s.Kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := f.r.Show(c, "prot/a.txt"); string(b) != "one\ntwo\nthree\n" {
+		t.Errorf("prot/a.txt in the Candidate: %q", b)
+	}
+	if len(late) != 1 || late[0].Path != "prot/a.txt" || !late[0].Tamper || late[0].Change != "modified" {
+		t.Errorf("late: %+v", late)
+	}
+}
+
+// On a send-back the parent Candidate holds the earlier Attempt's kept
+// addition. A later rejected edit goes back to the Snapshot's content,
+// never to the parent's, and an untouched kept file stays kept.
+func TestCommitScopedRestoresProtectedPathsFromTheSnapshot(t *testing.T) {
+	f := newScopeFixture(t)
+	added := "one\ntwo\nthree\nfour\n"
+	write(t, filepath.Join(f.ws, "prot", "a.txt"), added)
+	s := f.checkAdditive(t)
+	c1, _, err := f.r.CommitScoped(f.ws, f.snap, f.snap, "c1", protOnly, s.Links, s.Kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt 2 leaves the addition alone: compared with the Snapshot, it
+	// is still additive, and stays.
+	s = f.checkAdditive(t)
+	c2, late, err := f.r.CommitScoped(f.ws, c1, f.snap, "c2", protOnly, s.Links, s.Kept)
+	if err != nil || len(late) != 0 {
+		t.Fatalf("late %+v, err %v", late, err)
+	}
+	if b, _, _ := f.r.Show(c2, "prot/a.txt"); string(b) != added {
+		t.Errorf("untouched kept file in c2: %q", b)
+	}
+
+	// Attempt 3 rewrites it: reverted to the Snapshot's content, a Tamper
+	// event, and no late revert back to c2's addition.
+	write(t, filepath.Join(f.ws, "prot", "a.txt"), "rewritten\n")
+	s = f.checkAdditive(t)
+	if len(s.Kept) != 0 || len(s.Reverts) != 1 || !s.Reverts[0].Tamper {
+		t.Fatalf("reverts %+v, kept %v", s.Reverts, s.Kept)
+	}
+	if err := s.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	c3, late, err := f.r.CommitScoped(f.ws, c2, f.snap, "c3", protOnly, s.Links, s.Kept)
+	if err != nil || len(late) != 0 {
+		t.Fatalf("late %+v, err %v", late, err)
+	}
+	if b, _, _ := f.r.Show(c3, "prot/a.txt"); string(b) != "one\ntwo\nthree\n" {
+		t.Errorf("prot/a.txt in c3: %q", b)
 	}
 }
