@@ -48,6 +48,15 @@ type KeptTest struct {
 // are never comments here: a //go: line in a doc comment is part of its
 // declaration (//go:embed changes a var), and every //go: line before the
 // package clause (//go:build, //go:debug) must be unchanged.
+//
+// What this guarantees is that every original declaration is delivered
+// as it was, not that the original tests behave as they did: an added
+// package-level initialiser (var _ = f()), a function shadowing a builtin
+// or a method on a type the file declares can still change how they run.
+// A new test file in the package can do the same, so an addition has no
+// more authority than one; the TestMain and init ban only flags the
+// obvious case. None of it reaches a Verdict: the Check runs the Oracle's
+// version of the file.
 func additiveTestEdit(path string, before, after []byte) ([]string, bool) {
 	if !strings.HasSuffix(path, "_test.go") {
 		return nil, false

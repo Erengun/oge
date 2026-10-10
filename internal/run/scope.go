@@ -84,7 +84,7 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 		rules.Tamper = func(string) bool { return false }
 	}
 	added := map[string][]string{}
-	if a.Role != "verifier" {
+	if a.Role == "implementer" {
 		// An edit that only adds to an Oracle test file is the
 		// implementer's own test, as a new test file is (#117): kept, and
 		// no Tamper event. The Check runs the Oracle's version anyway.
