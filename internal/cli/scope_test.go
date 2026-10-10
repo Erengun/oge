@@ -243,11 +243,12 @@ func TestRunRevertNeverWritesThroughASymlink(t *testing.T) {
 }
 
 // The agent's whole process tree is gone before the comparison, so a
-// background writer can't change a protected file after its revert.
+// background writer can't change a protected file after its revert. (It
+// rewrites the test: an addition would be kept, #117.)
 func TestRunScopeCheckRunsAfterTheAgentTreeIsKilled(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
-	script := "( while :; do echo '// more' >> add_test.go; sleep 0.01; done ) >/dev/null 2>&1 &\nsleep 0.1\n" + fixScript
+	script := "( while :; do echo 'package fx' > add_test.go; sleep 0.01; done ) >/dev/null 2>&1 &\nsleep 0.1\n" + fixScript
 	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
 	dir, committed := raced(t, f, code, out, errOut)
 	if !committed {
@@ -281,6 +282,72 @@ func TestRunNewTestsAndAgentGitAreInScope(t *testing.T) {
 	}
 	if files := gitOut(t, filepath.Join(dir, "repo.git"), "ls-tree", "-r", "--name-only", "refs/oge/candidates/c1"); strings.Contains(files, ".git/") {
 		t.Errorf("the Candidate holds the Workspace .git:\n%s", files)
+	}
+}
+
+// appendTest adds a test to the Oracle's test file, one that would fail
+// if the Check ran it.
+const appendTest = `printf '\nfunc TestAddZero(t *testing.T) {\n\tt.Fatal("never run by the Check")\n}\n' >> add_test.go
+`
+
+// An edit that only adds a test to an Oracle test file is the
+// implementer's own test (#117): no revert, no Tamper event, no Gate. The
+// Candidate delivers it, while the Check runs the Oracle's version.
+func TestRunAdditiveOracleTestEditIsKept(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	code, out, errOut := f.run(t, fixScript+appendTest, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || strings.Contains(out, "\nscope ") || strings.Contains(out, "Gate") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "check      go test -json ./... · 1 ran · 0 failed · pass") {
+		t.Errorf("the Check didn't run only the Oracle's test:\n%s", out)
+	}
+	dir := f.onlyRun(t)
+	if got := candidateFile(t, dir, "add_test.go"); !strings.HasPrefix(got, fxTest) || !strings.Contains(got, "func TestAddZero") {
+		t.Errorf("the Candidate lost the addition: %q", got)
+	}
+	if len(reverted(t, dir)) != 0 || len(records(t, dir, run.RecTamperEvent)) != 0 {
+		t.Errorf("the addition was reverted or a Tamper event")
+	}
+	kept, _ := records(t, dir, run.RecScopeObserved)[0]["kept"].([]any)
+	if len(kept) != 1 {
+		t.Fatalf("kept: %v", kept)
+	}
+	k := kept[0].(map[string]any)
+	if k["path"] != "add_test.go" || k["class"] != "oracle_test_addition" || k["tamper"] != false ||
+		len(k["added"].([]any)) != 1 || k["added"].([]any)[0] != "TestAddZero" {
+		t.Errorf("kept record: %v", k)
+	}
+}
+
+// Attempt 1 adds a test but leaves Add broken, so the Candidate it sends
+// back holds the addition. Attempt 2 rewrites the test: that is reverted
+// to the Snapshot's content, not to Attempt 1's, and is a Tamper event.
+const addThenRewrite = `case "$OGE_FAKE_TURN" in
+*"Add(2, 3) != 5"*) ;;
+*) echo "adding a test"; ` + appendTest + ` exit 0 ;;
+esac
+` + tamperFix
+
+func TestRunRewriteAfterAKeptAdditionGoesBackToTheSnapshot(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	code, out, errOut := f.run(t, addThenRewrite, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitParked || !strings.Contains(out, "Waiting for you: the tamper Gate") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	dir := f.onlyRun(t)
+	repo := filepath.Join(dir, "repo.git")
+	if got := gitOut(t, repo, "show", "refs/oge/candidates/c1:add_test.go"); !strings.Contains(got, "func TestAddZero") {
+		t.Errorf("c1 lacks the kept addition: %q", got)
+	}
+	if got := gitOut(t, repo, "show", "refs/oge/candidates/c2:add_test.go"); got != fxTest {
+		t.Errorf("c2:add_test.go differs from the Snapshot's: %q", got)
+	}
+	tampers := records(t, dir, run.RecTamperEvent)
+	if len(tampers) != 1 || tampers[0]["attempt"] != "implement#2" || tampers[0]["late"] != nil {
+		t.Errorf("Tamper events: %v", tampers)
 	}
 }
 

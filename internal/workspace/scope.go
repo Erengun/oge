@@ -56,6 +56,10 @@ type ScopeRules struct {
 	// a Tamper event; nil means every one is. A role that isn't judged
 	// (the verifier) commits ordinary scope violations instead (spec #35).
 	Tamper func(class string) bool
+	// Additive reports whether a modified protected regular file's new
+	// content only adds to its Snapshot content (#117); nil means never.
+	// Such a path is kept, not reverted, and is no Tamper event.
+	Additive func(path string, before, after []byte) bool
 	// Enforcement names a path's enforcement class; nil means revert-only.
 	Enforcement func(path string) string
 	// Put stores a patch and returns its blob id.
@@ -90,7 +94,11 @@ type Scope struct {
 	// Links are the symlinks the Workspace holds once the reverts are
 	// made, with their targets: the only links a Candidate may take.
 	Links map[string]string
-	ws    string
+	// Kept are the modified protected paths that Additive kept, each with
+	// the git object id of the content it judged: the only content of that
+	// path a Candidate may take (CommitScoped).
+	Kept map[string]string
+	ws   string
 }
 
 // Tamper counts the Tamper events among the reverts.
@@ -141,7 +149,7 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 	if err != nil {
 		return nil, err
 	}
-	s := &Scope{ws: ws}
+	s := &Scope{ws: ws, Kept: map[string]string{}}
 	planned := map[string]*Revert{}
 	plan := func(p, class string, tamper bool) {
 		if planned[p] == nil {
@@ -163,6 +171,16 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 			continue
 		}
 		if unreadable[p] || !sameAsSnapshot(ws, p, before[p], after[p]) {
+			if !unreadable[p] && rules.Additive != nil {
+				oid, ok, err := r.additive(ws, p, before[p], after[p], rules.Additive)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					s.Kept[p] = oid
+					continue
+				}
+			}
 			plan(p, class, rules.Tamper == nil || rules.Tamper(class))
 		}
 	}
@@ -250,6 +268,36 @@ func (r *RunRepo) CheckScope(ws, snap string, rules ScopeRules) (*Scope, error) 
 		}
 	}
 	return s, nil
+}
+
+// additiveLimit caps the Workspace content Additive is asked to judge; a
+// larger file is reverted as before.
+const additiveLimit = 4 << 20
+
+// additive asks rules' Additive about a modified regular file, of the same
+// mode as its Snapshot entry, and returns the object id of the content it
+// judged. The file is read once, never through a link.
+func (r *RunRepo) additive(ws, p string, b *entry, afterMode string, judge func(string, []byte, []byte) bool) (string, bool, error) {
+	if b == nil || b.mode != afterMode || (afterMode != modeFile && afterMode != modeExec) {
+		return "", false, nil
+	}
+	before, err := r.content(b)
+	if err != nil {
+		return "", false, err
+	}
+	f, err := os.OpenFile(filepath.Join(ws, filepath.FromSlash(p)), os.O_RDONLY|oNoFollow, 0)
+	if err != nil {
+		return "", false, nil // reverted as before
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", false, nil
+	}
+	after, err := io.ReadAll(io.LimitReader(f, additiveLimit+1))
+	if err != nil || len(after) > additiveLimit || !judge(p, before, after) {
+		return "", false, nil
+	}
+	return gitOID(after), true, nil
 }
 
 // describe fills in a revert's change, hashes, sizes, patch and
