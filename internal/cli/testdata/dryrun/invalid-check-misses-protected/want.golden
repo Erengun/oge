@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  check.commands: the Check can't run 2 protected test files in 2 package dirs (internal/cli, internal/oracle); the Run would end in an Infrastructure stop. Scope project.test_globs to what the Check runs (e.g. internal/delivery/**/*_test.go), or widen the Check to ./...

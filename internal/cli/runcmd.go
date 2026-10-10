@@ -26,7 +26,7 @@ import (
 
 // startRun refuses what this build can't run yet, then runs the Task and
 // maps the outcome to its exit code (ADR-0015).
-func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Frozen, cfgData []byte) int {
+func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Frozen, cfgData []byte, warn string) int {
 	for _, s := range frozen.Stages {
 		if env.Agents[s.Agent] == nil {
 			fmt.Fprintf(env.Stderr, "oge: running a Task with %s isn't implemented yet; use --dry-run to see what it would do\n", s.Agent)
@@ -79,7 +79,7 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 	v := selectView(env, f, t, frozen)
 	plainOf(v).applying = f.apply
-	withWarning(v, testConfigWarning(root, frozen))
+	withWarning(v, warn)
 	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 		p := run.Params{
 			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,

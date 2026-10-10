@@ -1,0 +1,28 @@
+exit: 0
+--- stdout
+Dry run: nothing was started.
+
+Task       fix it
+Criteria   none
+
+Mode       Standard: implementer, then a fresh verifier writes held-out tests, then Öge's Check
+Config     .oge/oge.toml from the Snapshot, schema 1
+Pipeline   default (frozen, compiled graph 981c61b8903f)
+           implement ─▶ verify (after) ─▶ Check
+           mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
+  implement  claude         network off   (installed)
+  verify     claude         network off   fresh Session every Attempt   (inherits implement)
+  Check      go test -json ./...   go-test-json · timeout 10m · network off (not enforced)   (project)
+  tests      **/*_test.go
+  output     none: every new file is Ambiguous until you decide
+  limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · user requests 3 · Oracle growth 4 Attempts, 20/Attempt, 50/Run · Stage 60m active, idle 10m
+
+! No acceptance criteria found in the Task.
+!   Held-out tests will be reported as unmapped, and send-back feedback can name no criteria.
+!   Add a "## Acceptance criteria" list to fix this.
+
+! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads
+! 1 package dir (internal/cli) has testdata/ that no test_globs entry matches: its goldens would be writable by the agent
+
+Valid. A Run would start from here.
+--- stderr

@@ -267,15 +267,22 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 
+	refusal, coverWarns := checkCoverageOf(root, frozen)
+	if refusal != "" {
+		reportProblems(env, "this Run isn't valid", []pipeline.Problem{{Key: "check.commands", Msg: refusal}})
+		return ExitRefused
+	}
+
 	t, code := readTask(env, f, positional, attended)
 	if code != ExitOK {
 		return code
 	}
 
+	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
 	if !f.dryRun {
-		return startRun(env, f, root, t, frozen, cfgData)
+		return startRun(env, f, root, t, frozen, cfgData, warn)
 	}
-	renderDryRun(env.Stdout, t, frozen, cfg != nil, testConfigWarning(root, frozen), f.verbose || f.veryVerbose)
+	renderDryRun(env.Stdout, t, frozen, cfg != nil, warn, f.verbose || f.veryVerbose)
 	return ExitOK
 }
 
