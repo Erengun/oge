@@ -438,6 +438,9 @@ func TestImplementerTestsCount(t *testing.T) {
 	if r := scenario(t, "accepted-implementer-tests-both").Receipt(); r.ImplementerTests != 2 {
 		t.Errorf("both: %d", r.ImplementerTests)
 	}
+	if r := scenario(t, "accepted-kept-additions-resolved").Receipt(); r.ImplementerTests != 1 || len(r.Protected.Kept) != 1 {
+		t.Errorf("resolved: %d, %+v", r.ImplementerTests, r.Protected.Kept)
+	}
 	if r := scenario(t, "accepted-fast").Receipt(); r.ImplementerTests != 0 || strings.Contains(r.Text(receipt.Paint{}), "implementer-authored") {
 		t.Errorf("none: %d", r.ImplementerTests)
 	}

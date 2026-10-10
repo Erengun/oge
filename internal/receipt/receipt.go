@@ -71,10 +71,11 @@ type Receipt struct {
 	QA        *QA        `json:"qa,omitempty"`
 	Protected Protected  `json:"protected"`
 	// ImplementerTests counts the implementer-authored tests the final
-	// Candidate delivers that no Check ran (#119): the test funcs the
-	// Candidate adds in new files that match project.test_globs (one per
-	// such file that isn't Go source or doesn't parse), plus the funcs the
-	// implementer added to existing Oracle test files (Protected.Kept).
+	// Candidate delivers that no Check ran (#119), as a lower bound: the
+	// test funcs in new files that match project.test_globs, plus the funcs
+	// added to existing Oracle test files (Protected.Kept). A file with no
+	// test func, that isn't Go source, doesn't parse or can't be read
+	// counts 1.
 	ImplementerTests int        `json:"implementer_tests"`
 	Scope            Scope      `json:"scope"`
 	Decisions        []Decision `json:"decisions"`
@@ -274,11 +275,7 @@ type Delivery struct {
 type Source interface {
 	Blob(id string) ([]byte, error)
 	Changed(from, to string) ([]string, error)
-}
-
-// fileSource is a Source that can also read a file at a commit. Without
-// it, new test files aren't counted (#119).
-type fileSource interface {
+	// Show is the content of path at commit, or ok=false if absent.
 	Show(commit, path string) (data []byte, ok bool, err error)
 }
 
@@ -388,8 +385,8 @@ type (
 		Files                       []string
 	}
 	ambiguousResolved struct {
-		Choice, Candidate string
-		Files             []string
+		Choice, Candidate, Attempt string
+		Files                      []string
 	}
 	gateOpened struct {
 		Pins gate.Pins
@@ -432,6 +429,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		attempts  []attemptEnded
 		tamperIdx = map[string]int{}
 		keptBy    = map[string][]KeptFile{} // implementer attempt → its last ScopeObserved's kept
+		madeBy    = map[string]string{}     // Candidate a resolution made → the Attempt it resolved
 		openAt    *time.Time
 		abandoned string              // the Gate a human was asked at and never answered
 		resolved  = map[string]bool{} // Ambiguous files promoted or dropped
@@ -671,6 +669,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		case run.RecAmbiguousResolved:
 			var d ambiguousResolved
 			if get(rec.Data, &d) {
+				madeBy[d.Candidate] = d.Attempt
 				for _, f := range d.Files {
 					resolved[clean(f)] = true
 				}
@@ -736,14 +735,17 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 	}
 	if cand != "" {
 		c := &Candidate{Commit: cand, Files: []string{}}
-		for i := len(attempts) - 1; i >= 0; i-- {
-			if a := attempts[i]; a.Candidate == cand {
-				r.Protected.Kept = append(r.Protected.Kept, keptBy[a.Attempt]...)
-				break
+		// The Attempt behind the Candidate: the one that committed it, or
+		// the one a resolution that made it resolved.
+		by := madeBy[cand]
+		for _, a := range attempts {
+			if a.Candidate == cand {
+				by = a.Attempt
 			}
 		}
+		r.Protected.Kept = append(r.Protected.Kept, keptBy[by]...)
 		for _, k := range r.Protected.Kept {
-			r.ImplementerTests += len(k.Added)
+			r.ImplementerTests += max(len(k.Added), 1) // a lower bound
 		}
 		if snapshot != "" {
 			if files, err := src.Changed(snapshot, cand); err == nil {

@@ -503,6 +503,19 @@ func Scenarios() []Scenario {
 			b.End(7300*ms, run.Accepted, C1)
 			return b
 		}},
+		{"accepted-kept-additions-resolved", func() *Builder {
+			// Kept additions, then an Ambiguous-file drop made the final
+			// Candidate: no Attempt committed it, the resolution did.
+			b := New(pipeline.Fast)
+			a := fastAttempt()
+			a.Changed = []string{"add.go", "add_test.go", "scratch.txt"}
+			a.Kept = []run.KeptTest{{Path: "add_test.go", Class: run.ClassOracleTestAddition, OID: "e69de29", Added: []string{"TestAddZero"}}}
+			b.Attempt(a)
+			b.Resolve(6200*ms, 6300*ms, "drop", []string{"scratch.txt"}, C1, C2)
+			b.Check(1, C2, 0, 6400*ms, 7400*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7500*ms, run.Accepted, C2)
+			return b
+		}},
 		{"accepted-implementer-tests-both", func() *Builder {
 			// Kept additions and a new test file together.
 			b := NewWithTests(pipeline.Fast, "*_test.go")

@@ -13,14 +13,13 @@ import (
 
 // newTests counts the implementer-authored tests in the new files the
 // Candidate adds that match the test globs (#119): the Test, Benchmark,
-// Fuzz and Example funcs of a Go file, and one for a matching new file
-// that isn't Go source or doesn't parse (a lower bound for it). Files
+// Fuzz and Example funcs of a Go file, and at least one for each matching
+// new file (a file with no test func, that isn't Go source, doesn't parse
+// or can't be read counts 1: the count is a lower bound). Files
 // that existed in the Snapshot are not new: their additions come from the
-// Ledger's kept list. It reads files through src, and counts nothing when
-// src can't.
+// Ledger's kept list.
 func newTests(src Source, snapshot, cand string, changed, testGlobs []string) int {
-	fs, ok := src.(fileSource)
-	if !ok || len(testGlobs) == 0 {
+	if len(testGlobs) == 0 {
 		return 0
 	}
 	n := 0
@@ -28,17 +27,18 @@ func newTests(src Source, snapshot, cand string, changed, testGlobs []string) in
 		if !oracle.MatchAny(testGlobs, f) {
 			continue
 		}
-		if _, existed, err := fs.Show(snapshot, f); err != nil || existed {
+		if _, existed, err := src.Show(snapshot, f); err == nil && existed {
 			continue
 		}
-		data, ok, err := fs.Show(cand, f)
-		if err != nil || !ok {
-			continue // deleted, or unreadable
-		}
-		if c, ok := goTestFuncs(f, data); ok {
-			n += c
-		} else {
-			n++
+		data, ok, err := src.Show(cand, f)
+		switch {
+		case err == nil && !ok:
+			continue // deleted
+		case err != nil:
+			n++ // unreadable: still delivered
+		default:
+			c, _ := goTestFuncs(f, data)
+			n += max(c, 1)
 		}
 	}
 	return n
