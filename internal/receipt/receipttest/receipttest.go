@@ -37,6 +37,7 @@ type Builder struct {
 	prev    string
 	blobs   map[string][]byte
 	changed map[string][]string
+	files   map[string][]byte // commit+":"+path → content
 	// V0 and Manifests are the Oracle manifests' blob ids by version.
 	Manifests map[int]string
 }
@@ -44,8 +45,20 @@ type Builder struct {
 // New starts a Run in mode with the Task "fix Add" and Oracle v0 (the
 // visible TestAdd), its Preflight done at 0.4s.
 func New(mode pipeline.Mode, weakening ...pipeline.Weakening) *Builder {
-	b := &Builder{blobs: map[string][]byte{}, changed: map[string][]string{}, Manifests: map[int]string{}}
-	frozen, _ := json.Marshal(pipeline.Frozen{Mode: mode, TrustWeakening: weakening})
+	return newRun(mode, nil, weakening...)
+}
+
+// NewWithTests is New with project.test_globs set to globs, for a Run
+// whose Candidate adds test files (see File).
+func NewWithTests(mode pipeline.Mode, globs ...string) *Builder {
+	return newRun(mode, globs)
+}
+
+func newRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakening) *Builder {
+	b := &Builder{blobs: map[string][]byte{}, changed: map[string][]string{}, files: map[string][]byte{}, Manifests: map[int]string{}}
+	f := pipeline.Frozen{Mode: mode, TrustWeakening: weakening}
+	f.Project.TestGlobs = globs
+	frozen, _ := json.Marshal(f)
 	b.Add(0, run.RecRunStarted, map[string]any{"run": RunID, "oge_version": "test", "created": T0, "source": "/repo",
 		"task": b.Blob([]byte("fix Add\n\nAdd returns 0 for every input.\n")), "frozen": b.Blob(frozen), "mode": mode})
 	b.Add(100*time.Millisecond, run.RecSnapshotTaken, map[string]any{"commit": Snapshot, "head": "84ca1bd0e1f2", "branch": "main", "modified": 0, "untracked": 1})
@@ -96,6 +109,15 @@ func (s source) Blob(id string) ([]byte, error) {
 	return nil, fmt.Errorf("no blob %s", id)
 }
 
+// File sets the content of path at commit, which a Show then returns. A
+// path no File sets at the Snapshot is new in the Candidate.
+func (b *Builder) File(commit, path, content string) { b.files[commit+":"+path] = []byte(content) }
+
+func (s source) Show(commit, path string) ([]byte, bool, error) {
+	d, ok := s.b.files[commit+":"+path]
+	return d, ok, nil
+}
+
 func (s source) Changed(from, to string) ([]string, error) { return s.b.changed[from+".."+to], nil }
 
 // Oracle records Oracle version v. A version a verifier Attempt added
@@ -128,6 +150,9 @@ type Attempt struct {
 	Reverted     []workspace.Revert
 	Withheld     []workspace.Withheld
 	Enforcement  string
+	// Kept are the Oracle test files it only added to; nil writes no
+	// "kept" list, as before #117.
+	Kept []run.KeptTest
 }
 
 // Attempt appends a's records.
@@ -159,7 +184,11 @@ func (b *Builder) Attempt(a Attempt) {
 	if rev == nil {
 		rev = []workspace.Revert{}
 	}
-	b.Add(a.To-20*time.Millisecond, run.RecScopeObserved, map[string]any{"attempt": a.ID, "role": a.Role, "state": "planned", "reverted": rev, "tamper": tamper, "enforcement": enf})
+	scope := map[string]any{"attempt": a.ID, "role": a.Role, "state": "planned", "reverted": rev, "tamper": tamper, "enforcement": enf}
+	if a.Kept != nil {
+		scope["kept"] = a.Kept
+	}
+	b.Add(a.To-20*time.Millisecond, run.RecScopeObserved, scope)
 	n := 0
 	for _, r := range a.Reverted {
 		if r.Tamper {
@@ -450,6 +479,53 @@ func Scenarios() []Scenario {
 			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
 			b.Gate("gate.ambiguous_file", 7300*ms, 0, "", "")
 			b.Unresolved(7400*ms, run.Parked, "gate.ambiguous_file", []string{"docs/debug.md", "tmp/result.json"}, "2 new files were not covered by the declared output/test globs:")
+			return b
+		}},
+		{"accepted-implementer-tests", func() *Builder {
+			// A new test file the implementer wrote: delivered, never run.
+			b := NewWithTests(pipeline.Fast, "*_test.go")
+			a := fastAttempt()
+			a.Changed = []string{"add.go", "extra_test.go"}
+			b.File(C1, "extra_test.go", "package fx\n\nimport \"testing\"\n\nfunc helper() {}\nfunc TestExtraA(t *testing.T) {}\nfunc TestExtraB(t *testing.T) {}\nfunc Testing() {}\n")
+			b.Attempt(a)
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
+			return b
+		}},
+		{"accepted-kept-additions", func() *Builder {
+			// Additions to an existing Oracle test file, kept (#117).
+			b := New(pipeline.Fast)
+			a := fastAttempt()
+			a.Changed = []string{"add.go", "add_test.go"}
+			a.Kept = []run.KeptTest{{Path: "add_test.go", Class: run.ClassOracleTestAddition, OID: "e69de29", Added: []string{"TestAddZero", "TestAddNeg"}}}
+			b.Attempt(a)
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
+			return b
+		}},
+		{"accepted-kept-additions-resolved", func() *Builder {
+			// Kept additions, then an Ambiguous-file drop made the final
+			// Candidate: no Attempt committed it, the resolution did.
+			b := New(pipeline.Fast)
+			a := fastAttempt()
+			a.Changed = []string{"add.go", "add_test.go", "scratch.txt"}
+			a.Kept = []run.KeptTest{{Path: "add_test.go", Class: run.ClassOracleTestAddition, OID: "e69de29", Added: []string{"TestAddZero"}}}
+			b.Attempt(a)
+			b.Resolve(6200*ms, 6300*ms, "drop", []string{"scratch.txt"}, C1, C2)
+			b.Check(1, C2, 0, 6400*ms, 7400*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7500*ms, run.Accepted, C2)
+			return b
+		}},
+		{"accepted-implementer-tests-both", func() *Builder {
+			// Kept additions and a new test file together.
+			b := NewWithTests(pipeline.Fast, "*_test.go")
+			a := fastAttempt()
+			a.Changed = []string{"add.go", "add_test.go", "extra_test.go"}
+			a.Kept = []run.KeptTest{{Path: "add_test.go", Class: run.ClassOracleTestAddition, OID: "e69de29", Added: []string{"TestAddZero"}}}
+			b.File(C1, "extra_test.go", "package fx\n\nimport \"testing\"\n\nfunc TestExtra(t *testing.T) {}\n")
+			b.Attempt(a)
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
 			return b
 		}},
 		{"accepted-delivered", func() *Builder {

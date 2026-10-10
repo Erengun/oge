@@ -422,3 +422,46 @@ func TestReceiptJSONKeepsEscapedText(t *testing.T) {
 		t.Errorf("why %q", got)
 	}
 }
+
+// The count is the funcs in new test files that match the test globs plus
+// the funcs added to existing Oracle test files (#119); the last
+// ScopeObserved record of the Attempt behind the Candidate is the one
+// that counts.
+func TestImplementerTestsCount(t *testing.T) {
+	r := scenario(t, "accepted-implementer-tests").Receipt()
+	if r.ImplementerTests != 2 { // TestExtraA, TestExtraB; not helper, not Testing
+		t.Errorf("new file: %d", r.ImplementerTests)
+	}
+	if r := scenario(t, "accepted-kept-additions").Receipt(); r.ImplementerTests != 2 || len(r.Protected.Kept) != 1 {
+		t.Errorf("kept: %d, %+v", r.ImplementerTests, r.Protected.Kept)
+	}
+	if r := scenario(t, "accepted-implementer-tests-both").Receipt(); r.ImplementerTests != 2 {
+		t.Errorf("both: %d", r.ImplementerTests)
+	}
+	if r := scenario(t, "accepted-kept-additions-resolved").Receipt(); r.ImplementerTests != 1 || len(r.Protected.Kept) != 1 {
+		t.Errorf("resolved: %d, %+v", r.ImplementerTests, r.Protected.Kept)
+	}
+	if r := scenario(t, "accepted-fast").Receipt(); r.ImplementerTests != 0 || strings.Contains(r.Text(receipt.Paint{}), "implementer-authored") {
+		t.Errorf("none: %d", r.ImplementerTests)
+	}
+
+	// A late record drops a kept file written after the comparison.
+	b := scenario(t, "accepted-kept-additions")
+	recs := b.Records()
+	var late []ledger.Record
+	for _, rec := range recs {
+		late = append(late, rec)
+		if rec.Type == run.RecScopeObserved {
+			d, _ := json.Marshal(map[string]any{"attempt": "implement#1", "role": "implementer", "state": "late", "reverted": []any{}, "kept": []any{}, "tamper": 0, "enforcement": workspace.RevertOnly})
+			late = append(late, ledger.Record{Format: rec.Format, Seq: rec.Seq, At: rec.At, Type: run.RecScopeObserved, Data: d})
+		}
+	}
+	if r := receipt.FromRecords(late, "", b.Source()); r.ImplementerTests != 0 || len(r.Protected.Kept) != 0 {
+		t.Errorf("late: %d, %+v", r.ImplementerTests, r.Protected.Kept)
+	}
+
+	got := scenario(t, "accepted-kept-additions").Receipt().Text(receipt.Paint{})
+	if !strings.Contains(got, "no test changes reverted · 2 test additions kept in add_test.go") || strings.Contains(got, "no test changes kept") {
+		t.Errorf("Protected line:\n%s", got)
+	}
+}

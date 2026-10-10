@@ -6,17 +6,19 @@
   "outcome": "Accepted",
   "headline": "✓ Accepted",
   "candidate": {
-    "commit": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
-    "files_changed": 1,
+    "commit": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
+    "files_changed": 3,
     "files": [
-      "add.go"
+      "add.go",
+      "add_test.go",
+      "scratch.txt"
     ]
   },
   "oracle_version": 0,
   "checks": [
     {
       "check": 1,
-      "candidate": "6d1231d9f00d1e2f3a4b5c6d7e8f90a1b2c3d4e5",
+      "candidate": "5a1bd801f27ab642a46d7c5efe8d105508e4a498",
       "oracle_version": 0,
       "verdict": "pass",
       "tests_passed": 1,
@@ -38,23 +40,39 @@
   ],
   "protected": {
     "reverted": [],
-    "kept": []
+    "kept": [
+      {
+        "path": "add_test.go",
+        "added": [
+          "TestAddZero"
+        ]
+      }
+    ]
   },
-  "implementer_tests": 0,
+  "implementer_tests": 1,
   "scope": {
     "reverted": [],
     "qa_discarded": []
   },
-  "decisions": [],
+  "decisions": [
+    {
+      "gate": "gate.ambiguous_file",
+      "actor": "human",
+      "choice": "drop",
+      "files": [
+        "scratch.txt"
+      ]
+    }
+  ],
   "supervision": {
     "approved_automatically": 18,
     "denied": 2,
     "cancelled": 0,
     "sent_back": 0,
-    "human_interruptions": 0
+    "human_interruptions": 1
   },
   "time": {
-    "total_ms": 7300,
+    "total_ms": 7500,
     "stages": [
       {
         "stage": "preflight",
@@ -69,12 +87,13 @@
         "ms": 990
       }
     ],
-    "human_attention_ms": 0
+    "human_attention_ms": 100
   },
   "not_covered": [
     "No independent tests (fast mode): no QA and no held-out tests",
+    "1 implementer-authored test delivered, not run by Öge",
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "ce78e1c22356200a91549adfb9b8341b82abb2e8811538df51a3ac5e1a1df2cf"
+  "ledger_head": "256aa2fc7d14b5f5272eda9dd45cadb468f92a3cc02eecf27487e9260a2788a9"
 }

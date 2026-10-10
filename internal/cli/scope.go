@@ -11,8 +11,9 @@ import (
 	"github.com/erengun/oge/internal/workspace"
 )
 
-// scopeText is the compact line for an Attempt's reverts, or "" when
-// there were none. It says what changed and what Öge undid, never why.
+// scopeText is the compact line for an Attempt's reverts and kept test
+// additions, or "" when there were none. It says what changed and what Öge
+// undid or kept, never why.
 func scopeText(a *run.Attempt) string {
 	var prot, links, inWay []string
 	allTests := true
@@ -41,6 +42,22 @@ func scopeText(a *run.Attempt) string {
 	}
 	if len(inWay) > 0 {
 		parts = append(parts, counted(inWay, "file in the way of a protected path", "files in the way of protected paths", "removed"))
+	}
+	if len(a.Kept) > 0 {
+		var paths []string
+		n := 0
+		for _, k := range a.Kept {
+			paths = append(paths, pathText(k.Path))
+			n += len(k.Added)
+		}
+		what := "additions"
+		if n > 0 {
+			what = fmt.Sprintf("%d test additions", n)
+			if n == 1 {
+				what = "1 test addition"
+			}
+		}
+		parts = append(parts, "kept "+what+" in "+strings.Join(paths, ", "))
 	}
 	return clean(strings.Join(parts, " · "))
 }

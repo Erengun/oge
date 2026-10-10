@@ -37,8 +37,10 @@
     }
   ],
   "protected": {
-    "reverted": []
+    "reverted": [],
+    "kept": []
   },
+  "implementer_tests": 0,
   "scope": {
     "reverted": [],
     "qa_discarded": []

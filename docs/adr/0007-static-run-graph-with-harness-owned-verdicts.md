@@ -24,5 +24,6 @@ status: accepted
 
 - Fixture runs ([#31](https://github.com/Erengun/oge/issues/31)) show that the Check-only Verdict misses defects reviewers routinely catch, and that routing through Gates loses them. Then admit a budgeted, non-accepting send-back driven directly by an Exit.
 - False Tamper events are common, for example toolchains touching test configuration. Then narrow what counts as protected state, but keep the Gate.
+  - *Amendment, 2026-10-10 ([#117](https://github.com/Erengun/oge/issues/117)):* this narrowing was applied. The M1 acceptance run showed the revert and Gate firing on Claude's additive test edits, which can't reach the Verdict because the Check runs the Oracle's version of every test file. An additive edit to an existing Oracle test file is now an Implementer-authored test addition, not a Tamper event. Anything else keeps the revert, the Tamper event and the mandatory Gate.
 - Unattended runs become a requirement and the Gate on budget exhaustion blocks them. The terminal state for unattended runs is [#25](https://github.com/Erengun/oge/issues/25)'s call.
 - New evidence shows that LLM verdicts on code match harness-run tests on the #31 metrics. Then the Verdict's sole reliance on Evidence would no longer be warranted.
