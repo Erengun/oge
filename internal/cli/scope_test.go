@@ -297,8 +297,12 @@ func TestRunAdditiveOracleTestEditIsKept(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
 	code, out, errOut := f.run(t, fixScript+appendTest, "fix Add", "--fast", "--agent", "fake", "--unattended")
-	if code != ExitOK || strings.Contains(out, "\nscope ") || strings.Contains(out, "Gate") {
+	if code != ExitOK || strings.Contains(out, "Gate") || strings.Contains(out, "reverted:") {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	// The only scope line says what was kept; nothing was reverted.
+	if strings.Count(out, "\nscope ") != 1 || !strings.Contains(out, "\nscope      kept 1 test addition in add_test.go\n") {
+		t.Errorf("want one scope line naming the kept addition:\n%s", out)
 	}
 	if !strings.Contains(out, "check      go test -json ./... · 1 ran · 0 failed · pass") {
 		t.Errorf("the Check didn't run only the Oracle's test:\n%s", out)
