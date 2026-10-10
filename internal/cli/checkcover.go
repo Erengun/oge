@@ -17,14 +17,14 @@ import (
 // of their package patterns, the Run would end in an Infrastructure stop after
 // the agent had worked (#114), so it returns that as a refusal. Opaque
 // commands (make test, scripts) get no claim.
-func checkCoverage(paths, globs, runs []string) (refusal string, warns []string) {
-	protected := map[string]int{} // package dir -> protected _test.go files
+func checkCoverage(root string, paths, globs, runs []string) (refusal string, warns []string) {
+	protected := map[string][]string{} // package dir -> protected _test.go files
 	for _, p := range paths {
 		if !strings.HasSuffix(p, "_test.go") || !oracle.MatchAny(globs, p) {
 			continue
 		}
 		if dir := path.Dir(p); oracle.GoPackageDir(dir) {
-			protected[dir]++
+			protected[dir] = append(protected[dir], p)
 		}
 	}
 	if len(protected) == 0 {
@@ -33,6 +33,7 @@ func checkCoverage(paths, globs, runs []string) (refusal string, warns []string)
 
 	var cmds []goTestCmd
 	allPlain := len(runs) > 0
+	filtered := false
 	for _, r := range runs {
 		c, ok := parseGoTest(r)
 		if !ok {
@@ -40,25 +41,32 @@ func checkCoverage(paths, globs, runs []string) (refusal string, warns []string)
 			continue
 		}
 		cmds = append(cmds, c)
-		if c.filters {
-			warns = append(warns, "the Check filters tests; protected tests outside the filter will stop the Run")
-		}
+		filtered = filtered || c.filters
 	}
-	warns = dedupe(warns)
+	if filtered {
+		warns = append(warns, "the Check filters tests; protected tests outside the filter will stop the Run")
+	}
 
 	// A protected package's testdata that no test_globs entry matches is
-	// writable by the Candidate.
-	var loose []string
-	for dir := range protected {
-		prefix := dir + "/testdata/"
-		if dir == "." {
-			prefix = "testdata/"
-		}
-		for _, p := range paths {
-			if strings.HasPrefix(p, prefix) && !oracle.MatchAny(globs, p) {
-				loose = append(loose, dir)
-				break
+	// writable by the Candidate. One pass: testdata's parent dirs whose
+	// files the globs leave out.
+	looseDirs := map[string]bool{}
+	for _, p := range paths {
+		dir, _, ok := strings.Cut(p, "/testdata/")
+		if !ok {
+			if !strings.HasPrefix(p, "testdata/") {
+				continue
 			}
+			dir = "."
+		}
+		if !oracle.MatchAny(globs, p) {
+			looseDirs[dir] = true
+		}
+	}
+	var loose []string
+	for dir := range looseDirs {
+		if _, ok := protected[dir]; ok {
+			loose = append(loose, dir)
 		}
 	}
 	if len(loose) > 0 {
@@ -71,7 +79,7 @@ func checkCoverage(paths, globs, runs []string) (refusal string, warns []string)
 	}
 	var uncovered []string
 	files := 0
-	for dir, n := range protected {
+	for dir, fs := range protected {
 		covered := false
 		for _, c := range cmds {
 			if c.covers(dir) {
@@ -79,7 +87,18 @@ func checkCoverage(paths, globs, runs []string) (refusal string, warns []string)
 				break
 			}
 		}
-		if !covered {
+		if covered {
+			continue
+		}
+		// Files that never run here (build-constrained) or expect nothing
+		// (helpers) don't make the Check unable to run the protected tests.
+		n := 0
+		for _, f := range fs {
+			if sf, err := workspace.ReadSnapshotFile(root, f); err != nil || !sf.InSnapshot || oracle.PlainlyExpected(f, sf.Data) {
+				n++
+			}
+		}
+		if n > 0 {
 			uncovered = append(uncovered, dir)
 			files += n
 		}
@@ -88,21 +107,23 @@ func checkCoverage(paths, globs, runs []string) (refusal string, warns []string)
 		return "", warns
 	}
 	sort.Strings(uncovered)
-	scope := "internal/pkg/**/*_test.go"
-	if p := cmds[0].patterns; len(p) == 1 {
+	scope := ""
+	if len(cmds) == 1 && len(cmds[0].patterns) == 1 {
+		p := cmds[0].patterns[0]
 		switch {
-		case p[0] == "...":
+		case p == "...":
 			scope = "**/*_test.go"
-		case strings.HasSuffix(p[0], "/..."):
-			scope = strings.TrimSuffix(p[0], "...") + "**/*_test.go"
-		case p[0] == ".":
+		case strings.HasSuffix(p, "/..."):
+			scope = strings.TrimSuffix(p, "...") + "**/*_test.go"
+		case p == ".":
 			scope = "*_test.go"
 		default:
-			scope = p[0] + "/*_test.go"
+			scope = p + "/*_test.go"
 		}
+		scope = " (e.g. " + scope + ")"
 	}
 	return fmt.Sprintf("the Check can't run %d protected test %s in %s; the Run would end in an Infrastructure stop. "+
-		"Scope project.test_globs to what the Check runs (e.g. %s), or widen the Check to ./...",
+		"Scope project.test_globs to what the Check runs%s, or widen the Check to ./...",
 		files, covPlural(files, "file", "files"), dirList(uncovered), scope), warns
 }
 
@@ -119,16 +140,6 @@ func dirList(dirs []string) string {
 		shown, more = dirs[:3], fmt.Sprintf(" and %d more", len(dirs)-3)
 	}
 	return fmt.Sprintf("%d package %s (%s%s)", len(dirs), covPlural(len(dirs), "dir", "dirs"), strings.Join(shown, ", "), more)
-}
-
-func dedupe(in []string) []string {
-	var out []string
-	for _, s := range in {
-		if len(out) == 0 || out[len(out)-1] != s {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // goTestCmd is a parsed plain `go test` command.
@@ -188,11 +199,13 @@ func parseGoTest(run string) (c goTestCmd, ok bool) {
 			break
 		}
 		if !strings.HasPrefix(a, "-") || a == "-" {
-			// A package pattern: a directory pattern under the current one.
+			// Only directory patterns under the current one: an import
+			// path, all, std or cmd could name anything.
+			if a != "." && !strings.HasPrefix(a, "./") {
+				return c, false
+			}
 			p := path.Clean(a)
 			switch {
-			case strings.HasPrefix(a, "/") || strings.HasPrefix(a, "../") || a == "..":
-				return c, false
 			case strings.Contains(strings.TrimSuffix(strings.TrimSuffix(p, "..."), "/"), "..."):
 				return c, false
 			case strings.HasSuffix(p, "...") && p != "..." && !strings.HasSuffix(p, "/..."):
@@ -240,7 +253,7 @@ func checkCoverageOf(root string, f *pipeline.Frozen) (string, []string) {
 	for _, c := range f.Checks {
 		runs = append(runs, c.Run)
 	}
-	return checkCoverage(paths, f.Project.TestGlobs, runs)
+	return checkCoverage(root, paths, f.Project.TestGlobs, runs)
 }
 
 // joinWarnings joins warnings for the summary's "! " line.

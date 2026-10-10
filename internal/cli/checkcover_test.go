@@ -32,6 +32,10 @@ func TestParseGoTest(t *testing.T) {
 		{"go test '-run=X' ./a", nil, false, false},
 		{"go test ./a/.../b", nil, false, false},
 		{"go test ../a", nil, false, false},
+		{"go test github.com/x/m/...", nil, false, false},
+		{"go test mod/pkg", nil, false, false},
+		{"go test all", nil, false, false},
+		{"go test std cmd", nil, false, false},
 		{"make test", nil, false, false},
 		{"go vet ./...", nil, false, false},
 	}
@@ -61,30 +65,58 @@ func TestCheckCoverage(t *testing.T) {
 	}
 	globs := []string{"**/*_test.go"}
 	// Four uncovered dirs: the message names three and counts the rest.
-	msg, _ := checkCoverage(paths, globs, []string{"go test ./a/..."})
+	msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/..."})
 	for _, want := range []string{"4 protected test files in 4 package dirs (b, b/c, d and 1 more)", "a/**/*_test.go", "./..."} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal %q lacks %q", msg, want)
 		}
 	}
 	// Any one command covering a dir is enough.
-	if msg, _ := checkCoverage(paths, globs, []string{"go test ./a/... ./b/... ./d ./e"}); msg != "" {
+	if msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/... ./b/... ./d ./e"}); msg != "" {
 		t.Errorf("covered, but refused: %s", msg)
 	}
-	if msg, _ := checkCoverage(paths, globs, []string{"go test ./a/...", "go test ./..."}); msg != "" {
+	if msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/...", "go test ./..."}); msg != "" {
 		t.Errorf("covered by the second command, but refused: %s", msg)
 	}
 	// An opaque command anywhere means no claim.
-	if msg, _ := checkCoverage(paths, globs, []string{"go test ./a/...", "make test"}); msg != "" {
+	if msg, _ := checkCoverage("", paths, globs, []string{"go test ./a/...", "make test"}); msg != "" {
 		t.Errorf("opaque command, but refused: %s", msg)
 	}
-	msg, warns := checkCoverage(paths, globs, []string{"make test"})
+	msg, warns := checkCoverage("", paths, globs, []string{"make test"})
 	if msg != "" || len(warns) != 1 || !strings.Contains(warns[0], "(d)") || !strings.Contains(warns[0], "testdata/") {
 		t.Errorf("testdata warning: %q %q", msg, warns)
 	}
-	_, warns = checkCoverage(paths, []string{"**/*_test.go", "d/testdata/**"}, []string{"go test -run X ./..."})
+	_, warns = checkCoverage("", paths, []string{"**/*_test.go", "d/testdata/**"}, []string{"go test -run X ./..."})
 	if len(warns) != 1 || !strings.Contains(warns[0], "filters tests") {
 		t.Errorf("-run warning only: %q", warns)
+	}
+}
+
+func TestCheckCoverageIgnoresFilesThatExpectNothing(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	initRepo(t, repo)
+	const body = "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n"
+	files := map[string]string{
+		"e2e/a_test.go":         "//go:build e2e\n\n" + body,
+		"win/b_windows_test.go": body,
+		"helper/export_test.go": "package x\n",
+		"real/c_test.go":        body,
+	}
+	var paths []string
+	for p, src := range files {
+		writeFile(t, filepath.Join(repo, p), []byte(src))
+		paths = append(paths, p)
+	}
+	gitIn(t, repo, "add", "-A")
+	globs := []string{"**/*_test.go"}
+	msg, _ := checkCoverage(repo, paths, globs, []string{"go test ./real/..."})
+	if msg != "" {
+		t.Errorf("refused for files that never run or expect nothing: %s", msg)
+	}
+	msg, _ = checkCoverage(repo, paths, globs, []string{"go test ./e2e/..."})
+	if !strings.Contains(msg, "1 protected test file in 1 package dir (real)") {
+		t.Errorf("want only real/ uncovered, got %q", msg)
 	}
 }
 
@@ -101,5 +133,8 @@ func TestRunRefusesACheckThatCannotRunTheProtectedTests(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("the agent ran although the Check can't run the protected tests")
+	}
+	if runs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*")); len(runs) != 0 {
+		t.Errorf("the refusal left Run state: %v", runs)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -189,6 +190,28 @@ func isTestName(name string) bool {
 	}
 	r, _ := utf8.DecodeRuneInString(rest)
 	return !unicode.IsLower(r)
+}
+
+var (
+	knownOS   = strings.Fields("aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd openbsd plan9 solaris wasip1 windows zos")
+	knownArch = strings.Fields("386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64 mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x sparc sparc64 wasm")
+)
+
+// PlainlyExpected reports whether the _test.go file at path, holding src,
+// surely expects a test to run wherever the go command builds its package:
+// it is in a package dir, has no GOOS/GOARCH filename suffix or build
+// constraint, and declares at least one test or example.
+func PlainlyExpected(p string, src []byte) bool {
+	if !goPackageDir(path.Dir(p)) || constraint(src) != "" || len(testNames(src)) == 0 {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(path.Base(p), "_test.go"), "_")
+	for i := len(parts) - 1; i >= 1 && i >= len(parts)-2; i-- {
+		if slices.Contains(knownOS, parts[i]) || slices.Contains(knownArch, parts[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // GoPackageDir reports whether the go command ever builds dir as a package.
