@@ -39,8 +39,11 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 	}
 	p("")
 	modeSrc := ""
-	if f.ModeSource == pipeline.FromUser {
+	switch f.ModeSource {
+	case pipeline.FromUser:
 		modeSrc = "   (user)"
+	case pipeline.FromTUI:
+		modeSrc = "   (setup)"
 	}
 	p("Mode       %s: %s%s", f.Mode, modeNotes[f.Mode], modeSrc)
 	if hasProjectConfig {
@@ -152,6 +155,9 @@ func sourceName(s pipeline.Source) string {
 	}
 	if s == pipeline.FromUser {
 		return "user config"
+	}
+	if s == pipeline.FromTUI {
+		return "setup"
 	}
 	return string(s)
 }

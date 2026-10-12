@@ -30,7 +30,7 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	if code := refuseRun(env, f, frozen); code != ExitOK {
 		return code
 	}
-	code, _ := runCycle(env, f, root, &t, &resolved{frozen: frozen, cfgData: cfgData, warn: warn}, nil)
+	code, _ := runCycle(env, f, root, &t, &resolved{frozen: frozen, cfgData: cfgData, warn: warn, flags: f}, nil, nil)
 	return code
 }
 
@@ -44,17 +44,22 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // Every Task resolves the config afresh (resolveHome): the project config
 // and the files may have changed since the last Run, and what oge "task"
 // would refuse, the composer refuses too.
+//
+// f is what the command line asked for, not first.flags: the user config and
+// the setup panel's choices are added to it for every Task. The panel's
+// choices outlive one Run, so they are kept here, for the session.
 func startHome(env Env, f runFlags, root string, first *resolved) int {
-	if code := refuseRun(env, f, first.frozen); code != ExitOK {
+	if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
 		return code
 	}
 	last := ExitOK
 	res, problem := first, []string(nil)
+	setup := newSetupState(env, root)
 	for i := 0; ; i++ {
 		if i > 0 {
-			res, problem = resolveHome(env, f, root)
+			res, problem = resolveHome(env, f, root, setup)
 		}
-		code, st := runCycle(env, f, root, nil, res, problem)
+		code, st := runCycle(env, f, root, nil, res, problem, setup)
 		switch st {
 		case cycleQuit:
 			return last
@@ -69,13 +74,18 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 // resolveHome is resolveRun and refuseRun for a Task asked for in the
 // composer. It never prompts (the terminal belongs to the composer), and a
 // refusal comes back as lines to show under it.
-func resolveHome(env Env, f runFlags, root string) (*resolved, []string) {
+func resolveHome(env Env, f runFlags, root string, setup *setupState) (*resolved, []string) {
 	var buf strings.Builder
 	quiet := env
 	quiet.Stderr = &buf
-	res, code := resolveRun(quiet, f, root, false)
+	user, code := loadUserConfig(quiet)
+	var res *resolved
 	if code == ExitOK {
-		code = refuseRun(quiet, f, res.frozen)
+		f = setup.flags(withUser(f, user.ForRepo(root), env))
+		res, code = resolveRun(quiet, f, root, false, user)
+	}
+	if code == ExitOK {
+		code = refuseRun(quiet, res.flags, res.frozen)
 	}
 	if code == ExitOK {
 		return res, nil
@@ -131,7 +141,7 @@ const (
 
 // runCycle runs one Task. With t nil it first asks for it in the composer,
 // in the same view that then shows the Run.
-func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, problem []string) (int, cycleState) {
+func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, problem []string, setup *setupState) (int, cycleState) {
 	dir, err := ledger.DefaultStateDir(env.Getenv)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
@@ -164,18 +174,20 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, pro
 		frozen = res.frozen
 	}
 	v := selectView(env, f, first, frozen)
-	plainOf(v).applying = f.apply
+	used := res // the Run's own flags: the user config's and the setup panel's are in them
 	if res != nil {
+		plainOf(v).applying = res.flags.apply
 		withWarning(v, res.warn)
 	}
 	startFor := func(t task.Task, res *resolved) startFunc {
+		used = res
 		frozen, cfgData := res.frozen, res.cfgData
 		return func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 			p := run.Params{
 				Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 				State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
 			}
-			if !f.unattended {
+			if !res.flags.unattended {
 				p.Gates = viewPort{v}
 			}
 			return run.Start(ctx, p)
@@ -188,7 +200,7 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, pro
 	} else {
 		var quit bool
 		u := v.(*tui)
-		out, quit, err = u.home(ctx, in, env, root, startFor, res, problem, func() (*resolved, []string) { return resolveHome(env, f, root) })
+		out, quit, err = u.home(ctx, in, env, root, startFor, res, problem, func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup)
 		started = u.started
 		if quit {
 			return ExitOK, cycleQuit
@@ -204,6 +216,9 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, pro
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal, cycleFatal
+	}
+	if used != nil {
+		f = used.flags
 	}
 	if code := afterRun(env, f, v, root, out); code != ExitOK {
 		return code, cycleRan

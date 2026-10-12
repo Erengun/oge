@@ -1,0 +1,15 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Setup   next Run · [enter] change · [s] save as default · [tab] done
+   implement agent    claude
+ > implement profile  claude
+      > claude
+        claude@work
+        claude@z
+   implement model    sonnet
+   verify agent       codex
+   verify model       agent's default
+   mode               Standard   implementer, then a fresh verifier writes held…
+   unattended         off   never stops at an optional Gate (ADR-0008)
+   apply on accept    off   applies an Accepted Candidate to your working tree

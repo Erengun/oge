@@ -27,7 +27,7 @@ func homeFrozen() *pipeline.Frozen {
 func testHome(width int) *home {
 	f := homeFrozen()
 	h := &home{comp: newComposer(), title: "oge · demo · main", setup: setupLines(f), st: newStyles(false)}
-	h.resolve = func() (*resolved, []string) { return &resolved{frozen: f}, nil }
+	h.resolve = func(*setupState) (*resolved, []string) { return &resolved{frozen: f}, nil }
 	h.width, h.height = width, 24
 	return h
 }
@@ -173,6 +173,12 @@ type homeSession struct {
 
 func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession {
 	t.Helper()
+	return startHomeSessionWith(t, f, nil, args...)
+}
+
+// startHomeSessionWith lets the test change the Env first.
+func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ...string) *homeSession {
+	t.Helper()
 	f.interactive = true
 	f.setenv("TERM", "xterm-256color")
 	f.setenv("NO_COLOR", "1")
@@ -188,6 +194,9 @@ func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession 
 	s := &homeSession{t: t, f: f, pw: pw, exit: make(chan int, 1)}
 	env := f.envWithFake(script, &s.out, &s.errOut)
 	env.Stdin = pr
+	if tweak != nil {
+		tweak(&env)
+	}
 	go func() { s.exit <- Main(env, args) }()
 	return s
 }
