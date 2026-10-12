@@ -65,6 +65,9 @@ type Env struct {
 
 	// logins remembers the profiles found logged in, for the session (#186).
 	logins *loginCache
+	// programStarted, when set, is told each time the live view starts a
+	// Bubble Tea program: tests count them.
+	programStarted func()
 }
 
 // ProcessEnv is the Env of the running process.

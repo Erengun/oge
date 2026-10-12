@@ -30,16 +30,15 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	if code := refuseRun(env, f, frozen); code != ExitOK {
 		return code
 	}
-	code, _ := runCycle(env, f, root, &t, &resolved{frozen: frozen, cfgData: cfgData, warn: warn, flags: f}, nil, nil)
-	return code
+	return runCycle(env, f, root, &t, &resolved{frozen: frozen, cfgData: cfgData, warn: warn, flags: f})
 }
 
 // startHome is a bare oge on a terminal: the composer, then a Run in the
-// same view, then the composer again, until the human quits it. The exit
-// code is the last Run's, or 0 when none ran (TODO(#130-decision): a
-// session that ran several Tasks reports only the last one, like a shell
-// reports its last command). A failure of Öge itself ends the session with
-// its own code.
+// same view, then the composer again, until the human quits it. One Bubble
+// Tea program owns the whole session (#182). The exit code is the last
+// Run's, or 0 when none ran (TODO(#130-decision): a session that ran several
+// Tasks reports only the last one, like a shell reports its last command).
+// A failure of Öge itself ends the session with its own code.
 //
 // Every Task resolves the config afresh (resolveHome): the project config
 // and the files may have changed since the last Run, and what oge "task"
@@ -50,7 +49,6 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // choices outlive one Run, so they are kept here, for the session.
 func startHome(env Env, f runFlags, root string, first *resolved) int {
 	setup := newSetupState(env, root)
-	last := ExitOK
 	res, problem := first, []string(nil)
 	if first == nil {
 		// No project config: the Checks section holds Öge's proposal.
@@ -61,20 +59,35 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 	} else if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
 		return code
 	}
-	for i := 0; ; i++ {
-		if i > 0 {
-			res, problem = resolveHome(env, f, root, setup)
-		}
-		code, st := runCycle(env, f, root, nil, res, problem, setup)
-		switch st {
-		case cycleQuit:
-			return last
-		case cycleFatal:
-			return code
-		}
-		last = code
-		fmt.Fprintln(env.Stdout)
+	state, code := openState(env, root)
+	if code != ExitOK {
+		return code
 	}
+	frozen := &pipeline.Frozen{}
+	if res != nil {
+		frozen = res.frozen
+	}
+	u := selectView(env, f, task.Task{}, frozen).(*tui)
+	code, err := u.home(env, root, starter(env, root, state, u), res, problem,
+		func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup)
+	return endCode(env, code, err, u.started)
+}
+
+// endCode is the exit code of a view that returned err: a forced stop, Öge's
+// own failure, or else code.
+func endCode(env Env, code int, err error, started bool) int {
+	if errors.Is(err, errForced) {
+		if started {
+			proc.KillAll()
+			fmt.Fprintln(env.Stderr, "oge: stopped without waiting for the Run to end; its agent and Check processes were killed")
+		}
+		return ExitInterrupted
+	}
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
+		return ExitInternal
+	}
+	return code
 }
 
 // resolveHome is resolveRun and refuseRun for a Task asked for in the
@@ -148,57 +161,31 @@ func refuseRun(env Env, f runFlags, frozen *pipeline.Frozen) int {
 	return ExitOK
 }
 
-// cycleState is how one pass of startHome's loop ended.
-type cycleState int
-
-const (
-	cycleRan   cycleState = iota // a Run ended; its exit code is the cycle's
-	cycleQuit                    // the human left the composer
-	cycleFatal                   // Öge itself failed or was stopped: the code ends the session
-)
-
-// runCycle runs one Task. With t nil it first asks for it in the composer,
-// in the same view that then shows the Run.
-func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, problem []string, setup *setupState) (int, cycleState) {
+// openState opens this repo's state root; a code other than ExitOK says why
+// it can't.
+func openState(env Env, root string) (*ledger.StateRoot, int) {
 	dir, err := ledger.DefaultStateDir(env.Getenv)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
-		return ExitRefused, cycleFatal
+		return nil, ExitRefused
 	}
 	state, err := ledger.OpenStateRoot(dir, root)
 	var refused *ledger.RefusedError
 	switch {
 	case errors.As(err, &refused):
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
-		return ExitRefused, cycleFatal
+		return nil, ExitRefused
 	case err != nil:
 		fmt.Fprintf(env.Stderr, "oge: opening the state root: %v\n", err)
-		return ExitInternal, cycleFatal
+		return nil, ExitInternal
 	}
+	return state, ExitOK
+}
 
-	// TODO(#40-decision): Ctrl-C or SIGTERM cancels the context, which
-	// interrupts the Attempt; ADR-0012's Checkpoint and interrupted status
-	// come later. A second one stops Öge without waiting.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	in := newInterrupts(cancel)
-	defer in.watch(os.Interrupt, syscall.SIGTERM)()
-	var first task.Task
-	if t != nil {
-		first = *t
-	}
-	frozen := &pipeline.Frozen{}
-	if res != nil {
-		frozen = res.frozen
-	}
-	v := selectView(env, f, first, frozen)
-	used := res // the Run's own flags: the user config's and the setup panel's are in them
-	if res != nil {
-		plainOf(v).applying = res.flags.apply
-		withWarning(v, res.warn)
-	}
-	startFor := func(t task.Task, res *resolved) startFunc {
-		used = res
+// starter returns how a Task starts with its resolved config, reporting its
+// Gates to v.
+func starter(env Env, root string, state *ledger.StateRoot, v view) func(task.Task, *resolved) startFunc {
+	return func(t task.Task, res *resolved) startFunc {
 		frozen, cfgData := res.frozen, res.cfgData
 		return func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 			p := run.Params{
@@ -211,37 +198,33 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, pro
 			return run.Start(ctx, p)
 		}
 	}
-	var out *run.Result
-	started := true // a Run was started, so it may have processes to kill
-	if t != nil {
-		out, err = v.show(ctx, in, startFor(*t, res))
-	} else {
-		var quit bool
-		u := v.(*tui)
-		out, quit, err = u.home(ctx, in, env, root, startFor, res, problem, func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup)
-		started = u.started
-		if quit {
-			return ExitOK, cycleQuit
-		}
+}
+
+// runCycle runs the Task t, as oge "task" does.
+func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved) int {
+	state, code := openState(env, root)
+	if code != ExitOK {
+		return code
 	}
-	if errors.Is(err, errForced) {
-		if started {
-			proc.KillAll()
-			fmt.Fprintln(env.Stderr, "oge: stopped without waiting for the Run to end; its agent and Check processes were killed")
-		}
-		return ExitInterrupted, cycleFatal
-	}
+
+	// TODO(#40-decision): Ctrl-C or SIGTERM cancels the context, which
+	// interrupts the Attempt; ADR-0012's Checkpoint and interrupted status
+	// come later. A second one stops Öge without waiting.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	in := newInterrupts(cancel)
+	defer in.watch(os.Interrupt, syscall.SIGTERM)()
+	v := selectView(env, f, *t, res.frozen)
+	plainOf(v).applying = res.flags.apply
+	withWarning(v, res.warn)
+	out, err := v.show(ctx, in, starter(env, root, state, v)(*t, res))
 	if err != nil {
-		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
-		return ExitInternal, cycleFatal
+		return endCode(env, 0, err, true)
 	}
-	if used != nil {
-		f = used.flags
+	if code := afterRun(env, res.flags, v, root, out); code != ExitOK {
+		return code
 	}
-	if code := afterRun(env, f, v, root, out); code != ExitOK {
-		return code, cycleRan
-	}
-	return outcomeCode(env, out), cycleRan
+	return outcomeCode(env, out)
 }
 
 // outcomeCode maps a Run's outcome to its exit code (ADR-0015).

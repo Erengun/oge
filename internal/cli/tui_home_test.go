@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -310,6 +311,44 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	}
 	if n := len(runDirs(t, f)); n != 2 {
 		t.Errorf("%d Runs", n)
+	}
+}
+
+// Two Tasks in one session run in one Bubble Tea program, never a second
+// one (#183). The action bar's keys work inside it: [d] prints the diff and
+// [a] applies.
+func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	var programs atomic.Int32
+	s := startHomeSessionWith(t, f, func(env *Env) { env.programStarted = func() { programs.Add(1) } }, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("Result        ✓ Accepted")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	s.type_("fix Add again\r")
+	s.expect("fix Add again")
+	s.expect("[a] apply")
+	s.type_("d")
+	s.expect("diff --git")
+	s.type_("a")
+	s.expect("Applied Candidate")
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "return a + b") {
+		t.Errorf("[a] didn't apply the Candidate: add.go is\n%s", b)
+	}
+	s.type_("q")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if n := len(runDirs(t, f)); n != 2 {
+		t.Errorf("%d Runs", n)
+	}
+	if n := programs.Load(); n != 1 {
+		t.Errorf("%d programs started; one owns the session", n)
 	}
 }
 
