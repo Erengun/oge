@@ -205,6 +205,55 @@ func TestTUIRunning(t *testing.T) {
 	}
 }
 
+// withSetup is the harness for a Run whose setup runs on the Snapshot
+// while the implementer works (#195, #198).
+func withSetup(t *testing.T) *tuiHarness {
+	h := newTUIHarness(t, false, 80)
+	h.f.Setup.Run = "sh setup.sh"
+	h.m = newModel(task.Parse("fix Add\n\nAdd returns 0 for every input.\n"), h.f, newStyles(false), func() time.Time { return h.clock })
+	h.m.Update(tea.WindowSizeMsg{Width: 80, Height: 40})
+	h.at(200 * time.Millisecond)
+	h.send(run.Event{Kind: run.EvStarted, Result: h.res})
+	h.agent(agent.Event{Kind: agent.SessionOpened})
+	h.agent(agent.Event{Kind: agent.TurnAccepted})
+	h.agent(agent.Event{Kind: agent.Claim, Text: "reading add.go"})
+	h.at(4200 * time.Millisecond)
+	h.m.spin = 3
+	return h
+}
+
+// Setup runs behind the implementer: preflight keeps running, with its
+// own clock, and the agent's activity stays.
+func TestTUISetupRunsBehindTheImplementer(t *testing.T) {
+	h := withSetup(t)
+	golden(t, "setup-running", h.m.render())
+}
+
+// Setup passing at the join ends preflight only: the implementer keeps
+// its clock and activity.
+func TestTUISetupPasses(t *testing.T) {
+	h := withSetup(t)
+	h.at(6100 * time.Millisecond)
+	h.att.Exit, h.att.Candidate, h.att.Changed = "done", "6d1231d9f00d", []string{"add.go"}
+	h.agent(agent.Event{Kind: agent.TurnSettled, Exit: "done"})
+	h.at(6150 * time.Millisecond)
+	h.send(run.Event{Kind: run.EvPreflight, Result: h.res})
+	golden(t, "setup-passed", h.m.render())
+	h.send(run.Event{Kind: run.EvAttempt, Result: h.res, Attempt: h.att})
+	h.checked(true)
+	golden(t, "setup-accepted", h.end(run.Accepted))
+}
+
+// Setup failing cancels the implementer: the failure is preflight's, and
+// the implementer isn't marked refused.
+func TestTUISetupFails(t *testing.T) {
+	h := withSetup(t)
+	h.at(5000 * time.Millisecond)
+	h.send(run.Event{Kind: run.EvPreflight, Result: h.res, Why: "exit 7"})
+	h.res.Outcome = run.Refused
+	golden(t, "setup-failed", h.end(run.Refused, `setup "sh setup.sh" fails on the Snapshot (exit 7); fix it before running`))
+}
+
 func TestTUIExpandedActivity(t *testing.T) {
 	h := newTUIHarness(t, false, 80)
 	h.working()

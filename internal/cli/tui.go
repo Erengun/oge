@@ -236,6 +236,9 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		m.head = startedLine(ev.Result, f)
 	case run.EvPreflight:
 		m.text = preflightText(f)
+		if ev.Why != "" {
+			m.text, m.fail = fmt.Sprintf("setup %q fails on the Snapshot (%s)", f.Setup.Run, ev.Why), true
+		}
 	case run.EvAgent:
 		// Only what the agent says it's doing; the Session and Exit
 		// bookkeeping stays in -v (ADR-0019).
@@ -283,6 +286,7 @@ type stage struct {
 	state      stageState
 	timed      bool
 	mark       string // a note's mark, in place of ✓
+	bg         bool   // keeps running when a later stage begins
 	start, end time.Time
 }
 
@@ -322,7 +326,13 @@ type model struct {
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
 	m := &model{title: clean(t.Title), frozen: f, st: st, now: now}
 	m.head = fmt.Sprintf("%s mode", f.Mode)
-	m.stages = append(m.stages, stage{name: "preflight"})
+	pre := stage{name: "preflight"}
+	if f.Setup.Run != "" {
+		// Setup runs on the Snapshot while the implementer works (#195):
+		// preflight stays running behind it until the Run joins them.
+		pre.text, pre.bg = fmt.Sprintf("setup %q running on the Snapshot", f.Setup.Run), true
+	}
+	m.stages = append(m.stages, pre)
 	for _, s := range f.Stages {
 		if f.Mode == pipeline.Fast && s.Role != "implementer" {
 			continue
@@ -449,6 +459,11 @@ func (m *model) apply(msg tea.Msg) bool {
 			s.state, s.end = failed, msg.at
 			if msg.res != nil && msg.res.Outcome == run.Refused {
 				s.text = "refused"
+				if m.stages[0].state == failed && m.cur != 0 {
+					// Setup failed on the Snapshot and cancelled the
+					// Attempt: the agent is not to blame.
+					s.state, s.mark, s.text = passed, "·", "cancelled · setup failed on the Snapshot"
+				}
 			}
 		}
 		m.finished = true
@@ -479,7 +494,7 @@ func (m *model) begin(i int, at time.Time) {
 	if i == m.cur && m.stages[i].state == running {
 		return
 	}
-	if m.cur < len(m.stages) && m.stages[m.cur].state == running {
+	if m.cur < len(m.stages) && m.stages[m.cur].state == running && !m.stages[m.cur].bg {
 		m.stages[m.cur].state = pending
 	}
 	m.stages[i].state, m.stages[i].start = running, at
@@ -492,6 +507,16 @@ func (m *model) begin(i int, at time.Time) {
 func (m *model) finish(msg progressMsg) {
 	i := m.index(msg.stage)
 	s := &m.stages[i]
+	if s.state == running && s.bg && i < m.cur && m.cur < len(m.stages) && m.stages[m.cur].state == running {
+		// A background stage ending (setup, behind the implementer): the
+		// stage in front of it keeps its clock and its activity.
+		s.text, s.sub, s.timed, s.end = msg.text, msg.sub, msg.timed, msg.at
+		s.state = passed
+		if msg.fail {
+			s.state = failed
+		}
+		return
+	}
 	if s.state != running {
 		// Its start went unseen; it began when the running one did.
 		s.start = m.stages[min(m.cur, len(m.stages)-1)].start

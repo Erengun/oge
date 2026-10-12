@@ -1,0 +1,10 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+⠸ preflight  setup "sh setup.sh" running on the Snapshot · 4.2s
+⠸ implement  fake · 4.0s
+  ⎿ reading add.go
+· check      go test -json ./...
+
+Nothing needs you.
+ctrl+c to cancel
