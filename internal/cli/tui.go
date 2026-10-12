@@ -309,6 +309,14 @@ type model struct {
 	queue         *queue
 	interrupt     func()
 	gate          *gateState // an open Gate, waiting for the human
+
+	// scroll: finished items are printed above the program (take) and leave
+	// the frame, which keeps only what still changes (the home, #190).
+	scroll  bool
+	echoed  bool // the Task's echo is printed
+	headed  bool // the Run line is printed
+	began   bool // the Run line is the Run's own, not the stand-in
+	printed int  // the stages printed, in order; they stay in stages
 }
 
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
@@ -406,7 +414,7 @@ func (m *model) apply(msg tea.Msg) bool {
 	case progressMsg:
 		switch msg.kind {
 		case run.EvStarted:
-			m.head = msg.head
+			m.head, m.began = msg.head, true
 		case run.EvPreflight, run.EvAttempt, run.EvCheck:
 			m.finish(msg)
 		case run.EvDecided:
@@ -457,7 +465,7 @@ func (m *model) index(name string) int {
 			return i
 		}
 	}
-	i := max(len(m.stages)-1, 0)
+	i := max(len(m.stages)-1, 0, m.printed)
 	m.stages = append(m.stages[:i], append([]stage{{name: name}}, m.stages[i:]...)...)
 	if m.cur >= i {
 		m.cur++
@@ -519,43 +527,27 @@ func (m *model) render() string {
 	var lines []string
 	add := func(s string) { lines = append(lines, s) }
 
-	add(st.bold(m.title))
-	add(st.dim(m.head))
-	add("")
+	if !m.scroll {
+		add(st.bold(m.title))
+		add(st.dim(m.head))
+		add("")
+	}
 	for i, s := range m.stages {
+		if m.scroll && i < m.printed {
+			continue
+		}
+		if s.state != running {
+			lines = append(lines, m.stageLines(i)...)
+			continue
+		}
 		name := fmt.Sprintf("%-10s", stageLabel(s.name, m.frozen))
-		switch s.state {
-		case pending:
-			text := s.text
-			if m.finished {
-				text = "not run"
-			}
-			add(st.dim("· " + strings.TrimRight(name+" "+text, " ")))
-		case running:
-			line := st.accent(spinnerFrames[m.spin%len(spinnerFrames)]) + " " + name + " "
-			if s.text != "" {
-				line += s.text + " · "
-			}
-			add(line + st.dim(elapsed(m.now().Sub(s.start))))
-			if i == m.cur {
-				lines = append(lines, m.activity(len(lines))...)
-			}
-		default:
-			mark := st.ok("✓")
-			switch {
-			case s.state == failed:
-				mark = st.bad("✗")
-			case s.mark != "":
-				mark = st.accent(s.mark)
-			}
-			line := mark + " " + name + " " + s.text
-			if !s.timed {
-				line += st.dim(" · " + elapsed(s.end.Sub(s.start)))
-			}
-			add(line)
-			for _, l := range s.sub {
-				add("  " + fmt.Sprintf("%-10s", "") + " " + l)
-			}
+		line := st.accent(spinnerFrames[m.spin%len(spinnerFrames)]) + " " + name + " "
+		if s.text != "" {
+			line += s.text + " · "
+		}
+		add(line + st.dim(elapsed(m.now().Sub(s.start))))
+		if i == m.cur {
+			lines = append(lines, m.activity(len(lines))...)
 		}
 	}
 	lines = append(lines, m.gateLines()...)
@@ -583,6 +575,66 @@ func (m *model) render() string {
 	// The renderer erases the line the cursor ends on when it stops, so the
 	// frame ends with an empty one.
 	return b.String()
+}
+
+// stageLines are a stage's lines once it isn't running: pending (not run,
+// once the Run has finished) or ended.
+func (m *model) stageLines(i int) []string {
+	st, s := m.st, m.stages[i]
+	name := fmt.Sprintf("%-10s", stageLabel(s.name, m.frozen))
+	if s.state == pending {
+		text := s.text
+		if m.finished {
+			text = "not run"
+		}
+		return []string{st.dim("· " + strings.TrimRight(name+" "+text, " "))}
+	}
+	mark := st.ok("✓")
+	switch {
+	case s.state == failed:
+		mark = st.bad("✗")
+	case s.mark != "":
+		mark = st.accent(s.mark)
+	}
+	line := mark + " " + name + " " + s.text
+	if !s.timed {
+		line += st.dim(" · " + elapsed(s.end.Sub(s.start)))
+	}
+	lines := []string{line}
+	for _, l := range s.sub {
+		lines = append(lines, "  "+fmt.Sprintf("%-10s", "")+" "+l)
+	}
+	return lines
+}
+
+// take returns what has finished since it was last called, in order, for
+// printing above the program: the Task's echo, the Run line, then each
+// ended stage (a Gate's outcome is one). A stage is taken only once all
+// before it are, so the transcript keeps the stages' order; once the Run
+// has finished, what never ran is taken too. Without scroll it is nothing.
+func (m *model) take() []string {
+	if !m.scroll {
+		return nil
+	}
+	var out []string
+	if !m.echoed {
+		m.echoed = true
+		out = append(out, m.st.bold("> "+m.title))
+	}
+	if !m.headed {
+		if !m.began && !m.finished {
+			return out
+		}
+		m.headed = true
+		out = append(out, m.st.dim(m.head), "")
+	}
+	for ; m.printed < len(m.stages); m.printed++ {
+		if s := m.stages[m.printed].state; s == running || (s == pending && !m.finished) {
+			break
+		}
+		out = append(out, m.stageLines(m.printed)...)
+	}
+	return out
 }
 
 // activity is the agent's recent steps under the running stage: the last

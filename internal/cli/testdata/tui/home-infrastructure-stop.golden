@@ -1,0 +1,29 @@
+> fix Add
+Run X · Standard mode · HEAD X (main) + 1 untracked
+
+✓ preflight  ok · X
+✗ implement  fake · Infrastructure stop · X
+· QA         not run
+· check      not run
+
+ÖGE RECEIPT   Run X · Standard mode
+Result        ■ Infrastructure stop: no Verdict
+              Claude's authentication failed: not logged in
+Task          fix Add
+Checks        none ran
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          X · preflight X · implement X · your attention X
+Not covered   No Check reached a Verdict: there is no Evidence on any Candidate
+Ledger        head X · identifies this Receipt; not tamper-proof
+! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads
+Nothing was written to your repository.
+
+╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Standard · implement fake · verify fake
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+

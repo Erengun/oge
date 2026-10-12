@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -24,12 +25,13 @@ import (
 // The home is what a bare oge opens on a terminal: a composer for the Task
 // and, under it, a read-only line of what the Run will use. One Bubble Tea
 // program owns the whole session (#182): Enter starts the Run in it, so the
-// live view takes over the frame the composer was in. When the Run ends its
-// last frame and the summary are printed above the program, and after an
-// Accepted Run the action bar takes the live area; then the composer comes
-// back, in the same program.
-// TODO(#184): the action bar's keys move into the composer.
-// TODO(#190): finished stages print as they finish, not with the summary.
+// live view takes over the frame the composer was in. The session reads as
+// one transcript: the Task's echo, each stage as it ends, a Gate's outcome
+// and the summary are printed above the program (#190), and the live area
+// keeps only what still changes. When the Run ends the composer comes back
+// at once. An Accepted Run is taken only by an explicit act (#184): the
+// /apply /diff /receipt /branch commands, or ↓ on an empty composer and a
+// key on the action row; never a bare key the composer would take as text.
 
 // maxComposerRows is how many lines of the Task the box shows before it
 // scrolls.
@@ -213,7 +215,7 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 }
 
 // home is the session program's root model: the composer, the Run's own
-// model once Enter starts it, then the action bar, then the composer again.
+// model once Enter starts it, then the composer again.
 type home struct {
 	comp  *composer
 	title string   // the box's title: repo and branch
@@ -244,22 +246,25 @@ type home struct {
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
 	// after takes the Run's end: it returns the summary to print and, after
-	// an Accepted Run, the action bar. stop ends the session (Öge failed).
-	after func(ended) (text string, bar *deliveryBar, stop bool)
-	bar   *deliveryBar // non-nil while the action bar waits for a key
-	// barAt is when the bar was shown: keys before barArm has passed were
-	// typed ahead, never meant for it, and are dropped (ADR-0015: applying
-	// is an explicit act). now is the clock; nil is time.Now.
-	barAt time.Time
+	// an Accepted Run, what can take it. stop ends the session (Öge failed).
+	after func(ended) (text string, last *lastRun, stop bool)
+	// last is the latest ended Run the human can take: /apply, /diff,
+	// /receipt, /branch, or ↓ and a key. nil when there is none.
+	last *lastRun
+	// actions: ↓ moved the focus to the action row, whose keys act once
+	// actionsArm has passed since actionsAt. Keys before were typed ahead,
+	// never meant for it (ADR-0015: applying is an explicit act). now is
+	// the clock; nil is time.Now.
+	actions   bool
+	actionsAt time.Time
 	// hold, while true, swallows interrupts: a pager or $EDITOR has the
 	// terminal, and its Ctrl+C is its own (nil in tests).
 	hold func(bool)
 	now  func() time.Time
 }
 
-// barArm is how long the action bar ignores keys once shown, as the old bar
-// flushed what was typed before it.
-const barArm = 300 * time.Millisecond
+// actionsArm is how long the action row ignores its keys once focused.
+const actionsArm = 300 * time.Millisecond
 
 func (h *home) clock() time.Time {
 	if h.now != nil {
@@ -268,14 +273,38 @@ func (h *home) clock() time.Time {
 	return time.Now()
 }
 
-// deliveryBar is the action bar after an Accepted Run, inside the session's
-// program: [a] applies, [d] shows the diff, [r] the Receipt again, and q,
-// Enter or Ctrl+C go back to the composer.
-type deliveryBar struct {
-	bar     *actionBar     // its line, and [a]
-	diff    func() tea.Cmd // [d]
-	receipt func() string  // [r]
+// lastRun is what can take an Accepted Run from the home (#184): each
+// returns what to print, the delivery code's own lines, as oge apply, oge
+// branch, oge diff and oge receipt print them.
+type lastRun struct {
+	apply   func() string
+	branch  func(name string) string // "" is the default name
+	diff    func() tea.Cmd           // printed, or paged with $PAGER
+	receipt func() string
 }
+
+// act runs one of the Run's actions by its key; arg is a branch's name.
+func (l *lastRun) act(key, arg string) tea.Cmd {
+	out := func(s string) tea.Cmd { return tea.Println(strings.TrimSuffix(s, "\n")) }
+	switch key {
+	case "a":
+		return out(l.apply())
+	case "b":
+		return out(l.branch(arg))
+	case "d":
+		return l.diff()
+	case "r":
+		return out(l.receipt())
+	}
+	return nil
+}
+
+// slashKeys are the composer's delivery commands (#145 adds more).
+var slashKeys = map[string]string{"/apply": "a", "/branch": "b", "/diff": "d", "/receipt": "r"}
+
+// slashWord is what a command's first word looks like: other text that
+// starts with a slash (a path) is a Task.
+var slashWord = regexp.MustCompile(`^/[a-z-]+$`)
 
 // runEndedMsg is the Run's end, after its view has finished.
 type runEndedMsg ended
@@ -303,31 +332,40 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		h.width, h.height = ws.Width, ws.Height
 	}
-	if h.bar != nil {
-		return h.barUpdate(msg)
-	}
 	if h.run != nil {
 		if e, ok := msg.(runEndedMsg); ok {
 			return h.onEnded(ended(e))
 		}
 		was := h.run.finished
 		_, cmd := h.run.Update(msg)
+		// Only progress finishes stages. What finished is printed before the
+		// next progress is waited for, so the transcript keeps its order.
+		var print tea.Cmd
+		if _, ok := msg.(batchMsg); ok {
+			if lines := h.run.take(); len(lines) > 0 {
+				print = tea.Println(strings.Join(lines, "\n"))
+			}
+		}
 		if !was && h.run.finished {
 			// The view has finished; its tea.Quit is for oge "task". The
 			// session goes on once the Run itself has returned.
 			if h.done == nil {
-				return h, nil
+				return h, print
 			}
 			done := h.done
-			return h, func() tea.Msg { return runEndedMsg(<-done) }
+			return h, tea.Sequence(print, func() tea.Msg { return runEndedMsg(<-done) })
 		}
-		return h, cmd
+		return h, tea.Sequence(print, cmd)
 	}
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
 		h.quit = true
 		return h, tea.Quit
+	case pageFailedMsg:
+		h.msg = []string{"oge: showing the diff: " + clean(msg.err.Error())}
+		return h, nil
 	case tea.PasteMsg:
+		h.actions = false
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
@@ -336,6 +374,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.comp.insert(msg.Content)
 		}
 	case editedMsg:
+		h.actions = false
 		if msg.err != nil {
 			h.msg = []string{"the editor failed: " + clean(msg.err.Error())}
 		} else {
@@ -344,6 +383,8 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
 		switch {
+		case h.actions:
+			return h.actionKey(msg)
 		case h.review != nil:
 			h.answerReview(msg.String())
 			return h, nil
@@ -382,6 +423,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if task.IsEmpty(text) {
 				return h, nil
 			}
+			if cmd, ok := h.slash(strings.TrimSpace(text)); ok {
+				return h, cmd
+			}
 			if h.ctx != nil && h.ctx.Err() != nil {
 				h.quit = true
 				return h, tea.Quit
@@ -396,6 +440,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.sel.syncFrom(res)
 			m, cmd := h.start(task.Parse(text), res, h.width, h.height)
 			h.run = m
+			if lines := m.take(); len(lines) > 0 { // the Task's echo
+				cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
+			}
 			return h, cmd
 		case "ctrl+e":
 			if h.edit != nil {
@@ -415,6 +462,12 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.sel.reopen()
 			h.panel = &setupPanel{sel: h.sel, st: h.st, rev0: h.sel.rev}
+		case "down":
+			if h.last != nil && h.comp.empty() {
+				h.actions, h.actionsAt = true, h.clock()
+				return h, nil
+			}
+			h.comp.key(msg)
 		default:
 			h.comp.key(msg)
 		}
@@ -422,27 +475,69 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return h, nil
 }
 
-// onEnded prints the Run's last frame and its summary above the program,
-// then offers the action bar or opens the composer again.
+// slash runs a delivery command typed in the composer; ok is false when
+// text isn't one (it is then a Task). /branch takes a name.
+func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
+	word, arg, _ := strings.Cut(text, " ")
+	arg = strings.TrimSpace(arg)
+	if !slashWord.MatchString(word) {
+		return nil, false
+	}
+	key, known := slashKeys[word]
+	switch {
+	case word == "/new" && arg == "":
+		h.last = nil
+	case !known || (arg != "" && word != "/branch"):
+		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new"}
+		return nil, true
+	case h.last == nil:
+		h.msg = []string{word + ": no Accepted Run to take in this session"}
+		return nil, true
+	default:
+		cmd = h.last.act(key, arg)
+	}
+	h.comp = newComposer()
+	return cmd, true
+}
+
+// actionKey is a key while the action row has the focus. Its keys act only
+// once actionsArm has passed and on an empty composer, and each ↓ allows one
+// action: the focus then goes back. Esc or ↑ go back to the composer, and
+// any other key goes back and is typed there.
+func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "esc", "up", "ctrl+c":
+		h.actions = false
+		return h, nil
+	case "a", "b", "d", "r":
+		if h.clock().Sub(h.actionsAt) < actionsArm || !h.comp.empty() || h.last == nil {
+			return h, nil // typed ahead, before the row could be seen
+		}
+		h.actions = false
+		return h, h.last.act(key, "")
+	}
+	h.actions = false
+	return h.Update(msg)
+}
+
+// onEnded prints the Run's summary above the program (its stages are
+// printed already) and opens the composer again.
 func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
-	text, bar, stop := h.after(e)
+	text, last, stop := h.after(e)
 	if stop {
 		h.quit = true
 		return h, tea.Quit
 	}
-	block := strings.TrimRight(h.run.render(), "\n") + "\n" + text
-	if bar != nil {
-		h.bar, h.barAt = bar, h.clock()
-	} else {
-		h.reopen()
-	}
-	return h, tea.Println(block)
+	h.last = last
+	h.reopen()
+	return h, tea.Println(text)
 }
 
 // reopen opens the composer again after a Run: empty, with what the next
 // Run would use read afresh (the files may have changed during the Run).
 func (h *home) reopen() {
-	h.run, h.bar, h.done = nil, nil, nil
+	h.run, h.done, h.actions = nil, nil, false
 	h.comp = newComposer()
 	res, problem := h.resolve(h.sel)
 	h.msg, h.setup = problem, nil
@@ -452,39 +547,7 @@ func (h *home) reopen() {
 	}
 }
 
-// barUpdate is the action bar's keys.
-func (h *home) barUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case ctxDoneMsg:
-		h.quit = true
-		return h, tea.Quit
-	case pageFailedMsg:
-		return h, tea.Println("oge: showing the diff: " + clean(msg.err.Error()))
-	case tea.KeyPressMsg:
-		if h.clock().Sub(h.barAt) < barArm {
-			return h, nil // typed ahead, before the bar could be seen
-		}
-		switch msg.String() {
-		case "a":
-			if !h.bar.bar.applied {
-				return h, tea.Println(h.bar.bar.apply())
-			}
-		case "d":
-			return h, h.bar.diff()
-		case "r":
-			return h, tea.Println(strings.TrimSuffix(h.bar.receipt(), "\n"))
-		case "q", "enter", "ctrl+c":
-			h.reopen()
-			return h, nil
-		}
-	}
-	return h, nil
-}
-
 func (h *home) View() tea.View {
-	if h.bar != nil {
-		return tea.NewView(h.bar.bar.render())
-	}
 	if h.run != nil {
 		return h.run.View()
 	}
@@ -511,6 +574,15 @@ func (h *home) render() (string, int, int) {
 	blank := len(h.comp.lines) == 1 && len(h.comp.lines[0]) == 0
 
 	var lines []string
+	top := 0 // lines above the box
+	switch {
+	case h.actions:
+		lines = append(lines, " "+st.bold("[a] apply  [d] diff  [r] receipt  [b] branch")+"   "+st.dim("esc back"))
+		top++
+	case h.last != nil:
+		lines = append(lines, " "+st.dim("↓ actions · /apply /diff /receipt /branch · /new"))
+		top++
+	}
 	title := " " + h.title + " "
 	lines = append(lines, st.dim("╭─")+st.bold(title)+st.dim(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
 	for i, r := range rows {
@@ -563,7 +635,7 @@ func (h *home) render() (string, int, int) {
 		b.WriteString(ansi.Truncate(l, width, "…"))
 		b.WriteByte('\n')
 	}
-	return b.String(), cc + 2, cr + 1
+	return b.String(), cc + 2, cr + 1 + top
 }
 
 // closeSetup leaves the panel. The setup bar shows what the next Run will
@@ -794,6 +866,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		in.forwardTo(runIn)
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
 		u.m.width, u.m.height = w, ht
+		u.m.scroll = true
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn
 		u.plain.applying = r.flags.apply
 		h.done = u.launch(runCtx, runIn, startFor(t, r))
@@ -806,7 +879,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		}(runIn.forced, running)
 		return u.m, u.m.Init()
 	}
-	h.after = func(e ended) (string, *deliveryBar, bool) {
+	h.after = func(e ended) (string, *lastRun, bool) {
 		close(running)
 		in.forwardTo(nil)
 		runCancel()
@@ -816,9 +889,9 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 			return "", nil, true
 		}
 		var text string
-		var bar *deliveryBar
-		text, bar, last = u.summary(env, used.flags, root, e.res, h.hold)
-		return text, bar, false
+		var l *lastRun
+		text, l, last = u.summary(env, used.flags, root, e.res, h.hold)
+		return text, l, false
 	}
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
@@ -842,7 +915,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		}
 		return 0, failed.err
 	}
-	if h.run != nil && h.bar == nil && running != nil {
+	if h.run != nil && running != nil {
 		select {
 		case <-running:
 		default:
@@ -864,18 +937,17 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 
 // summary is what follows a Run in the home: its Receipt, then what afterRun
 // does, as text to print above the program. After an Accepted Run that the
-// human takes, the action bar comes too. code is the Run's exit code.
-func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold func(bool)) (string, *deliveryBar, int) {
+// human takes, what can take it comes too. code is the Run's exit code.
+func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold func(bool)) (string, *lastRun, int) {
 	var buf strings.Builder
-	receiptText := func(applied bool) string {
+	receiptText := func() string {
 		var b strings.Builder
 		p := *u.plain
 		p.w = &b
-		p.applying = p.applying || applied
 		p.endScreen(res)
 		return b.String()
 	}
-	buf.WriteString(receiptText(false))
+	buf.WriteString(receiptText())
 	quiet := env
 	quiet.Stdout, quiet.Stderr = &buf, &buf
 	if res.Outcome != run.Accepted || f.apply || f.unattended {
@@ -892,8 +964,24 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		fmt.Fprintf(&buf, "oge: reading the Run for delivery: %s\n", clean(err.Error()))
 		return buf.String(), nil, ExitInternal
 	}
-	s := &deliveryBar{bar: newActionBar(env, r, root, nil)}
-	s.receipt = func() string { return receiptText(s.bar.applied) }
+	// Once applied the Receipt lists the Delivery, so it says nothing about
+	// what was written itself.
+	deliver := func(do func(Env) int) func() string {
+		return func() string {
+			var b strings.Builder
+			q := env
+			q.Stdout, q.Stderr = &b, &b
+			do(q)
+			return b.String()
+		}
+	}
+	s := &lastRun{
+		apply: deliver(func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) }),
+		branch: func(name string) string {
+			return deliver(func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })()
+		},
+		receipt: receiptText,
+	}
 	s.diff = func() tea.Cmd {
 		patch, err := delivery.Diff(r)
 		switch {
@@ -904,7 +992,7 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		case env.Page == nil:
 			return tea.Println(strings.TrimSuffix(diffText(env, r, patch), "\n"))
 		}
-		// TODO(#184): the pager runs with the program's terminal released.
+		// The pager has the terminal (released), and its Ctrl+C (hold).
 		return tea.Exec(editorCmd{hold: hold, run: func() error { return env.Page(diffText(env, r, patch)) }}, func(err error) tea.Msg {
 			if err != nil {
 				return pageFailedMsg{err}

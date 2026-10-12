@@ -154,9 +154,7 @@ func TestBareOgeSetupEditsAGlobSavesItAndRuns(t *testing.T) {
 	s.type_("\t")
 	s.composer()
 	s.type_("fix Add\r")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
+	s.ended()
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -239,9 +237,7 @@ func TestBareOgeUnsavedNarrowedGlobIsTrustWeakening(t *testing.T) {
 	s.expect("! trust-weakening: test glob removed in setup: **/*_test.go (from setup)")
 	s.expect("Test globs: *_test.go (from setup)")
 	s.type_("fix Add\r")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
+	s.ended()
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -266,9 +262,7 @@ func TestBareOgeRunsFromTheUnsavedProposal(t *testing.T) {
 	s.composer()
 	s.expect("Checks: go test -json ./... (from setup)")
 	s.type_("fix Add\r")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
+	s.ended()
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
