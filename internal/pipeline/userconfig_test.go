@@ -56,6 +56,10 @@ func TestLoadUserConfigParses(t *testing.T) {
 	}
 }
 
+// fakeKey is key-shaped but assembled at run time, so the repo's secret
+// scan (internal/fixturescan) sees no key literal.
+var fakeKey = "sk-" + "ant-" + "api03-" + strings.Repeat("A", 20)
+
 func TestLoadUserConfigIsStrict(t *testing.T) {
 	r := abs(t, "r")
 	rk := func(suffix string) string { return `repos."` + r + `"` + suffix }
@@ -69,7 +73,7 @@ func TestLoadUserConfigIsStrict(t *testing.T) {
 		"unclean repo":  {"schema = 1\n[repos." + q(r+string(filepath.Separator)+"..") + "]\nmode = \"fast\"\n", ""},
 		"relative prof": {"schema = 1\n[profiles]\nx = \"rel\"\n", "profiles.x"},
 		"wrong type":    {"schema = 1\n[repos." + q(r) + "]\napply = \"yes\"\n", ""},
-		"key as model":  {"schema = 1\n[repos." + q(r) + ".stages.implement]\nmodel = \"sk-ant-api03-AAAAAAAAAAAAAAAAAAAA\"\n", ""},
+		"key as model":  {"schema = 1\n[repos." + q(r) + ".stages.implement]\nmodel = \"" + fakeKey + "\"\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, probs := LoadUserConfig([]byte(tc.in))

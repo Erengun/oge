@@ -123,6 +123,8 @@ func runCase(t *testing.T, dir string) string {
 	out := fmt.Sprintf("exit: %d\n--- stdout\n%s--- stderr\n%s", code, stdout.String(), stderr.String())
 	if xdg != "" {
 		out = strings.ReplaceAll(out, xdg, "$XDG_CONFIG_HOME")
+		// A TOML key error quotes the path with its backslashes escaped.
+		out = strings.ReplaceAll(out, strings.ReplaceAll(realRepo, `\`, `\\`), "$REPO")
 		out = strings.ReplaceAll(out, realRepo, "$REPO")
 		out = strings.ReplaceAll(out, `$XDG_CONFIG_HOME\oge\config.toml`, "$XDG_CONFIG_HOME/oge/config.toml")
 	}
