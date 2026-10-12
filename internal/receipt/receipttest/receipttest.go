@@ -54,7 +54,28 @@ func NewWithTests(mode pipeline.Mode, globs ...string) *Builder {
 	return newRun(mode, globs)
 }
 
+// NewWithSetup is New for a Run with a setup command, which runs while the
+// implementer works (#195): its Preflight is observed by Preflight, after
+// the first Attempt, not at 0.4s.
+func NewWithSetup(mode pipeline.Mode) *Builder {
+	return startRun(mode, nil)
+}
+
+// Preflight observes a setup command that passed on the Snapshot, after
+// the Attempt it overlapped.
+func (b *Builder) Preflight(d time.Duration, setup string) {
+	b.Add(d, run.RecPreflightObserved, map[string]any{"checks": []string{"submodules"},
+		"setup": oracle.Execution{Run: setup, Argv: []string{"sh", "-c", setup}, Cwd: "cache-seed", DurationMs: 5400, Pass: true}})
+}
+
 func newRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakening) *Builder {
+	b := startRun(mode, globs, weakening...)
+	b.Add(400*time.Millisecond, run.RecPreflightObserved, map[string]any{"checks": []string{"submodules"}})
+	return b
+}
+
+// startRun is a Run up to Oracle v0, before its Preflight.
+func startRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakening) *Builder {
 	b := &Builder{blobs: map[string][]byte{}, changed: map[string][]string{}, files: map[string][]byte{}, Manifests: map[int]string{}}
 	f := pipeline.Frozen{Mode: mode, TrustWeakening: weakening}
 	f.Project.TestGlobs = globs
@@ -63,7 +84,6 @@ func newRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakening)
 		"task": b.Blob([]byte("fix Add\n\nAdd returns 0 for every input.\n")), "frozen": b.Blob(frozen), "mode": mode})
 	b.Add(100*time.Millisecond, run.RecSnapshotTaken, map[string]any{"commit": Snapshot, "head": "84ca1bd0e1f2", "branch": "main", "modified": 0, "untracked": 1})
 	b.Oracle(150*time.Millisecond, 0, "", nil, 0)
-	b.Add(400*time.Millisecond, run.RecPreflightObserved, map[string]any{"checks": []string{"submodules"}})
 	return b
 }
 
@@ -335,6 +355,16 @@ func Scenarios() []Scenario {
 		{"accepted-fast", func() *Builder {
 			b := New(pipeline.Fast)
 			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
+			return b
+		}},
+		{"accepted-setup", func() *Builder {
+			// Setup overlapped the implementer: its Preflight is observed
+			// after the Attempt ended, and the Receipt still lists it first.
+			b := NewWithSetup(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.Preflight(6150*ms, "sh setup.sh")
 			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
 			b.End(7300*ms, run.Accepted, C1)
 			return b

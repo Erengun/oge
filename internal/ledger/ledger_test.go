@@ -84,6 +84,29 @@ func TestBlobsAreContentAddressed(t *testing.T) {
 	}
 }
 
+func TestPutAllRepeatedContentWritesOnce(t *testing.T) {
+	s, err := OpenBlobs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bs [][]byte
+	for i := range 40 {
+		bs = append(bs, []byte(fmt.Sprintf("blob %d\n", i%3)))
+	}
+	ids, err := s.PutAll(bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		if want, _ := s.Put(bs[i]); id != want {
+			t.Fatalf("id %d = %s, want %s", i, id, want)
+		}
+		if b, err := s.Get(id); err != nil || !bytes.Equal(b, bs[i]) {
+			t.Fatalf("get %d: %q %v", i, b, err)
+		}
+	}
+}
+
 func TestStateRootRefusals(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("TMPDIR isn't the system temp directory on Windows")

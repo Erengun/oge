@@ -45,18 +45,32 @@ func (s *Blobs) Put(b []byte) (string, error) {
 func (s *Blobs) PutAll(bs [][]byte) ([]string, error) {
 	ids := make([]string, len(bs))
 	errs := make([]error, len(bs))
+	// Equal contents write once: two goroutines racing on one hash would
+	// rename over each other's temp file for nothing.
+	first := make(map[string]int, len(bs))
+	var uniq []int
+	for i, b := range bs {
+		h := hashHex(b)
+		if j, ok := first[h]; ok {
+			ids[i] = ids[j]
+			continue
+		}
+		first[h] = i
+		ids[i] = "sha256:" + h
+		uniq = append(uniq, i)
+	}
 	next := make(chan int)
 	var wg sync.WaitGroup
-	for range min(8, len(bs)) {
+	for range min(8, len(uniq)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				ids[i], errs[i] = s.put(bs[i])
+				_, errs[i] = s.put(bs[i])
 			}
 		}()
 	}
-	for i := range bs {
+	for _, i := range uniq {
 		next <- i
 	}
 	close(next)
