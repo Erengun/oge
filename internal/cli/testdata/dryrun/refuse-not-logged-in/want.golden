@@ -1,0 +1,4 @@
+exit: 2
+--- stdout
+--- stderr
+oge: claude isn't logged in. Logged in: claude@work, claude@z. Pick one with Tab, `--agent claude@<name>`, or run `claude auth login`.

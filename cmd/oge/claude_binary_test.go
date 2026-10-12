@@ -330,3 +330,42 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// A profile with no login is refused before any Run state exists, naming
+// the profiles that are logged in; a logged-in one runs (#186).
+func TestBinaryClaudeLoginCheck(t *testing.T) {
+	t.Parallel()
+	repo, env := runFixture(t)
+	home := ""
+	for _, kv := range env {
+		if h, ok := strings.CutPrefix(kv, "HOME="); ok {
+			home = h
+		}
+	}
+	for _, name := range []string{".claude-work", ".claude-z"} {
+		if err := os.MkdirAll(filepath.Join(home, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, name, "settings.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	env = append(env, "OGE_STATE_DIR="+state,
+		"OGE_FAKE_CLAUDE_LOGINS="+filepath.Join(home, ".claude-work")+string(os.PathListSeparator)+filepath.Join(home, ".claude-z"))
+	env = withFakeClaude(t, env, claudeSession(true))
+
+	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
+	want := "claude isn't logged in. Logged in: claude@work, claude@z. Pick one with Tab, `--agent claude@<name>`, or run `claude auth login`."
+	if code != 2 || !strings.Contains(errOut, want) {
+		t.Fatalf("exit %d, want 2 and %q\nstdout:\n%s\nstderr:\n%s", code, want, out, errOut)
+	}
+	if _, err := os.Stat(state); err == nil {
+		t.Errorf("the refusal created Run state at %s", state)
+	}
+
+	code, out, errOut = runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude@work", "--unattended")
+	if code != 0 || !strings.Contains(out, "✓ Accepted") {
+		t.Fatalf("logged-in profile: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}

@@ -392,6 +392,10 @@ func resolveRun(env Env, f runFlags, root string, attended bool, user *pipeline.
 		reportProblems(env, "this Run isn't valid", []pipeline.Problem{{Key: "check.commands", Msg: refusal}})
 		return nil, ExitRefused
 	}
+	if refusal := checkLogin(env, frozen, extraProfiles, f.dryRun); refusal != "" {
+		fmt.Fprintf(env.Stderr, "oge: %s\n", refusal)
+		return nil, ExitRefused
+	}
 	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
 	return &resolved{cfg: cfg, frozen: frozen, cfgData: cfgData, warn: warn, flags: f}, ExitOK
 }

@@ -11,6 +11,11 @@
 //	OGE_FAKE_CLAUDE_RECORD   where to write its argv and environment as JSON
 //	OGE_FAKE_CLAUDE_RECORD_<ROLE>  where to write them instead for $OGE_ROLE
 //	OGE_FAKE_CLAUDE_STDIN    where to append every line it reads
+//	OGE_FAKE_CLAUDE_LOGINS   for `auth status`: the config dirs that are
+//	                         logged in, joined with the path-list separator;
+//	                         "default" is an unset CLAUDE_CONFIG_DIR. Unset
+//	                         means every dir is logged in; "unsupported"
+//	                         is a claude without the command; "hang" never answers.
 //
 // Replay: an "out" frame is written, with the recording's working
 // directory /home/user/project rewritten to the real one. An "in" frame
@@ -80,6 +85,10 @@ func main() {
 			fmt.Println("2.1.289 (Claude Code)")
 			return
 		}
+	}
+	if len(os.Args) == 3 && os.Args[1] == "auth" && os.Args[2] == "status" {
+		authStatus()
+		return
 	}
 	record := os.Getenv("OGE_FAKE_CLAUDE_RECORD")
 	if p := os.Getenv("OGE_FAKE_CLAUDE_RECORD_" + strings.ToUpper(os.Getenv("OGE_ROLE"))); p != "" && os.Getenv("OGE_ROLE") != "" {
@@ -240,4 +249,31 @@ func permits(resp json.RawMessage) bool {
 func fail(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "fakeclaude: "+format+"\n", a...)
 	os.Exit(3)
+}
+
+// authStatus answers `claude auth status` the way claude 2.1.296 does: JSON
+// on stdout, exit 1 when logged out. It reads nothing but the environment.
+func authStatus() {
+	logins, set := os.LookupEnv("OGE_FAKE_CLAUDE_LOGINS")
+	if logins == "unsupported" {
+		fmt.Fprintln(os.Stderr, "error: unknown command 'auth'")
+		os.Exit(1)
+	}
+	if logins == "hang" {
+		select {}
+	}
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
+	if dir == "" {
+		dir = "default"
+	}
+	in := !set
+	for _, d := range filepath.SplitList(logins) {
+		in = in || d == dir
+	}
+	if in {
+		fmt.Println(`{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty"}`)
+		return
+	}
+	fmt.Println(`{"loggedIn": false, "authMethod": "none", "apiProvider": "firstParty"}`)
+	os.Exit(1)
 }

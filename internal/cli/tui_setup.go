@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -46,6 +47,7 @@ type setupState struct {
 	rev                   int  // counts changes
 	agents                []string
 	profiles              []claude.Profile
+	logins                map[string]claude.Login // by profile dir; checked once per session (#186)
 	lastFrozen            *pipeline.Frozen
 }
 
@@ -114,7 +116,16 @@ func (s *setupState) choices() ([]string, []claude.Profile) {
 	if user, code := loadUserConfig(Env{Getenv: s.env.Getenv, Stderr: io.Discard}); code == ExitOK && user != nil {
 		extra = user.Profiles
 	}
-	return agents, claude.Profiles(getenv("HOME"), getenv, extra)
+	profiles := claude.Profiles(getenv("HOME"), getenv, extra)
+	if s.logins == nil {
+		s.logins = map[string]claude.Login{}
+		if l := claudeLogins(s.env); l != nil {
+			for i, st := range l.LoginStatuses(context.Background(), profiles) {
+				s.logins[profiles[i].Dir] = st
+			}
+		}
+	}
+	return agents, profiles
 }
 
 func (s *setupState) touch() { s.changed = true; s.rev++ }
@@ -397,7 +408,11 @@ func (p *setupPanel) open(r setupRow) {
 			current = p.sel.impl.profile
 		}
 		for _, pr := range p.sel.profiles {
-			add(choice{value: pr.Name, label: pr.Label()}, pr.Name == current)
+			c := choice{value: pr.Name, label: pr.Label()}
+			if p.sel.logins[pr.Dir] == claude.LoggedOut {
+				c.note = "not logged in"
+			}
+			add(c, pr.Name == current)
 		}
 	case rowMode:
 		for _, m := range []pipeline.Mode{pipeline.Fast, pipeline.Standard, pipeline.Blind} {

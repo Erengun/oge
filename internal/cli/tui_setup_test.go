@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
@@ -347,5 +349,37 @@ func TestUserUnattendedKeepsTheFirstRunProposal(t *testing.T) {
 	_, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--dry-run")
 	if strings.Contains(errOut, "no terminal to review") {
 		t.Errorf("a user-config unattended counted as no terminal:\n%s", errOut)
+	}
+}
+
+// The picker asks once per session which profiles are logged in (#186).
+func TestSetupChoicesRemembersLogins(t *testing.T) {
+	home := t.TempDir()
+	for _, d := range []string{".claude-work", ".claude-z"} {
+		writeFile(t, filepath.Join(home, d, "settings.json"), []byte("{}"))
+	}
+	env := Env{
+		Getenv: func(k string) string {
+			if k == "HOME" {
+				return home
+			}
+			return ""
+		},
+		Agents: map[string]agent.Adapter{claude.Name: loginStub{home: home, in: []string{".claude-z"}}},
+	}
+	s := newSetupState(env, t.TempDir())
+	_, profiles := s.choices()
+	got := map[string]claude.Login{}
+	for _, p := range profiles {
+		got[p.Label()] = s.logins[p.Dir]
+	}
+	want := map[string]claude.Login{"claude": claude.LoggedOut, "claude@work": claude.LoggedOut, "claude@z": claude.LoggedIn}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("logins = %v, want %v", got, want)
+	}
+	s.env.Agents = nil
+	s.choices() // not asked again
+	if len(s.logins) != 3 {
+		t.Errorf("logins forgotten: %v", s.logins)
 	}
 }

@@ -83,6 +83,9 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 		if s.Role == "verifier" {
 			extra = "   fresh Session every Attempt"
 		}
+		if s.NotLoggedIn {
+			extra += "   (not logged in)"
+		}
 		p("  %-10s %-*s network %s%s   (%s)", s.Name, width, bind, s.Network, extra, s.Source)
 	}
 	for _, c := range f.Checks {
