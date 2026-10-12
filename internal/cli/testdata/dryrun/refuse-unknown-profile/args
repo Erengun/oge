@@ -1,0 +1,7 @@
+--dry-run
+--task-file
+task.md
+--implement
+claude@nope
+--verify
+claude@z

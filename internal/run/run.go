@@ -609,12 +609,23 @@ type attemptSpec struct {
 	withheld   []workspace.Withheld
 }
 
+// launchProfile is the AttemptStarting record of how a Stage is launched.
+// The agent's config profile is its name ("work"), never a path to its
+// credentials (ADR-0006).
+func launchProfile(stage pipeline.Stage) map[string]string {
+	m := map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network}
+	if stage.Profile != "" {
+		m["profile"] = stage.Profile
+	}
+	return m
+}
+
 // implement runs one implementer Attempt: AttemptStarting before the
 // spawn, ProcessStarted right after it, AttemptEnded only once the
 // Candidate is committed.
 func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo,
 	adapter agent.Adapter, stage pipeline.Stage, runID, snap string, at attemptSpec, protected func(string) string) (*Attempt, error) {
-	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Role: stage.Role, Agent: stage.Agent, Cause: at.cause}
+	a := &Attempt{ID: fmt.Sprintf("%s#%d", stage.Name, at.n), Stage: stage.Name, Role: stage.Role, Agent: stage.Binding(), Cause: at.cause}
 	ws := at.ws
 	instructions, err := repoInstructions(repo, snap)
 	if err != nil {
@@ -631,7 +642,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 		return nil, err
 	}
 	spec := agent.LaunchSpec{
-		Role: stage.Role, Model: stage.Model, Workspace: ws, Network: stage.Network, RunID: runID,
+		Role: stage.Role, Model: stage.Model, Profile: stage.Profile, Workspace: ws, Network: stage.Network, RunID: runID,
 		RepoInstructions: instructions, CheckCommands: checks, DenyRead: append([]string{p.State.Private}, at.denyRead...), Cache: cache,
 		WriteGlobs: at.writeGlobs,
 	}
@@ -653,7 +664,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	}
 	if err := l.Append(RecAttemptStarting, map[string]any{
 		"attempt": a.ID, "stage": stage.Name, "role": stage.Role, "cause": at.cause, "start_revision": at.start, "session": "fresh",
-		"launch_profile": map[string]string{"agent": stage.Agent, "model": stage.Model, "role": stage.Role, "network": stage.Network},
+		"launch_profile": launchProfile(stage),
 		"briefing":       briefingBlob, "repo_instructions": instructions != "",
 	}); err != nil {
 		return nil, err

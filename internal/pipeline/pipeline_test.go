@@ -236,3 +236,104 @@ func TestProblemsAndWeakeningsDontEchoValues(t *testing.T) {
 		t.Errorf("the weakening echoes the setup command: %+v", w)
 	}
 }
+
+func TestParseBinding(t *testing.T) {
+	for in, want := range map[string][3]string{
+		"claude":          {"claude", "", ""},
+		"claude:sonnet":   {"claude", "", "sonnet"},
+		"claude@z":        {"claude", "z", ""},
+		"claude@z:sonnet": {"claude", "z", "sonnet"},
+		"claude@work:a:b": {"claude", "work", "a:b"},
+		"codex@x":         {"codex", "x", ""},
+	} {
+		a, p, m := ParseBinding(in)
+		if got := [3]string{a, p, m}; got != want {
+			t.Errorf("ParseBinding(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestClaudeProfileBindings(t *testing.T) {
+	o := Overrides{
+		Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"},
+		Agents: []string{"implement=claude@z:sonnet"}, Verify: "claude@work",
+		ClaudeProfiles: []string{"work", "z"},
+	}
+	f, probs := Resolve(nil, o, []string{"claude"})
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	for _, s := range f.Stages {
+		switch s.Name {
+		case "implement":
+			if s.Agent != "claude" || s.Profile != "z" || s.Model != "sonnet" || s.Binding() != "claude@z" {
+				t.Errorf("implement = %+v", s)
+			}
+		case "verify":
+			if s.Agent != "claude" || s.Profile != "work" || s.Model != "" {
+				t.Errorf("verify = %+v", s)
+			}
+		}
+	}
+
+	// An unbound verifier inherits the implementer's profile.
+	o.Verify = ""
+	f, probs = Resolve(nil, o, []string{"claude"})
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	if v := f.Stages[1]; v.Profile != "z" {
+		t.Errorf("inherited verify = %+v, want profile z", v)
+	}
+}
+
+func TestUnknownClaudeProfileListsTheKnownOnes(t *testing.T) {
+	o := Overrides{Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"},
+		Implement: "claude@typo", ClaudeProfiles: []string{"work", "z"}}
+	_, probs := Resolve(nil, o, []string{"claude"})
+	if len(probs) != 1 || probs[0].Key != "--implement" ||
+		!strings.Contains(probs[0].Msg, "known: work, z") || strings.Contains(probs[0].Msg, "typo") {
+		t.Errorf("problems = %+v, want one listing work and z without echoing the typed name", probs)
+	}
+	o.ClaudeProfiles = nil
+	if _, probs = Resolve(nil, o, []string{"claude"}); len(probs) != 1 || !strings.Contains(probs[0].Msg, "none found") {
+		t.Errorf("problems = %+v, want none found", probs)
+	}
+}
+
+func TestProfilesAreForClaudeOnly(t *testing.T) {
+	o := Overrides{Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"},
+		Implement: "codex@work", ClaudeProfiles: []string{"work"}}
+	_, probs := Resolve(nil, o, []string{"claude"})
+	if len(probs) != 1 || probs[0].Msg != "profiles are supported for claude only" {
+		t.Errorf("problems = %+v", probs)
+	}
+}
+
+func TestConfigStageBindingWithAProfileIsAProblem(t *testing.T) {
+	cfg, probs := Load([]byte(`schema = 1
+[project]
+test_globs = ["**/*_test.go"]
+[[check.commands]]
+run    = "go test -json ./..."
+report = "go-test-json"
+[pipelines.default.stages.implement]
+agent = "claude@work"
+`))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	_, probs = Resolve(cfg, Overrides{ClaudeProfiles: []string{"work"}}, nil)
+	if len(probs) != 1 || probs[0].Key != "pipelines.default.stages.implement.agent" || !strings.Contains(probs[0].Msg, "personal") {
+		t.Errorf("problems = %+v, want the profiles-are-personal Problem", probs)
+	}
+}
+
+func TestEmptyProfileIsAProblem(t *testing.T) {
+	for _, spec := range []string{"claude@", "claude@:sonnet"} {
+		o := Overrides{Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"}, Implement: spec}
+		if _, probs := Resolve(nil, o, []string{"claude"}); len(probs) != 1 || probs[0].Msg != emptyProfile {
+			t.Errorf("%q: problems = %+v", spec, probs)
+		}
+	}
+}

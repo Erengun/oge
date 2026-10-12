@@ -42,7 +42,11 @@ func TestVerifierLaunchLoadsNothingFromItsView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertIsolatedVerifier(t, args, p.env([]string{"HOME=/synthetic/home"}, spec))
+	env, err := p.env([]string{"HOME=/synthetic/home"}, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIsolatedVerifier(t, args, env)
 	if i := indexOf(args, "--append-system-prompt"); i < 0 || args[i+1] != "Use tabs." {
 		t.Errorf("the Snapshot's instructions aren't the verifier's: %q", args)
 	}

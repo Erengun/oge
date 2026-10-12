@@ -20,6 +20,7 @@ var update = flag.Bool("update", false, "rewrite golden files (go test ./interna
 //	oge.toml     committed as .oge/oge.toml
 //	files/       copied into the repository and committed
 //	untracked/   copied into the repository, not committed
+//	home/        copied into the HOME the CLI sees (Claude profile dirs)
 //	installed    agents on PATH, one per line (default: claude)
 //	interactive  present: a human is at a terminal
 //	stdin        what the human types or pipes
@@ -73,9 +74,22 @@ func runCase(t *testing.T, dir string) string {
 	editor, editorErr := os.ReadFile(filepath.Join(dir, "editor"))
 	stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
 
+	var getenv func(string) string
+	if exists(filepath.Join(dir, "home")) {
+		home := t.TempDir()
+		copyTree(t, filepath.Join(dir, "home"), home)
+		getenv = func(k string) string {
+			if k == "HOME" {
+				return home
+			}
+			return ""
+		}
+	}
+
 	var stdout, stderr bytes.Buffer
 	env := Env{
-		Stdin: bytes.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
+		Getenv: getenv,
+		Stdin:  bytes.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
 		Dir:         repo,
 		Interactive: func() bool { return exists(filepath.Join(dir, "interactive")) },
 		LookPath: func(name string) (string, error) {
