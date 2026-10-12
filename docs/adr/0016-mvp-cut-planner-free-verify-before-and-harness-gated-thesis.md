@@ -22,7 +22,7 @@ status: accepted; modes (Fast/Standard/Blind) and speed/interruption gate criter
   4. The Check runs.
 
   Missing Acceptance criteria give a warning, not a refusal, and such a run may produce unmapped tests. *Amends in part* [ADR-0012](0012-failures-attributed-ledger-written-ahead-resume-from-durable-state.md), which tied `before` to an Approved plan, and [ADR-0013](0013-constrained-toml-pipelines-compiled-into-the-frozen-graph.md), whose validation rule rejected `before` without a planner. Where a planner exists post-MVP, the Approved plan joins the Task as a briefing input.
-- *Amended 2026-10-12 ([#135](https://github.com/Erengun/oge/issues/135)):* the MVP cut now includes an ACP v1 client with OpenCode as its first agent (ADR-0003, amended). Its certified scope and its place in the M2 order are decided in [#137](https://github.com/Erengun/oge/issues/137). Claude remains the agent the thesis and the pre-registered evaluation rest on.
+- *Amended 2026-10-12 ([#135](https://github.com/Erengun/oge/issues/135)):* the MVP cut now includes an ACP v1 client with OpenCode as its first agent (ADR-0003, amended). Its certified scope and its place in the M2 order are decided in [#137](https://github.com/Erengun/oge/issues/137). The "Claude is required" bullet below is unchanged.
 - **Codex is not on the thesis path.** Claude is required. Codex lands after its spike if it is technically usable, and a Claude-only release is not a failed MVP.
 - **The evaluation harness is a mandatory MVP deliverable.** It lives in `eval/`, outside the release binary. It:
   - runs the same Snapshot and frozen Task/config per fixture for every arm;
