@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -126,6 +127,7 @@ Run flags:
                            (never commits)
   --agent <stage>=<agent>[:<model>]   bind a Stage; --agent <agent> binds every Stage
   --implement, --verify <agent>[:<model>]
+                           <agent> is claude or claude@<profile>, e.g. --verify claude@work
   --check <command>        add a Check command for this Run
   --tests <glob>           add a test glob for this Run
   --output <glob>          add an output glob for this Run
@@ -262,11 +264,14 @@ func runCommand(env Env, args []string) int {
 	for name := range env.Agents {
 		registered = append(registered, name)
 	}
+	f.o.ClaudeProfiles = claudeProfileNames(env)
 	frozen, probs := pipeline.Resolve(cfg, f.o, installed, registered...)
 	if len(probs) > 0 {
 		reportProblems(env, "this Run isn't valid", probs)
 		return ExitRefused
 	}
+
+	nameDefaultProfile(env, frozen)
 
 	refusal, coverWarns := checkCoverageOf(root, frozen)
 	if refusal != "" {
@@ -290,6 +295,38 @@ func runCommand(env Env, args []string) int {
 	}
 	renderDryRun(env.Stdout, t, frozen, cfg != nil, warn, f.verbose || f.veryVerbose)
 	return ExitOK
+}
+
+// claudeProfileNames are the Claude profiles found under the user's home,
+// other than the default.
+func claudeProfileNames(env Env) []string {
+	getenv := env.Getenv
+	if getenv == nil {
+		getenv = func(string) string { return "" }
+	}
+	var names []string
+	for _, p := range claude.Profiles(getenv("HOME"), getenv, nil) {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	return names
+}
+
+// nameDefaultProfile gives a plain claude Stage the name of the profile
+// the parent's CLAUDE_CONFIG_DIR is, so the Ledger and dry run name the
+// account. The launch is the same.
+func nameDefaultProfile(env Env, f *pipeline.Frozen) {
+	getenv := env.Getenv
+	if getenv == nil {
+		return
+	}
+	def := claude.Profiles(getenv("HOME"), getenv, nil)[0]
+	for i := range f.Stages {
+		if s := &f.Stages[i]; s.Agent == claude.Name && s.Profile == "" {
+			s.Profile = def.Name
+		}
+	}
 }
 
 func installedAgents(env Env) []string {

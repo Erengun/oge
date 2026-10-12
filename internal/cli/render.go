@@ -60,16 +60,23 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 			p("%s", line)
 		}
 	}
-	for _, s := range f.Stages {
-		bind := s.Agent
+	// The binding column is at least 14 wide and grows with a long profile.
+	width := 14
+	binds := make([]string, len(f.Stages))
+	for i, s := range f.Stages {
+		binds[i] = s.Binding()
 		if s.Model != "" {
-			bind += ":" + s.Model
+			binds[i] += ":" + s.Model
 		}
+		width = max(width, len(binds[i]))
+	}
+	for i, s := range f.Stages {
+		bind := binds[i]
 		extra := ""
 		if s.Role == "verifier" {
 			extra = "   fresh Session every Attempt"
 		}
-		p("  %-10s %-14s network %s%s   (%s)", s.Name, bind, s.Network, extra, s.Source)
+		p("  %-10s %-*s network %s%s   (%s)", s.Name, width, bind, s.Network, extra, s.Source)
 	}
 	for _, c := range f.Checks {
 		report := c.Report
