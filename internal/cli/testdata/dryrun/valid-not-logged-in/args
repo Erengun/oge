@@ -1,0 +1,6 @@
+--dry-run
+--task-file
+task.md
+--fast
+--agent
+claude

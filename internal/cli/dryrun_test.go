@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/claude"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files (go test ./internal/cli -update)")
@@ -21,6 +25,9 @@ var update = flag.Bool("update", false, "rewrite golden files (go test ./interna
 //	files/       copied into the repository and committed
 //	untracked/   copied into the repository, not committed
 //	home/        copied into the HOME the CLI sees (Claude profile dirs)
+//	loggedin     the profile dirs (relative to HOME, like .claude-z) that
+//	             claude reports logged in, one per line; present: the
+//	             Claude adapter answers `auth status` (#186)
 //	installed    agents on PATH, one per line (default: claude)
 //	interactive  present: a human is at a terminal
 //	stdin        what the human types or pipes
@@ -119,6 +126,9 @@ func runCase(t *testing.T, dir string) string {
 		GOOS:    "linux",
 		Version: "test",
 	}
+	if b, err := os.ReadFile(filepath.Join(dir, "loggedin")); err == nil {
+		env.Agents = map[string]agent.Adapter{claude.Name: loginStub{home: envVars["HOME"], in: strings.Fields(string(b))}}
+	}
 	code := Main(env, args)
 	out := fmt.Sprintf("exit: %d\n--- stdout\n%s--- stderr\n%s", code, stdout.String(), stderr.String())
 	if xdg != "" {
@@ -187,4 +197,24 @@ func read(t *testing.T, path string) string {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// loginStub is a claude adapter that only answers login questions.
+type loginStub struct {
+	agent.Adapter
+	home string
+	in   []string // dirs relative to home that are logged in
+}
+
+func (s loginStub) LoginStatuses(_ context.Context, ps []claude.Profile) []claude.Login {
+	out := make([]claude.Login, len(ps))
+	for i, p := range ps {
+		out[i] = claude.LoggedOut
+		for _, d := range s.in {
+			if p.Dir == filepath.Join(s.home, d) {
+				out[i] = claude.LoggedIn
+			}
+		}
+	}
+	return out
 }

@@ -2,13 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
@@ -366,5 +369,97 @@ func TestUserUnattendedKeepsTheFirstRunProposal(t *testing.T) {
 	_, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--dry-run")
 	if strings.Contains(errOut, "no terminal to review") {
 		t.Errorf("a user-config unattended counted as no terminal:\n%s", errOut)
+	}
+}
+
+// The picker learns in the background which profiles are logged in, and
+// reuses what the session already found (#186).
+func TestSetupChoicesRemembersLogins(t *testing.T) {
+	home := t.TempDir()
+	for _, d := range []string{".claude-work", ".claude-z"} {
+		writeFile(t, filepath.Join(home, d, "settings.json"), []byte("{}"))
+	}
+	stub := &countingLogins{loginStub: loginStub{home: home, in: []string{".claude-z"}}}
+	env := Env{
+		Getenv: func(k string) string {
+			if k == "HOME" {
+				return home
+			}
+			return ""
+		},
+		Agents: map[string]agent.Adapter{claude.Name: stub},
+		logins: &loginCache{},
+	}
+	s := newSetupState(env, t.TempDir())
+	_, profiles := s.choices()
+	<-s.refreshLogins(profiles)
+	notes := map[string]string{}
+	for _, p := range profiles {
+		notes[p.Label()] = s.loginNote(p.Dir)
+	}
+	want := map[string]string{"claude": "not logged in", "claude@work": "not logged in", "claude@z": ""}
+	if !reflect.DeepEqual(notes, want) {
+		t.Errorf("notes = %v, want %v", notes, want)
+	}
+	// Only the logged-in profile is remembered; the others are asked again.
+	stub.asked = nil
+	<-s.refreshLogins(profiles)
+	if len(stub.asked) != 2 {
+		t.Errorf("asked %v, want the two logged-out profiles", stub.asked)
+	}
+}
+
+type countingLogins struct {
+	loginStub
+	asked []string
+}
+
+func (c *countingLogins) LoginStatuses(ctx context.Context, ps []claude.Profile) []claude.Login {
+	for _, p := range ps {
+		c.asked = append(c.asked, p.Label())
+	}
+	return c.loginStub.LoginStatuses(ctx, ps)
+}
+
+// loginRunner is the scripted fake agent that also answers login questions.
+type loginRunner struct {
+	agent.Adapter
+	loginStub
+}
+
+// A bare oge whose default profile is logged out still opens the composer:
+// Enter shows the refusal, and Tab picks a profile that is logged in (#186).
+func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	home := f.vars["HOME"]
+	writeFile(t, filepath.Join(home, ".claude-z", "settings.json"), []byte("{}"))
+	withClaude := func(env *Env) {
+		env.Agents["claude"] = loginRunner{Adapter: env.Agents["fake"], loginStub: loginStub{home: home, in: []string{".claude-z"}}}
+		env.LookPath = func(name string) (string, error) {
+			if name == "claude" {
+				return name, nil
+			}
+			return "", os.ErrNotExist
+		}
+	}
+	s := startHomeSessionWith(t, f, withClaude, "--fast", "--agent", "claude")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("claude isn't logged in. Logged in: claude@z. Pick one with Tab,")
+	s.type_("\t")
+	s.expect("[s] save as default")
+	s.type_("\x1b[B\r") // implement profile
+	s.expect("claude@z")
+	s.type_("\x1b[B\r") // claude@z
+	s.type_("\t")
+	s.type_("n")
+	s.type_("\r")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }
