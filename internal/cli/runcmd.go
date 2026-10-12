@@ -30,7 +30,7 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	if code := refuseRun(env, f, frozen); code != ExitOK {
 		return code
 	}
-	code, _ := runCycle(env, f, root, &t, frozen, cfgData, warn)
+	code, _ := runCycle(env, f, root, &t, &resolved{frozen: frozen, cfgData: cfgData, warn: warn}, nil)
 	return code
 }
 
@@ -40,13 +40,21 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // session that ran several Tasks reports only the last one, like a shell
 // reports its last command). A failure of Öge itself ends the session with
 // its own code.
-func startHome(env Env, f runFlags, root string, frozen *pipeline.Frozen, cfgData []byte, warn string) int {
-	if code := refuseRun(env, f, frozen); code != ExitOK {
+//
+// Every Task resolves the config afresh (resolveHome): the project config
+// and the files may have changed since the last Run, and what oge "task"
+// would refuse, the composer refuses too.
+func startHome(env Env, f runFlags, root string, first *resolved) int {
+	if code := refuseRun(env, f, first.frozen); code != ExitOK {
 		return code
 	}
 	last := ExitOK
-	for {
-		code, st := runCycle(env, f, root, nil, frozen, cfgData, warn)
+	res, problem := first, []string(nil)
+	for i := 0; ; i++ {
+		if i > 0 {
+			res, problem = resolveHome(env, f, root)
+		}
+		code, st := runCycle(env, f, root, nil, res, problem)
 		switch st {
 		case cycleQuit:
 			return last
@@ -56,6 +64,29 @@ func startHome(env Env, f runFlags, root string, frozen *pipeline.Frozen, cfgDat
 		last = code
 		fmt.Fprintln(env.Stdout)
 	}
+}
+
+// resolveHome is resolveRun and refuseRun for a Task asked for in the
+// composer. It never prompts (the terminal belongs to the composer), and a
+// refusal comes back as lines to show under it.
+func resolveHome(env Env, f runFlags, root string) (*resolved, []string) {
+	var buf strings.Builder
+	quiet := env
+	quiet.Stderr = &buf
+	res, code := resolveRun(quiet, f, root, false)
+	if code == ExitOK {
+		code = refuseRun(quiet, f, res.frozen)
+	}
+	if code == ExitOK {
+		return res, nil
+	}
+	var lines []string
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, clean(l))
+		}
+	}
+	return nil, lines
 }
 
 // refuseRun refuses a Run this build can't start, before anything is shown.
@@ -100,7 +131,7 @@ const (
 
 // runCycle runs one Task. With t nil it first asks for it in the composer,
 // in the same view that then shows the Run.
-func runCycle(env Env, f runFlags, root string, t *task.Task, frozen *pipeline.Frozen, cfgData []byte, warn string) (int, cycleState) {
+func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved, problem []string) (int, cycleState) {
 	dir, err := ledger.DefaultStateDir(env.Getenv)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
@@ -128,10 +159,17 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, frozen *pipeline.F
 	if t != nil {
 		first = *t
 	}
+	frozen := &pipeline.Frozen{}
+	if res != nil {
+		frozen = res.frozen
+	}
 	v := selectView(env, f, first, frozen)
 	plainOf(v).applying = f.apply
-	withWarning(v, warn)
-	startFor := func(t task.Task) startFunc {
+	if res != nil {
+		withWarning(v, res.warn)
+	}
+	startFor := func(t task.Task, res *resolved) startFunc {
+		frozen, cfgData := res.frozen, res.cfgData
 		return func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 			p := run.Params{
 				Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
@@ -143,29 +181,34 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, frozen *pipeline.F
 			return run.Start(ctx, p)
 		}
 	}
-	var res *run.Result
+	var out *run.Result
+	started := true // a Run was started, so it may have processes to kill
 	if t != nil {
-		res, err = v.show(ctx, in, startFor(*t))
+		out, err = v.show(ctx, in, startFor(*t, res))
 	} else {
 		var quit bool
-		res, quit, err = v.(*tui).home(ctx, in, env, root, startFor)
+		u := v.(*tui)
+		out, quit, err = u.home(ctx, in, env, root, startFor, res, problem, func() (*resolved, []string) { return resolveHome(env, f, root) })
+		started = u.started
 		if quit {
 			return ExitOK, cycleQuit
 		}
 	}
 	if errors.Is(err, errForced) {
-		proc.KillAll()
-		fmt.Fprintln(env.Stderr, "oge: stopped without waiting for the Run to end; its agent and Check processes were killed")
+		if started {
+			proc.KillAll()
+			fmt.Fprintln(env.Stderr, "oge: stopped without waiting for the Run to end; its agent and Check processes were killed")
+		}
 		return ExitInterrupted, cycleFatal
 	}
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal, cycleFatal
 	}
-	if code := afterRun(env, f, v, root, res); code != ExitOK {
+	if code := afterRun(env, f, v, root, out); code != ExitOK {
 		return code, cycleRan
 	}
-	return outcomeCode(env, res), cycleRan
+	return outcomeCode(env, out), cycleRan
 }
 
 // outcomeCode maps a Run's outcome to its exit code (ADR-0015).

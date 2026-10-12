@@ -31,6 +31,12 @@ type tui struct {
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}
+	// started: a Run was started (the home starts it only on Enter).
+	started bool
+	// noFallback: a Gate opened after the view has gone is refused rather
+	// than asked in plain lines, whose stdin reader would outlive the Run and
+	// take the next composer's keys (the home).
+	noFallback bool
 }
 
 const (
@@ -72,6 +78,7 @@ func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.R
 
 // launch starts the Run on its own goroutine, reporting into u.m's queue.
 func (u *tui) launch(ctx context.Context, in *interrupts, start startFunc) <-chan ended {
+	u.started = true
 	q := &queue{wake: make(chan struct{}, 1)}
 	u.m.queue, u.m.interrupt = q, in.interrupt
 	u.plain.intr = in

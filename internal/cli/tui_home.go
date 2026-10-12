@@ -15,6 +15,7 @@ import (
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
+	"github.com/rivo/uniseg"
 )
 
 // The home is what a bare oge opens on a terminal: a composer for the Task
@@ -159,34 +160,42 @@ func (c *composer) key(k tea.KeyPressMsg) bool {
 	return true
 }
 
-// layout wraps the text to width columns. It returns the visible rows and
-// where the cursor is among them, and scrolls to keep the cursor in view.
+// layout wraps the text to width columns, by grapheme cluster, so wide and
+// combined characters take the columns the terminal gives them. It returns
+// the visible rows and where the cursor is among them, and scrolls to keep
+// the cursor in view.
 func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 	width = max(width, 1)
 	var all []string
 	for i, l := range c.lines {
-		var row []rune
-		w := 0
-		for j, r := range l {
-			rw := ansi.StringWidth(string(r))
-			if w+rw > width && len(row) > 0 {
-				all = append(all, string(row))
-				row, w = nil, 0
+		var row strings.Builder
+		w, n := 0, 0 // columns in the row; runes before the cluster
+		rest := string(l)
+		for rest != "" {
+			cl, tail, cw, _ := uniseg.FirstGraphemeClusterInString(rest, -1)
+			k := len([]rune(cl))
+			if w+cw > width && w > 0 {
+				all = append(all, row.String())
+				row.Reset()
+				w = 0
 			}
-			if i == c.row && j == c.col {
+			if i == c.row && c.col >= n && c.col < n+k {
 				curRow, curCol = len(all), w
 			}
-			row = append(row, r)
-			w += rw
+			row.WriteString(cl)
+			w += cw
+			n += k
+			rest = tail
 		}
-		if i == c.row && c.col == len(l) {
+		if i == c.row && c.col >= n {
 			if w >= width { // the cursor wraps onto a fresh row
-				all = append(all, string(row))
-				row, w = nil, 0
+				all = append(all, row.String())
+				row.Reset()
+				w = 0
 			}
 			curRow, curCol = len(all), w
 		}
-		all = append(all, string(row))
+		all = append(all, row.String())
 	}
 	if curRow < c.top {
 		c.top = curRow
@@ -208,8 +217,14 @@ type home struct {
 	st    styles
 	// start begins the Run for a Task in this program: it returns the Run's
 	// model and its first command.
-	start func(task.Task, int, int) (*model, tea.Cmd)
-	edit  func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
+	start func(task.Task, *resolved, int, int) (*model, tea.Cmd)
+	// resolve reads the config again, for the Task about to start.
+	resolve func() (*resolved, []string)
+	ctx     context.Context
+	// msg is what stops or went wrong, shown under the box.
+	msg         []string
+	interrupted bool                      // the context ended while composing
+	edit        func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
 
 	width, height int
 	run           *model // nil while composing
@@ -222,7 +237,18 @@ type editedMsg struct {
 	err  error
 }
 
-func (h *home) Init() tea.Cmd { return nil }
+// ctxDoneMsg tells the composer that Öge was interrupted.
+type ctxDoneMsg struct{}
+
+func (h *home) Init() tea.Cmd {
+	if h.ctx == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		<-h.ctx.Done()
+		return ctxDoneMsg{}
+	}
+}
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
@@ -233,28 +259,48 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, cmd
 	}
 	switch msg := msg.(type) {
+	case ctxDoneMsg:
+		h.interrupted, h.quit = true, true
+		return h, tea.Quit
 	case tea.PasteMsg:
 		h.comp.insert(msg.Content)
 	case editedMsg:
-		if msg.err == nil {
+		if msg.err != nil {
+			h.msg = []string{"the editor failed: " + clean(msg.err.Error())}
+		} else {
 			h.comp.set(msg.text)
 		}
 	case tea.KeyPressMsg:
+		h.msg = nil
 		switch msg.String() {
-		case "ctrl+c", "esc":
-			// With a Task in the box, the first one clears it (as Claude
-			// Code's prompt does); on an empty box it leaves.
+		case "esc", "ctrl+c":
+			// On an empty box both leave. With a Task in the box Esc does
+			// nothing, so it never wipes one; Ctrl+C clears it first (as
+			// Claude Code's prompt does).
 			if h.comp.empty() {
 				h.quit = true
 				return h, tea.Quit
 			}
-			h.comp.set("")
+			if msg.String() == "ctrl+c" {
+				h.comp.set("")
+			}
 		case "enter":
 			text := task.StripComments(h.comp.text())
 			if task.IsEmpty(text) {
 				return h, nil
 			}
-			m, cmd := h.start(task.Parse(text), h.width, h.height)
+			if h.ctx != nil && h.ctx.Err() != nil {
+				h.interrupted, h.quit = true, true
+				return h, tea.Quit
+			}
+			res, problem := h.resolve()
+			if problem != nil {
+				// The Run can't start: say why, and keep the Task.
+				h.msg, h.setup = problem, nil
+				return h, nil
+			}
+			h.setup = setupLines(res.frozen)
+			m, cmd := h.start(task.Parse(text), res, h.width, h.height)
 			h.run = m
 			return h, cmd
 		case "ctrl+e":
@@ -308,6 +354,9 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
 	}
 	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
+	for _, l := range h.msg {
+		lines = append(lines, " "+st.bad(l))
+	}
 	for _, l := range h.setup {
 		lines = append(lines, " "+st.dim(l))
 	}
@@ -327,9 +376,9 @@ func setupLines(f *pipeline.Frozen) []string {
 		for _, s := range f.Stages {
 			if s.Role == role {
 				if s.Model != "" {
-					return s.Agent + ":" + s.Model
+					return s.Binding() + ":" + s.Model
 				}
-				return s.Agent
+				return s.Binding()
 			}
 		}
 		return ""
@@ -347,7 +396,7 @@ func setupLines(f *pipeline.Frozen) []string {
 	return []string{
 		strings.Join(parts, " · "),
 		"Checks: " + strings.Join(checks, " · "),
-		"[tab] setup  [enter] run  [shift+enter] newline  [ctrl+e] editor",
+		"[tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor",
 	}
 }
 
@@ -398,14 +447,23 @@ func editInEditor(env Env, text string) tea.Cmd {
 }
 
 // home shows the composer and, on Enter, the Run in the same program. quit
-// is true when the human left the composer without running anything.
-func (u *tui) home(ctx context.Context, in *interrupts, env Env, root string, startFor func(task.Task) startFunc) (res *run.Result, quit bool, err error) {
-	h := &home{comp: newComposer(), title: homeTitle(env, root), setup: setupLines(u.m.frozen), st: u.m.st}
+// is true when the human left the composer without running anything, or
+// Öge was interrupted while composing. res is the config as of now (nil
+// when problem says why it can't be resolved); resolve reads it again when
+// a Task is sent.
+func (u *tui) home(ctx context.Context, in *interrupts, env Env, root string, startFor func(task.Task, *resolved) startFunc,
+	res *resolved, problem []string, resolve func() (*resolved, []string)) (out *run.Result, quit bool, err error) {
+	h := &home{comp: newComposer(), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem}
+	if res != nil {
+		h.setup = setupLines(res.frozen)
+	}
+	u.noFallback = true
 	var done <-chan ended
-	h.start = func(t task.Task, w, ht int) (*model, tea.Cmd) {
-		u.m = newModel(t, u.m.frozen, u.m.st, time.Now)
+	h.start = func(t task.Task, r *resolved, w, ht int) (*model, tea.Cmd) {
+		u.m = newModel(t, r.frozen, u.m.st, time.Now)
 		u.m.width, u.m.height = w, ht
-		done = u.launch(ctx, in, startFor(t))
+		u.plain.frozen, u.plain.warn = r.frozen, r.warn
+		done = u.launch(ctx, in, startFor(t, r))
 		return u.m, u.m.Init()
 	}
 	if env.Edit != nil {
@@ -420,6 +478,6 @@ func (u *tui) home(ctx context.Context, in *interrupts, env Env, root string, st
 		}
 		return nil, err == nil, err
 	}
-	res, err = u.finish(in, err, done)
-	return res, false, err
+	out, err = u.finish(in, err, done)
+	return out, false, err
 }

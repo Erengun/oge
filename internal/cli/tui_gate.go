@@ -37,7 +37,7 @@ type gateState struct {
 func (u *tui) gate(ctx context.Context, r gate.Request) (gate.Decision, error) {
 	select {
 	case <-u.gone:
-		return u.plain.gate(ctx, r)
+		return u.askPlain(ctx, r)
 	default:
 	}
 	reply := make(chan gate.Decision, 1)
@@ -46,10 +46,21 @@ func (u *tui) gate(ctx context.Context, r gate.Request) (gate.Decision, error) {
 	case d := <-reply:
 		return d, nil
 	case <-u.gone:
-		return u.plain.gate(ctx, r)
+		return u.askPlain(ctx, r)
 	case <-ctx.Done():
 		return gate.Decision{}, ctx.Err()
 	}
+}
+
+// askPlain asks a Gate in plain lines once the live view has gone, unless
+// the home is running: there it would leave a goroutine reading stdin for
+// the life of the process, and the next composer would lose keys to it. The
+// Gate then has no decision, as with a closed stdin.
+func (u *tui) askPlain(ctx context.Context, r gate.Request) (gate.Decision, error) {
+	if u.noFallback {
+		return gate.Decision{}, gate.ErrNoDecision
+	}
+	return u.plain.gate(ctx, r)
 }
 
 // gateKey takes a key while a Gate is open. ok is false for keys the

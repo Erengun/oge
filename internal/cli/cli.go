@@ -255,36 +255,16 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 
-	cfg, cfgData, code := loadConfig(env, root, f, attended)
+	res, code := resolveRun(env, f, root, attended)
 	if code != ExitOK {
 		return code
 	}
-	installed := installedAgents(env)
-	var registered []string
-	for name := range env.Agents {
-		registered = append(registered, name)
-	}
-	f.o.ClaudeProfiles = claudeProfileNames(env)
-	frozen, probs := pipeline.Resolve(cfg, f.o, installed, registered...)
-	if len(probs) > 0 {
-		reportProblems(env, "this Run isn't valid", probs)
-		return ExitRefused
-	}
-
-	nameDefaultProfile(env, frozen)
-
-	refusal, coverWarns := checkCoverageOf(root, frozen)
-	if refusal != "" {
-		reportProblems(env, "this Run isn't valid", []pipeline.Problem{{Key: "check.commands", Msg: refusal}})
-		return ExitRefused
-	}
-
-	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
+	cfg, frozen, cfgData, warn := res.cfg, res.frozen, res.cfgData, res.warn
 	// A bare oge on a terminal that draws the live view asks for the Task in
 	// its composer, in the same view that shows the Run (#130). Everything
 	// else keeps the $EDITOR, stdin and refusal paths of readTask.
 	if len(positional) == 0 && f.taskFile == "" && !f.dryRun && !f.unattended && liveView(env, f) {
-		return startHome(env, f, root, frozen, cfgData, warn)
+		return startHome(env, f, root, res)
 	}
 	t, code := readTask(env, f, positional, attended)
 	if code != ExitOK {
@@ -327,6 +307,47 @@ func nameDefaultProfile(env Env, f *pipeline.Frozen) {
 			s.Profile = def.Name
 		}
 	}
+}
+
+// resolved is a Run's configuration as of one moment: the project config,
+// the frozen graph it compiles to, and the warnings that go with it.
+type resolved struct {
+	cfg     *pipeline.Config
+	frozen  *pipeline.Frozen
+	cfgData []byte
+	warn    string
+}
+
+// resolveRun reads the config from the Snapshot, resolves it with the flags
+// and checks that the Checks cover the tests (#120). The home does this
+// again for every Task, so an edited config is read again and the coverage
+// check runs on the tree as it is now. Problems go to env.Stderr.
+func resolveRun(env Env, f runFlags, root string, attended bool) (*resolved, int) {
+	cfg, cfgData, code := loadConfig(env, root, f, attended)
+	if code != ExitOK {
+		return nil, code
+	}
+	installed := installedAgents(env)
+	var registered []string
+	for name := range env.Agents {
+		registered = append(registered, name)
+	}
+	f.o.ClaudeProfiles = claudeProfileNames(env)
+	frozen, probs := pipeline.Resolve(cfg, f.o, installed, registered...)
+	if len(probs) > 0 {
+		reportProblems(env, "this Run isn't valid", probs)
+		return nil, ExitRefused
+	}
+
+	nameDefaultProfile(env, frozen)
+
+	refusal, coverWarns := checkCoverageOf(root, frozen)
+	if refusal != "" {
+		reportProblems(env, "this Run isn't valid", []pipeline.Problem{{Key: "check.commands", Msg: refusal}})
+		return nil, ExitRefused
+	}
+	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
+	return &resolved{cfg: cfg, frozen: frozen, cfgData: cfgData, warn: warn}, ExitOK
 }
 
 func installedAgents(env Env) []string {
