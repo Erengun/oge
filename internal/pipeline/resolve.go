@@ -180,7 +180,7 @@ type Stage struct {
 	// NotLoggedIn is set by the CLI, after resolving, when the agent
 	// reported that this Stage's profile has no login (#186). It is not
 	// part of the compiled graph.
-	NotLoggedIn bool
+	NotLoggedIn bool `json:"-"`
 }
 
 // Binding is the Stage's agent as the user writes and reads it:

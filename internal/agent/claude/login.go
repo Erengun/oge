@@ -46,7 +46,9 @@ func parseAuthStatus(out []byte) (Login, string) {
 
 // LoginStatus asks claude whether profile p is logged in, running
 // `claude auth status` with that profile's CLAUDE_CONFIG_DIR (the default
-// profile keeps the parent's). It spends no model quota.
+// profile keeps the parent's). It spends no model quota. In an empty config
+// dir claude may create .claude.json or backups; that is harmless, because
+// discovery only offers dirs that already hold a config.
 func (a *Adapter) LoginStatus(ctx context.Context, p Profile) Login {
 	path := a.Path
 	if path == "" {

@@ -356,7 +356,7 @@ func TestBinaryClaudeLoginCheck(t *testing.T) {
 	env = withFakeClaude(t, env, claudeSession(true))
 
 	code, out, errOut := runExe(t, testBinary, repo, env, "fix Add", "--fast", "--agent", "claude", "--unattended")
-	want := "claude isn't logged in. Logged in: claude@work, claude@z. Pick one with Tab, `--agent claude@<name>`, or run `claude auth login`."
+	want := "claude isn't logged in. Logged in: claude@work, claude@z. Pick one with `--agent claude@<name>`, or run `claude auth login`."
 	if code != 2 || !strings.Contains(errOut, want) {
 		t.Fatalf("exit %d, want 2 and %q\nstdout:\n%s\nstderr:\n%s", code, want, out, errOut)
 	}

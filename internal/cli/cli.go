@@ -62,6 +62,9 @@ type Env struct {
 	// OGE_TEST_CACHE_SEED in -tags ogetest builds), to keep them fast;
 	// Checks still get private copies of the Run's own seed.
 	CacheSeedTemplate string
+
+	// logins remembers the profiles found logged in, for the session (#186).
+	logins *loginCache
 }
 
 // ProcessEnv is the Env of the running process.
@@ -146,6 +149,9 @@ Environment:
 // Main runs oge with args (without the program name) and returns the exit
 // code.
 func Main(env Env, args []string) int {
+	if env.logins == nil {
+		env.logins = &loginCache{}
+	}
 	if len(args) > 0 {
 		switch a := args[0]; {
 		case a == "--version" || a == "-version":
@@ -174,10 +180,14 @@ func (m *multi) String() string     { return strings.Join(*m, ", ") }
 func (m *multi) Set(v string) error { *m = append(*m, v); return nil }
 
 type runFlags struct {
-	taskFile   string
-	dryRun     bool
-	unattended bool
-	verbose    bool
+	taskFile string
+	dryRun   bool
+	// home: a bare oge on a terminal opens the composer, where Tab picks
+	// another profile. loginMark: a login problem marks the Stage instead
+	// of refusing, because the composer shows it under the Task (#186).
+	home, loginMark bool
+	unattended      bool
+	verbose         bool
 	// TODO(#79-decision): -vv is accepted and means -v until ADR-0019's
 	// second level has something more to show.
 	veryVerbose bool
@@ -272,6 +282,7 @@ func runCommand(env Env, args []string) int {
 	// first-run proposal (#132): the detected Checks, pre-filled, saved only
 	// after a reviewed diff. Elsewhere the proposal stays on stdin.
 	home := len(positional) == 0 && f.taskFile == "" && !f.dryRun && !cli.unattended && liveView(env, f)
+	cli.home, f.home, f.loginMark = home, home, home
 	if home && noProjectConfig(root, f) {
 		return startHome(env, cli, root, nil)
 	}
@@ -409,7 +420,7 @@ func resolveRun(env Env, f runFlags, root string, attended bool, user *pipeline.
 		reportProblems(env, "this Run isn't valid", []pipeline.Problem{{Key: "check.commands", Msg: refusal}})
 		return nil, ExitRefused
 	}
-	if refusal := checkLogin(env, frozen, extraProfiles, f.dryRun); refusal != "" {
+	if refusal := checkLogin(env, frozen, extraProfiles, f.dryRun || f.loginMark, f.home); refusal != "" {
 		fmt.Fprintf(env.Stderr, "oge: %s\n", refusal)
 		return nil, ExitRefused
 	}

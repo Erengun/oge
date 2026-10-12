@@ -1,13 +1,13 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
@@ -47,7 +47,9 @@ type setupState struct {
 	rev                   int  // counts changes
 	agents                []string
 	profiles              []claude.Profile
-	logins                map[string]claude.Login // by profile dir; checked once per session (#186)
+	lmu                   sync.Mutex
+	logins                map[string]claude.Login // by profile dir (#186)
+	checking              chan struct{}           // open while a check is under way
 	lastFrozen            *pipeline.Frozen
 	oracleState           // the Checks section (#132)
 }
@@ -119,15 +121,56 @@ func (s *setupState) choices() ([]string, []claude.Profile) {
 		extra = user.Profiles
 	}
 	profiles := claude.Profiles(getenv("HOME"), getenv, extra)
-	if s.logins == nil {
-		s.logins = map[string]claude.Login{}
-		if l := claudeLogins(s.env); l != nil {
-			for i, st := range l.LoginStatuses(context.Background(), profiles) {
-				s.logins[profiles[i].Dir] = st
-			}
-		}
-	}
+	s.refreshLogins(profiles)
 	return agents, profiles
+}
+
+// refreshLogins asks, in the background, which profiles are logged in, so
+// the composer never waits on it. The answer is read with loginOf; the
+// returned channel closes when it is in. A check already under way is
+// joined, not repeated.
+func (s *setupState) refreshLogins(profiles []claude.Profile) <-chan struct{} {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	if s.checking != nil {
+		return s.checking
+	}
+	l := claudeLogins(s.env)
+	done := make(chan struct{})
+	if l == nil {
+		close(done)
+		return done
+	}
+	s.checking = done
+	go func() {
+		got := s.env.logins.statuses(l, profiles)
+		s.lmu.Lock()
+		if s.logins == nil {
+			s.logins = map[string]claude.Login{}
+		}
+		for i, st := range got {
+			s.logins[profiles[i].Dir] = st
+		}
+		s.checking = nil
+		s.lmu.Unlock()
+		close(done)
+	}()
+	return done
+}
+
+// loginNote is the picker's dim note for a profile: nothing when it is
+// logged in or unknown.
+func (s *setupState) loginNote(dir string) string {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	st, ok := s.logins[dir]
+	if s.checking != nil && !(ok && st == claude.LoggedIn) {
+		return "checking…"
+	}
+	if ok && st == claude.LoggedOut {
+		return "not logged in"
+	}
+	return ""
 }
 
 func (s *setupState) touch() { s.changed = true; s.rev++ }
@@ -442,11 +485,10 @@ func (p *setupPanel) open(r setupRow) {
 		if r.stage == 1 && st.agent == "" {
 			current = p.sel.impl.profile
 		}
+		p.sel.refreshLogins(p.sel.profiles) // a logged-out one is asked again
 		for _, pr := range p.sel.profiles {
 			c := choice{value: pr.Name, label: pr.Label()}
-			if p.sel.logins[pr.Dir] == claude.LoggedOut {
-				c.note = "not logged in"
-			}
+			c.note = p.sel.loginNote(pr.Dir)
 			add(c, pr.Name == current)
 		}
 	case rowMode:
