@@ -270,15 +270,20 @@ func ttyOut(env Env) bool {
 
 // showDiff pages the patch, coloured unless NO_COLOR is set (ADR-0022).
 func showDiff(env Env, r *delivery.Run, patch []byte) error {
-	st := newStyles(colorAllowed(env.Getenv))
-	head := st.dim(fmt.Sprintf("Run %s · %s · Candidate %s against the Snapshot %s", r.ID, outcomeWord(r),
-		delivery.Short(r.Candidate), delivery.Short(r.Snapshot)))
-	text := head + "\n\n" + colorDiff(delivery.Clean(patch), st)
+	text := diffText(env, r, patch)
 	if env.Page == nil {
 		_, err := io.WriteString(env.Stdout, text)
 		return err
 	}
 	return env.Page(text)
+}
+
+// diffText is the diff as oge diff shows it: a head line, then the patch.
+func diffText(env Env, r *delivery.Run, patch []byte) string {
+	st := newStyles(colorAllowed(env.Getenv))
+	head := st.dim(fmt.Sprintf("Run %s · %s · Candidate %s against the Snapshot %s", r.ID, outcomeWord(r),
+		delivery.Short(r.Candidate), delivery.Short(r.Snapshot)))
+	return head + "\n\n" + colorDiff(delivery.Clean(patch), st)
 }
 
 // colorDiff paints a patch: file headers bold, hunk headers in the accent,

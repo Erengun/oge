@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -222,6 +223,14 @@ func (s *homeSession) expect(text string) {
 	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
 }
 
+// actionBar waits for the action bar, then for it to take keys: until
+// barArm has passed it drops them as typed ahead.
+func (s *homeSession) actionBar() {
+	s.t.Helper()
+	s.expect("[a] apply")
+	time.Sleep(barArm + 50*time.Millisecond)
+}
+
 func (s *homeSession) type_(keys string) {
 	s.t.Helper()
 	s.mark = len(s.out.String())
@@ -249,7 +258,7 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
-	s.expect("[a] apply")
+	s.actionBar()
 	s.type_("q")
 	s.composer()
 	// What the terminal shows now: the Run's summary above, and the
@@ -292,13 +301,13 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	s = startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
-	s.expect("[a] apply")
+	s.actionBar()
 	s.type_("q")
 	s.composer()
 	s.type_("\x05")                         // Ctrl+E on an empty box
 	s.out.waitForN(t, "fix Add", <-shown+1) // the box shows what the editor left
 	s.type_("\r")
-	s.expect("[a] apply")
+	s.actionBar()
 	s.type_("q")
 	s.composer()
 	s.type_("\x03")
@@ -310,6 +319,71 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	}
 	if n := len(runDirs(t, f)); n != 2 {
 		t.Errorf("%d Runs", n)
+	}
+}
+
+// Two Tasks in one session run in one Bubble Tea program, never a second
+// one (#183). The action bar's keys work inside it: [d] prints the diff and
+// [a] applies.
+func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	var programs atomic.Int32
+	s := startHomeSessionWith(t, f, func(env *Env) { env.programStarted = func() { programs.Add(1) } }, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\ra") // the a is typed ahead: it must not apply
+	s.expect("Result        ✓ Accepted")
+	s.actionBar()
+	s.type_("q")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); strings.Contains(string(b), "return a + b") {
+		t.Fatal("an a typed before the action bar applied the Candidate")
+	}
+	s.type_("fix Add again\r")
+	s.expect("fix Add again")
+	s.actionBar()
+	s.type_("d")
+	s.expect("diff --git")
+	s.type_("a")
+	s.expect("Applied Candidate")
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "return a + b") {
+		t.Errorf("[a] didn't apply the Candidate: add.go is\n%s", b)
+	}
+	s.type_("q")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if n := len(runDirs(t, f)); n != 2 {
+		t.Errorf("%d Runs", n)
+	}
+	if n := programs.Load(); n != 1 {
+		t.Errorf("%d programs started; one owns the session", n)
+	}
+}
+
+// The action bar drops keys typed before it could be seen: an a typed ahead
+// never applies; a fresh one does (ADR-0015).
+func TestActionBarDropsKeysTypedAhead(t *testing.T) {
+	at := time.Unix(0, 0)
+	applied := 0
+	h := testHome(70)
+	h.now = func() time.Time { return at }
+	h.run = newModel(task.Parse("fix Add"), homeFrozen(), newStyles(false), time.Now)
+	h.bar, h.barAt = &deliveryBar{bar: &actionBar{apply: func() string { applied++; return "applied" }}}, at
+	at = at.Add(barArm / 2)
+	h.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	h.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if applied != 0 || h.bar == nil {
+		t.Fatalf("keys typed ahead acted: applied %d, bar left: %v", applied, h.bar == nil)
+	}
+	at = at.Add(barArm)
+	if _, cmd := h.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}); cmd != nil {
+		cmd()
+	}
+	if applied != 1 {
+		t.Fatalf("a fresh a applied %d times", applied)
 	}
 }
 

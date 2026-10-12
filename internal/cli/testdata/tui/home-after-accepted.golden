@@ -20,10 +20,10 @@ Ledger        head X · identifies this Receipt; not tamper-proof
 ! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads
 Nothing was written to your repository.
 
-
 ╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  Fast · implement fake · no verifier
  Checks: go test -json ./...
  [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+

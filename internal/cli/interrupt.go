@@ -29,6 +29,16 @@ type interrupts struct {
 	// diverted, when set, takes the next interrupt instead: Ctrl-C at a
 	// Gate's reason prompt returns to the Gate.
 	diverted func()
+	// forward, when set, takes every interrupt instead: the home's session
+	// passes them to the Run it started.
+	forward *interrupts
+}
+
+// forwardTo sends interrupts to r until it is called with nil.
+func (i *interrupts) forwardTo(r *interrupts) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.forward = r
 }
 
 // divert sends interrupts to f until it is called with nil.
@@ -45,6 +55,10 @@ func newInterrupts(cancel context.CancelFunc) *interrupts {
 func (i *interrupts) interrupt() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if r := i.forward; r != nil {
+		r.interrupt()
+		return
+	}
 	if f := i.diverted; f != nil && i.n == 0 {
 		i.diverted = nil
 		f()

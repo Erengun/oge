@@ -37,6 +37,10 @@ type tui struct {
 	// than asked in plain lines, whose stdin reader would outlive the Run and
 	// take the next composer's keys (the home).
 	noFallback bool
+	// kill stops the running program at once (a forced stop).
+	kill func()
+	// programStarted, when set, is told each time a program starts (tests).
+	programStarted func()
 }
 
 const (
@@ -52,8 +56,9 @@ const (
 func newTUI(env Env, t task.Task, f *pipeline.Frozen, plain *renderer) *tui {
 	return &tui{
 		in: env.Stdin, out: env.Stdout, stderr: env.Stderr, plain: plain,
-		m:    newModel(t, f, newStyles(colorAllowed(env.Getenv)), time.Now),
-		gone: make(chan struct{}),
+		m:              newModel(t, f, newStyles(colorAllowed(env.Getenv)), time.Now),
+		gone:           make(chan struct{}),
+		programStarted: env.programStarted,
 	}
 }
 
@@ -105,6 +110,10 @@ func (u *tui) program(in *interrupts, root tea.Model) error {
 	}
 	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
 	p := tea.NewProgram(root, opts...)
+	u.kill = p.Kill
+	if u.programStarted != nil {
+		u.programStarted()
+	}
 	viewDone := make(chan struct{})
 	defer close(viewDone)
 	go func() {
