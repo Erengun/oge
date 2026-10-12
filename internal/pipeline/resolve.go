@@ -75,6 +75,7 @@ type Source string
 const (
 	FromBuiltin   Source = "built-in"
 	FromProject   Source = "project"
+	FromUser      Source = "user"
 	FromCLI       Source = "cli"
 	FromInstalled Source = "installed"
 	FromInherited Source = "inherits implement"
@@ -94,6 +95,9 @@ type Overrides struct {
 	Require   []string
 	// Unattended removes the optional Gates (ADR-0008).
 	Unattended bool
+	// User holds this repo's personal defaults from the user-level config
+	// (nil when there are none). Flags beat it; it beats .oge/oge.toml.
+	User *RepoDefaults
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
@@ -164,6 +168,12 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		f.Mode = Fast
 	case o.Blind:
 		f.Mode, f.Verify = Blind, "before"
+	case o.User != nil && o.User.Mode == "fast":
+		f.Mode = Fast
+	case o.User != nil && o.User.Mode == "blind":
+		f.Mode, f.Verify = Blind, "before"
+	case o.User != nil && o.User.Mode == "standard":
+		f.Mode, f.Verify = Standard, "after"
 	case p.Verify == "before":
 		f.Mode, f.Verify = Blind, "before"
 	default:
@@ -233,10 +243,16 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	if impl.Agent == "" {
 		impl.Source = ""
 	}
+	if o.User != nil {
+		probs = append(probs, userBinding(&impl, o.User.Stages.Implement, "implement", registered)...)
+	}
 	ver := Stage{Name: "verify", Role: "verifier", Network: "off", Source: src}
 	ver.Agent, ver.Model = p.Stages.Verify.Agent, p.Stages.Verify.Model
 	if ver.Agent == "" {
 		ver.Source = ""
+	}
+	if o.User != nil {
+		probs = append(probs, userBinding(&ver, o.User.Stages.Verify, "verify", registered)...)
 	}
 	switch f.Mode {
 	case Fast:
@@ -278,6 +294,27 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	f.Graph = Compile(f.Mode, f.ResultGate)
 	f.Hash = f.Graph.Hash(f.Limits)
 	return f, nil
+}
+
+// userBinding lets the user config's choice for a Stage replace the
+// project's, field by field. Flags are applied afterwards by bind.
+func userBinding(s *Stage, u UserStage, name string, registered []string) []Problem {
+	if u.Agent != "" {
+		// TODO(#131): the @profile grammar belongs to the Claude adapter
+		// (#139); only the agent name is checked here.
+		agent, _, _ := strings.Cut(u.Agent, "@")
+		if !knownAgent(agent) && !oneOf(agent, registered...) {
+			return []Problem{{"user config: stages." + name + ".agent", "unknown agent; use one of " + strings.Join(KnownAgents, ", ")}}
+		}
+		s.Agent = u.Agent
+	}
+	if u.Model != "" {
+		s.Model = u.Model
+	}
+	if s.Agent != "" && (u.Agent != "" || u.Model != "") {
+		s.Source = FromUser
+	}
+	return nil
 }
 
 func trimAll(vals []string) []string {

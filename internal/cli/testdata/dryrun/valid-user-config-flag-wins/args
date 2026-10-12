@@ -1,0 +1,6 @@
+--dry-run
+--fast
+--agent
+claude:opus
+--task-file
+task.md

@@ -24,6 +24,7 @@ var update = flag.Bool("update", false, "rewrite golden files (go test ./interna
 //	interactive  present: a human is at a terminal
 //	stdin        what the human types or pipes
 //	editor       what the human writes in $EDITOR
+//	userconfig   the user-level config; $REPO is the repository's path
 //	norepo       present: the working directory is not a git repository
 //	want.golden  exit code, stdout and stderr
 func TestDryRunGoldens(t *testing.T) {
@@ -74,6 +75,7 @@ func runCase(t *testing.T, dir string) string {
 	stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
 
 	var stdout, stderr bytes.Buffer
+	var xdg, realRepo string
 	env := Env{
 		Stdin: bytes.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
 		Dir:         repo,
@@ -95,8 +97,23 @@ func runCase(t *testing.T, dir string) string {
 		GOOS:    "linux",
 		Version: "test",
 	}
+	if uc, err := os.ReadFile(filepath.Join(dir, "userconfig")); err == nil {
+		realRepo, _ = filepath.EvalSymlinks(repo)
+		xdg = t.TempDir()
+		writeFile(t, filepath.Join(xdg, "oge", "config.toml"), []byte(strings.ReplaceAll(string(uc), "$REPO", realRepo)))
+		env.Getenv = func(k string) string {
+			if k == "XDG_CONFIG_HOME" {
+				return xdg
+			}
+			return ""
+		}
+	}
 	code := Main(env, args)
 	out := fmt.Sprintf("exit: %d\n--- stdout\n%s--- stderr\n%s", code, stdout.String(), stderr.String())
+	if xdg != "" {
+		out = strings.ReplaceAll(out, xdg, "$XDG_CONFIG_HOME")
+		out = strings.ReplaceAll(out, realRepo, "$REPO")
+	}
 	return strings.ReplaceAll(out, repo, "$REPO")
 }
 

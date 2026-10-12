@@ -256,6 +256,11 @@ func runCommand(env Env, args []string) int {
 	if code != ExitOK {
 		return code
 	}
+	user, code := loadUserConfig(env)
+	if code != ExitOK {
+		return code
+	}
+	f.o.User = user.ForRepo(root)
 	installed := installedAgents(env)
 	var registered []string
 	for name := range env.Agents {
@@ -284,6 +289,32 @@ func runCommand(env Env, args []string) int {
 	}
 	renderDryRun(env.Stdout, t, frozen, cfg != nil, warn, f.verbose || f.veryVerbose)
 	return ExitOK
+}
+
+// loadUserConfig reads the user-level config. A missing file is fine; one
+// that is unreadable or invalid refuses the Run rather than silently falling
+// back to other defaults.
+func loadUserConfig(env Env) (*pipeline.UserConfig, int) {
+	path := pipeline.UserConfigPath(env.Getenv)
+	if path == "" {
+		return nil, ExitOK
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ExitOK
+	}
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "oge: reading %s: %v\n", path, err)
+		return nil, ExitRefused
+	}
+	cfg, probs := pipeline.LoadUserConfig(data)
+	if len(probs) > 0 {
+		reportProblems(env, path+" isn't valid", probs)
+		return nil, ExitRefused
+	}
+	// TODO(#131): pass cfg.Profiles as the `extra` map of claude.Profiles
+	// once Claude profiles (#139) land.
+	return cfg, ExitOK
 }
 
 func installedAgents(env Env) []string {

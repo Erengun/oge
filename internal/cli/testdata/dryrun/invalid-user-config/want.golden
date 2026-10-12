@@ -1,0 +1,6 @@
+exit: 2
+--- stdout
+--- stderr
+oge: $XDG_CONFIG_HOME/oge/config.toml isn't valid
+  repos."$REPO".bogus: unknown key
+  repos."$REPO".mode: must be "fast", "standard" or "blind"

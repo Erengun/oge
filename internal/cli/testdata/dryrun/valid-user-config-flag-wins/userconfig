@@ -1,0 +1,11 @@
+schema = 1
+
+[repos."$REPO"]
+mode = "blind"
+
+[repos."$REPO".stages.implement]
+agent = "claude@z"
+model = "sonnet"
+
+[repos."$REPO".stages.verify]
+agent = "claude@work"
