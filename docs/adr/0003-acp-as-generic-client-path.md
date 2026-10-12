@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted (MVP consequence amended 2026-10-12: ACP + OpenCode is in the MVP, #135)
 ---
 
 # ACP is Öge's generic client path, not the transport for Codex and Claude
@@ -15,7 +15,8 @@ ACP is the standard way to drive coding agents, so a reader may expect Öge to s
 
 ## Consequences
 
-- **MVP.** No ACP code. The adapter interface ([#18](https://github.com/Erengun/oge/issues/18)) is checked on paper to confirm that an ACP v1 agent could sit behind it. Features that only some agents have are optional capabilities, not assumptions in the interface.
+- **MVP.** No ACP code.
+  - *Amended 2026-10-12 ([#135](https://github.com/Erengun/oge/issues/135)), by this ADR's own reversal clause ("the user requires OpenCode … in the MVP"):* an ACP v1 client with OpenCode as its first agent **is** in the MVP, on [Map: M2](https://github.com/Erengun/oge/issues/134). [#133](https://github.com/Erengun/oge/issues/133) found it the cheapest route to the most models: OpenRouter, Ollama and llama.cpp through OpenCode, and Copilot, Cursor, Cline, Goose and others on the same client. Every client rule below still holds. The live probe ([#136](https://github.com/Erengun/oge/issues/136)) found gaps for the scope decision in [#137](https://github.com/Erengun/oge/issues/137): a silent fallback to a hosted provider, shell writes outside the cwd with no OS sandbox, and skills loaded from `$HOME`. The certified agents, providers and policy are decided there. The adapter interface ([#18](https://github.com/Erengun/oge/issues/18)) is checked on paper to confirm that an ACP v1 agent could sit behind it. Features that only some agents have are optional capabilities, not assumptions in the interface.
 - **Post-MVP.** The first ACP target is OpenCode. The smallest ACP v1 client is built per ADR-0001, with these rules:
   - Never call `authenticate` speculatively.
   - Negotiate capabilities per agent and per session.
