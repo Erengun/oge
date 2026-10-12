@@ -25,6 +25,7 @@ var update = flag.Bool("update", false, "rewrite golden files (go test ./interna
 //	interactive  present: a human is at a terminal
 //	stdin        what the human types or pipes
 //	editor       what the human writes in $EDITOR
+//	userconfig   the user-level config; $REPO is the repository's path
 //	norepo       present: the working directory is not a git repository
 //	want.golden  exit code, stdout and stderr
 func TestDryRunGoldens(t *testing.T) {
@@ -74,16 +75,25 @@ func runCase(t *testing.T, dir string) string {
 	editor, editorErr := os.ReadFile(filepath.Join(dir, "editor"))
 	stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
 
-	var getenv func(string) string
+	envVars := map[string]string{}
 	if exists(filepath.Join(dir, "home")) {
 		home := t.TempDir()
 		copyTree(t, filepath.Join(dir, "home"), home)
-		getenv = func(k string) string {
-			if k == "HOME" {
-				return home
-			}
-			return ""
-		}
+		envVars["HOME"] = home
+	}
+	var xdg, realRepo string
+	if uc, err := os.ReadFile(filepath.Join(dir, "userconfig")); err == nil {
+		// $REPO becomes the repository's real path, escaped for a TOML
+		// basic string (Windows paths hold backslashes).
+		realRepo, _ = filepath.EvalSymlinks(repo)
+		xdg = t.TempDir()
+		esc := strings.ReplaceAll(realRepo, `\`, `\\`)
+		writeFile(t, filepath.Join(xdg, "oge", "config.toml"), []byte(strings.ReplaceAll(string(uc), "$REPO", esc)))
+		envVars["XDG_CONFIG_HOME"] = xdg
+	}
+	var getenv func(string) string
+	if len(envVars) > 0 {
+		getenv = func(k string) string { return envVars[k] }
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -111,6 +121,13 @@ func runCase(t *testing.T, dir string) string {
 	}
 	code := Main(env, args)
 	out := fmt.Sprintf("exit: %d\n--- stdout\n%s--- stderr\n%s", code, stdout.String(), stderr.String())
+	if xdg != "" {
+		out = strings.ReplaceAll(out, xdg, "$XDG_CONFIG_HOME")
+		// A TOML key error quotes the path with its backslashes escaped.
+		out = strings.ReplaceAll(out, strings.ReplaceAll(realRepo, `\`, `\\`), "$REPO")
+		out = strings.ReplaceAll(out, realRepo, "$REPO")
+		out = strings.ReplaceAll(out, `$XDG_CONFIG_HOME\oge\config.toml`, "$XDG_CONFIG_HOME/oge/config.toml")
+	}
 	return strings.ReplaceAll(out, repo, "$REPO")
 }
 

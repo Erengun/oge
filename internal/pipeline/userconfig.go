@@ -1,0 +1,230 @@
+package pipeline
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+// UserConfigRel is the user-level Öge config, relative to the config home
+// ($XDG_CONFIG_HOME, else ~/.config on every OS, to match dotfile habits).
+// It holds personal, per-repo choices that never belong in git (#129).
+const UserConfigRel = "oge/config.toml"
+
+// UserSchemaVersion is the newest user-config schema this binary understands.
+const UserSchemaVersion = 1
+
+// UserConfig is the user-level file as written. Precedence for a Run:
+// flags > this file (for this repo) > .oge/oge.toml > installed default.
+type UserConfig struct {
+	Schema int `toml:"schema"`
+	// Profiles are extra Claude profiles kept outside ~/.claude-<name>:
+	// name -> absolute config directory.
+	// It is the `extra` map of claude.Profiles.
+	Profiles map[string]string       `toml:"profiles,omitempty"`
+	Repos    map[string]RepoDefaults `toml:"repos,omitempty"`
+}
+
+// RepoDefaults are one repository's personal defaults, keyed in the file by
+// the repo root's absolute path. Absent keys fall through to the next source.
+type RepoDefaults struct {
+	Mode       string `toml:"mode,omitempty"` // fast | standard | blind
+	Unattended *bool  `toml:"unattended,omitempty"`
+	Apply      *bool  `toml:"apply,omitempty"`
+	Stages     struct {
+		Implement UserStage `toml:"implement,omitempty"`
+		Verify    UserStage `toml:"verify,omitempty"`
+	} `toml:"stages,omitempty"`
+}
+
+// UserStage is a Stage binding. Agent is carried as written, agent[@profile];
+// the Claude adapter owns the @profile grammar (#139).
+type UserStage struct {
+	Agent string `toml:"agent,omitempty"`
+	Model string `toml:"model,omitempty"`
+}
+
+// UserConfigPath returns where the user config lives, or "" when neither
+// XDG_CONFIG_HOME nor HOME is set.
+func UserConfigPath(getenv func(string) string) string {
+	if getenv == nil {
+		return ""
+	}
+	if x := getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, filepath.FromSlash(UserConfigRel))
+	}
+	if h := getenv("HOME"); h != "" {
+		return filepath.Join(h, ".config", filepath.FromSlash(UserConfigRel))
+	}
+	return ""
+}
+
+// LoadUserConfig parses a user config strictly. Like Load it returns every
+// problem it finds. It does not scan for credentials: a profile legitimately
+// points at a Claude config directory, which Öge selects but never reads
+// (ADR-0006).
+func LoadUserConfig(data []byte) (*UserConfig, []Problem) {
+	var raw map[string]any
+	if _, err := toml.Decode(string(data), &raw); err != nil {
+		return nil, []Problem{{Msg: "not valid TOML" + position(err)}}
+	}
+	var probs []Problem
+	switch v, ok := raw["schema"]; {
+	case !ok:
+		probs = append(probs, Problem{"schema", fmt.Sprintf("required; add schema = %d", UserSchemaVersion)})
+	case !isInt(v):
+		probs = append(probs, Problem{"schema", "must be an integer"})
+	case v.(int64) > UserSchemaVersion:
+		return nil, []Problem{{"schema", fmt.Sprintf("%d is newer than this oge understands (schema %d); upgrade oge", v.(int64), UserSchemaVersion)}}
+	case v.(int64) < 1:
+		probs = append(probs, Problem{"schema", fmt.Sprintf("%d is not a valid schema; use schema = %d", v.(int64), UserSchemaVersion)})
+	}
+	var cfg UserConfig
+	md, err := toml.Decode(string(data), &cfg)
+	if err != nil {
+		return nil, append(probs, typeError(err))
+	}
+	for _, p := range undecoded(md.Undecoded()) {
+		// The project file's trust-mistake rules don't apply here.
+		probs = append(probs, Problem{p.Key, "unknown key"})
+	}
+	probs = append(probs, cfg.validate()...)
+	if len(probs) > 0 {
+		return nil, probs
+	}
+	return &cfg, nil
+}
+
+func (c *UserConfig) validate() []Problem {
+	var probs []Problem
+	add := func(key, msg string) { probs = append(probs, Problem{key, msg}) }
+	for _, name := range sortedKeys(c.Profiles) {
+		key := "profiles." + name
+		switch {
+		case strings.TrimSpace(name) == "" || strings.ContainsAny(name, "@: \t"):
+			add("profiles", fmt.Sprintf("profile name %q must be non-empty without spaces, '@' or ':'", name))
+		case !filepath.IsAbs(c.Profiles[name]):
+			add(key, "must be an absolute path to the profile's config directory")
+		}
+	}
+	for _, root := range sortedKeys(c.Repos) {
+		key := `repos."` + root + `"`
+		d := c.Repos[root]
+		if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+			add(key, "a repo is keyed by the clean, absolute path of its root")
+		}
+		if d.Mode != "" && !oneOf(d.Mode, "fast", "standard", "blind") {
+			add(key+".mode", `must be "fast", "standard" or "blind"`)
+		}
+		for _, s := range []struct {
+			name string
+			st   UserStage
+		}{{"implement", d.Stages.Implement}, {"verify", d.Stages.Verify}} {
+			if s.st.Agent != "" && strings.TrimSpace(s.st.Agent) == "" {
+				add(key+".stages."+s.name+".agent", "must not be blank")
+			}
+			for field, v := range map[string]string{"agent": s.st.Agent, "model": s.st.Model} {
+				if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {
+					add(key+".stages."+s.name+"."+field, "looks like a credential; Öge never takes credentials in config (ADR-0006)")
+				}
+			}
+		}
+	}
+	return probs
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ForRepo returns the defaults saved for repoRoot. Keys are canonical:
+// absolute, clean and with symlinks resolved, which SaveRepoDefaults
+// guarantees. A git worktree is a separate repo with its own key.
+func (c *UserConfig) ForRepo(repoRoot string) *RepoDefaults {
+	if c == nil {
+		return nil
+	}
+	root := filepath.Clean(repoRoot)
+	if d, ok := c.Repos[root]; ok {
+		return &d
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+		if d, ok := c.Repos[real]; ok {
+			return &d
+		}
+	}
+	return nil
+}
+
+// SaveRepoDefaults records defaults for repoRoot in the user config at path.
+// It is the only writer, and only an explicit user action (the TUI's "save as
+// default") calls it. The write is atomic (temp file, rename), the file is
+// mode 0600 in a 0700 directory, and other repos' sections and [profiles]
+// are kept. An existing file that doesn't parse is never overwritten.
+// Comments in the file are not preserved.
+func SaveRepoDefaults(path, repoRoot string, defaults RepoDefaults) error {
+	if !filepath.IsAbs(repoRoot) {
+		return fmt.Errorf("repo root %q must be absolute", repoRoot)
+	}
+	repoRoot = filepath.Clean(repoRoot)
+	if real, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = real
+	}
+	// A dotfile-managed config is usually a symlink: write through it.
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
+	cfg := &UserConfig{Schema: UserSchemaVersion}
+	switch data, err := os.ReadFile(path); {
+	case err == nil:
+		var probs []Problem
+		if cfg, probs = LoadUserConfig(data); len(probs) > 0 {
+			return fmt.Errorf("%s isn't valid, so it was not changed: %s", path, probs[0])
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return err
+	}
+	if cfg.Repos == nil {
+		cfg.Repos = map[string]RepoDefaults{}
+	}
+	cfg.Repos[repoRoot] = defaults
+	if probs := cfg.validate(); len(probs) > 0 {
+		return fmt.Errorf("not saved: %s", probs[0])
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".config.toml.*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := toml.NewEncoder(tmp).Encode(cfg); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
