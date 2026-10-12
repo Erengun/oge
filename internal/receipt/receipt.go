@@ -1139,6 +1139,8 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 			src := string(w.Source)
 			if w.Source == pipeline.FromProject {
 				src = pipeline.ConfigPath
+			} else if w.Source == pipeline.FromUser {
+				src = "user config"
 			}
 			nc = append(nc, fmt.Sprintf("trust-weakening option in effect: %s (from %s)", val(clean(w.Option)), val(clean(src))))
 		}

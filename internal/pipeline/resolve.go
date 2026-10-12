@@ -75,6 +75,7 @@ type Source string
 const (
 	FromBuiltin   Source = "built-in"
 	FromProject   Source = "project"
+	FromUser      Source = "user"
 	FromCLI       Source = "cli"
 	FromInstalled Source = "installed"
 	FromInherited Source = "inherits implement"
@@ -98,11 +99,20 @@ type Overrides struct {
 	Require        []string
 	// Unattended removes the optional Gates (ADR-0008).
 	Unattended bool
+	// User holds this repo's personal defaults from the user-level config
+	// (nil when there are none). Flags beat it; it beats .oge/oge.toml.
+	User *RepoDefaults
+	// UserConfigPath names that file in messages about what it set.
+	UserConfigPath string
+	// Standard is --standard: the mode flag that lets a Run override a
+	// weaker mode set in the user config.
+	Standard bool
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
 type Frozen struct {
 	Mode           Mode
+	ModeSource     Source `json:"-"` // FromUser, FromCLI or "" (project or default)
 	Verify         string // "after", "before", or "" in Fast mode
 	Project        ProjectConfig
 	Setup          SetupConfig
@@ -171,13 +181,34 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	f := &Frozen{Project: cfg.Project, Setup: cfg.Setup}
 
 	// Mode.
+	var flagged []string
+	for _, m := range []struct {
+		on   bool
+		name string
+	}{{o.Fast, "--fast"}, {o.Blind, "--blind"}, {o.Standard, "--standard"}} {
+		if m.on {
+			flagged = append(flagged, m.name)
+		}
+	}
+	userMode := ""
+	if o.User != nil {
+		userMode = o.User.Mode
+	}
 	switch {
-	case o.Fast && o.Blind:
-		add("--fast, --blind", "choose one mode")
+	case len(flagged) > 1:
+		add(strings.Join(flagged, ", "), "choose one mode")
 	case o.Fast:
-		f.Mode = Fast
+		f.Mode, f.ModeSource = Fast, FromCLI
 	case o.Blind:
-		f.Mode, f.Verify = Blind, "before"
+		f.Mode, f.Verify, f.ModeSource = Blind, "before", FromCLI
+	case o.Standard:
+		f.Mode, f.Verify, f.ModeSource = Standard, "after", FromCLI
+	case userMode == "fast":
+		f.Mode, f.ModeSource = Fast, FromUser
+	case userMode == "blind":
+		f.Mode, f.Verify, f.ModeSource = Blind, "before", FromUser
+	case userMode == "standard":
+		f.Mode, f.Verify, f.ModeSource = Standard, "after", FromUser
 	case p.Verify == "before":
 		f.Mode, f.Verify = Blind, "before"
 	default:
@@ -187,7 +218,11 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		if !oneOf(g, KnownGuarantees...) {
 			add("--require "+g, "unknown guarantee; known: %s", strings.Join(KnownGuarantees, ", "))
 		} else if f.Mode != "" && !oneOf(g, modeGuarantees[f.Mode]...) {
-			add("--require "+g, "%s mode doesn't give this guarantee; use Standard (the default) or --blind", f.Mode)
+			if f.ModeSource == FromUser {
+				add("--require "+g, "%s mode (mode = %q in your user config%s) doesn't give this guarantee; pass --standard or --blind", f.Mode, userMode, inFile(o.UserConfigPath))
+			} else {
+				add("--require "+g, "%s mode doesn't give this guarantee; use Standard (the default) or --blind", f.Mode)
+			}
 		}
 	}
 
@@ -248,11 +283,24 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	if impl.Agent == "" {
 		impl.Source = ""
 	}
+	// Profile names never enter git (#127); only the user config may bind one.
+	if impl.Profile != "" {
+		probs = append(probs, Problem{"pipelines.default.stages.implement.agent", profilesArePersonal})
+	}
+	if o.User != nil {
+		probs = append(probs, userBinding(&impl, o.User.Stages.Implement, "implement", registered, o.ClaudeProfiles)...)
+	}
 	ver := Stage{Name: "verify", Role: "verifier", Network: "off", Source: src}
 	ver.Agent, ver.Profile = SplitAgent(p.Stages.Verify.Agent)
 	ver.Model = p.Stages.Verify.Model
 	if ver.Agent == "" {
 		ver.Source = ""
+	}
+	if ver.Profile != "" && f.Mode != Fast {
+		probs = append(probs, Problem{"pipelines.default.stages.verify.agent", profilesArePersonal})
+	}
+	if o.User != nil {
+		probs = append(probs, userBinding(&ver, o.User.Stages.Verify, "verify", registered, o.ClaudeProfiles)...)
 	}
 	switch f.Mode {
 	case Fast:
@@ -263,13 +311,6 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		f.Stages = []Stage{impl, ver}
 	}
 	known := func(a string) bool { return knownAgent(a) || oneOf(a, registered...) }
-	for _, s := range f.Stages {
-		if s.Source == src && s.Profile != "" {
-			// Profile names never enter git (#127).
-			// TODO(#129): accept a profile bound by the user-level config.
-			probs = append(probs, Problem{"pipelines.default.stages." + s.Name + ".agent", profilesArePersonal})
-		}
-	}
 	probs = append(probs, bind(f.Stages, o, known)...)
 	if f.Mode != "" {
 		probs = append(probs, defaultBindings(f.Stages, installed)...)
@@ -285,8 +326,19 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	}
 	f.Limits = resolveLimits(p.Limits)
 
-	// Trust-weakening options: from the project file only (there is no user
-	// config and no CLI network flag in the MVP).
+	// Trust-weakening options: from the project file, or a mode the user
+	// config chose (there is no CLI network flag in the MVP).
+	if f.ModeSource == FromUser && f.Mode == Fast {
+		f.TrustWeakening = append(f.TrustWeakening, Weakening{"mode = fast", FromUser, "no independent verifier, no held-out tests"})
+	}
+	if u := o.User; u != nil {
+		if u.Unattended != nil && *u.Unattended {
+			f.Notices = append(f.Notices, "user config: unattended isn't used yet (#131); pass --unattended")
+		}
+		if u.Apply != nil && *u.Apply {
+			f.Notices = append(f.Notices, "user config: apply isn't used yet (#131); pass --apply")
+		}
+	}
 	if cfg.Setup.Network == "on" {
 		// The setup command isn't echoed: it may hold a token (#39).
 		f.TrustWeakening = append(f.TrustWeakening, Weakening{"setup network = on", FromProject, ""})
@@ -301,6 +353,40 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	f.Graph = Compile(f.Mode, f.ResultGate)
 	f.Hash = f.Graph.Hash(f.Limits)
 	return f, nil
+}
+
+func inFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	return ", " + path
+}
+
+// userBinding lets the user config's choice for a Stage replace the
+// project's. As with --agent, a user agent brings its own model (none means
+// the agent's default); a user model alone keeps the project's agent.
+func userBinding(s *Stage, u UserStage, name string, registered, profiles []string) []Problem {
+	key := "user config: stages." + name + ".agent"
+	switch {
+	case u.Agent != "":
+		agent, profile, _ := ParseBinding(u.Agent)
+		switch {
+		case bareAt(u.Agent):
+			return []Problem{{key, emptyProfile}}
+		case !knownAgent(agent) && !oneOf(agent, registered...):
+			return []Problem{{key, "unknown agent; use one of " + strings.Join(KnownAgents, ", ")}}
+		}
+		if msg := checkProfile(agent, profile, profiles); msg != "" {
+			return []Problem{{key, msg}}
+		}
+		s.Agent, s.Profile, s.Model, s.Source = agent, profile, u.Model, FromUser
+	case u.Model != "":
+		s.Model = u.Model
+		if s.Agent != "" {
+			s.Source = FromUser
+		}
+	}
+	return nil
 }
 
 func trimAll(vals []string) []string {

@@ -38,7 +38,11 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 		p("%s %-5s %s", label, c.ID, c.Text)
 	}
 	p("")
-	p("Mode       %s: %s", f.Mode, modeNotes[f.Mode])
+	modeSrc := ""
+	if f.ModeSource == pipeline.FromUser {
+		modeSrc = "   (user)"
+	}
+	p("Mode       %s: %s%s", f.Mode, modeNotes[f.Mode], modeSrc)
 	if hasProjectConfig {
 		p("Config     %s from the Snapshot, schema %d", pipeline.ConfigPath, pipeline.SchemaVersion)
 	} else {
@@ -145,6 +149,9 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 func sourceName(s pipeline.Source) string {
 	if s == pipeline.FromProject {
 		return pipeline.ConfigPath
+	}
+	if s == pipeline.FromUser {
+		return "user config"
 	}
 	return string(s)
 }
