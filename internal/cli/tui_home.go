@@ -234,9 +234,8 @@ type home struct {
 	note   string // what happened, shown under the box (a save)
 	ctx    context.Context
 	// msg is what stops or went wrong, shown under the box.
-	msg         []string
-	interrupted bool                      // the context ended while composing
-	edit        func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
+	msg  []string
+	edit func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
 
 	width, height int
 	run           *model // nil while composing
@@ -246,13 +245,16 @@ type home struct {
 	done <-chan ended
 	// after takes the Run's end: it returns the summary to print and, after
 	// an Accepted Run, the action bar. stop ends the session (Öge failed).
-	after func(ended) (text string, bar *summary, stop bool)
-	bar   *summary // non-nil while the action bar waits for a key
+	after func(ended) (text string, bar *deliveryBar, stop bool)
+	bar   *deliveryBar // non-nil while the action bar waits for a key
 	// barAt is when the bar was shown: keys before barArm has passed were
 	// typed ahead, never meant for it, and are dropped (ADR-0015: applying
 	// is an explicit act). now is the clock; nil is time.Now.
 	barAt time.Time
-	now   func() time.Time
+	// hold, while true, swallows interrupts: a pager or $EDITOR has the
+	// terminal, and its Ctrl+C is its own (nil in tests).
+	hold func(bool)
+	now  func() time.Time
 }
 
 // barArm is how long the action bar ignores keys once shown, as the old bar
@@ -266,10 +268,10 @@ func (h *home) clock() time.Time {
 	return time.Now()
 }
 
-// summary is the action bar after an Accepted Run, inside the session's
+// deliveryBar is the action bar after an Accepted Run, inside the session's
 // program: [a] applies, [d] shows the diff, [r] the Receipt again, and q,
 // Enter or Ctrl+C go back to the composer.
-type summary struct {
+type deliveryBar struct {
 	bar     *actionBar     // its line, and [a]
 	diff    func() tea.Cmd // [d]
 	receipt func() string  // [r]
@@ -306,7 +308,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if h.run != nil {
 		if e, ok := msg.(runEndedMsg); ok {
-			return h.ended(ended(e))
+			return h.onEnded(ended(e))
 		}
 		was := h.run.finished
 		_, cmd := h.run.Update(msg)
@@ -323,7 +325,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
-		h.interrupted, h.quit = true, true
+		h.quit = true
 		return h, tea.Quit
 	case tea.PasteMsg:
 		switch {
@@ -381,7 +383,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 			if h.ctx != nil && h.ctx.Err() != nil {
-				h.interrupted, h.quit = true, true
+				h.quit = true
 				return h, tea.Quit
 			}
 			res, problem := h.resolve(h.sel)
@@ -420,9 +422,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return h, nil
 }
 
-// ended prints the Run's last frame and its summary above the program,
+// onEnded prints the Run's last frame and its summary above the program,
 // then offers the action bar or opens the composer again.
-func (h *home) ended(e ended) (tea.Model, tea.Cmd) {
+func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 	text, bar, stop := h.after(e)
 	if stop {
 		h.quit = true
@@ -454,7 +456,7 @@ func (h *home) reopen() {
 func (h *home) barUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
-		h.interrupted, h.quit = true, true
+		h.quit = true
 		return h, tea.Quit
 	case pageFailedMsg:
 		return h, tea.Println("oge: showing the diff: " + clean(msg.err.Error()))
@@ -706,18 +708,27 @@ func homeTitle(env Env, root string) string {
 
 // editorCmd runs $EDITOR on the Task inside the program: Bubble Tea hands
 // over the terminal and takes it back.
-type editorCmd struct{ run func() error }
+type editorCmd struct {
+	run  func() error
+	hold func(bool) // see home.hold
+}
 
-func (e editorCmd) Run() error          { return e.run() }
+func (e editorCmd) Run() error {
+	if e.hold != nil {
+		e.hold(true)
+		defer e.hold(false)
+	}
+	return e.run()
+}
 func (e editorCmd) SetStdin(io.Reader)  {}
 func (e editorCmd) SetStdout(io.Writer) {}
 func (e editorCmd) SetStderr(io.Writer) {}
 
 // editInEditor opens text in env.Edit, with the template's comments when the
 // box is empty, and returns what the human left, comments stripped.
-func editInEditor(env Env, text string) tea.Cmd {
+func editInEditor(env Env, text string, hold func(bool)) tea.Cmd {
 	var out string
-	return tea.Exec(editorCmd{func() error {
+	return tea.Exec(editorCmd{hold: hold, run: func() error {
 		tmp, err := os.CreateTemp("", "oge-task-*.md")
 		if err != nil {
 			return err
@@ -769,6 +780,13 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		failed    *ended        // Öge itself failed or panicked
 	)
 	last := ExitOK
+	h.hold = func(on bool) {
+		if on {
+			in.forwardTo(newInterrupts(func() {}))
+		} else {
+			in.forwardTo(nil)
+		}
+	}
 	h.start = func(t task.Task, r *resolved, w, ht int) (*model, tea.Cmd) {
 		var runCtx context.Context
 		runCtx, runCancel = context.WithCancel(context.Background())
@@ -788,21 +806,22 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		}(runIn.forced, running)
 		return u.m, u.m.Init()
 	}
-	h.after = func(e ended) (string, *summary, bool) {
+	h.after = func(e ended) (string, *deliveryBar, bool) {
 		close(running)
 		in.forwardTo(nil)
 		runCancel()
+		u.started = false // no Run is live: a forced stop has nothing to kill
 		if e.panicked != nil || e.err != nil {
 			failed = &e
 			return "", nil, true
 		}
 		var text string
-		var bar *summary
-		text, bar, last = u.summary(env, used.flags, root, e.res)
+		var bar *deliveryBar
+		text, bar, last = u.summary(env, used.flags, root, e.res, h.hold)
 		return text, bar, false
 	}
 	if env.Edit != nil {
-		h.edit = func(text string) tea.Cmd { return editInEditor(env, text) }
+		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
 	err = u.program(in, h)
 	select {
@@ -830,6 +849,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 			// The view stopped during a Run: the Run goes on, and its
 			// summary follows in plain lines.
 			out, err := u.finish(runIn, err, h.done)
+			close(running)
 			if err != nil {
 				return 0, err
 			}
@@ -845,7 +865,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 // summary is what follows a Run in the home: its Receipt, then what afterRun
 // does, as text to print above the program. After an Accepted Run that the
 // human takes, the action bar comes too. code is the Run's exit code.
-func (u *tui) summary(env Env, f runFlags, root string, res *run.Result) (string, *summary, int) {
+func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold func(bool)) (string, *deliveryBar, int) {
 	var buf strings.Builder
 	receiptText := func(applied bool) string {
 		var b strings.Builder
@@ -869,23 +889,23 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result) (string
 	}
 	r, err := delivery.Load(res.Dir)
 	if err != nil {
-		fmt.Fprintf(&buf, "oge: reading the Run for delivery: %v\n", err)
+		fmt.Fprintf(&buf, "oge: reading the Run for delivery: %s\n", clean(err.Error()))
 		return buf.String(), nil, ExitInternal
 	}
-	s := &summary{bar: newActionBar(env, r, root, nil)}
+	s := &deliveryBar{bar: newActionBar(env, r, root, nil)}
 	s.receipt = func() string { return receiptText(s.bar.applied) }
 	s.diff = func() tea.Cmd {
 		patch, err := delivery.Diff(r)
 		switch {
 		case err != nil:
-			return tea.Println("oge: " + err.Error())
+			return tea.Println("oge: " + clean(err.Error()))
 		case len(patch) == 0:
 			return tea.Println(fmt.Sprintf("Candidate %s changes nothing since the Snapshot.", delivery.Short(r.Candidate)))
 		case env.Page == nil:
 			return tea.Println(strings.TrimSuffix(diffText(env, r, patch), "\n"))
 		}
 		// TODO(#184): the pager runs with the program's terminal released.
-		return tea.Exec(editorCmd{run: func() error { return env.Page(diffText(env, r, patch)) }}, func(err error) tea.Msg {
+		return tea.Exec(editorCmd{hold: hold, run: func() error { return env.Page(diffText(env, r, patch)) }}, func(err error) tea.Msg {
 			if err != nil {
 				return pageFailedMsg{err}
 			}

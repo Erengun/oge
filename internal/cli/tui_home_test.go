@@ -371,7 +371,7 @@ func TestActionBarDropsKeysTypedAhead(t *testing.T) {
 	h := testHome(70)
 	h.now = func() time.Time { return at }
 	h.run = newModel(task.Parse("fix Add"), homeFrozen(), newStyles(false), time.Now)
-	h.bar, h.barAt = &summary{bar: &actionBar{apply: func() string { applied++; return "applied" }}}, at
+	h.bar, h.barAt = &deliveryBar{bar: &actionBar{apply: func() string { applied++; return "applied" }}}, at
 	at = at.Add(barArm / 2)
 	h.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	h.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})

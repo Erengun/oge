@@ -73,6 +73,9 @@ func TestBareOgeShowsAnInfrastructureStop(t *testing.T) {
 	s.composer()
 	s.type_("fix Add\r")
 	s.expect("Infrastructure stop")
+	// The live frame names the stop first; the Receipt is printed with the
+	// final frame once the Run has returned.
+	s.expect("ÖGE RECEIPT")
 	s.composer()
 	var screen vt
 	screen.write([]byte(s.out.String()))

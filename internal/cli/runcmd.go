@@ -245,7 +245,7 @@ func outcomeCode(env Env, res *run.Result) int {
 	case run.Refused:
 		fmt.Fprintln(env.Stderr, "oge: Preflight refused this Run")
 		for _, w := range res.Why {
-			fmt.Fprintf(env.Stderr, "  %s\n", w)
+			fmt.Fprintf(env.Stderr, "  %s\n", clean(w))
 		}
 		return ExitRefused
 	default:
