@@ -505,20 +505,44 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
+// waitForScript is a setup script that waits for the agent to touch
+// marker, then runs then; it fails with exit 9 if the agent never starts.
+func waitForScript(marker, then string) string {
+	return "i=0\nwhile [ ! -f '" + marker + "' ]; do\n  i=$((i+1)); [ $i -gt 600 ] && exit 9\n  sleep 0.1\ndone\n" + then
+}
+
 func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
 	// The setup command sees the Snapshot (untracked test included) and
-	// fails, so Preflight refuses before any agent starts.
-	cfg := fxConfig + "[setup]\nrun = \"test -f add_test.go && exit 7\"\n"
-	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	// fails while the agent works: the Attempt is cancelled and Preflight
+	// refuses (#195).
 	marker := filepath.Join(t.TempDir(), "agent-ran")
-	code, _, errOut := f.run(t, "touch '"+marker+"'\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
+	writeFile(t, filepath.Join(f.repo, "setup.sh"), []byte(waitForScript(marker, "test -f add_test.go && exit 7\n")))
+	cfg := fxConfig + "[setup]\nrun = \"sh setup.sh\"\n"
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	start := time.Now()
+	code, _, errOut := f.run(t, "touch '"+marker+"'\nsleep 60\n", "fix Add", "--fast", "--agent", "fake", "--unattended")
 	if code != ExitRefused || !strings.Contains(errOut, "fails on the Snapshot (exit 7)") {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("the agent ran after setup failed on the Snapshot")
+	if d := time.Since(start); d > 30*time.Second {
+		t.Errorf("the Run took %v: the failing setup didn't cancel the Attempt", d)
+	}
+}
+
+func TestRunSlowSetupDoesNotDelayTheImplementer(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	// Setup passes only once the agent has started: run in series, it
+	// would time out waiting and refuse the Run (#195).
+	marker := filepath.Join(t.TempDir(), "agent-ran")
+	writeFile(t, filepath.Join(f.repo, "setup.sh"), []byte(waitForScript(marker, "")))
+	cfg := fxConfig + "[setup]\nrun = \"sh setup.sh\"\n"
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	code, out, errOut := f.run(t, "touch '"+marker+"'\n"+fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 }
 
