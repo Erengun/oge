@@ -380,6 +380,9 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 func TestBareOgeBranchCommand(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
+	// oge branch commits; CI runners have no git identity.
+	gitIn(t, f.repo, "config", "user.name", "u")
+	gitIn(t, f.repo, "config", "user.email", "u@example.com")
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
