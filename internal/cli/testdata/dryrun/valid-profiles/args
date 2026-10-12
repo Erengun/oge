@@ -1,0 +1,7 @@
+--dry-run
+--task-file
+task.md
+--agent
+implement=claude@z:sonnet
+--verify
+claude@work

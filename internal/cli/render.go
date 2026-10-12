@@ -38,7 +38,11 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 		p("%s %-5s %s", label, c.ID, c.Text)
 	}
 	p("")
-	p("Mode       %s: %s", f.Mode, modeNotes[f.Mode])
+	modeSrc := ""
+	if f.ModeSource == pipeline.FromUser {
+		modeSrc = "   (user)"
+	}
+	p("Mode       %s: %s%s", f.Mode, modeNotes[f.Mode], modeSrc)
 	if hasProjectConfig {
 		p("Config     %s from the Snapshot, schema %d", pipeline.ConfigPath, pipeline.SchemaVersion)
 	} else {
@@ -60,16 +64,23 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 			p("%s", line)
 		}
 	}
-	for _, s := range f.Stages {
-		bind := s.Agent
+	// The binding column is at least 14 wide and grows with a long profile.
+	width := 14
+	binds := make([]string, len(f.Stages))
+	for i, s := range f.Stages {
+		binds[i] = s.Binding()
 		if s.Model != "" {
-			bind += ":" + s.Model
+			binds[i] += ":" + s.Model
 		}
+		width = max(width, len(binds[i]))
+	}
+	for i, s := range f.Stages {
+		bind := binds[i]
 		extra := ""
 		if s.Role == "verifier" {
 			extra = "   fresh Session every Attempt"
 		}
-		p("  %-10s %-14s network %s%s   (%s)", s.Name, bind, s.Network, extra, s.Source)
+		p("  %-10s %-*s network %s%s   (%s)", s.Name, width, bind, s.Network, extra, s.Source)
 	}
 	for _, c := range f.Checks {
 		report := c.Report
@@ -138,6 +149,9 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 func sourceName(s pipeline.Source) string {
 	if s == pipeline.FromProject {
 		return pipeline.ConfigPath
+	}
+	if s == pipeline.FromUser {
+		return "user config"
 	}
 	return string(s)
 }

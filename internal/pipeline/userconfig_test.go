@@ -3,52 +3,73 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-const userCfg = `schema = 1
+// abs returns a clean absolute path for this OS.
+func abs(t *testing.T, name string) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(d, name)
+}
+
+// q quotes p as a TOML literal string, so Windows backslashes survive.
+func q(p string) string { return "'" + p + "'" }
+
+func userCfg(side, one string) string {
+	return `schema = 1
 
 [profiles]
-side = "/opt/claude-side"
+side = ` + q(side) + `
 
-[repos."/r/one"]
+[repos.` + q(one) + `]
 mode = "blind"
 unattended = true
 
-[repos."/r/one".stages.implement]
+[repos.` + q(one) + `.stages.implement]
 agent = "claude@z"
 model = "sonnet"
 
-[repos."/r/one".stages.verify]
+[repos.` + q(one) + `.stages.verify]
 agent = "claude@work"
 `
+}
 
 func TestLoadUserConfigParses(t *testing.T) {
-	c, probs := LoadUserConfig([]byte(userCfg))
+	side, one := abs(t, "side"), abs(t, "one")
+	c, probs := LoadUserConfig([]byte(userCfg(side, one)))
 	if len(probs) > 0 {
 		t.Fatal(probs)
 	}
-	d := c.ForRepo("/r/one")
+	d := c.ForRepo(one)
 	if d == nil || d.Mode != "blind" || d.Unattended == nil || !*d.Unattended ||
 		d.Stages.Implement != (UserStage{"claude@z", "sonnet"}) || d.Stages.Verify.Agent != "claude@work" {
 		t.Fatalf("defaults = %+v", d)
 	}
-	if c.Profiles["side"] != "/opt/claude-side" || c.ForRepo("/r/other") != nil {
+	if c.Profiles["side"] != side || c.ForRepo(abs(t, "other")) != nil {
 		t.Fatalf("profiles/other = %v", c.Profiles)
 	}
 }
 
 func TestLoadUserConfigIsStrict(t *testing.T) {
+	r := abs(t, "r")
+	rk := func(suffix string) string { return `repos."` + r + `"` + suffix }
 	for name, tc := range map[string]struct{ in, key string }{
 		"no schema":     {"[profiles]\n", "schema"},
 		"newer schema":  {"schema = 2\n", "schema"},
 		"unknown key":   {"schema = 1\nbogus = 1\n", "bogus"},
-		"unknown stage": {"schema = 1\n[repos.\"/r\".stages.plan]\nagent = \"claude\"\n", `repos."/r".stages.plan`},
-		"bad mode":      {"schema = 1\n[repos.\"/r\"]\nmode = \"turbo\"\n", `repos."/r".mode`},
+		"unknown stage": {"schema = 1\n[repos." + q(r) + ".stages.plan]\nagent = \"claude\"\n", rk(".stages.plan")},
+		"bad mode":      {"schema = 1\n[repos." + q(r) + "]\nmode = \"turbo\"\n", rk(".mode")},
 		"relative repo": {"schema = 1\n[repos.\"r\"]\nmode = \"fast\"\n", `repos."r"`},
+		"unclean repo":  {"schema = 1\n[repos." + q(r+string(filepath.Separator)+"..") + "]\nmode = \"fast\"\n", ""},
 		"relative prof": {"schema = 1\n[profiles]\nx = \"rel\"\n", "profiles.x"},
-		"wrong type":    {"schema = 1\n[repos.\"/r\"]\napply = \"yes\"\n", ""},
+		"wrong type":    {"schema = 1\n[repos." + q(r) + "]\napply = \"yes\"\n", ""},
+		"key as model":  {"schema = 1\n[repos." + q(r) + ".stages.implement]\nmodel = \"sk-ant-api03-AAAAAAAAAAAAAAAAAAAA\"\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, probs := LoadUserConfig([]byte(tc.in))
@@ -57,6 +78,11 @@ func TestLoadUserConfigIsStrict(t *testing.T) {
 			}
 			if tc.key != "" && probs[0].Key != tc.key {
 				t.Errorf("problems = %v", probs)
+			}
+			for _, p := range probs {
+				if strings.Contains(p.String(), "AAAAAAAA") {
+					t.Errorf("problem echoes a value: %v", p)
+				}
 			}
 		})
 	}
@@ -92,26 +118,38 @@ func TestPrecedenceFlagsOverUserOverRepoOverInstalled(t *testing.T) {
 	repo.Pipelines.Default.Stages.Implement = StageConfig{Agent: "codex", Model: "gpt"}
 	user := &RepoDefaults{Mode: "blind"}
 	user.Stages.Implement = UserStage{Agent: "claude@z", Model: "sonnet"}
+	profiles := []string{"z"}
 
-	// Installed default when nothing else binds.
 	f := userRes(t, &Config{Schema: 1}, Overrides{})
 	if s := stage(f, "implement"); s.Agent != "claude" || s.Source != FromInstalled {
 		t.Fatalf("installed: %+v", s)
 	}
-	// Repo config binds.
 	f = userRes(t, repo, Overrides{})
 	if s := stage(f, "implement"); s.Agent != "codex" || s.Source != FromProject || f.Mode != Standard {
 		t.Fatalf("repo: %+v mode %s", s, f.Mode)
 	}
-	// User beats repo, including mode.
-	f = userRes(t, repo, Overrides{User: user})
-	if s := stage(f, "implement"); s.Agent != "claude@z" || s.Model != "sonnet" || s.Source != FromUser || f.Mode != Blind {
+	f = userRes(t, repo, Overrides{User: user, ClaudeProfiles: profiles})
+	if s := stage(f, "implement"); s.Agent != "claude" || s.Profile != "z" || s.Model != "sonnet" || s.Source != FromUser || f.Mode != Blind || f.ModeSource != FromUser {
 		t.Fatalf("user: %+v mode %s", s, f.Mode)
 	}
-	// Flags beat user.
-	f = userRes(t, repo, Overrides{User: user, Fast: true, Agents: []string{"implement=claude:opus"}})
-	if s := stage(f, "implement"); s.Agent != "claude" || s.Model != "opus" || s.Source != FromCLI || f.Mode != Fast {
+	f = userRes(t, repo, Overrides{User: user, ClaudeProfiles: profiles, Fast: true, Agents: []string{"implement=claude:opus"}})
+	if s := stage(f, "implement"); s.Agent != "claude" || s.Profile != "" || s.Model != "opus" || s.Source != FromCLI || f.Mode != Fast {
 		t.Fatalf("flags: %+v mode %s", s, f.Mode)
+	}
+	// --standard beats a user mode of fast.
+	f = userRes(t, repo, Overrides{User: &RepoDefaults{Mode: "fast"}, Standard: true})
+	if f.Mode != Standard || len(f.TrustWeakening) != 0 {
+		t.Fatalf("--standard: %s %v", f.Mode, f.TrustWeakening)
+	}
+}
+
+func TestUserAgentBringsItsOwnModel(t *testing.T) {
+	repo := &Config{Schema: 1}
+	repo.Pipelines.Default.Stages.Implement = StageConfig{Agent: "codex", Model: "gpt-5"}
+	u := &RepoDefaults{}
+	u.Stages.Implement.Agent = "claude"
+	if s := stage(userRes(t, repo, Overrides{User: u}), "implement"); s.Agent != "claude" || s.Model != "" {
+		t.Fatalf("%+v", s)
 	}
 }
 
@@ -126,29 +164,74 @@ func TestUserModelAloneKeepsRepoAgent(t *testing.T) {
 	}
 }
 
-func TestUserConfigUnknownAgentIsAProblem(t *testing.T) {
+func resolveProbs(cfg *Config, o Overrides) []Problem {
+	cfg.Project.TestGlobs = []string{"a_test.go"}
+	cfg.Check.Commands = []CheckCommandConfig{{Run: "go test -json", Report: "go-test-json"}}
+	_, probs := Resolve(cfg, o, []string{"claude"})
+	return probs
+}
+
+func TestUserBindingProblems(t *testing.T) {
+	for name, agent := range map[string]string{"unknown agent": "nope@x", "codex profile": "codex@foo", "unknown profile": "claude@zz", "bare at": "claude@"} {
+		u := &RepoDefaults{}
+		u.Stages.Implement.Agent = agent
+		probs := resolveProbs(&Config{Schema: 1}, Overrides{User: u, ClaudeProfiles: []string{"z"}})
+		if len(probs) == 0 || !strings.Contains(probs[0].Key, "user config") {
+			t.Errorf("%s: problems = %v", name, probs)
+		}
+	}
+}
+
+func TestProjectProfileStillRefusedButUserProfileAccepted(t *testing.T) {
+	repo := &Config{Schema: 1}
+	repo.Pipelines.Default.Stages.Implement.Agent = "claude@z"
+	if probs := resolveProbs(repo, Overrides{ClaudeProfiles: []string{"z"}}); len(probs) == 0 {
+		t.Error("project profile accepted")
+	}
 	u := &RepoDefaults{}
-	u.Stages.Implement.Agent = "nope@x"
-	cfg := &Config{Schema: 1, Project: ProjectConfig{TestGlobs: []string{"a_test.go"}},
-		Check: CheckConfig{Commands: []CheckCommandConfig{{Run: "go test -json", Report: "go-test-json"}}}}
-	if _, probs := Resolve(cfg, Overrides{User: u}, []string{"claude"}); len(probs) == 0 ||
-		!strings.Contains(probs[0].Key, "user config") {
-		t.Fatalf("problems = %v", probs)
+	u.Stages.Implement.Agent = "claude@z"
+	if probs := resolveProbs(&Config{Schema: 1}, Overrides{User: u, ClaudeProfiles: []string{"z"}}); len(probs) != 0 {
+		t.Errorf("user profile refused: %v", probs)
+	}
+	// A user model must not launder a project-file profile.
+	u = &RepoDefaults{}
+	u.Stages.Implement.Model = "haiku"
+	if probs := resolveProbs(repo, Overrides{User: u, ClaudeProfiles: []string{"z"}}); len(probs) == 0 {
+		t.Error("project profile accepted after a user model")
+	}
+}
+
+func TestUserFastIsATrustWeakeningOption(t *testing.T) {
+	f := userRes(t, &Config{Schema: 1}, Overrides{User: &RepoDefaults{Mode: "fast"}})
+	if len(f.TrustWeakening) != 1 || f.TrustWeakening[0].Option != "mode = fast" || f.TrustWeakening[0].Source != FromUser {
+		t.Fatalf("%v", f.TrustWeakening)
+	}
+	f = userRes(t, &Config{Schema: 1}, Overrides{Fast: true})
+	if len(f.TrustWeakening) != 0 {
+		t.Fatalf("an explicit --fast is not a weakening: %v", f.TrustWeakening)
+	}
+	probs := resolveProbs(&Config{Schema: 1}, Overrides{User: &RepoDefaults{Mode: "fast"}, UserConfigPath: "/u/config.toml", Require: []string{"held-out"}})
+	if len(probs) != 1 || !strings.Contains(probs[0].Msg, "/u/config.toml") || !strings.Contains(probs[0].Msg, "--standard") {
+		t.Fatalf("%v", probs)
+	}
+	if probs := resolveProbs(&Config{Schema: 1}, Overrides{Fast: true, Standard: true}); len(probs) != 1 {
+		t.Fatalf("%v", probs)
 	}
 }
 
 func TestSaveRepoDefaultsRoundTripsOtherSections(t *testing.T) {
+	side, one, two := abs(t, "side"), abs(t, "one"), abs(t, "two")
 	path := filepath.Join(t.TempDir(), "cfg", "oge", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(userCfg), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(userCfg(side, one)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	apply := true
 	d := RepoDefaults{Mode: "fast", Apply: &apply}
 	d.Stages.Implement = UserStage{Agent: "codex"}
-	if err := SaveRepoDefaults(path, "/r/two", d); err != nil {
+	if err := SaveRepoDefaults(path, two, d); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
@@ -156,18 +239,20 @@ func TestSaveRepoDefaultsRoundTripsOtherSections(t *testing.T) {
 	if len(probs) > 0 {
 		t.Fatalf("saved file invalid: %v\n%s", probs, data)
 	}
-	if c.Profiles["side"] != "/opt/claude-side" {
+	if c.Profiles["side"] != side {
 		t.Errorf("profiles lost: %v", c.Profiles)
 	}
-	one, two := c.ForRepo("/r/one"), c.ForRepo("/r/two")
-	if one == nil || one.Stages.Implement.Agent != "claude@z" || one.Stages.Verify.Agent != "claude@work" || *one.Unattended != true {
-		t.Errorf("other repo changed: %+v", one)
+	o, n := c.ForRepo(one), c.ForRepo(two)
+	if o == nil || o.Stages.Implement.Agent != "claude@z" || o.Stages.Verify.Agent != "claude@work" || *o.Unattended != true {
+		t.Errorf("other repo changed: %+v", o)
 	}
-	if two == nil || two.Mode != "fast" || two.Apply == nil || !*two.Apply || two.Stages.Implement.Agent != "codex" {
-		t.Errorf("new repo: %+v", two)
+	if n == nil || n.Mode != "fast" || n.Apply == nil || !*n.Apply || n.Stages.Implement.Agent != "codex" {
+		t.Errorf("new repo: %+v", n)
 	}
-	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
-		t.Errorf("mode = %v", fi.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+			t.Errorf("mode = %v", fi.Mode().Perm())
+		}
 	}
 	if m, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".config.toml.*")); len(m) != 0 {
 		t.Errorf("temp file left: %v", m)
@@ -176,16 +261,17 @@ func TestSaveRepoDefaultsRoundTripsOtherSections(t *testing.T) {
 
 func TestSaveCreatesDirPrivatelyAndRefusesToClobberInvalidFile(t *testing.T) {
 	base := t.TempDir()
+	repo := abs(t, "one")
 	path := filepath.Join(base, "new", "oge", "config.toml")
-	if err := SaveRepoDefaults(path, "/r/one", RepoDefaults{Mode: "blind"}); err != nil {
+	if err := SaveRepoDefaults(path, repo, RepoDefaults{Mode: "blind"}); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(filepath.Dir(path)); err != nil || fi.Mode().Perm() != 0o700 {
+	if fi, err := os.Stat(filepath.Dir(path)); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o700) {
 		t.Errorf("dir: %v %v", fi, err)
 	}
 	bad := filepath.Join(base, "bad.toml")
 	os.WriteFile(bad, []byte("schema = 1\nbogus = 1\n"), 0o600)
-	if err := SaveRepoDefaults(bad, "/r/one", RepoDefaults{}); err == nil {
+	if err := SaveRepoDefaults(bad, repo, RepoDefaults{}); err == nil {
 		t.Fatal("overwrote an invalid file")
 	}
 	if b, _ := os.ReadFile(bad); !strings.Contains(string(b), "bogus") {
@@ -193,12 +279,38 @@ func TestSaveCreatesDirPrivatelyAndRefusesToClobberInvalidFile(t *testing.T) {
 	}
 }
 
+func TestSaveKeepsASymlinkedConfigAndCanonicalisesTheKey(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "dotfiles", "config.toml")
+	link := filepath.Join(base, "xdg", "oge", "config.toml")
+	os.MkdirAll(filepath.Dir(real), 0o755)
+	os.MkdirAll(filepath.Dir(link), 0o755)
+	os.WriteFile(real, []byte("schema = 1\n"), 0o600)
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("no symlinks:", err)
+	}
+	repo := abs(t, "r")
+	os.MkdirAll(repo, 0o755)
+	if err := SaveRepoDefaults(link, repo+string(filepath.Separator)+".", RepoDefaults{Mode: "fast"}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(link); fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("the symlink was replaced")
+	}
+	data, _ := os.ReadFile(real)
+	c, probs := LoadUserConfig(data)
+	if len(probs) > 0 || c.ForRepo(repo) == nil {
+		t.Fatalf("%v\n%s", probs, data)
+	}
+}
+
 func TestUserConfigPath(t *testing.T) {
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	if p := UserConfigPath(env(map[string]string{"XDG_CONFIG_HOME": "/x", "HOME": "/h"})); p != "/x/oge/config.toml" {
+	x, h := abs(t, "x"), abs(t, "h")
+	if p := UserConfigPath(env(map[string]string{"XDG_CONFIG_HOME": x, "HOME": h})); p != filepath.Join(x, "oge", "config.toml") {
 		t.Error(p)
 	}
-	if p := UserConfigPath(env(map[string]string{"HOME": "/h"})); p != "/h/.config/oge/config.toml" {
+	if p := UserConfigPath(env(map[string]string{"HOME": h})); p != filepath.Join(h, ".config", "oge", "config.toml") {
 		t.Error(p)
 	}
 	if UserConfigPath(nil) != "" {

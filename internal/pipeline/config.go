@@ -287,6 +287,22 @@ var roleKinds = map[string]bool{
 // KnownAgents are the agent names a Stage may bind.
 var KnownAgents = []string{"claude", "codex"}
 
+// SplitAgent splits a binding's agent into the agent and its profile:
+// "claude@work" is ("claude", "work"). Whether the profile exists is
+// checked when the Run is resolved, against the profiles found then.
+func SplitAgent(s string) (agent, profile string) {
+	agent, profile, _ = strings.Cut(s, "@")
+	return agent, profile
+}
+
+// ParseBinding splits agent[@profile][:model], as --agent, --implement and
+// --verify take it.
+func ParseBinding(spec string) (agent, profile, model string) {
+	head, model, _ := strings.Cut(spec, ":")
+	agent, profile = SplitAgent(head)
+	return agent, profile, model
+}
+
 func knownAgent(a string) bool {
 	for _, k := range KnownAgents {
 		if a == k {
@@ -374,7 +390,9 @@ func (s StageConfig) validate(name, role string) []Problem {
 	default:
 		probs = append(probs, Problem{key + ".role", fmt.Sprintf("Stage %s has the fixed Role kind %s", name, role)})
 	}
-	if s.Agent != "" && !knownAgent(s.Agent) {
+	if bareAt(s.Agent) {
+		probs = append(probs, Problem{key + ".agent", emptyProfile})
+	} else if a, _ := SplitAgent(s.Agent); s.Agent != "" && !knownAgent(a) {
 		probs = append(probs, Problem{key + ".agent", "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
 	}
 	if name == "implement" && !oneOf(s.Network, "", "off", "on") {

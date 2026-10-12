@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
@@ -118,13 +119,16 @@ Run flags:
   --dry-run                show what a Run would do, without starting any agent
                            (a first-run config proposal is still saved on yes)
   --task-file <path|->     read the Task from a file, or stdin with -
-  --fast | --blind         mode: Fast (no verifier) or Blind (verifier first); default Standard
+  --fast | --standard | --blind
+                           mode: Fast (no verifier), Standard (the default) or Blind
+                           (verifier first); beats the mode in your user config
   --require <guarantee>    refuse unless the mode gives it (e.g. held-out)
   --confirm                stop at the Result gate before accepting
   --apply                  apply the Candidate to your working tree if Accepted
                            (never commits)
   --agent <stage>=<agent>[:<model>]   bind a Stage; --agent <agent> binds every Stage
   --implement, --verify <agent>[:<model>]
+                           <agent> is claude or claude@<profile>, e.g. --verify claude@work
   --check <command>        add a Check command for this Run
   --tests <glob>           add a test glob for this Run
   --output <glob>          add an output glob for this Run
@@ -194,6 +198,7 @@ func parseRunFlags(args []string) (runFlags, []string, error) {
 	fs.BoolVar(&f.apply, "apply", false, "")
 	fs.BoolVar(&f.o.Fast, "fast", false, "")
 	fs.BoolVar(&f.o.Blind, "blind", false, "")
+	fs.BoolVar(&f.o.Standard, "standard", false, "")
 	fs.BoolVar(&f.o.Confirm, "confirm", false, "")
 	fs.Var((*multi)(&f.o.Agents), "agent", "")
 	fs.StringVar(&f.o.Implement, "implement", "", "")
@@ -252,25 +257,35 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 
-	cfg, cfgData, code := loadConfig(env, root, f, attended)
-	if code != ExitOK {
-		return code
-	}
+	// The user config first: a malformed one refuses before any first-run
+	// proposal is shown.
 	user, code := loadUserConfig(env)
 	if code != ExitOK {
 		return code
 	}
 	f.o.User = user.ForRepo(root)
+	f.o.UserConfigPath = pipeline.UserConfigPath(env.Getenv)
+	var extraProfiles map[string]string
+	if user != nil {
+		extraProfiles = user.Profiles
+	}
+	cfg, cfgData, code := loadConfig(env, root, f, attended)
+	if code != ExitOK {
+		return code
+	}
 	installed := installedAgents(env)
 	var registered []string
 	for name := range env.Agents {
 		registered = append(registered, name)
 	}
+	f.o.ClaudeProfiles = claudeProfileNames(env, extraProfiles)
 	frozen, probs := pipeline.Resolve(cfg, f.o, installed, registered...)
 	if len(probs) > 0 {
 		reportProblems(env, "this Run isn't valid", probs)
 		return ExitRefused
 	}
+
+	nameDefaultProfile(env, frozen, extraProfiles)
 
 	refusal, coverWarns := checkCoverageOf(root, frozen)
 	if refusal != "" {
@@ -312,9 +327,39 @@ func loadUserConfig(env Env) (*pipeline.UserConfig, int) {
 		reportProblems(env, path+" isn't valid", probs)
 		return nil, ExitRefused
 	}
-	// TODO(#131): pass cfg.Profiles as the `extra` map of claude.Profiles
-	// once Claude profiles (#139) land.
 	return cfg, ExitOK
+}
+
+// claudeProfileNames are the Claude profiles found under the user's home,
+// other than the default.
+func claudeProfileNames(env Env, extra map[string]string) []string {
+	getenv := env.Getenv
+	if getenv == nil {
+		getenv = func(string) string { return "" }
+	}
+	var names []string
+	for _, p := range claude.Profiles(getenv("HOME"), getenv, extra) {
+		if p.Name != "" {
+			names = append(names, p.Name)
+		}
+	}
+	return names
+}
+
+// nameDefaultProfile gives a plain claude Stage the name of the profile
+// the parent's CLAUDE_CONFIG_DIR is, so the Ledger and dry run name the
+// account. The launch is the same.
+func nameDefaultProfile(env Env, f *pipeline.Frozen, extra map[string]string) {
+	getenv := env.Getenv
+	if getenv == nil {
+		return
+	}
+	def := claude.Profiles(getenv("HOME"), getenv, extra)[0]
+	for i := range f.Stages {
+		if s := &f.Stages[i]; s.Agent == claude.Name && s.Profile == "" {
+			s.Profile = def.Name
+		}
+	}
 }
 
 func installedAgents(env Env) []string {

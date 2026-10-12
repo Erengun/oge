@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  --require held-out: Fast mode (mode = "fast" in your user config, $XDG_CONFIG_HOME/oge/config.toml) doesn't give this guarantee; pass --standard or --blind

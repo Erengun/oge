@@ -1,0 +1,5 @@
+--dry-run
+--require
+held-out
+--task-file
+task.md

@@ -4,7 +4,7 @@ Personal, per-repo choices that never go into git (#126, #127, #129).
 
 **File:** `$XDG_CONFIG_HOME/oge/config.toml`, else `~/.config/oge/config.toml` (on macOS too). A missing file is fine. A file that doesn't parse, or has an unknown key, refuses the Run with a Problem naming the file; Öge never falls back silently.
 
-**Precedence:** flags > this file (for this repo) > `.oge/oge.toml` > installed default. `oge run --dry-run` shows `(user)` beside values that come from here.
+**Precedence:** flags > this file (for this repo) > `.oge/oge.toml` > installed default. `oge run --dry-run` shows `(user)` beside the mode and the Stage bindings that come from here. `--standard`, `--fast` and `--blind` are the mode flags, so a flag can always override the mode set here.
 
 ```toml
 schema = 1
@@ -25,6 +25,12 @@ model = "sonnet"
 agent = "claude@work"
 ```
 
-Today `mode` and the stage `agent` / `model` take effect on a Run. `unattended`, `apply` and `[profiles]` are parsed and exposed for the TUI and Claude profiles wiring (#131, #139).
+**Keys.** A repo is keyed by the clean, absolute path of its root with symlinks resolved; `SaveRepoDefaults` writes that form and a key that isn't clean and absolute is a Problem. A git worktree is a separate repo with its own key.
 
-**Writing:** `pipeline.SaveRepoDefaults` is the only writer and runs only on an explicit save. It writes atomically (0600 file in a 0700 directory), keeps other repos' sections and `[profiles]`, and refuses to overwrite an invalid file. Comments are not preserved.
+**Bindings.** A Stage's `agent` takes `agent[@profile]` and brings its own `model` (leave it out for the agent's default); a `model` alone keeps the project's agent. A profile must be one Öge found (`~/.claude-<name>`) or one listed in `[profiles]`. Profiles are the only thing `.oge/oge.toml` may not bind. `agent` and `model` values that look like credentials are refused (ADR-0006).
+
+**Trust.** `mode = "fast"` here is a trust-weakening option: dry-run lists it under "Trust-weakening options in effect" and the Receipt lists it under "Not covered", like `setup network = on`. `--require held-out` refuses it and names this file; pass `--standard`.
+
+Today `mode`, the Stage bindings and `[profiles]` take effect on a Run. `unattended` and `apply` are parsed, and dry-run says they aren't used yet (#131).
+
+**Writing:** `pipeline.SaveRepoDefaults` is the only writer and runs only on an explicit save. It writes atomically (0600 file in a 0700 directory, through a symlinked config), keeps other repos' sections and `[profiles]`, and refuses to overwrite an invalid file. Comments are not preserved.

@@ -20,6 +20,7 @@ var update = flag.Bool("update", false, "rewrite golden files (go test ./interna
 //	oge.toml     committed as .oge/oge.toml
 //	files/       copied into the repository and committed
 //	untracked/   copied into the repository, not committed
+//	home/        copied into the HOME the CLI sees (Claude profile dirs)
 //	installed    agents on PATH, one per line (default: claude)
 //	interactive  present: a human is at a terminal
 //	stdin        what the human types or pipes
@@ -74,10 +75,31 @@ func runCase(t *testing.T, dir string) string {
 	editor, editorErr := os.ReadFile(filepath.Join(dir, "editor"))
 	stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
 
-	var stdout, stderr bytes.Buffer
+	envVars := map[string]string{}
+	if exists(filepath.Join(dir, "home")) {
+		home := t.TempDir()
+		copyTree(t, filepath.Join(dir, "home"), home)
+		envVars["HOME"] = home
+	}
 	var xdg, realRepo string
+	if uc, err := os.ReadFile(filepath.Join(dir, "userconfig")); err == nil {
+		// $REPO becomes the repository's real path, escaped for a TOML
+		// basic string (Windows paths hold backslashes).
+		realRepo, _ = filepath.EvalSymlinks(repo)
+		xdg = t.TempDir()
+		esc := strings.ReplaceAll(realRepo, `\`, `\\`)
+		writeFile(t, filepath.Join(xdg, "oge", "config.toml"), []byte(strings.ReplaceAll(string(uc), "$REPO", esc)))
+		envVars["XDG_CONFIG_HOME"] = xdg
+	}
+	var getenv func(string) string
+	if len(envVars) > 0 {
+		getenv = func(k string) string { return envVars[k] }
+	}
+
+	var stdout, stderr bytes.Buffer
 	env := Env{
-		Stdin: bytes.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
+		Getenv: getenv,
+		Stdin:  bytes.NewReader(stdin), Stdout: &stdout, Stderr: &stderr,
 		Dir:         repo,
 		Interactive: func() bool { return exists(filepath.Join(dir, "interactive")) },
 		LookPath: func(name string) (string, error) {
@@ -97,22 +119,12 @@ func runCase(t *testing.T, dir string) string {
 		GOOS:    "linux",
 		Version: "test",
 	}
-	if uc, err := os.ReadFile(filepath.Join(dir, "userconfig")); err == nil {
-		realRepo, _ = filepath.EvalSymlinks(repo)
-		xdg = t.TempDir()
-		writeFile(t, filepath.Join(xdg, "oge", "config.toml"), []byte(strings.ReplaceAll(string(uc), "$REPO", realRepo)))
-		env.Getenv = func(k string) string {
-			if k == "XDG_CONFIG_HOME" {
-				return xdg
-			}
-			return ""
-		}
-	}
 	code := Main(env, args)
 	out := fmt.Sprintf("exit: %d\n--- stdout\n%s--- stderr\n%s", code, stdout.String(), stderr.String())
 	if xdg != "" {
 		out = strings.ReplaceAll(out, xdg, "$XDG_CONFIG_HOME")
 		out = strings.ReplaceAll(out, realRepo, "$REPO")
+		out = strings.ReplaceAll(out, `$XDG_CONFIG_HOME\oge\config.toml`, "$XDG_CONFIG_HOME/oge/config.toml")
 	}
 	return strings.ReplaceAll(out, repo, "$REPO")
 }

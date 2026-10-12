@@ -1,0 +1,6 @@
+exit: 2
+--- stdout
+--- stderr
+oge: this Run isn't valid
+  --implement: unknown Claude profile; known: work
+  --verify: unknown Claude profile; known: work

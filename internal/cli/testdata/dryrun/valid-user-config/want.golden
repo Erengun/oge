@@ -6,12 +6,12 @@ Task       Rate-limit /api/login
 Criteria   AC-1  After 5 failed logins for one account within 15 minutes, further attempts get HTTP 429.
            AC-2  A successful login clears that account's failure count.
 
-Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check
+Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check   (user)
 Config     .oge/oge.toml from the Snapshot, schema 1
 Pipeline   default (frozen, compiled graph cb4c8843108a)
            verify (before) ─▶ implement ─▶ Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
-  verify     claude@work    network off   fresh Session every Attempt   (user)
+  verify     claude@work     network off   fresh Session every Attempt   (user)
   implement  claude@z:sonnet network off   (user)
   Check      go test -json ./...   go-test-json · timeout 5m · network off (not enforced)   (project)
   tests      **/*_test.go  testdata/**

@@ -86,23 +86,33 @@ type Overrides struct {
 	Checks    []string
 	Tests     []string
 	Outputs   []string
-	Agents    []string // --agent <stage>=<agent>[:<model>] or <agent>[:<model>]
-	Implement string   // alias: --implement <agent>[:<model>]
-	Verify    string   // alias: --verify <agent>[:<model>]
-	Fast      bool
-	Blind     bool
-	Confirm   bool
-	Require   []string
+	Agents    []string // --agent <stage>=<agent>[@<profile>][:<model>] or <agent>[@<profile>][:<model>]
+	Implement string   // alias: --implement <agent>[@<profile>][:<model>]
+	Verify    string   // alias: --verify <agent>[@<profile>][:<model>]
+	// ClaudeProfiles are the names of the Claude profiles found on this
+	// machine (the default, bound as plain "claude", is not among them):
+	// what claude@<name> may name.
+	ClaudeProfiles []string
+	Fast           bool
+	Blind          bool
+	Confirm        bool
+	Require        []string
 	// Unattended removes the optional Gates (ADR-0008).
 	Unattended bool
 	// User holds this repo's personal defaults from the user-level config
 	// (nil when there are none). Flags beat it; it beats .oge/oge.toml.
 	User *RepoDefaults
+	// UserConfigPath names that file in messages about what it set.
+	UserConfigPath string
+	// Standard is --standard: the mode flag that lets a Run override a
+	// weaker mode set in the user config.
+	Standard bool
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
 type Frozen struct {
 	Mode           Mode
+	ModeSource     Source // FromUser, FromCLI or "" (project or default)
 	Verify         string // "after", "before", or "" in Fast mode
 	Project        ProjectConfig
 	Setup          SetupConfig
@@ -132,9 +142,19 @@ type Stage struct {
 	Name    string
 	Role    string
 	Agent   string
+	Profile string // the agent's config profile ("work" for claude@work); "" is the default
 	Model   string
 	Network string
 	Source  Source
+}
+
+// Binding is the Stage's agent as the user writes and reads it:
+// "claude", or "claude@work" with a profile. Never a path.
+func (s Stage) Binding() string {
+	if s.Profile != "" {
+		return s.Agent + "@" + s.Profile
+	}
+	return s.Agent
 }
 
 // Weakening is a trust-weakening option in effect and where it came from.
@@ -161,19 +181,34 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	f := &Frozen{Project: cfg.Project, Setup: cfg.Setup}
 
 	// Mode.
+	var flagged []string
+	for _, m := range []struct {
+		on   bool
+		name string
+	}{{o.Fast, "--fast"}, {o.Blind, "--blind"}, {o.Standard, "--standard"}} {
+		if m.on {
+			flagged = append(flagged, m.name)
+		}
+	}
+	userMode := ""
+	if o.User != nil {
+		userMode = o.User.Mode
+	}
 	switch {
-	case o.Fast && o.Blind:
-		add("--fast, --blind", "choose one mode")
+	case len(flagged) > 1:
+		add(strings.Join(flagged, ", "), "choose one mode")
 	case o.Fast:
-		f.Mode = Fast
+		f.Mode, f.ModeSource = Fast, FromCLI
 	case o.Blind:
-		f.Mode, f.Verify = Blind, "before"
-	case o.User != nil && o.User.Mode == "fast":
-		f.Mode = Fast
-	case o.User != nil && o.User.Mode == "blind":
-		f.Mode, f.Verify = Blind, "before"
-	case o.User != nil && o.User.Mode == "standard":
-		f.Mode, f.Verify = Standard, "after"
+		f.Mode, f.Verify, f.ModeSource = Blind, "before", FromCLI
+	case o.Standard:
+		f.Mode, f.Verify, f.ModeSource = Standard, "after", FromCLI
+	case userMode == "fast":
+		f.Mode, f.ModeSource = Fast, FromUser
+	case userMode == "blind":
+		f.Mode, f.Verify, f.ModeSource = Blind, "before", FromUser
+	case userMode == "standard":
+		f.Mode, f.Verify, f.ModeSource = Standard, "after", FromUser
 	case p.Verify == "before":
 		f.Mode, f.Verify = Blind, "before"
 	default:
@@ -183,7 +218,11 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		if !oneOf(g, KnownGuarantees...) {
 			add("--require "+g, "unknown guarantee; known: %s", strings.Join(KnownGuarantees, ", "))
 		} else if f.Mode != "" && !oneOf(g, modeGuarantees[f.Mode]...) {
-			add("--require "+g, "%s mode doesn't give this guarantee; use Standard (the default) or --blind", f.Mode)
+			if f.ModeSource == FromUser {
+				add("--require "+g, "%s mode (mode = %q in your user config%s) doesn't give this guarantee; pass --standard or --blind", f.Mode, userMode, inFile(o.UserConfigPath))
+			} else {
+				add("--require "+g, "%s mode doesn't give this guarantee; use Standard (the default) or --blind", f.Mode)
+			}
 		}
 	}
 
@@ -236,23 +275,32 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 
 	// Stages and bindings.
 	impl := Stage{Name: "implement", Role: "implementer", Network: "off", Source: src}
-	impl.Agent, impl.Model = p.Stages.Implement.Agent, p.Stages.Implement.Model
+	impl.Agent, impl.Profile = SplitAgent(p.Stages.Implement.Agent)
+	impl.Model = p.Stages.Implement.Model
 	if p.Stages.Implement.Network != "" {
 		impl.Network = p.Stages.Implement.Network
 	}
 	if impl.Agent == "" {
 		impl.Source = ""
 	}
+	// Profile names never enter git (#127); only the user config may bind one.
+	if impl.Profile != "" {
+		probs = append(probs, Problem{"pipelines.default.stages.implement.agent", profilesArePersonal})
+	}
 	if o.User != nil {
-		probs = append(probs, userBinding(&impl, o.User.Stages.Implement, "implement", registered)...)
+		probs = append(probs, userBinding(&impl, o.User.Stages.Implement, "implement", registered, o.ClaudeProfiles)...)
 	}
 	ver := Stage{Name: "verify", Role: "verifier", Network: "off", Source: src}
-	ver.Agent, ver.Model = p.Stages.Verify.Agent, p.Stages.Verify.Model
+	ver.Agent, ver.Profile = SplitAgent(p.Stages.Verify.Agent)
+	ver.Model = p.Stages.Verify.Model
 	if ver.Agent == "" {
 		ver.Source = ""
 	}
+	if ver.Profile != "" && f.Mode != Fast {
+		probs = append(probs, Problem{"pipelines.default.stages.verify.agent", profilesArePersonal})
+	}
 	if o.User != nil {
-		probs = append(probs, userBinding(&ver, o.User.Stages.Verify, "verify", registered)...)
+		probs = append(probs, userBinding(&ver, o.User.Stages.Verify, "verify", registered, o.ClaudeProfiles)...)
 	}
 	switch f.Mode {
 	case Fast:
@@ -278,8 +326,19 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	}
 	f.Limits = resolveLimits(p.Limits)
 
-	// Trust-weakening options: from the project file only (there is no user
-	// config and no CLI network flag in the MVP).
+	// Trust-weakening options: from the project file, or a mode the user
+	// config chose (there is no CLI network flag in the MVP).
+	if f.ModeSource == FromUser && f.Mode == Fast {
+		f.TrustWeakening = append(f.TrustWeakening, Weakening{"mode = fast", FromUser, "no independent verifier, no held-out tests"})
+	}
+	if u := o.User; u != nil {
+		if u.Unattended != nil && *u.Unattended {
+			f.Notices = append(f.Notices, "user config: unattended isn't used yet (#131); pass --unattended")
+		}
+		if u.Apply != nil && *u.Apply {
+			f.Notices = append(f.Notices, "user config: apply isn't used yet (#131); pass --apply")
+		}
+	}
 	if cfg.Setup.Network == "on" {
 		// The setup command isn't echoed: it may hold a token (#39).
 		f.TrustWeakening = append(f.TrustWeakening, Weakening{"setup network = on", FromProject, ""})
@@ -296,23 +355,36 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	return f, nil
 }
 
+func inFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	return ", " + path
+}
+
 // userBinding lets the user config's choice for a Stage replace the
-// project's, field by field. Flags are applied afterwards by bind.
-func userBinding(s *Stage, u UserStage, name string, registered []string) []Problem {
-	if u.Agent != "" {
-		// TODO(#131): the @profile grammar belongs to the Claude adapter
-		// (#139); only the agent name is checked here.
-		agent, _, _ := strings.Cut(u.Agent, "@")
-		if !knownAgent(agent) && !oneOf(agent, registered...) {
-			return []Problem{{"user config: stages." + name + ".agent", "unknown agent; use one of " + strings.Join(KnownAgents, ", ")}}
+// project's. As with --agent, a user agent brings its own model (none means
+// the agent's default); a user model alone keeps the project's agent.
+func userBinding(s *Stage, u UserStage, name string, registered, profiles []string) []Problem {
+	key := "user config: stages." + name + ".agent"
+	switch {
+	case u.Agent != "":
+		agent, profile, _ := ParseBinding(u.Agent)
+		switch {
+		case bareAt(u.Agent):
+			return []Problem{{key, emptyProfile}}
+		case !knownAgent(agent) && !oneOf(agent, registered...):
+			return []Problem{{key, "unknown agent; use one of " + strings.Join(KnownAgents, ", ")}}
 		}
-		s.Agent = u.Agent
-	}
-	if u.Model != "" {
+		if msg := checkProfile(agent, profile, profiles); msg != "" {
+			return []Problem{{key, msg}}
+		}
+		s.Agent, s.Profile, s.Model, s.Source = agent, profile, u.Model, FromUser
+	case u.Model != "":
 		s.Model = u.Model
-	}
-	if s.Agent != "" && (u.Agent != "" || u.Model != "") {
-		s.Source = FromUser
+		if s.Agent != "" {
+			s.Source = FromUser
+		}
 	}
 	return nil
 }
@@ -360,12 +432,21 @@ func inferReport(run string) string {
 
 // bind applies --agent and the Role-kind aliases.
 func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
+	profiles := o.ClaudeProfiles
 	var probs []Problem
 	boundBy := map[string]string{}
 	set := func(flag, stage, spec string) {
-		agent, model, _ := strings.Cut(spec, ":")
+		agent, profile, model := ParseBinding(spec)
+		if bareAt(spec) {
+			probs = append(probs, Problem{flag, emptyProfile})
+			return
+		}
 		if !knownAgent(agent) {
 			probs = append(probs, Problem{flag, "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
+			return
+		}
+		if msg := checkProfile(agent, profile, profiles); msg != "" {
+			probs = append(probs, Problem{flag, msg})
 			return
 		}
 		for i := range stages {
@@ -377,7 +458,7 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 				return
 			}
 			boundBy[stage] = flag
-			stages[i].Agent, stages[i].Model, stages[i].Source = agent, model, FromCLI
+			stages[i].Agent, stages[i].Profile, stages[i].Model, stages[i].Source = agent, profile, model, FromCLI
 			return
 		}
 		probs = append(probs, Problem{flag, fmt.Sprintf("no Stage %q in this mode (Stages: %s)", stage, stageNames(stages))})
@@ -390,8 +471,8 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 			set(flag, stage, spec)
 			continue
 		}
-		if agent, _, _ := strings.Cut(a, ":"); !knownAgent(agent) {
-			set(flag, stages[0].Name, a) // reports the unknown agent once
+		if agent, profile, _ := ParseBinding(a); bareAt(a) || !knownAgent(agent) || checkProfile(agent, profile, profiles) != "" {
+			set(flag, stages[0].Name, a) // reports the unknown agent or profile once
 			continue
 		}
 		for _, s := range stages {
@@ -420,6 +501,33 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	alias("--implement", "implementer", o.Implement)
 	alias("--verify", "verifier", o.Verify)
 	return probs
+}
+
+const (
+	profilesArePersonal = "Claude profiles are personal; bind them with --agent or the user config (~/.config/oge/config.toml)"
+	emptyProfile        = "empty profile name after @"
+)
+
+// bareAt reports a binding such as "claude@" or "claude@:sonnet".
+func bareAt(spec string) bool {
+	head, _, _ := strings.Cut(spec, ":")
+	return strings.HasSuffix(head, "@")
+}
+
+// checkProfile is the Problem's message when agent@profile can't be
+// bound, "" when it can. The typed name isn't echoed (#39).
+func checkProfile(agent, profile string, known []string) string {
+	switch {
+	case profile == "":
+		return ""
+	case agent != "claude":
+		return "profiles are supported for claude only"
+	case oneOf(profile, known...):
+		return ""
+	case len(known) == 0:
+		return "unknown Claude profile; none found (a profile is a ~/.claude-<name> directory holding a Claude config)"
+	}
+	return "unknown Claude profile; known: " + strings.Join(known, ", ")
 }
 
 func stageNames(stages []Stage) string {
@@ -453,7 +561,7 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 	for i := range stages {
 		if stages[i].Role == "verifier" && stages[i].Agent == "" {
 			// Inherit only what isn't set: a configured verify model wins.
-			stages[i].Agent, stages[i].Source = impl.Agent, FromInherited
+			stages[i].Agent, stages[i].Profile, stages[i].Source = impl.Agent, impl.Profile, FromInherited
 			if stages[i].Model == "" {
 				stages[i].Model = impl.Model
 			}

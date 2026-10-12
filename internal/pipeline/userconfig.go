@@ -25,7 +25,7 @@ type UserConfig struct {
 	Schema int `toml:"schema"`
 	// Profiles are extra Claude profiles kept outside ~/.claude-<name>:
 	// name -> absolute config directory.
-	// TODO(#131): pass this as the `extra` map of claude.Profiles (#139).
+	// It is the `extra` map of claude.Profiles.
 	Profiles map[string]string       `toml:"profiles,omitempty"`
 	Repos    map[string]RepoDefaults `toml:"repos,omitempty"`
 }
@@ -115,8 +115,8 @@ func (c *UserConfig) validate() []Problem {
 	for _, root := range sortedKeys(c.Repos) {
 		key := `repos."` + root + `"`
 		d := c.Repos[root]
-		if !filepath.IsAbs(root) {
-			add(key, "a repo is keyed by the absolute path of its root")
+		if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+			add(key, "a repo is keyed by the clean, absolute path of its root")
 		}
 		if d.Mode != "" && !oneOf(d.Mode, "fast", "standard", "blind") {
 			add(key+".mode", `must be "fast", "standard" or "blind"`)
@@ -127,6 +127,11 @@ func (c *UserConfig) validate() []Problem {
 		}{{"implement", d.Stages.Implement}, {"verify", d.Stages.Verify}} {
 			if s.st.Agent != "" && strings.TrimSpace(s.st.Agent) == "" {
 				add(key+".stages."+s.name+".agent", "must not be blank")
+			}
+			for field, v := range map[string]string{"agent": s.st.Agent, "model": s.st.Model} {
+				if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {
+					add(key+".stages."+s.name+"."+field, "looks like a credential; Öge never takes credentials in config (ADR-0006)")
+				}
 			}
 		}
 	}
@@ -142,16 +147,18 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// ForRepo returns the defaults saved for repoRoot, matching the path as
-// written or with symlinks resolved (macOS temp dirs and /var are links).
+// ForRepo returns the defaults saved for repoRoot. Keys are canonical:
+// absolute, clean and with symlinks resolved, which SaveRepoDefaults
+// guarantees. A git worktree is a separate repo with its own key.
 func (c *UserConfig) ForRepo(repoRoot string) *RepoDefaults {
 	if c == nil {
 		return nil
 	}
-	if d, ok := c.Repos[repoRoot]; ok {
+	root := filepath.Clean(repoRoot)
+	if d, ok := c.Repos[root]; ok {
 		return &d
 	}
-	if real, err := filepath.EvalSymlinks(repoRoot); err == nil && real != repoRoot {
+	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
 		if d, ok := c.Repos[real]; ok {
 			return &d
 		}
@@ -168,6 +175,14 @@ func (c *UserConfig) ForRepo(repoRoot string) *RepoDefaults {
 func SaveRepoDefaults(path, repoRoot string, defaults RepoDefaults) error {
 	if !filepath.IsAbs(repoRoot) {
 		return fmt.Errorf("repo root %q must be absolute", repoRoot)
+	}
+	repoRoot = filepath.Clean(repoRoot)
+	if real, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = real
+	}
+	// A dotfile-managed config is usually a symlink: write through it.
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
 	}
 	cfg := &UserConfig{Schema: UserSchemaVersion}
 	switch data, err := os.ReadFile(path); {
