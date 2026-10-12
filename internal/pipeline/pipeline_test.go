@@ -310,7 +310,7 @@ func TestProfilesAreForClaudeOnly(t *testing.T) {
 	}
 }
 
-func TestConfigStageBindingTakesAProfile(t *testing.T) {
+func TestConfigStageBindingWithAProfileIsAProblem(t *testing.T) {
 	cfg, probs := Load([]byte(`schema = 1
 [project]
 test_globs = ["**/*_test.go"]
@@ -323,11 +323,17 @@ agent = "claude@work"
 	if len(probs) > 0 {
 		t.Fatal(probs)
 	}
-	f, probs := Resolve(cfg, Overrides{ClaudeProfiles: []string{"work"}}, nil)
-	if len(probs) > 0 || f.Stages[0].Binding() != "claude@work" {
-		t.Fatalf("probs %v, stages %+v", probs, f.Stages)
+	_, probs = Resolve(cfg, Overrides{ClaudeProfiles: []string{"work"}}, nil)
+	if len(probs) != 1 || probs[0].Key != "pipelines.default.stages.implement.agent" || !strings.Contains(probs[0].Msg, "personal") {
+		t.Errorf("problems = %+v, want the profiles-are-personal Problem", probs)
 	}
-	if _, probs = Resolve(cfg, Overrides{}, nil); len(probs) != 1 || probs[0].Key != "pipelines.default.stages.implement.agent" {
-		t.Errorf("an unknown configured profile: %v", probs)
+}
+
+func TestEmptyProfileIsAProblem(t *testing.T) {
+	for _, spec := range []string{"claude@", "claude@:sonnet"} {
+		o := Overrides{Checks: []string{"go test -json ./..."}, Tests: []string{"*_test.go"}, Implement: spec}
+		if _, probs := Resolve(nil, o, []string{"claude"}); len(probs) != 1 || probs[0].Msg != emptyProfile {
+			t.Errorf("%q: problems = %+v", spec, probs)
+		}
 	}
 }

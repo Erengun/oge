@@ -270,6 +270,8 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 
+	nameDefaultProfile(env, frozen)
+
 	refusal, coverWarns := checkCoverageOf(root, frozen)
 	if refusal != "" {
 		reportProblems(env, "this Run isn't valid", []pipeline.Problem{{Key: "check.commands", Msg: refusal}})
@@ -303,6 +305,22 @@ func claudeProfileNames(env Env) []string {
 		}
 	}
 	return names
+}
+
+// nameDefaultProfile gives a plain claude Stage the name of the profile
+// the parent's CLAUDE_CONFIG_DIR is, so the Ledger and dry run name the
+// account. The launch is the same.
+func nameDefaultProfile(env Env, f *pipeline.Frozen) {
+	getenv := env.Getenv
+	if getenv == nil {
+		return
+	}
+	def := claude.Profiles(getenv("HOME"), getenv, nil)[0]
+	for i := range f.Stages {
+		if s := &f.Stages[i]; s.Agent == claude.Name && s.Profile == "" {
+			s.Profile = def.Name
+		}
+	}
 }
 
 func installedAgents(env Env) []string {

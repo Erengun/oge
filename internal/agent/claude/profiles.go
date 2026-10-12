@@ -46,17 +46,9 @@ func Profiles(home string, getenv func(string) string, extra map[string]string) 
 		def.Dir = filepath.Join(home, ".claude")
 	}
 	byName := map[string]string{}
-	if filepath.IsAbs(home) {
-		entries, _ := os.ReadDir(home)
-		for _, e := range entries {
-			name, ok := strings.CutPrefix(e.Name(), profileDirPrefix)
-			if !ok || !ValidProfileName(name) {
-				continue
-			}
-			dir := filepath.Join(home, e.Name())
-			if holdsConfig(dir) {
-				byName[name] = dir
-			}
+	for _, e := range claudeDirs(home) {
+		if name, _ := strings.CutPrefix(filepath.Base(e), profileDirPrefix); ValidProfileName(name) && holdsConfig(e) {
+			byName[name] = e
 		}
 	}
 	for name, dir := range extra {
@@ -64,11 +56,59 @@ func Profiles(home string, getenv func(string) string, extra map[string]string) 
 			byName[name] = filepath.Clean(dir)
 		}
 	}
+	// A parent CLAUDE_CONFIG_DIR that is a discovered profile makes the
+	// default that profile, named, instead of a second entry for one dir.
+	for name, dir := range byName {
+		if def.Dir == dir {
+			def.Name = name
+			delete(byName, name)
+		}
+	}
 	out := []Profile{def}
 	for name, dir := range byName {
 		out = append(out, Profile{Name: name, Dir: dir})
 	}
-	sort.Slice(out[1:], func(i, j int) bool { return out[1+i].Name < out[1+j].Name })
+	rest := out[1:]
+	sort.Slice(rest, func(i, j int) bool { return rest[i].Name < rest[j].Name })
+	return out
+}
+
+// claudeDirs are every directory ~/.claude-* under home, whatever it
+// holds or is called: a Stat for presence, never a read (ADR-0006).
+func claudeDirs(home string) []string {
+	if !filepath.IsAbs(home) {
+		return nil
+	}
+	var out []string
+	entries, _ := os.ReadDir(home)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), profileDirPrefix) {
+			continue
+		}
+		dir := filepath.Join(home, e.Name())
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			out = append(out, dir)
+		}
+	}
+	return out
+}
+
+// DenyDirs are the config dirs a sandbox must not let an agent read: every
+// ~/.claude-* directory (bindable or not, with a config or not), the
+// default and every profile.
+func DenyDirs(home string, getenv func(string) string, extra map[string]string) []string {
+	var out []string
+	add := func(d string) {
+		if d != "" && !oneOf(d, out) {
+			out = append(out, d)
+		}
+	}
+	for _, p := range Profiles(home, getenv, extra) {
+		add(p.Dir)
+	}
+	for _, d := range claudeDirs(home) {
+		add(d)
+	}
 	return out
 }
 

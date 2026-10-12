@@ -14,7 +14,7 @@ import (
 // ProfileVersion versions the Launch profile: its flags, environment
 // lists, policy JSON and pre-authorised operations. Bump it with any change
 // to them, so the profile hash recorded with each decision changes too.
-const ProfileVersion = 4
+const ProfileVersion = 5
 
 // MinVersion is the oldest claude this adapter supports; LastTested is the
 // newest it was tested against (#35). A newer one only warns.
@@ -47,8 +47,8 @@ var builtinPlugins = []string{
 
 // stripEnv are the session markers removed from the child environment
 // (ADR-0006): exact names, never a prefix, except CLAUDE_CODE_REMOTE*.
-// Everything else passes through, including CLAUDE_CONFIG_DIR and every
-// auth or provider variable.
+// Everything else passes through, including every auth or provider
+// variable and, for the default profile, CLAUDE_CONFIG_DIR.
 var stripEnv = []string{
 	"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED",
 	"CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH",
@@ -59,7 +59,8 @@ var stripEnv = []string{
 const stripEnvPrefix = "CLAUDE_CODE_REMOTE"
 
 // setEnv are the only variables Öge sets: the Launch profile's isolation
-// knobs, the Run-private Go cache, and Öge's own markers.
+// knobs, the Run-private Go cache, and Öge's own markers. Öge also sets
+// CLAUDE_CONFIG_DIR when a Stage is bound to a named profile (profiles.go).
 var setEnv = []string{"CLAUDE_CODE_DISABLE_AUTO_MEMORY", "GOCACHE", "GIT_OPTIONAL_LOCKS", "OGE_RUN_ID", "OGE_ROLE"}
 
 // homeSecrets are well-known credential locations under $HOME that the
@@ -185,13 +186,19 @@ func (p profile) denyRead(spec agent.LaunchSpec, parent []string) []string {
 		}
 	}
 	for _, v := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME"} {
-		if d := get(v); filepath.IsAbs(d) && !oneOf(filepath.Clean(d), out) {
-			out = append(out, filepath.Clean(d))
+		if d := get(v); filepath.IsAbs(d) {
+			for _, r := range withReal(d) {
+				if !oneOf(r, out) {
+					out = append(out, r)
+				}
+			}
 		}
 	}
-	for _, k := range p.profiles(parent) {
-		if k.Dir != "" && !oneOf(k.Dir, out) {
-			out = append(out, k.Dir)
+	for _, d := range DenyDirs(get("HOME"), get, p.extra) {
+		for _, r := range withReal(d) {
+			if !oneOf(r, out) {
+				out = append(out, r)
+			}
 		}
 	}
 	return out
@@ -278,6 +285,7 @@ func (p profile) hash() string {
 		"version": ProfileVersion, "role": p.role, "tools": p.tools,
 		"strip": stripEnv, "strip_prefix": stripEnvPrefix, "set": setEnv,
 		"bash_shapes": describeShapes(), "deny_read_home": homeSecrets,
+		"deny_read_profiles": "every ~/.claude-* dir + extras, symlinks resolved", "config_dir": "from the bound profile",
 		"builtin_plugins": builtinPlugins,
 	}
 	b, _ := json.Marshal(def)

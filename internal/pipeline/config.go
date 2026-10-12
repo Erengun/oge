@@ -390,7 +390,9 @@ func (s StageConfig) validate(name, role string) []Problem {
 	default:
 		probs = append(probs, Problem{key + ".role", fmt.Sprintf("Stage %s has the fixed Role kind %s", name, role)})
 	}
-	if a, _ := SplitAgent(s.Agent); s.Agent != "" && !knownAgent(a) {
+	if bareAt(s.Agent) {
+		probs = append(probs, Problem{key + ".agent", emptyProfile})
+	} else if a, _ := SplitAgent(s.Agent); s.Agent != "" && !knownAgent(a) {
 		probs = append(probs, Problem{key + ".agent", "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
 	}
 	if name == "implement" && !oneOf(s.Network, "", "off", "on") {

@@ -265,10 +265,9 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	known := func(a string) bool { return knownAgent(a) || oneOf(a, registered...) }
 	for _, s := range f.Stages {
 		if s.Source == src && s.Profile != "" {
-			key := "pipelines.default.stages." + s.Name + ".agent"
-			if msg := checkProfile(s.Agent, s.Profile, o.ClaudeProfiles); msg != "" {
-				probs = append(probs, Problem{key, msg})
-			}
+			// Profile names never enter git (#127).
+			// TODO(#129): accept a profile bound by the user-level config.
+			probs = append(probs, Problem{"pipelines.default.stages." + s.Name + ".agent", profilesArePersonal})
 		}
 	}
 	probs = append(probs, bind(f.Stages, o, known)...)
@@ -352,6 +351,10 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	boundBy := map[string]string{}
 	set := func(flag, stage, spec string) {
 		agent, profile, model := ParseBinding(spec)
+		if bareAt(spec) {
+			probs = append(probs, Problem{flag, emptyProfile})
+			return
+		}
 		if !knownAgent(agent) {
 			probs = append(probs, Problem{flag, "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
 			return
@@ -382,7 +385,7 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 			set(flag, stage, spec)
 			continue
 		}
-		if agent, profile, _ := ParseBinding(a); !knownAgent(agent) || checkProfile(agent, profile, profiles) != "" {
+		if agent, profile, _ := ParseBinding(a); bareAt(a) || !knownAgent(agent) || checkProfile(agent, profile, profiles) != "" {
 			set(flag, stages[0].Name, a) // reports the unknown agent or profile once
 			continue
 		}
@@ -412,6 +415,17 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	alias("--implement", "implementer", o.Implement)
 	alias("--verify", "verifier", o.Verify)
 	return probs
+}
+
+const (
+	profilesArePersonal = "Claude profiles are personal; bind them with --agent or the user config (~/.config/oge/config.toml)"
+	emptyProfile        = "empty profile name after @"
+)
+
+// bareAt reports a binding such as "claude@" or "claude@:sonnet".
+func bareAt(spec string) bool {
+	head, _, _ := strings.Cut(spec, ":")
+	return strings.HasSuffix(head, "@")
 }
 
 // checkProfile is the Problem's message when agent@profile can't be

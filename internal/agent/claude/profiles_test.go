@@ -66,7 +66,7 @@ func TestProfilesParentConfigDirIsTheDefault(t *testing.T) {
 		return ""
 	}
 	got := Profiles(home, getenv, nil)
-	if got[0].Name != "" || got[0].Dir != filepath.Join(home, ".claude-work") {
+	if got[0].Dir != filepath.Join(home, ".claude-work") {
 		t.Errorf("default = %v, want the parent's CLAUDE_CONFIG_DIR", got[0])
 	}
 }
@@ -166,5 +166,55 @@ func TestUnknownProfileFailsTheLaunchNamingTheKnownOnes(t *testing.T) {
 	_, err := p.env([]string{"HOME=" + home}, agent.LaunchSpec{Role: "implementer", Profile: "nope"})
 	if err == nil || !strings.Contains(err.Error(), "known: work") {
 		t.Errorf("err = %v, want one listing the known profiles", err)
+	}
+}
+
+func TestParentConfigDirNamesTheDefaultAfterTheProfile(t *testing.T) {
+	home := t.TempDir()
+	mk(t, filepath.Join(home, ".claude-work", "settings.json"), false)
+	mk(t, filepath.Join(home, ".claude-z", "settings.json"), false)
+	dir := filepath.Join(home, ".claude-work")
+	got := Profiles(home, func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return dir
+		}
+		return ""
+	}, nil)
+	var labels []string
+	for _, p := range got {
+		labels = append(labels, p.Label())
+	}
+	if want := []string{"claude@work", "claude@z"}; !reflect.DeepEqual(labels, want) {
+		t.Errorf("labels %v, want %v", labels, want)
+	}
+}
+
+func TestEveryClaudeDashDirIsDeniedButOnlyValidOnesBind(t *testing.T) {
+	home := t.TempDir()
+	mk(t, filepath.Join(home, ".claude-my work", ".credentials.json"), false)
+	mk(t, filepath.Join(home, ".claude-x@y", "settings.json"), false)
+	mk(t, filepath.Join(home, ".claude-creds", ".credentials.json"), false)
+	deny := DenyDirs(home, noEnv, nil)
+	for _, d := range []string{".claude-my work", ".claude-x@y", ".claude-creds"} {
+		if !oneOf(filepath.Join(home, d), deny) {
+			t.Errorf("%s isn't denied: %v", d, deny)
+		}
+	}
+	if got := Profiles(home, noEnv, nil); len(got) != 1 {
+		t.Errorf("only the default should bind: %v", got)
+	}
+}
+
+func TestSymlinkedProfileDirIsDeniedResolved(t *testing.T) {
+	home, real := t.TempDir(), t.TempDir()
+	mk(t, filepath.Join(real, "settings.json"), false)
+	if err := os.Symlink(real, filepath.Join(home, ".claude-work")); err != nil {
+		t.Skip("no symlinks")
+	}
+	resolved, _ := filepath.EvalSymlinks(real)
+	p, _ := profileFor("implementer")
+	deny := p.denyRead(agent.LaunchSpec{}, []string{"HOME=" + home})
+	if !oneOf(resolved, deny) || !oneOf(filepath.Join(home, ".claude-work"), deny) {
+		t.Errorf("deny %v lacks the link and %s", deny, resolved)
 	}
 }
