@@ -18,7 +18,6 @@ ap.add_argument("--cwd", required=True)
 ap.add_argument("--prompt")
 ap.add_argument("--decide", default="")
 ap.add_argument("--timeout", type=float, default=300)
-ap.add_argument("--session-model", help="optional session/set_model modelId")
 ap.add_argument("agent", nargs=argparse.REMAINDER)
 a = ap.parse_args()
 argv = a.agent[1:] if a.agent and a.agent[0] == "--" else a.agent
@@ -91,9 +90,6 @@ try:
         "clientInfo": {"name": "oge-probe", "version": "0"}}))
     if r and "result" in r:
         r = wait_for(request("session/new", {"cwd": a.cwd, "mcpServers": []}))
-    if r and "result" in r and a.session_model:
-        sid = r["result"]["sessionId"]
-        wait_for(request("session/set_model", {"sessionId": sid, "modelId": a.session_model}))
     if r and "result" in r and a.prompt:
         sid = r["result"]["sessionId"]
         wait_for(request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": a.prompt}]}))
