@@ -15,7 +15,7 @@ func TestBareOgeInterruptedWhileComposing(t *testing.T) {
 	// Sequential: it signals the test process.
 	f := newRunFixture(t)
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
-	s.composer(1)
+	s.composer()
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

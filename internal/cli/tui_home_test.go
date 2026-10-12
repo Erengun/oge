@@ -168,6 +168,7 @@ type homeSession struct {
 	out    syncBuf
 	errOut syncBuf
 	exit   chan int
+	mark   int // how much output there was when the last keys were typed
 }
 
 func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession {
@@ -192,13 +193,28 @@ func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession 
 }
 
 // composer waits for the n-th composer frame.
-func (s *homeSession) composer(n int) {
+// composer waits for a composer drawn after the last keys were typed. A
+// composer redraws as it's used, so counting its frames isn't enough: an
+// earlier composer's redraws could satisfy the count.
+func (s *homeSession) composer() {
 	s.t.Helper()
-	s.out.waitForN(s.t, "[ctrl+e] editor", n)
+	s.expect("[ctrl+e] editor")
+}
+
+// expect waits until text is written after the last keys were typed.
+func (s *homeSession) expect(text string) {
+	s.t.Helper()
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if strings.Contains(s.out.String()[s.mark:], text) {
+			return
+		}
+	}
+	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
 }
 
 func (s *homeSession) type_(keys string) {
 	s.t.Helper()
+	s.mark = len(s.out.String())
 	if _, err := s.pw.WriteString(keys); err != nil {
 		s.t.Fatal(err)
 	}
@@ -221,11 +237,11 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
-	s.composer(1)
+	s.composer()
 	s.type_("fix Add\r")
-	s.out.waitForN(t, "[a] apply", 1)
+	s.expect("[a] apply")
 	s.type_("q")
-	s.composer(2)
+	s.composer()
 	// What the terminal shows now: the Run's summary above, and the
 	// composer back, empty.
 	var screen vt
@@ -264,17 +280,17 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 		return os.WriteFile(path, append([]byte("fix Add\n"), b...), 0o644)
 	}
 	s = startHomeSession(t, f, "--fast", "--agent", "fake")
-	s.composer(1)
+	s.composer()
 	s.type_("fix Add\r")
-	s.out.waitForN(t, "[a] apply", 1)
+	s.expect("[a] apply")
 	s.type_("q")
-	s.composer(2)
+	s.composer()
 	s.type_("\x05")                         // Ctrl+E on an empty box
 	s.out.waitForN(t, "fix Add", <-shown+1) // the box shows what the editor left
 	s.type_("\r")
-	s.out.waitForN(t, "[a] apply", 2)
+	s.expect("[a] apply")
 	s.type_("q")
-	s.composer(3)
+	s.composer()
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -294,14 +310,14 @@ func TestBareOgeRefusesAConfigEditedWhileComposing(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
-	s.composer(1)
+	s.composer()
 	cfg := strings.Replace(fxConfig, "./...", "./elsewhere/...", 1)
 	if cfg == fxConfig {
 		t.Fatal("the fixture's Check changed; adjust this test")
 	}
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
 	s.type_("fix Add\r")
-	s.out.waitForN(t, "this Run isn't valid", 1)
+	s.expect("this Run isn't valid")
 	s.type_("\x03\x03") // clear the Task, then leave
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
