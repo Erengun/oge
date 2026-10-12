@@ -49,12 +49,16 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // the setup panel's choices are added to it for every Task. The panel's
 // choices outlive one Run, so they are kept here, for the session.
 func startHome(env Env, f runFlags, root string, first *resolved) int {
-	if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
-		return code
-	}
+	setup := newSetupState(env, root)
 	last := ExitOK
 	res, problem := first, []string(nil)
-	setup := newSetupState(env, root)
+	if first == nil {
+		// No project config: the Checks section holds Öge's proposal.
+		setup.seedProposal()
+		res, problem = resolveHome(env, f, root, setup)
+	} else if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
+		return code
+	}
 	for i := 0; ; i++ {
 		if i > 0 {
 			res, problem = resolveHome(env, f, root, setup)

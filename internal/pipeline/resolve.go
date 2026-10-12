@@ -124,6 +124,14 @@ type Overrides struct {
 	// value), FromUser (the user config) or FromTUI. Only the last two are
 	// shown as trust-weakening: they remove Gates without a typed flag.
 	UnattendedFrom Source
+	// TUIOracle says the setup panel edited the Checks and test globs
+	// (#132): TUIChecks and TUITests then replace the project's (flags
+	// still add to them). A Check the project file doesn't have, or one
+	// that was edited, is sourced FromTUI; one the file has and the panel
+	// left out is shown as trust-weakening.
+	TUIOracle bool
+	TUIChecks []CheckCommandConfig
+	TUITests  []string
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
@@ -266,11 +274,36 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		}
 		return out
 	}
-	f.Project.TestGlobs = appendCopy(trimAll(cfg.Project.TestGlobs), nonBlank("--tests", o.Tests))
+	baseGlobs, baseChecks := cfg.Project.TestGlobs, cfg.Check.Commands
+	var removed []string // Checks the file has and the setup panel left out
+	if o.TUIOracle {
+		baseGlobs, baseChecks = o.TUITests, o.TUIChecks
+		kept := map[string]bool{}
+		for _, c := range o.TUIChecks {
+			kept[strings.TrimSpace(c.Run)] = true
+		}
+		for _, c := range cfg.Check.Commands {
+			if run := strings.TrimSpace(c.Run); !kept[run] {
+				removed = append(removed, run)
+			}
+		}
+	}
+	f.Project.TestGlobs = appendCopy(trimAll(baseGlobs), nonBlank("--tests", o.Tests))
 	f.Project.OutputGlobs = appendCopy(trimAll(cfg.Project.OutputGlobs), nonBlank("--output", o.Outputs))
+	inFile := map[string]bool{}
 	for _, c := range cfg.Check.Commands {
+		inFile[strings.TrimSpace(c.Run)] = true
+	}
+	for _, c := range baseChecks {
 		c.Run = strings.TrimSpace(c.Run)
-		f.Checks = append(f.Checks, resolveCheck(c, src))
+		cs := src
+		if o.TUIOracle && !inFile[c.Run] {
+			cs = FromTUI
+		}
+		if c.Report == "" && o.TUIOracle {
+			c.Report = inferReport(c.Run)
+		}
+		f.Checks = append(f.Checks, resolveCheck(c, cs))
 	}
 	for _, run := range nonBlank("--check", o.Checks) {
 		f.Checks = append(f.Checks, resolveCheck(CheckCommandConfig{Run: run, Report: inferReport(run)}, FromCLI))
@@ -357,6 +390,9 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	if o.Unattended && (o.UnattendedFrom == FromUser || o.UnattendedFrom == FromTUI) {
 		f.TrustWeakening = append(f.TrustWeakening, Weakening{"unattended", o.UnattendedFrom, "removes the optional Gates, ADR-0008"})
 	}
+	for _, run := range removed {
+		f.TrustWeakening = append(f.TrustWeakening, Weakening{"Check removed in setup: " + run, FromTUI, "the Oracle has one fewer Check than " + ConfigPath})
+	}
 	if cfg.Setup.Network == "on" {
 		// The setup command isn't echoed: it may hold a token (#39).
 		f.TrustWeakening = append(f.TrustWeakening, Weakening{"setup network = on", FromProject, ""})
@@ -433,6 +469,10 @@ func resolveCheck(c CheckCommandConfig, src Source) CheckCommand {
 	}
 	return r
 }
+
+// InferReport is inferReport for the setup panel: the report a command
+// declares by itself, or "".
+func InferReport(run string) string { return inferReport(run) }
 
 // inferReport recognises the structured-report format of a --check command
 // where it is unambiguous.

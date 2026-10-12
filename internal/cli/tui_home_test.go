@@ -20,7 +20,8 @@ func homeFrozen() *pipeline.Frozen {
 			{Name: "implement", Role: "implementer", Agent: "claude", Model: "sonnet"},
 			{Name: "verify", Role: "verifier", Agent: "codex"},
 		},
-		Checks: []pipeline.CheckCommand{{Run: "go test -json ./..."}},
+		Project: pipeline.ProjectConfig{TestGlobs: []string{"**/*_test.go"}},
+		Checks:  []pipeline.CheckCommand{{Run: "go test -json ./..."}},
 	}
 }
 

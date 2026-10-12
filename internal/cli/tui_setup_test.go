@@ -67,7 +67,7 @@ func TestSetupProfilePickerListsDiscoveredProfiles(t *testing.T) {
 func TestSetupSavePromptAfterTheFirstChange(t *testing.T) {
 	h, dir := setupHome(t)
 	// Tab, down to "unattended", Enter flips it, Tab closes.
-	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), down(), enter(), tab())
+	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), enter(), tab())
 	if !h.saving {
 		t.Fatalf("no save prompt after a change:\n%s", frame(h))
 	}
