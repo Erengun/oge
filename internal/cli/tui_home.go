@@ -248,6 +248,22 @@ type home struct {
 	// an Accepted Run, the action bar. stop ends the session (Öge failed).
 	after func(ended) (text string, bar *summary, stop bool)
 	bar   *summary // non-nil while the action bar waits for a key
+	// barAt is when the bar was shown: keys before barArm has passed were
+	// typed ahead, never meant for it, and are dropped (ADR-0015: applying
+	// is an explicit act). now is the clock; nil is time.Now.
+	barAt time.Time
+	now   func() time.Time
+}
+
+// barArm is how long the action bar ignores keys once shown, as the old bar
+// flushed what was typed before it.
+const barArm = 300 * time.Millisecond
+
+func (h *home) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 // summary is the action bar after an Accepted Run, inside the session's
@@ -414,7 +430,7 @@ func (h *home) ended(e ended) (tea.Model, tea.Cmd) {
 	}
 	block := strings.TrimRight(h.run.render(), "\n") + "\n" + text
 	if bar != nil {
-		h.bar = bar
+		h.bar, h.barAt = bar, h.clock()
 	} else {
 		h.reopen()
 	}
@@ -443,6 +459,9 @@ func (h *home) barUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pageFailedMsg:
 		return h, tea.Println("oge: showing the diff: " + clean(msg.err.Error()))
 	case tea.KeyPressMsg:
+		if h.clock().Sub(h.barAt) < barArm {
+			return h, nil // typed ahead, before the bar could be seen
+		}
 		switch msg.String() {
 		case "a":
 			if !h.bar.bar.applied {
