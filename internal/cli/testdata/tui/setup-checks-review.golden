@@ -1,0 +1,13 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Save these Checks to .oge/oge.toml?   the file is written, never committed
+     …
+     # the Oracle
+     [project]
+   + test_globs = ["**/*_test.go", "testdata/**"]
+   - test_globs = ["**/*_test.go"]
+     
+     [[check.commands]]
+     …
+ [y]es write it [n]o

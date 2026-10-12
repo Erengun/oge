@@ -1,0 +1,20 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
+
+✓ preflight  ok · 0.4s
+✗ implement  claude · Infrastructure stop · 5.7s
+· QA         not run
+· check      not run
+
+ÖGE RECEIPT   Run 20261005T090000-a1b2c3 · Standard mode
+Result        ■ Infrastructure stop: no Verdict
+              claude isn't logged in
+Task          fix Add
+Checks        none ran
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          6.2s · preflight 400ms · implement 5.6s · your attention 0s
+Not covered   No Check reached a Verdict: there is no Evidence on any Candidate
+Ledger        head b997d7259029 · identifies this Receipt; not tamper-proof
+Nothing was written to your repository.

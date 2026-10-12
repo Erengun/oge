@@ -268,6 +268,13 @@ func runCommand(env Env, args []string) int {
 	// unattended only removes Gates, it doesn't stop a first-run proposal.
 	attended := env.Interactive() && !cli.unattended
 
+	// With no project config at all, the composer's setup panel is the
+	// first-run proposal (#132): the detected Checks, pre-filled, saved only
+	// after a reviewed diff. Elsewhere the proposal stays on stdin.
+	home := len(positional) == 0 && f.taskFile == "" && !f.dryRun && !cli.unattended && liveView(env, f)
+	if home && noProjectConfig(root, f) {
+		return startHome(env, cli, root, nil)
+	}
 	res, code := resolveRun(env, f, root, attended, user)
 	if code != ExitOK {
 		return code
@@ -276,7 +283,7 @@ func runCommand(env Env, args []string) int {
 	// A bare oge on a terminal that draws the live view asks for the Task in
 	// its composer, in the same view that shows the Run (#130). Everything
 	// else keeps the $EDITOR, stdin and refusal paths of readTask.
-	if len(positional) == 0 && f.taskFile == "" && !f.dryRun && !cli.unattended && liveView(env, f) {
+	if home {
 		return startHome(env, cli, root, res)
 	}
 	t, code := readTask(env, f, positional, attended)
@@ -288,6 +295,16 @@ func runCommand(env Env, args []string) int {
 	}
 	renderDryRun(env.Stdout, t, frozen, cfg != nil, warn, f.verbose || f.veryVerbose)
 	return ExitOK
+}
+
+// noProjectConfig says the Snapshot has no .oge/oge.toml and the command line
+// doesn't carry the Oracle either.
+func noProjectConfig(root string, f runFlags) bool {
+	if len(f.o.Checks) > 0 || len(f.o.Tests) > 0 {
+		return false
+	}
+	sf, err := workspace.ReadSnapshotFile(root, pipeline.ConfigPath)
+	return err == nil && !sf.InSnapshot && !sf.Ignored
 }
 
 // loadUserConfig reads the user-level config. A missing file is fine; one
@@ -454,7 +471,7 @@ func loadConfig(env Env, root string, f runFlags, attended bool) (*pipeline.Conf
 		return nil, nil, ExitRefused
 	}
 	if !sf.InSnapshot {
-		if len(f.o.Checks) > 0 || len(f.o.Tests) > 0 {
+		if len(f.o.Checks) > 0 || len(f.o.Tests) > 0 || f.o.TUIOracle {
 			return nil, nil, ExitOK // flags-only Run; Resolve says what is missing
 		}
 		if !attended {

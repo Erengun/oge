@@ -1,0 +1,21 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Setup   next Run · [enter] change · [s] save as default · [tab] done
+ > implement agent    claude
+   implement profile  claude
+   implement model    sonnet
+   verify agent       codex
+   verify model       agent's default
+   mode               Standard   implementer, then a fresh verifier writes held…
+   unattended         off   never stops at an optional Gate (ADR-0008)
+   apply on accept    off   applies an Accepted Candidate to your working tree
+Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
+   check 1            go test -json ./sub/...
+   + Check command    
+   test glob 1        **/*_test.go
+   + test glob        
+   ✗ refused: the Check can't run 1 protected test file in 1 package dir (.);
+     the Run would end in an Infrastructure stop. Scope project.test_globs to
+     what the Check runs (e.g. sub/**/*_test.go), or widen the Check to ./...
+   a Run can't start until this is fixed

@@ -49,12 +49,18 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // the setup panel's choices are added to it for every Task. The panel's
 // choices outlive one Run, so they are kept here, for the session.
 func startHome(env Env, f runFlags, root string, first *resolved) int {
-	if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
-		return code
-	}
+	setup := newSetupState(env, root)
 	last := ExitOK
 	res, problem := first, []string(nil)
-	setup := newSetupState(env, root)
+	if first == nil {
+		// No project config: the Checks section holds Öge's proposal.
+		if !setup.seedProposal() {
+			setup.seedEmpty() // a toolchain Öge doesn't recognise: the section starts empty
+		}
+		res, problem = resolveHome(env, f, root, setup)
+	} else if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
+		return code
+	}
 	for i := 0; ; i++ {
 		if i > 0 {
 			res, problem = resolveHome(env, f, root, setup)
@@ -89,6 +95,18 @@ func resolveHome(env Env, f runFlags, root string, setup *setupState) (*resolved
 	}
 	if code == ExitOK {
 		return res, nil
+	}
+	if setup != nil && setup.noFile && !setup.ready {
+		// The panel needs a resolved Run to show its other rows. With the
+		// first run's Checks still empty none resolves, so the panel is
+		// opened on a stand-in that is never run.
+		g := f
+		g.o.TUIChecks = []pipeline.CheckCommandConfig{{Run: "go test -json ./...", Report: oracle.ReportGoTestJSON}}
+		g.o.TUITests = []string{"**/*_test.go"}
+		quiet.Stderr = io.Discard
+		if r, c := resolveRun(quiet, g, root, false, user); c == ExitOK {
+			setup.init(r)
+		}
 	}
 	var lines []string
 	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
