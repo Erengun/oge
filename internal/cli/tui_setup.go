@@ -361,9 +361,11 @@ func (p *setupPanel) value(r setupRow) string {
 		}
 		return clean(st.agent)
 	case rowProfile:
-		agent, profile := st.agent, st.profile
-		if agent == "" {
-			agent, profile = p.sel.impl.agent, p.sel.impl.profile
+		// rows shows this row only for Claude; an unset verifier agent
+		// inherits implement's profile.
+		profile := st.profile
+		if st.agent == "" {
+			profile = p.sel.impl.profile
 		}
 		return clean(claude.Profile{Name: profile}.Label())
 	case rowModel:
