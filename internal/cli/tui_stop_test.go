@@ -77,9 +77,9 @@ func TestBareOgeShowsAnInfrastructureStop(t *testing.T) {
 	// final frame once the Run has returned.
 	s.expect("ÖGE RECEIPT")
 	s.composer()
-	var screen vt
+	screen := vt{height: 24}
 	screen.write([]byte(s.out.String()))
-	got := screen.String()
+	got := homeNorm.ReplaceAllString(screen.String(), "X")
 	s.type_("\x03")
 	s.wait()
 	for _, bad := range []string{"reviewing", "Nothing needs you"} {
@@ -90,4 +90,5 @@ func TestBareOgeShowsAnInfrastructureStop(t *testing.T) {
 	if !strings.Contains(got, reason) || !strings.Contains(got, "Result") {
 		t.Errorf("no Receipt with the stop's reason:\nscreen:\n%s\nstderr:\n%s", got, s.errOut.String())
 	}
+	golden(t, "home-infrastructure-stop", got)
 }

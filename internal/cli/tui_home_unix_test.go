@@ -51,13 +51,12 @@ func TestBareOgeInterruptInPagerOrEditorIsTheirs(t *testing.T) {
 	s.type_("\x05") // Ctrl+E
 	s.expect("fix Add")
 	s.type_("\r")
-	s.actionBar()
-	s.type_("d")
+	s.ended()
+	s.type_("/diff\r")
 	<-paged
-	time.Sleep(barArm) // the bar is drawn again after the pager
-	s.type_("q")
-	s.composer()
-	s.type_("\x03")
+	s.type_("still here")
+	s.expect("still here")
+	s.type_("\x03\x03") // clear it, then leave
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}

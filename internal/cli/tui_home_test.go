@@ -223,12 +223,21 @@ func (s *homeSession) expect(text string) {
 	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
 }
 
-// actionBar waits for the action bar, then for it to take keys: until
-// barArm has passed it drops them as typed ahead.
-func (s *homeSession) actionBar() {
+// ended waits for the composer back after an Accepted Run: its hint line
+// names the actions.
+func (s *homeSession) ended() {
 	s.t.Helper()
+	s.expect("↓ actions")
+}
+
+// actions moves the focus to the action row (↓ on an empty composer) and
+// waits for it to take keys: until actionsArm has passed it drops them as
+// typed ahead.
+func (s *homeSession) actions() {
+	s.t.Helper()
+	s.type_("\x1b[B")
 	s.expect("[a] apply")
-	time.Sleep(barArm + 50*time.Millisecond)
+	time.Sleep(actionsArm + 50*time.Millisecond)
 }
 
 func (s *homeSession) type_(keys string) {
@@ -258,12 +267,10 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
-	// What the terminal shows now: the Run's summary above, and the
-	// composer back, empty.
-	var screen vt
+	s.ended()
+	// The whole scrollback now, on an 80x24 terminal (the pipe reports no
+	// size): the transcript of the Run, and the composer back, empty.
+	screen := vt{height: 24}
 	screen.write([]byte(s.out.String()))
 	got := homeNorm.ReplaceAllString(screen.String(), "X")
 	s.type_("\x03")
@@ -301,15 +308,11 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	s = startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
+	s.ended()
 	s.type_("\x05")                         // Ctrl+E on an empty box
 	s.out.waitForN(t, "fix Add", <-shown+1) // the box shows what the editor left
 	s.type_("\r")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
+	s.ended()
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -331,27 +334,25 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 	var programs atomic.Int32
 	s := startHomeSessionWith(t, f, func(env *Env) { env.programStarted = func() { programs.Add(1) } }, "--fast", "--agent", "fake")
 	s.composer()
-	s.type_("fix Add\ra") // the a is typed ahead: it must not apply
+	s.type_("fix Add\r")
 	s.expect("Result        ✓ Accepted")
-	s.actionBar()
-	s.type_("q")
-	s.composer()
+	s.ended()
+	// The next message is typed straight away: its a applies nothing.
+	s.type_("add tests\r")
+	s.expect("> add tests")
 	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); strings.Contains(string(b), "return a + b") {
-		t.Fatal("an a typed before the action bar applied the Candidate")
+		t.Fatal("typing the next Task applied the Candidate")
 	}
-	s.type_("fix Add again\r")
-	s.expect("fix Add again")
-	s.actionBar()
-	s.type_("d")
+	s.ended()
+	s.type_("/diff\r")
 	s.expect("diff --git")
+	s.actions()
 	s.type_("a")
 	s.expect("Applied Candidate")
 	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "return a + b") {
 		t.Errorf("[a] didn't apply the Candidate: add.go is\n%s", b)
 	}
-	s.type_("q")
-	s.composer()
-	s.type_("\x03")
+	s.type_("\x03\x03") // back to the composer, then leave
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
@@ -361,29 +362,88 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 	if n := programs.Load(); n != 1 {
 		t.Errorf("%d programs started; one owns the session", n)
 	}
+	// One continuous transcript: both Tasks, in order, with their Receipts.
+	screen := vt{height: 24}
+	screen.write([]byte(s.out.String()))
+	all := screen.String()
+	first, second := strings.Index(all, "> fix Add"), strings.Index(all, "> add tests")
+	if first < 0 || second < first || strings.Count(all, "ÖGE RECEIPT") != 2 {
+		t.Errorf("not one transcript in order:\n%s", all)
+	}
 }
 
 // The action bar drops keys typed before it could be seen: an a typed ahead
-// never applies; a fresh one does (ADR-0015).
-func TestActionBarDropsKeysTypedAhead(t *testing.T) {
+// A Gate in the session: it opens in the live area, and its outcome is
+// printed into the transcript with the stages.
+func TestBareOgeGateInTheTranscript(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake", "--confirm")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("Result gate")
+	s.type_("t\r")
+	s.ended()
+	screen := vt{height: 24}
+	screen.write([]byte(s.out.String()))
+	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	golden(t, "home-gate", got)
+}
+
+// Delivery never fires on a bare printable key while the composer can take
+// text (#184): a typed into the composer is text; ↓ on an empty composer
+// focuses the action row, whose keys act only after actionsArm; any other
+// key goes back to the composer; and the slash commands act on Enter.
+func TestHomeDeliveryNeedsAnExplicitAct(t *testing.T) {
 	at := time.Unix(0, 0)
 	applied := 0
 	h := testHome(70)
 	h.now = func() time.Time { return at }
-	h.run = newModel(task.Parse("fix Add"), homeFrozen(), newStyles(false), time.Now)
-	h.bar, h.barAt = &deliveryBar{bar: &actionBar{apply: func() string { applied++; return "applied" }}}, at
-	at = at.Add(barArm / 2)
-	h.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	h.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
-	if applied != 0 || h.bar == nil {
-		t.Fatalf("keys typed ahead acted: applied %d, bar left: %v", applied, h.bar == nil)
+	h.last = &lastRun{apply: func() string { applied++; return "applied" }}
+	key := func(k string) {
+		if k == "down" {
+			h.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			return
+		}
+		h.Update(tea.KeyPressMsg{Code: rune(k[0]), Text: k})
 	}
-	at = at.Add(barArm)
-	if _, cmd := h.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}); cmd != nil {
-		cmd()
+	key("a")
+	if applied != 0 || h.comp.text() != "a" {
+		t.Fatalf("a on the composer: applied %d, text %q", applied, h.comp.text())
 	}
+	h.comp = newComposer()
+	if !strings.Contains(frame(h), "↓ actions · /apply /diff /receipt /branch · /new") {
+		t.Errorf("no hint line:\n%s", frame(h))
+	}
+	key("down")
+	key("a") // typed ahead of the row
+	if applied != 0 || !h.actions {
+		t.Fatalf("a before the row armed: applied %d, focused %v", applied, h.actions)
+	}
+	at = at.Add(actionsArm)
+	key("a")
 	if applied != 1 {
-		t.Fatalf("a fresh a applied %d times", applied)
+		t.Fatalf("a fresh a on the row applied %d times", applied)
+	}
+	key("x")
+	if h.actions || h.comp.text() != "x" {
+		t.Fatalf("typing on the row: focused %v, text %q", h.actions, h.comp.text())
+	}
+	h.comp.set("/apply")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if applied != 2 || !h.comp.empty() || h.run != nil {
+		t.Fatalf("/apply: applied %d, text %q, run %v", applied, h.comp.text(), h.run != nil)
+	}
+	h.comp.set("/new")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	h.comp.set("/apply")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if applied != 2 || h.last != nil || len(h.msg) == 0 {
+		t.Fatalf("/apply after /new: applied %d, msg %q", applied, h.msg)
 	}
 }
 

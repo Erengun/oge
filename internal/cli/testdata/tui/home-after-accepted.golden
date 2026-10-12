@@ -1,4 +1,4 @@
-fix Add
+> fix Add
 Run X · Fast mode · HEAD X (main) + 1 untracked
 
 ✓ preflight  ok · X
@@ -20,6 +20,7 @@ Ledger        head X · identifies this Receipt; not tamper-proof
 ! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads
 Nothing was written to your repository.
 
+ ↓ actions · /apply /diff /receipt /branch · /new
 ╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯

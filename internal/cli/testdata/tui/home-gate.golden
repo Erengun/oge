@@ -1,0 +1,32 @@
+> fix Add
+Run X · Fast mode · HEAD X (main) + 1 untracked
+
+✓ preflight  ok · X
+✓ implement  fake · Exit done · Candidate X · 1 file changed · X
+✓ check      go test -json ./... · 1 ran · 0 failed · pass · X
+• decision   take · recorded at the Result gate
+
+ÖGE RECEIPT   Run X · Fast mode
+Result        ✓ Accepted
+Task          fix Add
+Candidate     X · 1 file changed · Oracle v0
+Checks        Check #1 passed · 1 of 1 Oracle tests attested passing
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Decisions     take at the Result gate
+Handled       0 operations approved automatically · Human interruptions: 1
+Time          X · preflight X · implement X · Check X · your attention X
+Not covered   No independent tests (fast mode): no QA and no held-out tests
+              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+Ledger        head X · identifies this Receipt; not tamper-proof
+! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads
+Nothing was written to your repository.
+
+ ↓ actions · /apply /diff /receipt /branch · /new
+╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Fast · implement fake · no verifier
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+
