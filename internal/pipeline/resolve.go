@@ -112,10 +112,14 @@ type Overrides struct {
 	// Standard is --standard: the mode flag that lets a Run override a
 	// weaker mode set in the user config.
 	Standard bool
-	// ModeFrom and BindingsFrom are who set the mode flag and the agent
-	// bindings above: FromCLI (the zero value) for flags typed on the
-	// command line, FromTUI for the setup panel's choices.
-	ModeFrom, BindingsFrom Source
+	// ModeFrom is who set the mode flag above: FromCLI (the zero value) for
+	// a flag typed on the command line, FromTUI for the setup panel's pick.
+	ModeFrom Source
+	// TUIAgents are the Stage bindings picked in the setup panel, as
+	// "<stage>=<agent>[@<profile>][:<model>]". They are applied after the
+	// flags above and replace them for the same Stage, with source FromTUI;
+	// a Stage not named here keeps its flag's source.
+	TUIAgents []string
 	// UnattendedFrom is who set Unattended: FromCLI (--unattended, the zero
 	// value), FromUser (the user config) or FromTUI. Only the last two are
 	// shown as trust-weakening: they remove Gates without a typed flag.
@@ -237,6 +241,8 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		} else if f.Mode != "" && !oneOf(g, modeGuarantees[f.Mode]...) {
 			if f.ModeSource == FromUser {
 				add("--require "+g, "%s mode (mode = %q in your user config%s) doesn't give this guarantee; pass --standard or --blind", f.Mode, userMode, inFile(o.UserConfigPath))
+			} else if f.ModeSource == FromTUI {
+				add("--require "+g, "%s mode (set in setup) doesn't give this guarantee; change the mode with Tab", f.Mode)
 			} else {
 				add("--require "+g, "%s mode doesn't give this guarantee; use Standard (the default) or --blind", f.Mode)
 			}
@@ -445,9 +451,6 @@ func inferReport(run string) string {
 // bind applies --agent and the Role-kind aliases.
 func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	flagsFrom := FromCLI
-	if o.BindingsFrom != "" {
-		flagsFrom = o.BindingsFrom
-	}
 	profiles := o.ClaudeProfiles
 	var probs []Problem
 	boundBy := map[string]string{}
@@ -516,6 +519,13 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	}
 	alias("--implement", "implementer", o.Implement)
 	alias("--verify", "verifier", o.Verify)
+	flagsFrom = FromTUI
+	for _, a := range o.TUIAgents {
+		if stage, spec, ok := strings.Cut(a, "="); ok {
+			delete(boundBy, stage)
+			set("setup", stage, spec)
+		}
+	}
 	return probs
 }
 

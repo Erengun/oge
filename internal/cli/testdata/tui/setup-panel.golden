@@ -1,7 +1,7 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-Setup   applies to the next Run · [up/down] move · [enter] change · [tab] done
+Setup   next Run · [enter] change · [s] save as default · [tab] done
  > implement agent    claude
    implement profile  claude
    implement model    sonnet

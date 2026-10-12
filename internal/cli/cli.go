@@ -264,7 +264,9 @@ func runCommand(env Env, args []string) int {
 		return code
 	}
 	f = withUser(f, user.ForRepo(root), env)
-	attended := env.Interactive() && !f.unattended
+	// attended is about the terminal and the typed flag: a user-config
+	// unattended only removes Gates, it doesn't stop a first-run proposal.
+	attended := env.Interactive() && !cli.unattended
 
 	res, code := resolveRun(env, f, root, attended, user)
 	if code != ExitOK {

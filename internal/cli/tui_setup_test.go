@@ -99,20 +99,20 @@ func TestSetupNoPromptWithoutAChange(t *testing.T) {
 	}
 }
 
-// The choices become flags with the source "tui", replacing what the
-// command line bound; Fast and unattended picked in the panel are the weak
-// kind, so they are shown.
+// Only what was changed becomes the panel's binding (source "setup"); what
+// the command line bound stays. Fast and unattended picked in the panel are
+// the weak kind, so they are shown.
 func TestSetupChoicesBecomeFlags(t *testing.T) {
 	h, _ := setupHome(t)
 	var f runFlags
 	f.o.Agents = []string{"implement=codex"}
 	press(h, tab(), down(), enter(), down(), down(), enter(), tab()) // profile -> z
 	got := h.sel.flags(f)
-	if got.o.BindingsFrom != pipeline.FromTUI {
-		t.Errorf("source %q", got.o.BindingsFrom)
+	if len(got.o.Agents) != 1 || got.o.Agents[0] != "implement=codex" {
+		t.Errorf("the typed binding changed: %q", got.o.Agents)
 	}
-	if len(got.o.Agents) != 1 || got.o.Agents[0] != "implement=claude@z:sonnet" {
-		t.Errorf("agents %q", got.o.Agents)
+	if len(got.o.TUIAgents) != 1 || got.o.TUIAgents[0] != "implement=claude@z:sonnet" {
+		t.Errorf("setup bindings %q", got.o.TUIAgents)
 	}
 	h.sel.mode, h.sel.tMode, h.sel.unattended, h.sel.tUnatt = pipeline.Fast, true, true, true
 	got = h.sel.flags(f)
@@ -140,13 +140,11 @@ func TestSetupSaveWritesTheUserConfigOnly(t *testing.T) {
 	}
 }
 
-// With a typed --agent and a TUI pick for the same Stage, the pick wins and
-// the Run is valid (a flag can't bind a Stage twice).
 func TestSetupWeakerModeIsShownLikeTheUsers(t *testing.T) {
 	f := homeFrozen()
 	f.Mode, f.ModeSource = pipeline.Fast, pipeline.FromTUI
 	f.TrustWeakening = []pipeline.Weakening{{Option: "mode = fast", Source: pipeline.FromTUI, Detail: "no independent verifier"}}
-	if got := strings.Join(setupLines(f), "\n"); !strings.Contains(got, "! trust-weakening: mode = fast (from tui)") {
+	if got := strings.Join(setupLines(f), "\n"); !strings.Contains(got, "! trust-weakening: mode = fast (from setup)") {
 		t.Errorf("setup bar:\n%s", got)
 	}
 }
@@ -172,7 +170,7 @@ func TestSetupPicksAProfileRunsAndSaves(t *testing.T) {
 	s := startHomeSessionWith(t, f, withClaude, "--fast")
 	s.composer()
 	s.type_("\t")
-	s.expect("applies to the next Run")
+	s.expect("[s] save as default")
 	s.type_("\x1b[B\r") // implement profile
 	s.expect("claude@z")
 	s.type_("\x1b[B\r") // claude@z
@@ -273,5 +271,81 @@ func TestTypedUnattendedIsNotATrustWeakening(t *testing.T) {
 	_, out, _ := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--unattended", "--dry-run")
 	if strings.Contains(out, "Trust-weakening") {
 		t.Errorf("a typed --unattended was shown as a weakening:\n%s", out)
+	}
+}
+
+// Blind isn't built: the picker shows it but never takes it, and nothing
+// saves it.
+func TestSetupBlindCannotBePickedOrSaved(t *testing.T) {
+	h, _ := setupHome(t)
+	// mode row: agent, profile, model, verify agent, verify model, mode.
+	press(h, tab(), down(), down(), down(), down(), down(), enter(), down(), down(), enter())
+	if h.sel.mode == pipeline.Blind || h.sel.tMode {
+		t.Fatalf("Blind was picked: %v", h.sel.mode)
+	}
+	if got := frame(h); !strings.Contains(got, "not built yet (#52)") {
+		t.Errorf("the picker doesn't say why:\n%s", got)
+	}
+	h.sel.mode, h.sel.tMode = pipeline.Blind, true
+	if d := h.sel.defaults(pipeline.RepoDefaults{}); d.Mode != "" {
+		t.Errorf("Blind would be saved: %q", d.Mode)
+	}
+}
+
+// A close the Run would refuse doesn't leave a bar that says otherwise.
+func TestSetupRefusedCloseClearsTheBar(t *testing.T) {
+	h, _ := setupHome(t)
+	h.resolve = func(*setupState) (*resolved, []string) { return nil, []string{"this Run isn't valid"} }
+	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), enter(), tab())
+	if len(h.setup) != 0 || len(h.msg) == 0 || h.saving {
+		t.Errorf("setup=%v msg=%v saving=%v", h.setup, h.msg, h.saving)
+	}
+}
+
+// [s] saves after a "no", and Tab works when the config only resolves later.
+func TestSetupSaveKeyAndLateTab(t *testing.T) {
+	h, dir := setupHome(t)
+	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), enter(), tab(), tea.KeyPressMsg{Code: 'n', Text: "n"})
+	press(h, tab(), tea.KeyPressMsg{Code: 's', Text: "s"})
+	if h.note == "" {
+		t.Fatalf("no save: %v", h.msg)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".config", "oge", "config.toml")); err != nil {
+		t.Error(err)
+	}
+	late := testHome(80)
+	late.sel = &setupState{env: h.sel.env, root: h.sel.root}
+	press(late, tab())
+	if late.panel == nil {
+		t.Errorf("Tab stayed dead: %v", late.msg)
+	}
+}
+
+// With no agent registered the picker is empty and nothing breaks.
+func TestSetupPickerWithNoAgents(t *testing.T) {
+	h, _ := setupHome(t)
+	h.sel.env.Agents = nil
+	h.sel.agents, _ = h.sel.choices()
+	press(h, tab(), enter(), enter(), tab())
+	_ = frame(h)
+	if h.sel.impl.touched {
+		t.Error("a pick came from nowhere")
+	}
+}
+
+// A user-config unattended removes Gates; it doesn't stop the first-run
+// proposal, which needs a terminal.
+func TestUserUnattendedKeepsTheFirstRunProposal(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	f.interactive = true
+	f.setenv("TERM", "xterm-256color")
+	saveUserDefaults(t, f, pipeline.RepoDefaults{Unattended: yes()})
+	if err := os.Remove(filepath.Join(f.repo, ".oge", "oge.toml")); err != nil {
+		t.Skip(err)
+	}
+	_, _, errOut := f.run(t, fixScript, "fix Add", "--fast", "--agent", "fake", "--dry-run")
+	if strings.Contains(errOut, "no terminal to review") {
+		t.Errorf("a user-config unattended counted as no terminal:\n%s", errOut)
 	}
 }

@@ -290,7 +290,12 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.answerSave(msg.String())
 			return h, nil
 		case h.panel != nil:
-			if h.panel.key(msg) {
+			closed := h.panel.key(msg)
+			if h.panel.save {
+				h.panel.save = false
+				h.saveNow()
+			}
+			if closed {
 				h.closeSetup()
 			}
 			return h, nil
@@ -332,11 +337,18 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, h.edit(h.comp.text())
 			}
 		case "tab":
+			if h.sel != nil && !h.sel.ready {
+				// The config didn't resolve when the home opened; it may now.
+				if res, problem := h.resolve(h.sel); problem == nil {
+					h.sel.init(res)
+					h.setup = setupLines(res.frozen)
+				}
+			}
 			if h.sel == nil || !h.sel.ready {
 				h.msg = []string{"setup opens once the config resolves: fix what is shown above, then press Tab"}
 				return h, nil
 			}
-			h.panel = &setupPanel{sel: h.sel, st: h.st}
+			h.panel = &setupPanel{sel: h.sel, st: h.st, rev0: h.sel.rev}
 		default:
 			h.comp.key(msg)
 		}
@@ -412,10 +424,16 @@ func (h *home) render() (string, int, int) {
 // use, read again with the choices; the first time something changed, the
 // save prompt follows (and never a second time in the session).
 func (h *home) closeSetup() {
+	rev0 := h.panel.rev0
 	h.panel = nil
+	if h.sel.rev == rev0 {
+		return // nothing changed: the bar is as it was
+	}
 	res, problem := h.resolve(h.sel)
 	if problem != nil {
-		h.msg = problem
+		// What the bar shows must be what the next Run uses: say why it
+		// can't start, as Enter would.
+		h.msg, h.setup = problem, nil
 		return
 	}
 	h.setup = setupLines(res.frozen)
@@ -430,16 +448,23 @@ func (h *home) closeSetup() {
 func (h *home) answerSave(key string) {
 	switch key {
 	case "y", "Y":
-		_, err := h.save()
 		h.saving = false
-		if err != nil {
-			h.msg = []string{"not saved: " + clean(err.Error())}
-			return
-		}
-		h.note = "Saved as this repo's default in your user config"
+		h.saveNow()
 	case "n", "N", "esc", "ctrl+c":
 		h.saving = false
 	}
+}
+
+// saveNow writes the session's choices to the user config.
+func (h *home) saveNow() {
+	if h.save == nil {
+		return
+	}
+	if _, err := h.save(); err != nil {
+		h.msg = []string{"not saved: " + clean(err.Error())}
+		return
+	}
+	h.note = "Saved as this repo's default in your user config"
 }
 
 // setupLines is the setup bar for a resolved config: what this Run will use

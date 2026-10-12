@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -42,6 +43,7 @@ type setupState struct {
 	unattended, apply     bool
 	tMode, tUnatt, tApply bool
 	changed, asked        bool // any change; the save prompt was shown
+	rev                   int  // counts changes
 	agents                []string
 	profiles              []claude.Profile
 	lastFrozen            *pipeline.Frozen
@@ -96,7 +98,7 @@ func (s *setupState) syncFrom(res *resolved) {
 func (s *setupState) choices() ([]string, []claude.Profile) {
 	var agents []string
 	for name := range s.env.Agents {
-		if oneOfStr(name, pipeline.KnownAgents) && s.env.LookPath != nil {
+		if slices.Contains(pipeline.KnownAgents, name) && s.env.LookPath != nil {
 			if _, err := s.env.LookPath(name); err != nil {
 				continue
 			}
@@ -115,14 +117,7 @@ func (s *setupState) choices() ([]string, []claude.Profile) {
 	return agents, claude.Profiles(getenv("HOME"), getenv, extra)
 }
 
-func oneOfStr(v string, in []string) bool {
-	for _, s := range in {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
+func (s *setupState) touch() { s.changed = true; s.rev++ }
 
 func (st stageSel) binding() string {
 	b := st.agent
@@ -160,49 +155,29 @@ func (s *setupState) flags(f runFlags) runFlags {
 	if s.tApply {
 		f.apply = s.apply
 	}
-	if s.impl.touched || s.ver.touched {
-		// Replace what the command line bound; a Stage the human left alone
-		// keeps its binding, written as the flag that bound it.
-		var keep []string
-		for _, st := range []struct {
-			name string
-			sel  stageSel
-		}{{"implement", s.impl}, {"verify", s.ver}} {
-			if st.name == "verify" && s.mode == pipeline.Fast {
-				continue
-			}
-			if !st.sel.touched && !s.boundByFlags(st.name) {
-				continue
-			}
-			sel := st.sel
-			if sel.agent == "" { // the verifier follows the implementer
-				sel.agent, sel.profile = s.impl.agent, s.impl.profile
-			}
-			keep = append(keep, st.name+"="+sel.binding())
+	// Only what the human changed is sent as the panel's; a Stage left alone
+	// keeps the binding (and the source) it already had.
+	f.o.TUIAgents = nil
+	for _, st := range []struct {
+		name string
+		sel  stageSel
+	}{{"implement", s.impl}, {"verify", s.ver}} {
+		if !st.sel.touched || (st.name == "verify" && s.mode == pipeline.Fast) {
+			continue
 		}
-		f.o.Agents, f.o.Implement, f.o.Verify, f.o.BindingsFrom = keep, "", "", pipeline.FromTUI
+		sel := st.sel
+		if sel.agent == "" { // the verifier follows the implementer
+			sel.agent, sel.profile = s.impl.agent, s.impl.profile
+		}
+		f.o.TUIAgents = append(f.o.TUIAgents, st.name+"="+sel.binding())
 	}
 	return f
-}
-
-// boundByFlags reports whether the Stage's binding came from a flag (the
-// command line's), which the panel's flags replace.
-func (s *setupState) boundByFlags(stage string) bool {
-	if s.lastFrozen == nil {
-		return false
-	}
-	for _, st := range s.lastFrozen.Stages {
-		if st.Name == stage {
-			return st.Source == pipeline.FromCLI || st.Source == pipeline.FromTUI
-		}
-	}
-	return false
 }
 
 // defaults are the choices to save: what is already saved for this repo,
 // with what the human changed in this session on top.
 func (s *setupState) defaults(d pipeline.RepoDefaults) pipeline.RepoDefaults {
-	if s.tMode {
+	if s.tMode && s.mode != pipeline.Blind { // Blind isn't built: a saved one would refuse every Run
 		d.Mode = strings.ToLower(string(s.mode))
 	}
 	if s.tUnatt {
@@ -282,7 +257,10 @@ type setupRow struct {
 }
 
 // choice is one line of a picker.
-type choice struct{ value, label, note string }
+type choice struct {
+	value, label, note string
+	disabled           bool // shown, but can't be picked
+}
 
 func (c choice) FilterValue() string { return c.label }
 
@@ -297,7 +275,11 @@ func (d choiceDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	if i == m.Index() {
 		line = d.st.accent("> ") + d.st.bold(c.label)
 	}
-	if c.note != "" {
+	switch {
+	case c.disabled:
+		line = d.st.dim(strings.TrimSpace(line)) + "   " + d.st.dim(c.note)
+		line = "  " + line
+	case c.note != "":
 		line += "   " + d.st.dim(c.note)
 	}
 	fmt.Fprint(w, "      "+line)
@@ -308,6 +290,8 @@ type setupPanel struct {
 	sel    *setupState
 	st     styles
 	cursor int
+	rev0   int              // the state's rev when the panel opened
+	save   bool             // [s] was pressed
 	pick   *list.Model      // a picker is open for the cursor's row
 	input  *textinput.Model // the model box is open for the cursor's row
 }
@@ -356,8 +340,8 @@ func (p *setupPanel) value(r setupRow) string {
 	st := p.stage(r.stage)
 	switch r.kind {
 	case rowAgent:
-		if st.agent == "" {
-			return "same as implement"
+		if st.agent == "" || (st.inherits && !st.touched) {
+			return "same as implement (" + clean(p.sel.impl.agent) + ")"
 		}
 		return clean(st.agent)
 	case rowProfile:
@@ -417,7 +401,11 @@ func (p *setupPanel) open(r setupRow) {
 		}
 	case rowMode:
 		for _, m := range []pipeline.Mode{pipeline.Fast, pipeline.Standard, pipeline.Blind} {
-			add(choice{value: string(m), label: string(m), note: modeNotes[m]}, m == p.sel.mode)
+			c := choice{value: string(m), label: string(m), note: modeNotes[m]}
+			if m == pipeline.Blind {
+				c.disabled, c.note = true, "not built yet (#52)"
+			}
+			add(c, m == p.sel.mode)
 		}
 	case rowModel:
 		in := textinput.New()
@@ -435,10 +423,12 @@ func (p *setupPanel) open(r setupRow) {
 		p.input = &in
 		return
 	case rowUnattended:
-		p.sel.unattended, p.sel.tUnatt, p.sel.changed = !p.sel.unattended, true, true
+		p.sel.unattended, p.sel.tUnatt = !p.sel.unattended, true
+		p.sel.touch()
 		return
 	case rowApply:
-		p.sel.apply, p.sel.tApply, p.sel.changed = !p.sel.apply, true, true
+		p.sel.apply, p.sel.tApply = !p.sel.apply, true
+		p.sel.touch()
 		return
 	}
 	l := list.New(items, choiceDelegate{p.st}, 100, min(len(items), 8)+2) // the list keeps a line or two for itself
@@ -454,6 +444,9 @@ func (p *setupPanel) open(r setupRow) {
 // commitPick applies the picker's choice to the row.
 func (p *setupPanel) commitPick(r setupRow) {
 	c, ok := p.pick.SelectedItem().(choice)
+	if ok && c.disabled {
+		return // stays open: Blind can't be picked
+	}
 	p.pick = nil
 	if !ok {
 		return
@@ -463,7 +456,7 @@ func (p *setupPanel) commitPick(r setupRow) {
 	case rowAgent:
 		if st.agent != c.value {
 			st.agent, st.profile, st.model, st.touched, st.inherits = c.value, "", "", true, false
-			p.sel.changed = true
+			p.sel.touch()
 		}
 	case rowProfile:
 		if st.agent == "" && r.stage == 1 {
@@ -471,11 +464,12 @@ func (p *setupPanel) commitPick(r setupRow) {
 		}
 		if st.profile != c.value {
 			st.profile, st.touched = c.value, true
-			p.sel.changed = true
+			p.sel.touch()
 		}
 	case rowMode:
 		if string(p.sel.mode) != c.value {
-			p.sel.mode, p.sel.tMode, p.sel.changed = pipeline.Mode(c.value), true, true
+			p.sel.mode, p.sel.tMode = pipeline.Mode(c.value), true
+			p.sel.touch()
 			p.cursor = min(p.cursor, len(p.rows())-1)
 		}
 	}
@@ -493,7 +487,8 @@ func (p *setupPanel) key(k tea.KeyPressMsg) (closed bool) {
 		case "enter":
 			st := p.stage(r.stage)
 			if v := strings.TrimSpace(p.input.Value()); v != st.model {
-				st.model, st.touched, p.sel.changed = v, true, true
+				st.model, st.touched = v, true
+				p.sel.touch()
 			}
 			p.input = nil
 		case "esc", "ctrl+c":
@@ -516,6 +511,8 @@ func (p *setupPanel) key(k tea.KeyPressMsg) (closed bool) {
 		switch k.String() {
 		case "tab", "esc", "ctrl+c":
 			return true
+		case "s":
+			p.save = true
 		case "up", "ctrl+p":
 			p.cursor = max(p.cursor-1, 0)
 		case "down", "ctrl+n":
@@ -539,7 +536,7 @@ func (p *setupPanel) paste(s string) {
 func (p *setupPanel) lines() []string {
 	st := p.st
 	rows := p.rows()
-	out := []string{st.bold("Setup") + st.dim("   applies to the next Run · [up/down] move · [enter] change · [tab] done")}
+	out := []string{st.bold("Setup") + st.dim("   next Run · [enter] change · [s] save as default · [tab] done")}
 	for i, r := range rows {
 		mark, label := "  ", fmt.Sprintf("%-18s", p.label(r))
 		if i == p.cursor {
