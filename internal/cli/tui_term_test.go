@@ -24,6 +24,40 @@ type vt struct {
 	row, col int
 	modes    map[string]rune // private mode: its last 'h' or 'l'
 	kitty    int             // keyboard enhancements pushed and not popped
+	height   int             // screen rows; 0 is a screen that never scrolls
+	top      int             // the first screen row (a line index) once height is set
+}
+
+// lf moves down a row; at the bottom of a screen with a height the screen
+// scrolls and the top line joins the scrollback.
+func (t *vt) lf() {
+	if t.height > 0 && t.row == t.top+t.height-1 {
+		t.top++
+	}
+	t.row++
+	t.line()
+}
+
+// up and down move the cursor within the screen, as CUU and CUD do.
+func (t *vt) up(n int) { t.row = max(t.row-n, t.top) }
+func (t *vt) down(n int) {
+	t.row += n
+	if t.height > 0 {
+		t.row = min(t.row, t.top+t.height-1)
+	}
+	t.line()
+}
+
+// insertLines is IL: blank lines at the cursor row push the rows below
+// down, and the ones pushed off the bottom of the screen are lost.
+func (t *vt) insertLines(n int) {
+	t.line()
+	blank := make([][]rune, n)
+	t.lines = append(t.lines[:t.row], append(blank, t.lines[t.row:]...)...)
+	if t.height > 0 && len(t.lines) > t.top+t.height {
+		t.lines = t.lines[:t.top+t.height]
+	}
+	t.col = 0
 }
 
 func (t *vt) line() []rune {
@@ -50,9 +84,8 @@ func (t *vt) write(b []byte) {
 		case r == '\r':
 			t.col = 0
 		case r == '\n': // as a terminal with ONLCR shows it
-			t.row++
+			t.lf()
 			t.col = 0
-			t.line()
 		case r == 0x1b && i+1 < len(rs) && rs[i+1] == '[':
 			j := i + 2
 			for j < len(rs) && (rs[j] < 0x40 || rs[j] > 0x7e) {
@@ -109,10 +142,11 @@ func (t *vt) csi(params string, final rune) {
 	}
 	switch final {
 	case 'A':
-		t.row = max(t.row-n, 0)
+		t.up(n)
 	case 'B':
-		t.row += n
-		t.line()
+		t.down(n)
+	case 'L':
+		t.insertLines(n)
 	case 'C':
 		t.col += n
 	case 'D':
