@@ -1,0 +1,359 @@
+package cli
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/task"
+)
+
+func homeFrozen() *pipeline.Frozen {
+	return &pipeline.Frozen{
+		Mode: pipeline.Standard,
+		Stages: []pipeline.Stage{
+			{Name: "implement", Role: "implementer", Agent: "claude", Model: "sonnet"},
+			{Name: "verify", Role: "verifier", Agent: "codex"},
+		},
+		Checks: []pipeline.CheckCommand{{Run: "go test -json ./..."}},
+	}
+}
+
+func testHome(width int) *home {
+	f := homeFrozen()
+	h := &home{comp: newComposer(), title: "oge · demo · main", setup: setupLines(f), st: newStyles(false)}
+	h.resolve = func() (*resolved, []string) { return &resolved{frozen: f}, nil }
+	h.width, h.height = width, 24
+	return h
+}
+
+func frame(h *home) string { s, _, _ := h.render(); return s }
+
+func TestHomeEmptyComposer(t *testing.T) {
+	golden(t, "home-empty", frame(testHome(70)))
+}
+
+func TestHomeComposerWithTextAndSetupBar(t *testing.T) {
+	h := testHome(70)
+	h.comp.insert("fix Add\n\nAdd returns 0 for every input.")
+	golden(t, "home-text", frame(h))
+}
+
+func TestHomeFastModeHasNoVerifier(t *testing.T) {
+	f := &pipeline.Frozen{Mode: pipeline.Fast,
+		Stages: []pipeline.Stage{{Name: "implement", Role: "implementer", Agent: "claude"}},
+		Checks: []pipeline.CheckCommand{{Run: "go test ./..."}, {Run: "go vet ./..."}}}
+	got := strings.Join(setupLines(f), "\n")
+	if !strings.HasPrefix(got, "Fast · implement claude · no verifier\nChecks: go test ./... · go vet ./...\n[tab] setup  [enter] run") {
+		t.Errorf("setup bar:\n%s", got)
+	}
+}
+
+func press(h *home, keys ...tea.Msg) {
+	for _, k := range keys {
+		h.Update(k)
+	}
+}
+
+func TestComposerEditing(t *testing.T) {
+	h := testHome(70)
+	typ := func(s string) {
+		for _, r := range s {
+			h.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		}
+	}
+	typ("ab")
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	typ("cd")
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	typ("e")
+	if got := h.comp.text(); got != "ab\ncd\ne" {
+		t.Errorf("newlines: %q", got)
+	}
+	press(h, tea.KeyPressMsg{Code: tea.KeyLeft}, tea.KeyPressMsg{Code: tea.KeyBackspace}, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if got := h.comp.text(); got != "ab\nce" {
+		t.Errorf("backspace joins lines: %q", got)
+	}
+	// A paste lands whole, with its newlines, and can't carry controls.
+	h.Update(tea.PasteMsg{Content: "x\r\ny\x1b[31mz\ttab"})
+	if got := h.comp.text(); !strings.Contains(got, "x\ny[31mz    tab") || strings.ContainsRune(got, 0x1b) {
+		t.Errorf("paste: %q", got)
+	}
+}
+
+func TestComposerKeys(t *testing.T) {
+	var started []string
+	h := testHome(70)
+	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
+		started = append(started, tk.Title)
+		return newModel(tk, homeFrozen(), newStyles(false), time.Now), nil
+	}
+	// Enter on an empty box does nothing; Ctrl+C with text clears it; on an
+	// empty box it quits.
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if h.run != nil || len(started) != 0 {
+		t.Fatal("Enter on an empty composer started a Run")
+	}
+	h.comp.insert("fix Add")
+	h.Update(ctrlKey('c'))
+	if !h.comp.empty() || h.quit {
+		t.Fatalf("Ctrl+C with text: %q quit=%v", h.comp.text(), h.quit)
+	}
+	h.comp.insert("fix Add")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.comp.empty() || h.quit {
+		t.Fatal("Esc must not wipe a Task")
+	}
+	h.Update(ctrlKey('c'))
+	if _, cmd := h.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); !h.quit || cmd == nil {
+		t.Fatal("Esc on an empty composer should quit")
+	}
+	h = testHome(70)
+	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
+		started = append(started, tk.Title)
+		return newModel(tk, homeFrozen(), newStyles(false), time.Now), nil
+	}
+	h.comp.insert("fix Add")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if h.run == nil || len(started) != 1 || started[0] != "fix Add" {
+		t.Fatalf("Enter did not start the Run: %v", started)
+	}
+	if !strings.Contains(h.View().Content, "fix Add") {
+		t.Error("the Run's view did not take over")
+	}
+}
+
+func TestComposerWrapsAndScrolls(t *testing.T) {
+	h := testHome(24) // 20 columns inside the box
+	h.comp.insert(strings.Repeat("word ", 60))
+	rows, cr, cc := h.comp.layout(20)
+	if len(rows) != maxComposerRows || cr != maxComposerRows-1 || cc > 20 {
+		t.Errorf("rows %d cursor %d,%d", len(rows), cr, cc)
+	}
+	for _, l := range strings.Split(frame(h), "\n") {
+		if w := len([]rune(l)); w > 24 {
+			t.Errorf("a line is %d columns: %q", w, l)
+		}
+	}
+}
+
+// The Task never reaches the composer's frame with a control character in
+// it, nor the repository's name or branch.
+func TestHomeTitleAndSetupAreEscaped(t *testing.T) {
+	f := homeFrozen()
+	f.Checks[0].Run = "go test \x1b]0;pwned\x07"
+	for _, l := range setupLines(f) {
+		if strings.ContainsAny(l, "\x1b\x07") {
+			t.Errorf("setup bar line: %q", l)
+		}
+	}
+	if got := homeTitle(Env{}, "/tmp/evil\x1b[2Jrepo"); strings.ContainsRune(got, 0x1b) {
+		t.Errorf("title: %q", got)
+	}
+}
+
+// homeNorm hides what differs between runs: ids, hashes and durations.
+var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|\d+(\.\d+)?m?s\b`)
+
+// homeSession runs Main on a pipe the test types into, with the fake agent.
+type homeSession struct {
+	t      *testing.T
+	f      *runFixture
+	pw     *os.File
+	out    syncBuf
+	errOut syncBuf
+	exit   chan int
+	mark   int // how much output there was when the last keys were typed
+}
+
+func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession {
+	t.Helper()
+	f.interactive = true
+	f.setenv("TERM", "xterm-256color")
+	f.setenv("NO_COLOR", "1")
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pw.Close(); pr.Close() })
+	script := filepath.Join(filepath.Dir(f.repo), "agent.sh")
+	if err := os.WriteFile(script, []byte(fixScript), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &homeSession{t: t, f: f, pw: pw, exit: make(chan int, 1)}
+	env := f.envWithFake(script, &s.out, &s.errOut)
+	env.Stdin = pr
+	go func() { s.exit <- Main(env, args) }()
+	return s
+}
+
+// composer waits for the n-th composer frame.
+// composer waits for a composer drawn after the last keys were typed. A
+// composer redraws as it's used, so counting its frames isn't enough: an
+// earlier composer's redraws could satisfy the count.
+func (s *homeSession) composer() {
+	s.t.Helper()
+	s.expect("[ctrl+e] editor")
+}
+
+// expect waits until text is written after the last keys were typed.
+func (s *homeSession) expect(text string) {
+	s.t.Helper()
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if strings.Contains(s.out.String()[s.mark:], text) {
+			return
+		}
+	}
+	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
+}
+
+func (s *homeSession) type_(keys string) {
+	s.t.Helper()
+	s.mark = len(s.out.String())
+	if _, err := s.pw.WriteString(keys); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+func (s *homeSession) wait() int {
+	s.t.Helper()
+	select {
+	case code := <-s.exit:
+		return code
+	case <-time.After(120 * time.Second):
+		s.t.Fatalf("oge never exited\n%s", s.out.String())
+		return -1
+	}
+}
+
+// The whole session in one terminal: compose, Run, Accepted, the action
+// bar, and the composer back, empty, until Ctrl+C leaves with 0.
+func TestBareOgeComposesRunsAndLoops(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	// What the terminal shows now: the Run's summary above, and the
+	// composer back, empty.
+	var screen vt
+	screen.write([]byte(s.out.String()))
+	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if n := len(runDirs(t, f)); n != 1 {
+		t.Errorf("%d Runs", n)
+	}
+	if !strings.Contains(got, "Result        ✓ Accepted") {
+		t.Errorf("no Accepted Receipt:\n%s", got)
+	}
+	golden(t, "home-after-accepted", got)
+	// Leaving the composer takes its frame off the screen.
+	var end vt
+	end.write([]byte(s.out.String()))
+	if strings.Contains(end.String(), "Describe the task") {
+		t.Errorf("the composer's frame stayed after quitting:\n%s", end.String())
+	}
+}
+
+// A second Task in the same session, written in $EDITOR with Ctrl+E.
+func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	var s *homeSession
+	var edited []string
+	shown := make(chan int, 1) // how often the Task was on screen when the editor ran
+	f.edit = func(path string) error {
+		b, _ := os.ReadFile(path)
+		edited = append(edited, string(b))
+		shown <- strings.Count(s.out.String(), "fix Add")
+		return os.WriteFile(path, append([]byte("fix Add\n"), b...), 0o644)
+	}
+	s = startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	s.type_("\x05")                         // Ctrl+E on an empty box
+	s.out.waitForN(t, "fix Add", <-shown+1) // the box shows what the editor left
+	s.type_("\r")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if len(edited) != 1 || !strings.Contains(edited[0], "<!--") {
+		t.Errorf("the editor got %q; an empty box should open the template", edited)
+	}
+	if n := len(runDirs(t, f)); n != 2 {
+		t.Errorf("%d Runs", n)
+	}
+}
+
+// A config edited while the composer is open is read again when the Task is
+// sent: a Check that no longer covers the tests refuses, as oge "task" would,
+// and no Run starts.
+func TestBareOgeRefusesAConfigEditedWhileComposing(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	cfg := strings.Replace(fxConfig, "./...", "./elsewhere/...", 1)
+	if cfg == fxConfig {
+		t.Fatal("the fixture's Check changed; adjust this test")
+	}
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	s.type_("fix Add\r")
+	s.expect("this Run isn't valid")
+	s.type_("\x03\x03") // clear the Task, then leave
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if n := len(runDirs(t, f)); n != 0 {
+		t.Errorf("%d Runs started", n)
+	}
+}
+
+func runDirs(t *testing.T, f *runFixture) []string {
+	t.Helper()
+	runs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*"))
+	return runs
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// waitForN waits until text has been written at least n times.
+func (s *syncBuf) waitForN(t *testing.T, text string, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if strings.Count(s.String(), text) >= n {
+			return
+		}
+	}
+	t.Fatalf("%q never appeared %d times in:\n%s", text, n, s.String())
+}
+
+func TestSetupBarNamesAProfile(t *testing.T) {
+	f := homeFrozen()
+	f.Stages[0].Profile = "z"
+	if got := setupLines(f)[0]; !strings.Contains(got, "implement claude@z:sonnet") {
+		t.Errorf("setup bar: %s", got)
+	}
+}

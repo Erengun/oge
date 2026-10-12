@@ -31,6 +31,12 @@ type tui struct {
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}
+	// started: a Run was started (the home starts it only on Enter).
+	started bool
+	// noFallback: a Gate opened after the view has gone is refused rather
+	// than asked in plain lines, whose stdin reader would outlive the Run and
+	// take the next composer's keys (the home).
+	noFallback bool
 }
 
 const (
@@ -65,16 +71,29 @@ func (u *tui) hostRequest(hostPrompt) (string, error) { return "", errNotBuilt }
 // forced stop kills the view (which restores the terminal too) and returns
 // without waiting for the Run.
 func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
+	done := u.launch(ctx, in, start)
+	err := u.program(in, u.m)
+	return u.finish(in, err, done)
+}
+
+// launch starts the Run on its own goroutine, reporting into u.m's queue.
+func (u *tui) launch(ctx context.Context, in *interrupts, start startFunc) <-chan ended {
+	u.started = true
 	q := &queue{wake: make(chan struct{}, 1)}
 	u.m.queue, u.m.interrupt = q, in.interrupt
 	u.plain.intr = in
+	frozen := u.m.frozen
+	return runAsync(ctx, start, func(ev run.Event) { q.push(progressOf(ev, frozen, time.Now())) }, func(e ended) {
+		q.push(doneMsg{at: time.Now(), res: e.res, failed: e.err != nil || e.panicked != nil})
+	})
+}
+
+// program runs root as the inline Bubble Tea program until it quits, and
+// closes u.gone once the view has stopped.
+func (u *tui) program(in *interrupts, root tea.Model) error {
 	if u.gone == nil {
 		u.gone = make(chan struct{})
 	}
-	done := runAsync(ctx, start, func(ev run.Event) { q.push(progressOf(ev, u.m.frozen, time.Now())) }, func(e ended) {
-		q.push(doneMsg{at: time.Now(), res: e.res, failed: e.err != nil || e.panicked != nil})
-	})
-
 	// Bubble Tea's own signal handler would end the view before the
 	// summary; startRun's interrupts take SIGINT and SIGTERM instead.
 	out, opts := u.out, []tea.ProgramOption{tea.WithFPS(tuiFPS), tea.WithoutSignalHandler()}
@@ -85,7 +104,7 @@ func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.R
 		opts = append(opts, tea.WithWindowSize(80, 24))
 	}
 	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
-	p := tea.NewProgram(u.m, opts...)
+	p := tea.NewProgram(root, opts...)
 	viewDone := make(chan struct{})
 	defer close(viewDone)
 	go func() {
@@ -97,6 +116,11 @@ func (u *tui) show(ctx context.Context, in *interrupts, start startFunc) (*run.R
 	}()
 	_, err := p.Run()
 	close(u.gone)
+	return err
+}
+
+// finish waits for the Run the view showed and prints its summary.
+func (u *tui) finish(in *interrupts, err error, done <-chan ended) (*run.Result, error) {
 	select {
 	case <-in.forced:
 		return nil, errForced
