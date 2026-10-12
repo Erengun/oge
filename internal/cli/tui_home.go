@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -223,8 +224,9 @@ type home struct {
 	resolve func(*setupState) (*resolved, []string)
 	// sel is what the setup panel edits; it lives for the session.
 	sel    *setupState
-	panel  *setupPanel // non-nil while Tab's setup is open
-	saving bool        // the save prompt waits for y or n
+	panel  *setupPanel    // non-nil while Tab's setup is open
+	saving bool           // the save prompt waits for y or n
+	review *projectReview // the reviewed save into .oge/oge.toml waits for y or n
 	save   func() (string, error)
 	note   string // what happened, shown under the box (a save)
 	ctx    context.Context
@@ -273,7 +275,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving:
+		case h.saving, h.review != nil:
 		default:
 			h.comp.insert(msg.Content)
 		}
@@ -286,6 +288,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
 		switch {
+		case h.review != nil:
+			h.answerReview(msg.String())
+			return h, nil
 		case h.saving:
 			h.answerSave(msg.String())
 			return h, nil
@@ -294,6 +299,10 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.panel.save {
 				h.panel.save = false
 				h.saveNow()
+			}
+			if h.panel.saveProject {
+				h.panel.saveProject = false
+				h.reviewProject()
 			}
 			if closed {
 				h.closeSetup()
@@ -348,6 +357,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.msg = []string{"setup opens once the config resolves: fix what is shown above, then press Tab"}
 				return h, nil
 			}
+			h.sel.reopen()
 			h.panel = &setupPanel{sel: h.sel, st: h.st, rev0: h.sel.rev}
 		default:
 			h.comp.key(msg)
@@ -403,12 +413,30 @@ func (h *home) render() (string, int, int) {
 	switch {
 	case h.saving:
 		lines = append(lines, " "+st.bold("Save as default for this repo?")+" [y]es [n]o"+st.dim("   (your user config only)"))
+	case h.review != nil:
+		lines = append(lines, " "+st.bold("Save these Checks to "+pipeline.ConfigPath+"?")+st.dim("   the file is written, never committed"))
+		for _, l := range h.review.diff {
+			switch l[0] {
+			case '+':
+				l = st.ok(l)
+			case '-':
+				l = st.bad(l)
+			default:
+				l = st.dim(l)
+			}
+			lines = append(lines, "   "+l)
+		}
+		lines = append(lines, " [y]es write it [n]o")
 	case h.panel != nil:
+		h.panel.width = width
 		lines = append(lines, h.panel.lines()...)
 	}
 	if h.panel == nil {
 		for _, l := range h.setup {
 			lines = append(lines, " "+st.dim(l))
+		}
+		if h.sel != nil && h.sel.noFile {
+			lines = append(lines, " "+st.dim("no "+pipeline.ConfigPath+" yet: [tab] shows the proposed Checks; [w] there saves them"))
 		}
 	}
 
@@ -455,6 +483,46 @@ func (h *home) answerSave(key string) {
 	}
 }
 
+// reviewProject opens the reviewed save of the Checks into .oge/oge.toml.
+func (h *home) reviewProject() {
+	r, err := h.sel.reviewProject()
+	if err != nil {
+		h.msg = []string{clean(err.Error())}
+		return
+	}
+	h.review = r
+}
+
+// answerReview takes the review's answer. Only y writes; Esc and Ctrl+C
+// mean no.
+func (h *home) answerReview(key string) {
+	switch key {
+	case "y", "Y":
+		r := h.review
+		h.review = nil
+		if err := h.sel.writeProject(r); errors.Is(err, errChanged) {
+			h.msg = []string{clean(err.Error()) + ": review it again"}
+			h.reviewProject()
+			return
+		} else if err != nil {
+			h.msg = []string{"not saved: " + clean(err.Error())}
+			return
+		}
+		h.note = "Saved " + pipeline.ConfigPath + ". Commit it so every clone uses the same Checks."
+		if res, problem := h.resolve(h.sel); problem == nil {
+			h.sel.syncFrom(res)
+			h.setup = setupLines(res.frozen)
+			if h.panel != nil {
+				h.panel.rev0 = h.sel.rev
+			}
+		} else {
+			h.msg = problem
+		}
+	case "n", "N", "esc", "ctrl+c":
+		h.review = nil
+	}
+}
+
 // saveNow writes the session's choices to the user config.
 func (h *home) saveNow() {
 	if h.save == nil {
@@ -488,15 +556,24 @@ func setupLines(f *pipeline.Frozen) []string {
 		parts = append(parts, "no verifier")
 	}
 	var checks []string
+	edited := false
+	fromSetup := ""
 	for _, c := range f.Checks {
 		checks = append(checks, clean(c.Run))
+		edited = edited || c.Source == pipeline.FromTUI
+	}
+	if edited {
+		fromSetup = " (from setup)"
 	}
 	lines := []string{strings.Join(parts, " · ")}
 	for _, w := range f.TrustWeakening {
 		lines = append(lines, "! trust-weakening: "+clean(w.Option)+" (from "+sourceName(w.Source)+")")
 	}
+	if f.TestGlobsSource == pipeline.FromTUI {
+		lines = append(lines, "Test globs: "+clean(strings.Join(f.Project.TestGlobs, " · "))+" (from setup)")
+	}
 	return append(lines,
-		"Checks: "+strings.Join(checks, " · "),
+		"Checks: "+strings.Join(checks, " · ")+fromSetup,
 		"[tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor",
 	)
 }

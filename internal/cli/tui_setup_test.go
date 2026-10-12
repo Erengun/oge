@@ -46,6 +46,18 @@ func tab() tea.KeyPressMsg   { return tea.KeyPressMsg{Code: tea.KeyTab} }
 func down() tea.KeyPressMsg  { return tea.KeyPressMsg{Code: tea.KeyDown} }
 func enter() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter} }
 
+// cursorTo puts the open panel's cursor on the first row of a kind, so a
+// test doesn't count rows that new sections move.
+func cursorTo(h *home, kind rowKind) {
+	for i, r := range h.panel.rows() {
+		if r.kind == kind {
+			h.panel.cursor = i
+			return
+		}
+	}
+	panic("no such row")
+}
+
 func TestSetupPanelGolden(t *testing.T) {
 	h, _ := setupHome(t)
 	press(h, tab())
@@ -66,8 +78,10 @@ func TestSetupProfilePickerListsDiscoveredProfiles(t *testing.T) {
 
 func TestSetupSavePromptAfterTheFirstChange(t *testing.T) {
 	h, dir := setupHome(t)
-	// Tab, down to "unattended", Enter flips it, Tab closes.
-	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), down(), enter(), tab())
+	// Tab, the "unattended" row, Enter flips it, Tab closes.
+	press(h, tab())
+	cursorTo(h, rowUnattended)
+	press(h, enter(), tab())
 	if !h.saving {
 		t.Fatalf("no save prompt after a change:\n%s", frame(h))
 	}
@@ -278,8 +292,9 @@ func TestTypedUnattendedIsNotATrustWeakening(t *testing.T) {
 // saves it.
 func TestSetupBlindCannotBePickedOrSaved(t *testing.T) {
 	h, _ := setupHome(t)
-	// mode row: agent, profile, model, verify agent, verify model, mode.
-	press(h, tab(), down(), down(), down(), down(), down(), enter(), down(), down(), enter())
+	press(h, tab())
+	cursorTo(h, rowMode)
+	press(h, enter(), down(), down(), enter())
 	if h.sel.mode == pipeline.Blind || h.sel.tMode {
 		t.Fatalf("Blind was picked: %v", h.sel.mode)
 	}
@@ -296,7 +311,9 @@ func TestSetupBlindCannotBePickedOrSaved(t *testing.T) {
 func TestSetupRefusedCloseClearsTheBar(t *testing.T) {
 	h, _ := setupHome(t)
 	h.resolve = func(*setupState) (*resolved, []string) { return nil, []string{"this Run isn't valid"} }
-	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), enter(), tab())
+	press(h, tab())
+	cursorTo(h, rowUnattended)
+	press(h, enter(), tab())
 	if len(h.setup) != 0 || len(h.msg) == 0 || h.saving {
 		t.Errorf("setup=%v msg=%v saving=%v", h.setup, h.msg, h.saving)
 	}
@@ -305,7 +322,9 @@ func TestSetupRefusedCloseClearsTheBar(t *testing.T) {
 // [s] saves after a "no", and Tab works when the config only resolves later.
 func TestSetupSaveKeyAndLateTab(t *testing.T) {
 	h, dir := setupHome(t)
-	press(h, tab(), down(), down(), down(), down(), down(), down(), down(), enter(), tab(), tea.KeyPressMsg{Code: 'n', Text: "n"})
+	press(h, tab())
+	cursorTo(h, rowUnattended)
+	press(h, enter(), tab(), tea.KeyPressMsg{Code: 'n', Text: "n"})
 	press(h, tab(), tea.KeyPressMsg{Code: 's', Text: "s"})
 	if h.note == "" {
 		t.Fatalf("no save: %v", h.msg)

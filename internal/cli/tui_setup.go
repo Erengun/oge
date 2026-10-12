@@ -47,6 +47,7 @@ type setupState struct {
 	agents                []string
 	profiles              []claude.Profile
 	lastFrozen            *pipeline.Frozen
+	oracleState           // the Checks section (#132)
 }
 
 func newSetupState(env Env, root string) *setupState { return &setupState{env: env, root: root} }
@@ -91,6 +92,7 @@ func (s *setupState) syncFrom(res *resolved) {
 	if !s.tApply {
 		s.apply = res.flags.apply
 	}
+	s.syncOracle(res)
 	s.agents, s.profiles = s.choices()
 }
 
@@ -134,8 +136,11 @@ func (st stageSel) binding() string {
 // command line would: they replace what the command line bound for the same
 // Stage, and a weaker mode or unattended is shown as trust-weakening.
 func (s *setupState) flags(f runFlags) runFlags {
-	if s == nil || !s.ready {
+	if s == nil {
 		return f
+	}
+	if !s.ready { // a first run's proposal applies before the panel can open
+		return s.oracleFlags(f)
 	}
 	if s.tMode {
 		f.o.ModeFrom = pipeline.FromTUI
@@ -155,6 +160,7 @@ func (s *setupState) flags(f runFlags) runFlags {
 	if s.tApply {
 		f.apply = s.apply
 	}
+	f = s.oracleFlags(f)
 	// Only what the human changed is sent as the panel's; a Stage left alone
 	// keeps the binding (and the source) it already had.
 	f.o.TUIAgents = nil
@@ -249,11 +255,16 @@ const (
 	rowMode
 	rowUnattended
 	rowApply
+	rowCheck    // a Check command: idx
+	rowAddCheck // add one
+	rowGlob     // a test glob: idx
+	rowAddGlob
 )
 
 type setupRow struct {
 	kind  rowKind
 	stage int // 0 implement, 1 verify
+	idx   int // the Check or glob
 }
 
 // choice is one line of a picker.
@@ -287,29 +298,39 @@ func (d choiceDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 
 // setupPanel is the open panel: a row cursor, and at most one sub-editor.
 type setupPanel struct {
-	sel    *setupState
-	st     styles
-	cursor int
-	rev0   int              // the state's rev when the panel opened
-	save   bool             // [s] was pressed
-	pick   *list.Model      // a picker is open for the cursor's row
-	input  *textinput.Model // the model box is open for the cursor's row
+	sel         *setupState
+	st          styles
+	cursor      int
+	rev0        int              // the state's rev when the panel opened
+	save        bool             // [s] was pressed
+	saveProject bool             // [w] was pressed
+	width       int              // the terminal's, for wrapping
+	pick        *list.Model      // a picker is open for the cursor's row
+	input       *textinput.Model // the model box is open for the cursor's row
 }
 
 func (p *setupPanel) rows() []setupRow {
-	rows := []setupRow{{rowAgent, 0}}
+	rows := []setupRow{{kind: rowAgent}}
 	if p.sel.impl.agent == claude.Name {
-		rows = append(rows, setupRow{rowProfile, 0})
+		rows = append(rows, setupRow{kind: rowProfile, stage: 0})
 	}
-	rows = append(rows, setupRow{rowModel, 0})
+	rows = append(rows, setupRow{kind: rowModel, stage: 0})
 	if p.sel.mode != pipeline.Fast {
-		rows = append(rows, setupRow{rowAgent, 1})
+		rows = append(rows, setupRow{kind: rowAgent, stage: 1})
 		if p.sel.ver.agent == claude.Name || (p.sel.ver.agent == "" && p.sel.impl.agent == claude.Name) {
-			rows = append(rows, setupRow{rowProfile, 1})
+			rows = append(rows, setupRow{kind: rowProfile, stage: 1})
 		}
-		rows = append(rows, setupRow{rowModel, 1})
+		rows = append(rows, setupRow{kind: rowModel, stage: 1})
 	}
-	return append(rows, setupRow{rowMode, 0}, setupRow{rowUnattended, 0}, setupRow{rowApply, 0})
+	rows = append(rows, setupRow{kind: rowMode}, setupRow{kind: rowUnattended}, setupRow{kind: rowApply})
+	for i := range p.sel.checks {
+		rows = append(rows, setupRow{kind: rowCheck, idx: i})
+	}
+	rows = append(rows, setupRow{kind: rowAddCheck})
+	for i := range p.sel.globs {
+		rows = append(rows, setupRow{kind: rowGlob, idx: i})
+	}
+	return append(rows, setupRow{kind: rowAddGlob})
 }
 
 func (p *setupPanel) stage(i int) *stageSel {
@@ -332,6 +353,14 @@ func (p *setupPanel) label(r setupRow) string {
 		return "mode"
 	case rowUnattended:
 		return "unattended"
+	case rowCheck:
+		return fmt.Sprintf("check %d", r.idx+1)
+	case rowAddCheck:
+		return "+ Check command"
+	case rowGlob:
+		return fmt.Sprintf("test glob %d", r.idx+1)
+	case rowAddGlob:
+		return "+ test glob"
 	}
 	return "apply on accept"
 }
@@ -339,6 +368,12 @@ func (p *setupPanel) label(r setupRow) string {
 func (p *setupPanel) value(r setupRow) string {
 	st := p.stage(r.stage)
 	switch r.kind {
+	case rowCheck:
+		return clean(p.sel.checks[r.idx].Run)
+	case rowGlob:
+		return clean(p.sel.globs[r.idx])
+	case rowAddCheck, rowAddGlob:
+		return ""
 	case rowAgent:
 		if st.agent == "" || (st.inherits && !st.touched) {
 			return "same as implement (" + clean(p.sel.impl.agent) + ")"
@@ -422,6 +457,23 @@ func (p *setupPanel) open(r setupRow) {
 		in.Focus()
 		p.input = &in
 		return
+	case rowCheck, rowAddCheck, rowGlob, rowAddGlob:
+		in := textinput.New()
+		in.Prompt = ""
+		switch r.kind {
+		case rowCheck:
+			in.SetValue(p.sel.checks[r.idx].Run)
+		case rowGlob:
+			in.SetValue(p.sel.globs[r.idx])
+		case rowAddCheck:
+			in.Placeholder = "command that runs the tests, e.g. go test -json ./..."
+		default:
+			in.Placeholder = "glob of the test files, e.g. **/*_test.go"
+		}
+		in.CursorEnd()
+		in.Focus()
+		p.input = &in
+		return
 	case rowUnattended:
 		p.sel.unattended, p.sel.tUnatt = !p.sel.unattended, true
 		p.sel.touch()
@@ -485,10 +537,14 @@ func (p *setupPanel) key(k tea.KeyPressMsg) (closed bool) {
 	case p.input != nil:
 		switch k.String() {
 		case "enter":
-			st := p.stage(r.stage)
-			if v := strings.TrimSpace(p.input.Value()); v != st.model {
-				st.model, st.touched = v, true
-				p.sel.touch()
+			v := strings.TrimSpace(p.input.Value())
+			if r.kind == rowModel {
+				if st := p.stage(r.stage); v != st.model {
+					st.model, st.touched = v, true
+					p.sel.touch()
+				}
+			} else {
+				p.commitOracle(r, v)
 			}
 			p.input = nil
 		case "esc", "ctrl+c":
@@ -513,6 +569,11 @@ func (p *setupPanel) key(k tea.KeyPressMsg) (closed bool) {
 			return true
 		case "s":
 			p.save = true
+		case "w":
+			p.saveProject = true
+		case "d", "x":
+			p.remove(r)
+			p.cursor = min(p.cursor, len(p.rows())-1)
 		case "up", "ctrl+p":
 			p.cursor = max(p.cursor-1, 0)
 		case "down", "ctrl+n":
@@ -538,6 +599,9 @@ func (p *setupPanel) lines() []string {
 	rows := p.rows()
 	out := []string{st.bold("Setup") + st.dim("   next Run · [enter] change · [s] save as default · [tab] done")}
 	for i, r := range rows {
+		if (r.kind == rowCheck || r.kind == rowAddCheck) && rows[i-1].kind != rowCheck {
+			out = append(out, p.checksHeader())
+		}
 		mark, label := "  ", fmt.Sprintf("%-18s", p.label(r))
 		if i == p.cursor {
 			mark, label = st.accent("> "), st.bold(label)
@@ -552,9 +616,13 @@ func (p *setupPanel) lines() []string {
 					}
 				}
 			case p.input != nil:
-				out = append(out, "      model: "+p.input.View()+st.dim("   [enter] set · [tab] complete · [esc] cancel"))
+				if r.kind == rowModel {
+					out = append(out, "      model: "+p.input.View()+st.dim("   [enter] set · [tab] complete · [esc] cancel"))
+				} else {
+					out = append(out, "      > "+p.input.View()+st.dim("   [enter] set · [esc] cancel"))
+				}
 			}
 		}
 	}
-	return out
+	return append(out, p.validation(rows)...)
 }
