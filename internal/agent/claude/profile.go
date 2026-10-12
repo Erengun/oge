@@ -80,6 +80,8 @@ const maxInstructions = 128 << 10
 type profile struct {
 	role  string
 	tools []string
+	// extra are profiles kept outside $HOME, by name (see Profiles).
+	extra map[string]string
 }
 
 func profileFor(role string) (profile, error) {
@@ -133,10 +135,9 @@ func (p profile) args(spec agent.LaunchSpec, sessionID string, parent []string) 
 	return a, nil
 }
 
-// denyRead is every absolute path the sandbox denies reading: Öge's
-// private state and the home secrets.
-func denyRead(spec agent.LaunchSpec, parent []string) []string {
-	get := func(name string) string {
+// parentGetenv reads a variable from a parent environment.
+func parentGetenv(parent []string) func(string) string {
+	return func(name string) string {
 		for _, kv := range parent {
 			if k, v, ok := strings.Cut(kv, "="); ok && k == name {
 				return v
@@ -144,6 +145,39 @@ func denyRead(spec agent.LaunchSpec, parent []string) []string {
 		}
 		return ""
 	}
+}
+
+// profiles is every known Claude profile, found from the parent's $HOME
+// and CLAUDE_CONFIG_DIR.
+func (p profile) profiles(parent []string) []Profile {
+	get := parentGetenv(parent)
+	return Profiles(get("HOME"), get, p.extra)
+}
+
+// configDir is the dir a bound profile launches with, "" for the default,
+// which keeps whatever CLAUDE_CONFIG_DIR the parent has.
+func (p profile) configDir(spec agent.LaunchSpec, parent []string) (string, error) {
+	if spec.Profile == "" {
+		return "", nil
+	}
+	var names []string
+	for _, k := range p.profiles(parent) {
+		if k.Name == spec.Profile {
+			return k.Dir, nil
+		}
+		if k.Name != "" {
+			names = append(names, k.Name)
+		}
+	}
+	return "", fmt.Errorf("claude adapter: no Claude profile %q (known: %s)", spec.Profile, strings.Join(names, ", "))
+}
+
+// denyRead is every absolute path the sandbox denies reading: Öge's
+// private state, the home secrets, and every known profile's config dir,
+// the bound one included, as CLAUDE_CONFIG_DIR always was. A Stage can
+// therefore not read another profile's credentials.
+func (p profile) denyRead(spec agent.LaunchSpec, parent []string) []string {
+	get := parentGetenv(parent)
 	out := append([]string{}, spec.DenyRead...)
 	if home := get("HOME"); filepath.IsAbs(home) {
 		for _, s := range homeSecrets {
@@ -153,6 +187,11 @@ func denyRead(spec agent.LaunchSpec, parent []string) []string {
 	for _, v := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME"} {
 		if d := get(v); filepath.IsAbs(d) && !oneOf(filepath.Clean(d), out) {
 			out = append(out, filepath.Clean(d))
+		}
+	}
+	for _, k := range p.profiles(parent) {
+		if k.Dir != "" && !oneOf(k.Dir, out) {
+			out = append(out, k.Dir)
 		}
 	}
 	return out
@@ -165,7 +204,7 @@ func (p profile) settings(spec agent.LaunchSpec, parent []string) (string, error
 	if spec.Cache != "" {
 		fs["allowWrite"] = []string{spec.Cache}
 	}
-	reads := denyRead(spec, parent)
+	reads := p.denyRead(spec, parent)
 	if len(reads) > 0 {
 		fs["denyRead"] = reads
 	}
@@ -196,20 +235,27 @@ func (p profile) settings(spec agent.LaunchSpec, parent []string) (string, error
 
 // env is the child environment: the parent's, minus the session markers
 // and anything Öge sets, plus what Öge sets.
-func (p profile) env(parent []string, spec agent.LaunchSpec) []string {
+func (p profile) env(parent []string, spec agent.LaunchSpec) ([]string, error) {
+	dir, err := p.configDir(spec, parent)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 	for _, kv := range parent {
 		name, _, _ := strings.Cut(kv, "=")
-		if stripped(name) || oneOf(name, setEnv) {
+		if stripped(name) || oneOf(name, setEnv) || (dir != "" && name == "CLAUDE_CONFIG_DIR") {
 			continue
 		}
 		out = append(out, kv)
+	}
+	if dir != "" {
+		out = append(out, "CLAUDE_CONFIG_DIR="+dir)
 	}
 	out = append(out, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "GIT_OPTIONAL_LOCKS=0")
 	if spec.Cache != "" {
 		out = append(out, "GOCACHE="+spec.Cache)
 	}
-	return append(out, "OGE_RUN_ID="+spec.RunID, "OGE_ROLE="+p.role)
+	return append(out, "OGE_RUN_ID="+spec.RunID, "OGE_ROLE="+p.role), nil
 }
 
 func stripped(name string) bool {

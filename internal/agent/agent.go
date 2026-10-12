@@ -15,8 +15,11 @@ type Adapter interface {
 
 // LaunchSpec is what a Session is opened with.
 type LaunchSpec struct {
-	Role      string // Role kind, e.g. "implementer"
-	Model     string
+	Role  string // Role kind, e.g. "implementer"
+	Model string
+	// Profile names the agent's config profile ("work" for claude@work);
+	// empty is the default. Never a path (ADR-0006).
+	Profile   string
 	Workspace string // the directory the agent works in
 	Network   string // "off" or "on"
 	RunID     string

@@ -41,6 +41,9 @@ type Adapter struct {
 	// CloseGrace is how long Close waits at each step (stdin closed,
 	// SIGTERM, SIGKILL); zero means closeGrace.
 	CloseGrace time.Duration
+	// Profiles are extra Claude profiles kept outside $HOME, by name: the
+	// seam for the user-level Öge config (#129). See Profiles.
+	Profiles map[string]string
 }
 
 // New returns the adapter for the claude on PATH.
@@ -58,6 +61,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	if err != nil {
 		return nil, err
 	}
+	prof.extra = a.Profiles
 	path := a.Path
 	if path == "" {
 		if path, err = exec.LookPath("claude"); err != nil {
@@ -76,7 +80,9 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	}
 	cmd := exec.Command(path, args...)
 	cmd.Dir = spec.Workspace
-	cmd.Env = prof.env(parent, spec)
+	if cmd.Env, err = prof.env(parent, spec); err != nil {
+		return nil, err
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

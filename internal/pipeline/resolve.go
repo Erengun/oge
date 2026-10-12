@@ -85,13 +85,17 @@ type Overrides struct {
 	Checks    []string
 	Tests     []string
 	Outputs   []string
-	Agents    []string // --agent <stage>=<agent>[:<model>] or <agent>[:<model>]
-	Implement string   // alias: --implement <agent>[:<model>]
-	Verify    string   // alias: --verify <agent>[:<model>]
-	Fast      bool
-	Blind     bool
-	Confirm   bool
-	Require   []string
+	Agents    []string // --agent <stage>=<agent>[@<profile>][:<model>] or <agent>[@<profile>][:<model>]
+	Implement string   // alias: --implement <agent>[@<profile>][:<model>]
+	Verify    string   // alias: --verify <agent>[@<profile>][:<model>]
+	// ClaudeProfiles are the names of the Claude profiles found on this
+	// machine (the default, bound as plain "claude", is not among them):
+	// what claude@<name> may name.
+	ClaudeProfiles []string
+	Fast           bool
+	Blind          bool
+	Confirm        bool
+	Require        []string
 	// Unattended removes the optional Gates (ADR-0008).
 	Unattended bool
 }
@@ -128,9 +132,19 @@ type Stage struct {
 	Name    string
 	Role    string
 	Agent   string
+	Profile string // the agent's config profile ("work" for claude@work); "" is the default
 	Model   string
 	Network string
 	Source  Source
+}
+
+// Binding is the Stage's agent as the user writes and reads it:
+// "claude", or "claude@work" with a profile. Never a path.
+func (s Stage) Binding() string {
+	if s.Profile != "" {
+		return s.Agent + "@" + s.Profile
+	}
+	return s.Agent
 }
 
 // Weakening is a trust-weakening option in effect and where it came from.
@@ -226,7 +240,8 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 
 	// Stages and bindings.
 	impl := Stage{Name: "implement", Role: "implementer", Network: "off", Source: src}
-	impl.Agent, impl.Model = p.Stages.Implement.Agent, p.Stages.Implement.Model
+	impl.Agent, impl.Profile = SplitAgent(p.Stages.Implement.Agent)
+	impl.Model = p.Stages.Implement.Model
 	if p.Stages.Implement.Network != "" {
 		impl.Network = p.Stages.Implement.Network
 	}
@@ -234,7 +249,8 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		impl.Source = ""
 	}
 	ver := Stage{Name: "verify", Role: "verifier", Network: "off", Source: src}
-	ver.Agent, ver.Model = p.Stages.Verify.Agent, p.Stages.Verify.Model
+	ver.Agent, ver.Profile = SplitAgent(p.Stages.Verify.Agent)
+	ver.Model = p.Stages.Verify.Model
 	if ver.Agent == "" {
 		ver.Source = ""
 	}
@@ -247,6 +263,14 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		f.Stages = []Stage{impl, ver}
 	}
 	known := func(a string) bool { return knownAgent(a) || oneOf(a, registered...) }
+	for _, s := range f.Stages {
+		if s.Source == src && s.Profile != "" {
+			key := "pipelines.default.stages." + s.Name + ".agent"
+			if msg := checkProfile(s.Agent, s.Profile, o.ClaudeProfiles); msg != "" {
+				probs = append(probs, Problem{key, msg})
+			}
+		}
+	}
 	probs = append(probs, bind(f.Stages, o, known)...)
 	if f.Mode != "" {
 		probs = append(probs, defaultBindings(f.Stages, installed)...)
@@ -323,12 +347,17 @@ func inferReport(run string) string {
 
 // bind applies --agent and the Role-kind aliases.
 func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
+	profiles := o.ClaudeProfiles
 	var probs []Problem
 	boundBy := map[string]string{}
 	set := func(flag, stage, spec string) {
-		agent, model, _ := strings.Cut(spec, ":")
+		agent, profile, model := ParseBinding(spec)
 		if !knownAgent(agent) {
 			probs = append(probs, Problem{flag, "unknown agent; use one of " + strings.Join(KnownAgents, ", ")})
+			return
+		}
+		if msg := checkProfile(agent, profile, profiles); msg != "" {
+			probs = append(probs, Problem{flag, msg})
 			return
 		}
 		for i := range stages {
@@ -340,7 +369,7 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 				return
 			}
 			boundBy[stage] = flag
-			stages[i].Agent, stages[i].Model, stages[i].Source = agent, model, FromCLI
+			stages[i].Agent, stages[i].Profile, stages[i].Model, stages[i].Source = agent, profile, model, FromCLI
 			return
 		}
 		probs = append(probs, Problem{flag, fmt.Sprintf("no Stage %q in this mode (Stages: %s)", stage, stageNames(stages))})
@@ -353,8 +382,8 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 			set(flag, stage, spec)
 			continue
 		}
-		if agent, _, _ := strings.Cut(a, ":"); !knownAgent(agent) {
-			set(flag, stages[0].Name, a) // reports the unknown agent once
+		if agent, profile, _ := ParseBinding(a); !knownAgent(agent) || checkProfile(agent, profile, profiles) != "" {
+			set(flag, stages[0].Name, a) // reports the unknown agent or profile once
 			continue
 		}
 		for _, s := range stages {
@@ -383,6 +412,22 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	alias("--implement", "implementer", o.Implement)
 	alias("--verify", "verifier", o.Verify)
 	return probs
+}
+
+// checkProfile is the Problem's message when agent@profile can't be
+// bound, "" when it can. The typed name isn't echoed (#39).
+func checkProfile(agent, profile string, known []string) string {
+	switch {
+	case profile == "":
+		return ""
+	case agent != "claude":
+		return "profiles are supported for claude only"
+	case oneOf(profile, known...):
+		return ""
+	case len(known) == 0:
+		return "unknown Claude profile; none found (a profile is a ~/.claude-<name> directory holding a Claude config)"
+	}
+	return "unknown Claude profile; known: " + strings.Join(known, ", ")
 }
 
 func stageNames(stages []Stage) string {
@@ -416,7 +461,7 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 	for i := range stages {
 		if stages[i].Role == "verifier" && stages[i].Agent == "" {
 			// Inherit only what isn't set: a configured verify model wins.
-			stages[i].Agent, stages[i].Source = impl.Agent, FromInherited
+			stages[i].Agent, stages[i].Profile, stages[i].Source = impl.Agent, impl.Profile, FromInherited
 			if stages[i].Model == "" {
 				stages[i].Model = impl.Model
 			}
