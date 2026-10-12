@@ -6,6 +6,7 @@ package oracle
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 
 	"github.com/erengun/oge/internal/ledger"
@@ -66,6 +67,31 @@ type Source interface {
 	Show(commit, path string) ([]byte, bool, error)
 }
 
+// batchSource is a Source that reads many files at once (the Run
+// repository): one git process for Oracle v0 instead of two per file.
+type batchSource interface {
+	ShowAll(commit string, paths []string) (map[string][]byte, error)
+}
+
+// showAll reads paths at commit, in one batch when src can. A path absent
+// from the commit is absent from the map.
+func showAll(src Source, commit string, paths []string) (map[string][]byte, error) {
+	if b, ok := src.(batchSource); ok {
+		return b.ShowAll(commit, paths)
+	}
+	files := make(map[string][]byte, len(paths))
+	for _, p := range paths {
+		b, ok, err := src.Show(commit, p)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			files[p] = b
+		}
+	}
+	return files, nil
+}
+
 // NewV0 builds Oracle v0 from the Snapshot: every Snapshot file matching
 // the test globs, stored as blobs, plus the frozen Check commands. It
 // returns the manifest and its blob id.
@@ -80,23 +106,39 @@ func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs)
 	if err != nil {
 		return nil, "", err
 	}
+	// Every protected file, and every go.mod for the expected tests' import
+	// paths, read in one pass.
+	var want []string
 	for _, p := range files {
-		isTest, isConfig := MatchAny(m.TestGlobs, p), MatchAny(m.TestConfigGlobs, p)
-		if !isTest && !isConfig {
+		if MatchAny(m.TestGlobs, p) || MatchAny(m.TestConfigGlobs, p) || path.Base(p) == "go.mod" {
+			want = append(want, p)
+		}
+	}
+	content, err := showAll(src, snapshot, want)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading the Snapshot: %v", err)
+	}
+	var protected []string
+	var data [][]byte
+	for _, p := range files {
+		if !MatchAny(m.TestGlobs, p) && !MatchAny(m.TestConfigGlobs, p) {
 			continue
 		}
-		b, ok, err := src.Show(snapshot, p)
-		if err != nil || !ok {
-			return nil, "", fmt.Errorf("reading %s from the Snapshot: %v", p, err)
+		b, ok := content[p]
+		if !ok {
+			return nil, "", fmt.Errorf("reading %s from the Snapshot: not found", p)
 		}
-		id, err := blobs.Put(b)
-		if err != nil {
-			return nil, "", err
-		}
-		if isTest {
-			m.Tests = append(m.Tests, File{Path: p, Blob: id})
+		protected, data = append(protected, p), append(data, b)
+	}
+	ids, err := blobs.PutAll(data)
+	if err != nil {
+		return nil, "", err
+	}
+	for i, p := range protected {
+		if MatchAny(m.TestGlobs, p) {
+			m.Tests = append(m.Tests, File{Path: p, Blob: ids[i]})
 		} else {
-			m.Config = append(m.Config, File{Path: p, Blob: id})
+			m.Config = append(m.Config, File{Path: p, Blob: ids[i]})
 		}
 	}
 	sort.Slice(m.Tests, func(i, j int) bool { return m.Tests[i].Path < m.Tests[j].Path })
@@ -106,8 +148,10 @@ func NewV0(src Source, snapshot string, f *pipeline.Frozen, blobs *ledger.Blobs)
 	}
 	var byFile map[string][]TestID
 	m.Expected, byFile = expectedTests(testPaths, files, func(p string) ([]byte, error) {
-		b, _, err := src.Show(snapshot, p)
-		return b, err
+		if b, ok := content[p]; ok {
+			return b, nil
+		}
+		return nil, fmt.Errorf("%s isn't in the Snapshot", p)
 	})
 	for i := range m.Tests {
 		m.Tests[i].Expected = byFile[m.Tests[i].Path]

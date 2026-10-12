@@ -1,10 +1,12 @@
 package ledger
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 )
 
 // Blobs is a Run's content-addressed store: SHA-256 over uncompressed
@@ -26,6 +28,51 @@ func OpenBlobs(runDir string) (*Blobs, error) {
 // Put stores b durably (write, fsync, rename, fsync the directory) and
 // returns its id, "sha256:<hex>".
 func (s *Blobs) Put(b []byte) (string, error) {
+	id, err := s.put(b)
+	if err != nil {
+		return "", err
+	}
+	if err := syncDir(s.dir); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// PutAll stores every b as Put does and returns their ids in order. The
+// files are written and synced in parallel and the directory synced once:
+// an fsync costs milliseconds, and Oracle v0 stores hundreds of files
+// before the implementer can start (#195).
+func (s *Blobs) PutAll(bs [][]byte) ([]string, error) {
+	ids := make([]string, len(bs))
+	errs := make([]error, len(bs))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for range min(8, len(bs)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				ids[i], errs[i] = s.put(bs[i])
+			}
+		}()
+	}
+	for i := range bs {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	if err := syncDir(s.dir); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// put writes, syncs and renames one blob into place; the caller syncs
+// the directory.
+func (s *Blobs) put(b []byte) (string, error) {
 	h := hashHex(b)
 	final := filepath.Join(s.dir, h)
 	if _, err := os.Stat(final); err == nil {
@@ -44,9 +91,6 @@ func (s *Blobs) Put(b []byte) (string, error) {
 	}
 	if err := os.Rename(tmp.Name(), final); err != nil {
 		os.Remove(tmp.Name())
-		return "", err
-	}
-	if err := syncDir(s.dir); err != nil {
 		return "", err
 	}
 	return "sha256:" + h, nil
