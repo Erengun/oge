@@ -112,7 +112,7 @@ type Overrides struct {
 // Frozen is the resolved Pipeline a Run would freeze.
 type Frozen struct {
 	Mode           Mode
-	ModeSource     Source // FromUser, FromCLI or "" (project or default)
+	ModeSource     Source `json:"-"` // FromUser, FromCLI or "" (project or default)
 	Verify         string // "after", "before", or "" in Fast mode
 	Project        ProjectConfig
 	Setup          SetupConfig
