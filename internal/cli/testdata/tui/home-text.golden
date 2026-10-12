@@ -1,0 +1,8 @@
+╭─ oge · demo · main ────────────────────────────────────────────────╮
+│ fix Add                                                            │
+│                                                                    │
+│ Add returns 0 for every input.                                     │
+╰────────────────────────────────────────────────────────────────────╯
+ Standard · implement claude:sonnet · verify codex
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [shift+enter] newline  [ctrl+e] editor

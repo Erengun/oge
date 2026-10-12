@@ -27,6 +27,39 @@ import (
 // startRun refuses what this build can't run yet, then runs the Task and
 // maps the outcome to its exit code (ADR-0015).
 func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Frozen, cfgData []byte, warn string) int {
+	if code := refuseRun(env, f, frozen); code != ExitOK {
+		return code
+	}
+	code, _ := runCycle(env, f, root, &t, frozen, cfgData, warn)
+	return code
+}
+
+// startHome is a bare oge on a terminal: the composer, then a Run in the
+// same view, then the composer again, until the human quits it. The exit
+// code is the last Run's, or 0 when none ran (TODO(#130-decision): a
+// session that ran several Tasks reports only the last one, like a shell
+// reports its last command). A failure of Öge itself ends the session with
+// its own code.
+func startHome(env Env, f runFlags, root string, frozen *pipeline.Frozen, cfgData []byte, warn string) int {
+	if code := refuseRun(env, f, frozen); code != ExitOK {
+		return code
+	}
+	last := ExitOK
+	for {
+		code, st := runCycle(env, f, root, nil, frozen, cfgData, warn)
+		switch st {
+		case cycleQuit:
+			return last
+		case cycleFatal:
+			return code
+		}
+		last = code
+		fmt.Fprintln(env.Stdout)
+	}
+}
+
+// refuseRun refuses a Run this build can't start, before anything is shown.
+func refuseRun(env Env, f runFlags, frozen *pipeline.Frozen) int {
 	for _, s := range frozen.Stages {
 		if env.Agents[s.Agent] == nil {
 			fmt.Fprintf(env.Stderr, "oge: running a Task with %s isn't implemented yet; use --dry-run to see what it would do\n", s.Agent)
@@ -53,21 +86,35 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 		fmt.Fprintln(env.Stderr, "oge: an attended Run needs a terminal; pass --unattended to run without one")
 		return ExitRefused
 	}
+	return ExitOK
+}
 
+// cycleState is how one pass of startHome's loop ended.
+type cycleState int
+
+const (
+	cycleRan   cycleState = iota // a Run ended; its exit code is the cycle's
+	cycleQuit                    // the human left the composer
+	cycleFatal                   // Öge itself failed or was stopped: the code ends the session
+)
+
+// runCycle runs one Task. With t nil it first asks for it in the composer,
+// in the same view that then shows the Run.
+func runCycle(env Env, f runFlags, root string, t *task.Task, frozen *pipeline.Frozen, cfgData []byte, warn string) (int, cycleState) {
 	dir, err := ledger.DefaultStateDir(env.Getenv)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
-		return ExitRefused
+		return ExitRefused, cycleFatal
 	}
 	state, err := ledger.OpenStateRoot(dir, root)
 	var refused *ledger.RefusedError
 	switch {
 	case errors.As(err, &refused):
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
-		return ExitRefused
+		return ExitRefused, cycleFatal
 	case err != nil:
 		fmt.Fprintf(env.Stderr, "oge: opening the state root: %v\n", err)
-		return ExitInternal
+		return ExitInternal, cycleFatal
 	}
 
 	// TODO(#40-decision): Ctrl-C or SIGTERM cancels the context, which
@@ -77,31 +124,52 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 	defer cancel()
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
-	v := selectView(env, f, t, frozen)
+	var first task.Task
+	if t != nil {
+		first = *t
+	}
+	v := selectView(env, f, first, frozen)
 	plainOf(v).applying = f.apply
 	withWarning(v, warn)
-	res, err := v.show(ctx, in, func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
-		p := run.Params{
-			Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
-			State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
+	startFor := func(t task.Task) startFunc {
+		return func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
+			p := run.Params{
+				Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
+				State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
+			}
+			if !f.unattended {
+				p.Gates = viewPort{v}
+			}
+			return run.Start(ctx, p)
 		}
-		if !f.unattended {
-			p.Gates = viewPort{v}
+	}
+	var res *run.Result
+	if t != nil {
+		res, err = v.show(ctx, in, startFor(*t))
+	} else {
+		var quit bool
+		res, quit, err = v.(*tui).home(ctx, in, env, root, startFor)
+		if quit {
+			return ExitOK, cycleQuit
 		}
-		return run.Start(ctx, p)
-	})
+	}
 	if errors.Is(err, errForced) {
 		proc.KillAll()
 		fmt.Fprintln(env.Stderr, "oge: stopped without waiting for the Run to end; its agent and Check processes were killed")
-		return ExitInterrupted
+		return ExitInterrupted, cycleFatal
 	}
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
-		return ExitInternal
+		return ExitInternal, cycleFatal
 	}
 	if code := afterRun(env, f, v, root, res); code != ExitOK {
-		return code
+		return code, cycleRan
 	}
+	return outcomeCode(env, res), cycleRan
+}
+
+// outcomeCode maps a Run's outcome to its exit code (ADR-0015).
+func outcomeCode(env Env, res *run.Result) int {
 	switch res.Outcome {
 	case run.Accepted:
 		return ExitOK
@@ -163,14 +231,20 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	// view; unattended means "never prompt", and the view doesn't.
 	// TODO(#79-decision): an empty TERM gets plain lines too. Windows
 	// consoles set none, but Runs are refused on Windows for now.
-	if term := env.Getenv("TERM"); term == "" || term == "dumb" {
-		return plain
-	}
-	if f.plain || plain.verbose || !env.Interactive() {
+	if !liveView(env, f) {
 		return plain
 	}
 	plain.paint = receipt.Colors(colorAllowed(env.Getenv))
 	return newTUI(env, t, frozen, plain)
+}
+
+// liveView reports whether a Run on env draws the live view: see selectView.
+// The composer opens under the same condition.
+func liveView(env Env, f runFlags) bool {
+	if term := env.Getenv("TERM"); term == "" || term == "dumb" {
+		return false
+	}
+	return !(f.plain || f.verbose || f.veryVerbose || !env.Interactive())
 }
 
 // renderer is the plain view. It prints one line per stage, then the

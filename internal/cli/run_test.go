@@ -142,7 +142,14 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	env := f.env(&stdout, &stderr)
+	env := f.envWithFake(path, &stdout, &stderr)
+	code := Main(env, args)
+	return code, stdout.String(), stderr.String()
+}
+
+// envWithFake is f.env with the fake adapter running the script at path.
+func (f *runFixture) envWithFake(path string, stdout, stderr io.Writer) Env {
+	env := f.env(stdout, stderr)
 	// The fake's script gets the fixture's HOME and TMPDIR over the
 	// process's (the last of a duplicate key wins).
 	env.Agents = map[string]agent.Adapter{fake.Name: &fake.Adapter{Script: path, Env: []string{
@@ -152,8 +159,7 @@ func (f *runFixture) run(t *testing.T, script string, args ...string) (int, stri
 	if f.wrap != nil {
 		env.Agents[fake.Name] = f.wrap(env.Agents[fake.Name])
 	}
-	code := Main(env, args)
-	return code, stdout.String(), stderr.String()
+	return env
 }
 
 // setenv sets a variable the CLI sees in this fixture's later commands,

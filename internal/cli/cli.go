@@ -106,6 +106,7 @@ var notYet = map[string]bool{
 }
 
 const usage = `Usage:
+  oge                           on a terminal: write a Task in the composer and run it
   oge "<task>" [flags]          run a Task (same as oge run)
   oge run [<task>] [flags]
   oge diff [<run>]         show a Run's Candidate against its Snapshot
@@ -273,12 +274,17 @@ func runCommand(env Env, args []string) int {
 		return ExitRefused
 	}
 
+	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
+	// A bare oge on a terminal that draws the live view asks for the Task in
+	// its composer, in the same view that shows the Run (#130). Everything
+	// else keeps the $EDITOR, stdin and refusal paths of readTask.
+	if len(positional) == 0 && f.taskFile == "" && !f.dryRun && !f.unattended && liveView(env, f) {
+		return startHome(env, f, root, frozen, cfgData, warn)
+	}
 	t, code := readTask(env, f, positional, attended)
 	if code != ExitOK {
 		return code
 	}
-
-	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
 	if !f.dryRun {
 		return startRun(env, f, root, t, frozen, cfgData, warn)
 	}
