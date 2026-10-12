@@ -63,11 +63,14 @@ var fakeKey = "sk-" + "ant-" + "api03-" + strings.Repeat("A", 20)
 func TestLoadUserConfigIsStrict(t *testing.T) {
 	r := abs(t, "r")
 	rk := func(suffix string) string { return `repos."` + r + `"` + suffix }
+	// The TOML decoder's unknown-key messages quote a key with its
+	// backslashes escaped (Windows paths); our own checks print it raw.
+	rkDecoded := func(suffix string) string { return `repos."` + strings.ReplaceAll(r, `\`, `\\`) + `"` + suffix }
 	for name, tc := range map[string]struct{ in, key string }{
 		"no schema":     {"[profiles]\n", "schema"},
 		"newer schema":  {"schema = 2\n", "schema"},
 		"unknown key":   {"schema = 1\nbogus = 1\n", "bogus"},
-		"unknown stage": {"schema = 1\n[repos." + q(r) + ".stages.plan]\nagent = \"claude\"\n", rk(".stages.plan")},
+		"unknown stage": {"schema = 1\n[repos." + q(r) + ".stages.plan]\nagent = \"claude\"\n", rkDecoded(".stages.plan")},
 		"bad mode":      {"schema = 1\n[repos." + q(r) + "]\nmode = \"turbo\"\n", rk(".mode")},
 		"relative repo": {"schema = 1\n[repos.\"r\"]\nmode = \"fast\"\n", `repos."r"`},
 		"unclean repo":  {"schema = 1\n[repos." + q(r+string(filepath.Separator)+"..") + "]\nmode = \"fast\"\n", ""},
