@@ -249,16 +249,24 @@ func runCommand(env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "oge: running Tasks isn't supported on Windows yet; oge run --dry-run still works")
 		return ExitRefused
 	}
-	attended := env.Interactive() && !f.unattended
-	f.o.Unattended = f.unattended
-
 	root, err := workspace.RepoRoot(env.Dir)
 	if err != nil {
 		fmt.Fprintln(env.Stderr, "oge: not inside a git repository; Öge runs on a Snapshot of one")
 		return ExitRefused
 	}
 
-	res, code := resolveRun(env, f, root, attended)
+	// cli is what the command line asked for. The user config's unattended
+	// and apply join it (#131) for everything but the home, which re-reads
+	// them for every Task.
+	cli := f
+	user, code := loadUserConfig(env)
+	if code != ExitOK {
+		return code
+	}
+	f = withUser(f, user.ForRepo(root), env)
+	attended := env.Interactive() && !f.unattended
+
+	res, code := resolveRun(env, f, root, attended, user)
 	if code != ExitOK {
 		return code
 	}
@@ -266,8 +274,8 @@ func runCommand(env Env, args []string) int {
 	// A bare oge on a terminal that draws the live view asks for the Task in
 	// its composer, in the same view that shows the Run (#130). Everything
 	// else keeps the $EDITOR, stdin and refusal paths of readTask.
-	if len(positional) == 0 && f.taskFile == "" && !f.dryRun && !f.unattended && liveView(env, f) {
-		return startHome(env, f, root, res)
+	if len(positional) == 0 && f.taskFile == "" && !f.dryRun && !cli.unattended && liveView(env, f) {
+		return startHome(env, cli, root, res)
 	}
 	t, code := readTask(env, f, positional, attended)
 	if code != ExitOK {
@@ -343,21 +351,18 @@ type resolved struct {
 	frozen  *pipeline.Frozen
 	cfgData []byte
 	warn    string
+	// flags are the run flags this Run resolved with: the command line's,
+	// with the user config's and the setup panel's choices.
+	flags runFlags
 }
 
 // resolveRun reads the config from the Snapshot, resolves it with the flags
 // and checks that the Checks cover the tests (#120). The home does this
 // again for every Task, so an edited config is read again and the coverage
 // check runs on the tree as it is now. Problems go to env.Stderr.
-func resolveRun(env Env, f runFlags, root string, attended bool) (*resolved, int) {
-	// The user config first: a malformed one refuses before any first-run
-	// proposal is shown.
-	user, code := loadUserConfig(env)
-	if code != ExitOK {
-		return nil, code
-	}
-	f.o.User = user.ForRepo(root)
-	f.o.UserConfigPath = pipeline.UserConfigPath(env.Getenv)
+func resolveRun(env Env, f runFlags, root string, attended bool, user *pipeline.UserConfig) (*resolved, int) {
+	// f already holds the user config's choices (withUser), and a malformed
+	// user config refused before any first-run proposal was shown.
 	var extraProfiles map[string]string
 	if user != nil {
 		extraProfiles = user.Profiles
@@ -386,7 +391,26 @@ func resolveRun(env Env, f runFlags, root string, attended bool) (*resolved, int
 		return nil, ExitRefused
 	}
 	warn := joinWarnings(append([]string{testConfigWarning(root, frozen)}, coverWarns...)...)
-	return &resolved{cfg: cfg, frozen: frozen, cfgData: cfgData, warn: warn}, ExitOK
+	return &resolved{cfg: cfg, frozen: frozen, cfgData: cfgData, warn: warn, flags: f}, ExitOK
+}
+
+// withUser adds the user config's choices for this repo to the flags: its
+// mode and bindings (as Overrides.User), and its unattended and apply, which
+// a typed --unattended or --apply already says. unattended removes Gates, so
+// it is shown as a trust-weakening option (ADR-0008).
+func withUser(f runFlags, d *pipeline.RepoDefaults, env Env) runFlags {
+	f.o.User = d
+	f.o.UserConfigPath = pipeline.UserConfigPath(env.Getenv)
+	f.o.UnattendedFrom = pipeline.FromCLI
+	if d != nil && d.Unattended != nil && *d.Unattended && !f.unattended {
+		f.unattended = true
+		f.o.UnattendedFrom = pipeline.FromUser
+	}
+	if d != nil && d.Apply != nil && *d.Apply {
+		f.apply = true
+	}
+	f.o.Unattended = f.unattended
+	return f
 }
 
 func installedAgents(env Env) []string {

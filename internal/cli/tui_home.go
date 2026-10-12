@@ -218,9 +218,16 @@ type home struct {
 	// start begins the Run for a Task in this program: it returns the Run's
 	// model and its first command.
 	start func(task.Task, *resolved, int, int) (*model, tea.Cmd)
-	// resolve reads the config again, for the Task about to start.
-	resolve func() (*resolved, []string)
-	ctx     context.Context
+	// resolve reads the config again, for the Task about to start and with
+	// the setup panel's choices (sel) added.
+	resolve func(*setupState) (*resolved, []string)
+	// sel is what the setup panel edits; it lives for the session.
+	sel    *setupState
+	panel  *setupPanel // non-nil while Tab's setup is open
+	saving bool        // the save prompt waits for y or n
+	save   func() (string, error)
+	note   string // what happened, shown under the box (a save)
+	ctx    context.Context
 	// msg is what stops or went wrong, shown under the box.
 	msg         []string
 	interrupted bool                      // the context ended while composing
@@ -263,7 +270,13 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.interrupted, h.quit = true, true
 		return h, tea.Quit
 	case tea.PasteMsg:
-		h.comp.insert(msg.Content)
+		switch {
+		case h.panel != nil:
+			h.panel.paste(msg.Content)
+		case h.saving:
+		default:
+			h.comp.insert(msg.Content)
+		}
 	case editedMsg:
 		if msg.err != nil {
 			h.msg = []string{"the editor failed: " + clean(msg.err.Error())}
@@ -271,7 +284,17 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.comp.set(msg.text)
 		}
 	case tea.KeyPressMsg:
-		h.msg = nil
+		h.msg, h.note = nil, ""
+		switch {
+		case h.saving:
+			h.answerSave(msg.String())
+			return h, nil
+		case h.panel != nil:
+			if h.panel.key(msg) {
+				h.closeSetup()
+			}
+			return h, nil
+		}
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			// On an empty box both leave. With a Task in the box Esc does
@@ -293,13 +316,14 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.interrupted, h.quit = true, true
 				return h, tea.Quit
 			}
-			res, problem := h.resolve()
+			res, problem := h.resolve(h.sel)
 			if problem != nil {
 				// The Run can't start: say why, and keep the Task.
 				h.msg, h.setup = problem, nil
 				return h, nil
 			}
 			h.setup = setupLines(res.frozen)
+			h.sel.syncFrom(res)
 			m, cmd := h.start(task.Parse(text), res, h.width, h.height)
 			h.run = m
 			return h, cmd
@@ -308,7 +332,11 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, h.edit(h.comp.text())
 			}
 		case "tab":
-			// TODO(#131): opens the setup; the hint is shown, the key inert.
+			if h.sel == nil || !h.sel.ready {
+				h.msg = []string{"setup opens once the config resolves: fix what is shown above, then press Tab"}
+				return h, nil
+			}
+			h.panel = &setupPanel{sel: h.sel, st: h.st}
 		default:
 			h.comp.key(msg)
 		}
@@ -357,8 +385,19 @@ func (h *home) render() (string, int, int) {
 	for _, l := range h.msg {
 		lines = append(lines, " "+st.bad(l))
 	}
-	for _, l := range h.setup {
-		lines = append(lines, " "+st.dim(l))
+	if h.note != "" {
+		lines = append(lines, " "+st.ok(h.note))
+	}
+	switch {
+	case h.saving:
+		lines = append(lines, " "+st.bold("Save as default for this repo?")+" [y]es [n]o"+st.dim("   (your user config only)"))
+	case h.panel != nil:
+		lines = append(lines, h.panel.lines()...)
+	}
+	if h.panel == nil {
+		for _, l := range h.setup {
+			lines = append(lines, " "+st.dim(l))
+		}
 	}
 
 	var b strings.Builder
@@ -367,6 +406,40 @@ func (h *home) render() (string, int, int) {
 		b.WriteByte('\n')
 	}
 	return b.String(), cc + 2, cr + 1
+}
+
+// closeSetup leaves the panel. The setup bar shows what the next Run will
+// use, read again with the choices; the first time something changed, the
+// save prompt follows (and never a second time in the session).
+func (h *home) closeSetup() {
+	h.panel = nil
+	res, problem := h.resolve(h.sel)
+	if problem != nil {
+		h.msg = problem
+		return
+	}
+	h.setup = setupLines(res.frozen)
+	h.sel.syncFrom(res)
+	if h.sel.changed && !h.sel.asked && h.save != nil {
+		h.saving, h.sel.asked = true, true
+	}
+}
+
+// answerSave takes the save prompt's answer. Only y and n answer it; Esc and
+// Ctrl+C mean no. Nothing is written without a y.
+func (h *home) answerSave(key string) {
+	switch key {
+	case "y", "Y":
+		_, err := h.save()
+		h.saving = false
+		if err != nil {
+			h.msg = []string{"not saved: " + clean(err.Error())}
+			return
+		}
+		h.note = "Saved as this repo's default in your user config"
+	case "n", "N", "esc", "ctrl+c":
+		h.saving = false
+	}
 }
 
 // setupLines is the setup bar for a resolved config: what this Run will use
@@ -393,11 +466,14 @@ func setupLines(f *pipeline.Frozen) []string {
 	for _, c := range f.Checks {
 		checks = append(checks, clean(c.Run))
 	}
-	return []string{
-		strings.Join(parts, " · "),
-		"Checks: " + strings.Join(checks, " · "),
-		"[tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor",
+	lines := []string{strings.Join(parts, " · ")}
+	for _, w := range f.TrustWeakening {
+		lines = append(lines, "! trust-weakening: "+clean(w.Option)+" (from "+sourceName(w.Source)+")")
 	}
+	return append(lines,
+		"Checks: "+strings.Join(checks, " · "),
+		"[tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor",
+	)
 }
 
 // homeTitle is the composer's title: the repository and its branch.
@@ -452,17 +528,20 @@ func editInEditor(env Env, text string) tea.Cmd {
 // when problem says why it can't be resolved); resolve reads it again when
 // a Task is sent.
 func (u *tui) home(ctx context.Context, in *interrupts, env Env, root string, startFor func(task.Task, *resolved) startFunc,
-	res *resolved, problem []string, resolve func() (*resolved, []string)) (out *run.Result, quit bool, err error) {
-	h := &home{comp: newComposer(), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem}
+	res *resolved, problem []string, resolve func(*setupState) (*resolved, []string), sel *setupState) (out *run.Result, quit bool, err error) {
+	h := &home{comp: newComposer(), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel}
 	if res != nil {
 		h.setup = setupLines(res.frozen)
+		sel.init(res)
 	}
+	h.save = sel.save
 	u.noFallback = true
 	var done <-chan ended
 	h.start = func(t task.Task, r *resolved, w, ht int) (*model, tea.Cmd) {
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
 		u.m.width, u.m.height = w, ht
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn
+		u.plain.applying = r.flags.apply
 		done = u.launch(ctx, in, startFor(t, r))
 		return u.m, u.m.Init()
 	}

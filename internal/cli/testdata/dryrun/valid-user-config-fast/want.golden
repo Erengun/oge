@@ -18,10 +18,9 @@ Pipeline   default (frozen, compiled graph d4b2b7e9629e)
   setup      go mod download   network on
   limits     retries 2/Stage · send-backs 3 · Attempts 12/Run · Stage 60m active, idle 10m
 
-! user config: unattended isn't used yet (#131); pass --unattended
-
 ! Trust-weakening options in effect
 !   mode = fast              from user config   (no independent verifier, no held-out tests)
+!   unattended               from user config   (removes the optional Gates, ADR-0008)
 !   setup network = on       from .oge/oge.toml
 
 Valid. A Run would start from here.

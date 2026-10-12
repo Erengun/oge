@@ -73,10 +73,15 @@ const (
 type Source string
 
 const (
-	FromBuiltin   Source = "built-in"
-	FromProject   Source = "project"
-	FromUser      Source = "user"
-	FromCLI       Source = "cli"
+	FromBuiltin Source = "built-in"
+	FromProject Source = "project"
+	FromUser    Source = "user"
+	FromCLI     Source = "cli"
+	// FromTUI is a choice made in the TUI's setup panel (#131). It acts as a
+	// flag for this session's Runs, so it beats the user config; unlike a
+	// typed flag, a weakening one is shown like the user config's, since it
+	// was a menu pick rather than an explicit command.
+	FromTUI       Source = "tui"
 	FromInstalled Source = "installed"
 	FromInherited Source = "inherits implement"
 )
@@ -107,12 +112,20 @@ type Overrides struct {
 	// Standard is --standard: the mode flag that lets a Run override a
 	// weaker mode set in the user config.
 	Standard bool
+	// ModeFrom and BindingsFrom are who set the mode flag and the agent
+	// bindings above: FromCLI (the zero value) for flags typed on the
+	// command line, FromTUI for the setup panel's choices.
+	ModeFrom, BindingsFrom Source
+	// UnattendedFrom is who set Unattended: FromCLI (--unattended, the zero
+	// value), FromUser (the user config) or FromTUI. Only the last two are
+	// shown as trust-weakening: they remove Gates without a typed flag.
+	UnattendedFrom Source
 }
 
 // Frozen is the resolved Pipeline a Run would freeze.
 type Frozen struct {
 	Mode           Mode
-	ModeSource     Source `json:"-"` // FromUser, FromCLI or "" (project or default)
+	ModeSource     Source `json:"-"` // FromUser, FromCLI, FromTUI or "" (project or default)
 	Verify         string // "after", "before", or "" in Fast mode
 	Project        ProjectConfig
 	Setup          SetupConfig
@@ -177,6 +190,10 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	}
 	var probs []Problem
 	add := func(key, format string, a ...any) { probs = append(probs, Problem{key, fmt.Sprintf(format, a...)}) }
+	modeFrom := FromCLI
+	if o.ModeFrom != "" {
+		modeFrom = o.ModeFrom
+	}
 	p := cfg.Pipelines.Default
 	f := &Frozen{Project: cfg.Project, Setup: cfg.Setup}
 
@@ -198,11 +215,11 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	case len(flagged) > 1:
 		add(strings.Join(flagged, ", "), "choose one mode")
 	case o.Fast:
-		f.Mode, f.ModeSource = Fast, FromCLI
+		f.Mode, f.ModeSource = Fast, modeFrom
 	case o.Blind:
-		f.Mode, f.Verify, f.ModeSource = Blind, "before", FromCLI
+		f.Mode, f.Verify, f.ModeSource = Blind, "before", modeFrom
 	case o.Standard:
-		f.Mode, f.Verify, f.ModeSource = Standard, "after", FromCLI
+		f.Mode, f.Verify, f.ModeSource = Standard, "after", modeFrom
 	case userMode == "fast":
 		f.Mode, f.ModeSource = Fast, FromUser
 	case userMode == "blind":
@@ -328,16 +345,11 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 
 	// Trust-weakening options: from the project file, or a mode the user
 	// config chose (there is no CLI network flag in the MVP).
-	if f.ModeSource == FromUser && f.Mode == Fast {
-		f.TrustWeakening = append(f.TrustWeakening, Weakening{"mode = fast", FromUser, "no independent verifier, no held-out tests"})
+	if (f.ModeSource == FromUser || f.ModeSource == FromTUI) && f.Mode == Fast {
+		f.TrustWeakening = append(f.TrustWeakening, Weakening{"mode = fast", f.ModeSource, "no independent verifier, no held-out tests"})
 	}
-	if u := o.User; u != nil {
-		if u.Unattended != nil && *u.Unattended {
-			f.Notices = append(f.Notices, "user config: unattended isn't used yet (#131); pass --unattended")
-		}
-		if u.Apply != nil && *u.Apply {
-			f.Notices = append(f.Notices, "user config: apply isn't used yet (#131); pass --apply")
-		}
+	if o.Unattended && (o.UnattendedFrom == FromUser || o.UnattendedFrom == FromTUI) {
+		f.TrustWeakening = append(f.TrustWeakening, Weakening{"unattended", o.UnattendedFrom, "removes the optional Gates, ADR-0008"})
 	}
 	if cfg.Setup.Network == "on" {
 		// The setup command isn't echoed: it may hold a token (#39).
@@ -432,6 +444,10 @@ func inferReport(run string) string {
 
 // bind applies --agent and the Role-kind aliases.
 func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
+	flagsFrom := FromCLI
+	if o.BindingsFrom != "" {
+		flagsFrom = o.BindingsFrom
+	}
 	profiles := o.ClaudeProfiles
 	var probs []Problem
 	boundBy := map[string]string{}
@@ -458,7 +474,7 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 				return
 			}
 			boundBy[stage] = flag
-			stages[i].Agent, stages[i].Profile, stages[i].Model, stages[i].Source = agent, profile, model, FromCLI
+			stages[i].Agent, stages[i].Profile, stages[i].Model, stages[i].Source = agent, profile, model, flagsFrom
 			return
 		}
 		probs = append(probs, Problem{flag, fmt.Sprintf("no Stage %q in this mode (Stages: %s)", stage, stageNames(stages))})
