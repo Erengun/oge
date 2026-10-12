@@ -428,6 +428,62 @@ func (r *RunRepo) Show(commit, path string) (data []byte, ok bool, err error) {
 	return b, err == nil, err
 }
 
+// ShowAll returns the content of each path at commit that exists there,
+// read by one git process instead of two per path: Oracle v0 reads
+// hundreds of protected files before the implementer can start (#195).
+func (r *RunRepo) ShowAll(commit string, paths []string) (map[string][]byte, error) {
+	files := make(map[string][]byte, len(paths))
+	var in bytes.Buffer
+	var batch []string
+	for _, p := range paths {
+		if strings.ContainsAny(p, "\n\r") {
+			// cat-file --batch reads one name per line.
+			b, ok, err := r.Show(commit, p)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				files[p] = b
+			}
+			continue
+		}
+		batch = append(batch, p)
+		in.WriteString(commit + ":" + p + "\n")
+	}
+	if len(batch) == 0 {
+		return files, nil
+	}
+	out, err := r.git("", "", &in, "cat-file", "--batch")
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range batch {
+		nl := bytes.IndexByte(out, '\n')
+		if nl < 0 {
+			return nil, fmt.Errorf("git cat-file --batch: short output at %s", p)
+		}
+		line := string(out[:nl])
+		out = out[nl+1:]
+		if line == commit+":"+p+" missing" {
+			continue
+		}
+		header := strings.Fields(line)
+		if len(header) != 3 {
+			return nil, fmt.Errorf("git cat-file --batch: %s: unexpected header %q", p, strings.Join(header, " "))
+		}
+		if header[1] != "blob" {
+			return nil, fmt.Errorf("git cat-file --batch: %s is a %s, not a file", p, header[1])
+		}
+		var size int
+		if _, err := fmt.Sscan(header[2], &size); err != nil || size < 0 || size+1 > len(out) {
+			return nil, fmt.Errorf("git cat-file --batch: %s: bad size %q", p, header[2])
+		}
+		files[p] = out[:size:size]
+		out = out[size+1:] // the content, then a newline
+	}
+	return files, nil
+}
+
 // Files lists every file path in commit.
 func (r *RunRepo) Files(commit string) ([]string, error) {
 	out, err := r.git("", "", nil, "ls-tree", "-r", "-z", "--name-only", commit)

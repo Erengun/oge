@@ -358,35 +358,81 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 
 	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, SeedTemplate: p.CacheSeedTemplate}
 	pre := map[string]any{"checks": []string{"submodules", "lfs", "unmerged", "operation_in_progress"}}
-	// Setup runs on the Snapshot into the Run's cache seed, whose warm
-	// step then overlaps the implementer's Attempt (ADR-0021).
-	seed, setup, err := runner.NewSeed(ctx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
-	if err != nil {
-		return nil, err
+	// Setup runs on the Snapshot into the Run's cache seed, and the seed's
+	// warm step and the Snapshot control follow it (ADR-0020, ADR-0021),
+	// all while the implementer works: nothing the Attempt does depends on
+	// them (#195). A failing setup cancels the Attempt and refuses the Run,
+	// and nothing after the first Attempt starts before they're done.
+	attemptCtx, cancelAttempt := context.WithCancel(ctx)
+	defer cancelAttempt()
+	seedCtx, cancelSeed := context.WithCancel(ctx)
+	type preflight struct {
+		seed    *oracle.Seed
+		setup   *oracle.Execution
+		control *oracle.Control
+		err     error
 	}
-	defer seed.Close()
-	if setup != nil {
-		e := *setup
+	prepared := make(chan preflight, 1)
+	go func() {
+		var pf preflight
+		pf.seed, pf.setup, pf.err = runner.NewSeed(seedCtx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
+		if pf.err != nil || (pf.setup != nil && !pf.setup.Pass) {
+			cancelAttempt()
+		} else {
+			pf.control = startControl(seedCtx, runner, pf.seed, repo, m, snap, f.Setup.Run, res.Dir)
+		}
+		prepared <- pf
+	}()
+	var (
+		seed    *oracle.Seed
+		control *oracle.Control
+		joined  bool
+	)
+	defer func() {
+		cancelSeed()
+		if !joined {
+			pf := <-prepared
+			seed, control = pf.seed, pf.control
+		}
+		control.Stop()
+		seed.Close()
+	}()
+	// join waits for setup, the seed and the control. stop is true when
+	// the Run ends here: Öge failed (err), or setup was interrupted or
+	// failed on the Snapshot (r).
+	join := func() (stop bool, r *Result, err error) {
+		pf := <-prepared
+		joined, seed, control = true, pf.seed, pf.control
+		if pf.err != nil {
+			return true, nil, pf.err
+		}
+		if pf.setup == nil {
+			return false, nil, nil // observed before the Attempt
+		}
+		e := *pf.setup
 		pre["setup"] = e
+		if err := l.Append(RecPreflightObserved, pre); err != nil {
+			return true, nil, err
+		}
 		if ctx.Err() != nil {
-			if err := l.Append(RecPreflightObserved, pre); err != nil {
-				return nil, err
-			}
-			return end(InfrastructureStop, interrupted)
+			r, err = end(InfrastructureStop, interrupted)
+			return true, r, err
 		}
 		if !e.Pass {
-			if err := l.Append(RecPreflightObserved, pre); err != nil {
-				return nil, err
-			}
-			return end(Refused, fmt.Sprintf("setup %q fails on the Snapshot (%s); fix it before running", f.Setup.Run, e.Why))
+			r, err = end(Refused, fmt.Sprintf("setup %q fails on the Snapshot (%s); fix it before running", f.Setup.Run, e.Why))
+			return true, r, err
 		}
+		p.Observe(Event{Kind: EvPreflight, Result: res})
+		return false, nil, nil
 	}
-	if err := l.Append(RecPreflightObserved, pre); err != nil {
-		return nil, err
+	if f.Setup.Run == "" {
+		// No setup to pass or fail: Preflight is observed now, in the
+		// Ledger order a Run without setup always had.
+		if err := l.Append(RecPreflightObserved, pre); err != nil {
+			return nil, err
+		}
+		p.Observe(Event{Kind: EvPreflight, Result: res})
 	}
-	p.Observe(Event{Kind: EvPreflight, Result: res})
-	control := startControl(ctx, runner, seed, repo, m, snap, f.Setup.Run, res.Dir)
-	defer control.Stop()
 
 	// The walk: implementer, Check, then wherever the Verdict's edge goes.
 	w = &walk{p: p, l: l, g: f.Graph, limits: f.Limits, repo: repo, snap: snap, promoted: map[string]bool{}}
@@ -396,7 +442,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	var qa *qaStage
 	if verifier != nil {
 		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
-			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, seed: seed, runDir: res.Dir}
+			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, runDir: res.Dir} // its seed once joined
 	}
 	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
 	var a *Attempt
@@ -407,9 +453,19 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if resume == "" {
 			w.attempts++
 			var err error
-			a, err = implement(ctx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
+			a, err = implement(attemptCtx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
 			if err != nil {
 				return nil, err
+			}
+			if !joined {
+				// Setup's outcome comes before the Attempt's: a setup
+				// failure cancelled it, and refuses the Run.
+				if stop, r, err := join(); stop {
+					return r, err
+				}
+				if qa != nil {
+					qa.seed = seed
+				}
 			}
 			res.Attempt = a
 			res.Friction = agent.SumFriction(res.Friction, a.Friction)

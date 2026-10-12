@@ -243,3 +243,33 @@ func TestWorkspaceGitIsMinimalAndNeverInTheCandidate(t *testing.T) {
 		t.Errorf("Candidate changed %s", got)
 	}
 }
+
+func TestShowAllMatchesShow(t *testing.T) {
+	repo := newRepo(t)
+	write(t, filepath.Join(repo, "dir with space", "b c.txt"), "spaced\n")
+	write(t, filepath.Join(repo, "empty.txt"), "")
+	write(t, filepath.Join(repo, "bin.dat"), "\x00\n\x01 missing\n")
+	r, err := InitRunRepo(filepath.Join(t.TempDir(), "repo.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, _, err := r.TakeSnapshot(repo, filepath.Join(t.TempDir(), "ws"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := []string{"a.txt", "dir with space/b c.txt", "empty.txt", "bin.dat", "no such file.txt", "a.txt"}
+	got, err := r.ShowAll(snap, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range paths {
+		want, ok, err := r.Show(snap, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, found := got[p]
+		if found != ok || string(b) != string(want) {
+			t.Errorf("%s: ShowAll %q (found %v), Show %q (ok %v)", p, b, found, want, ok)
+		}
+	}
+}

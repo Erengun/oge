@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -431,6 +432,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		keptBy    = map[string][]KeptFile{} // implementer attempt → its last ScopeObserved's kept
 		madeBy    = map[string]string{}     // Candidate a resolution made → the Attempt it resolved
 		openAt    *time.Time
+		firstAt   time.Time           // the first AttemptStarting
 		abandoned string              // the Gate a human was asked at and never answered
 		resolved  = map[string]bool{} // Ambiguous files promoted or dropped
 		resolvedC string              // the Candidate the last resolution made
@@ -471,7 +473,15 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			get(rec.Data, &d)
 			setup = d.Setup
 			if !started.IsZero() {
-				addStage("preflight", rec.At.Sub(started))
+				// A Run with setup observes Preflight after the first
+				// Attempt, which setup overlapped (#195): its stage ends
+				// where that Attempt began, and still comes first.
+				at := rec.At
+				if !firstAt.IsZero() && firstAt.Before(at) {
+					at = firstAt
+				}
+				addStage("preflight", at.Sub(started))
+				order = append([]string{"preflight"}, slices.DeleteFunc(order, func(s string) bool { return s == "preflight" })...)
 			}
 		case run.RecOracleVersion:
 			var d oracleVersion
@@ -491,6 +501,9 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				continue
 			}
 			roles[d.Attempt], starts[d.Attempt] = d.Role, rec.At
+			if firstAt.IsZero() {
+				firstAt = rec.At
+			}
 			stages[d.Attempt] = d.Stage
 			if d.Role == "verifier" {
 				stages[d.Attempt] = "QA"
