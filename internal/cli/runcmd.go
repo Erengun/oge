@@ -54,7 +54,9 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 	res, problem := first, []string(nil)
 	if first == nil {
 		// No project config: the Checks section holds Öge's proposal.
-		setup.seedProposal()
+		if !setup.seedProposal() {
+			setup.seedEmpty() // a toolchain Öge doesn't recognise: the section starts empty
+		}
 		res, problem = resolveHome(env, f, root, setup)
 	} else if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
 		return code
@@ -93,6 +95,18 @@ func resolveHome(env Env, f runFlags, root string, setup *setupState) (*resolved
 	}
 	if code == ExitOK {
 		return res, nil
+	}
+	if setup != nil && setup.noFile && !setup.ready {
+		// The panel needs a resolved Run to show its other rows. With the
+		// first run's Checks still empty none resolves, so the panel is
+		// opened on a stand-in that is never run.
+		g := f
+		g.o.TUIChecks = []pipeline.CheckCommandConfig{{Run: "go test -json ./...", Report: oracle.ReportGoTestJSON}}
+		g.o.TUITests = []string{"**/*_test.go"}
+		quiet.Stderr = io.Discard
+		if r, c := resolveRun(quiet, g, root, false, user); c == ExitOK {
+			setup.init(r)
+		}
 	}
 	var lines []string
 	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {

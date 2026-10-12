@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -427,6 +428,7 @@ func (h *home) render() (string, int, int) {
 		}
 		lines = append(lines, " [y]es write it [n]o")
 	case h.panel != nil:
+		h.panel.width = width
 		lines = append(lines, h.panel.lines()...)
 	}
 	if h.panel == nil {
@@ -498,7 +500,11 @@ func (h *home) answerReview(key string) {
 	case "y", "Y":
 		r := h.review
 		h.review = nil
-		if err := h.sel.writeProject(r); err != nil {
+		if err := h.sel.writeProject(r); errors.Is(err, errChanged) {
+			h.msg = []string{clean(err.Error()) + ": review it again"}
+			h.reviewProject()
+			return
+		} else if err != nil {
 			h.msg = []string{"not saved: " + clean(err.Error())}
 			return
 		}
@@ -551,16 +557,23 @@ func setupLines(f *pipeline.Frozen) []string {
 	}
 	var checks []string
 	edited := false
+	fromSetup := ""
 	for _, c := range f.Checks {
 		checks = append(checks, clean(c.Run))
 		edited = edited || c.Source == pipeline.FromTUI
+	}
+	if edited {
+		fromSetup = " (from setup)"
 	}
 	lines := []string{strings.Join(parts, " · ")}
 	for _, w := range f.TrustWeakening {
 		lines = append(lines, "! trust-weakening: "+clean(w.Option)+" (from "+sourceName(w.Source)+")")
 	}
+	if f.TestGlobsSource == pipeline.FromTUI {
+		lines = append(lines, "Test globs: "+clean(strings.Join(f.Project.TestGlobs, " · "))+" (from setup)")
+	}
 	return append(lines,
-		"Checks: "+strings.Join(checks, " · ")+map[bool]string{true: " (from setup)"}[edited],
+		"Checks: "+strings.Join(checks, " · ")+fromSetup,
 		"[tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor",
 	)
 }

@@ -43,13 +43,6 @@ func checksHome(t *testing.T, check string) (*home, string) {
 	return h, repo
 }
 
-// rowsDown moves the cursor n rows.
-func rowsDown(h *home, n int) {
-	for range n {
-		press(h, down())
-	}
-}
-
 func TestChecksSectionGolden(t *testing.T) {
 	h, _ := checksHome(t, "go test -json ./...")
 	press(h, tab())
@@ -71,12 +64,7 @@ func TestChecksInlineRefusalForRun1Of114(t *testing.T) {
 func TestChecksEditingAGlobTurnsCoverageValid(t *testing.T) {
 	h, dir := checksHome(t, "go test -json ./sub/...")
 	press(h, tab())
-	rowsDown(h, 7) // the first test glob (no profile row: agent claude has one; see rows)
-	for i, r := range h.panel.rows() {
-		if r.kind == rowGlob {
-			h.panel.cursor = i
-		}
-	}
+	cursorTo(h, rowGlob)
 	press(h, enter(), tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
 	typ(h, "sub/**/*_test.go")
 	if got := frame(h); !strings.Contains(got, "✓ these Checks can run") {
@@ -101,11 +89,7 @@ func TestChecksReviewedSaveWritesTheFileAndNeverCommits(t *testing.T) {
 	before := gitOut(t, repo, "rev-list", "--count", "HEAD")
 	orig, _ := os.ReadFile(filepath.Join(repo, ".oge", "oge.toml"))
 	press(h, tab())
-	for i, r := range h.panel.rows() {
-		if r.kind == rowAddGlob {
-			h.panel.cursor = i
-		}
-	}
+	cursorTo(h, rowAddGlob)
 	press(h, enter())
 	typ(h, "testdata/**")
 	press(h, enter(), tea.KeyPressMsg{Code: 'w', Text: "w"})
@@ -157,10 +141,12 @@ func TestBareOgeSetupEditsAGlobSavesItAndRuns(t *testing.T) {
 	s.composer()
 	s.type_("\t")
 	s.expect("Checks   next Run")
-	s.type_(strings.Repeat("\x1b[B", 7) + "\r") // the first test glob
+	// To the last row ("+ test glob": the keys stop there), then the glob above it.
+	s.type_(strings.Repeat("\x1b[B", 40) + "\x1b[A\r")
 	s.expect("> **/*_test.go")
 	s.type_("\x15*_test.go\r")
-	s.expect("✓ these Checks can run the protected tests")
+	s.expect("test glob 1        *_test.go")
+	// Narrowing the glob is a weaker Oracle, and the Run says so.
 	s.type_("w")
 	s.expect("Save these Checks to .oge/oge.toml?")
 	s.type_("y")
@@ -211,5 +197,145 @@ func TestBareOgeFirstRunChecksSectionIsTheProposal(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(f.repo, ".oge", "oge.toml"))
 	if !strings.Contains(string(b), "[[check.commands]]") || !strings.Contains(gitOut(t, f.repo, "status", "--porcelain"), "?? .oge/") {
 		t.Errorf("file:\n%s\nstatus:\n%s", b, gitOut(t, f.repo, "status", "--porcelain"))
+	}
+}
+
+// anyRunFile reports whether a file under the Run's state holds all of the
+// substrings.
+func anyRunFile(t *testing.T, f *runFixture, subs ...string) bool {
+	t.Helper()
+	found := false
+	for _, d := range runDirs(t, f) {
+		_ = filepath.WalkDir(d, func(p string, e os.DirEntry, err error) error {
+			if err != nil || e.IsDir() {
+				return nil
+			}
+			b, _ := os.ReadFile(p)
+			ok := true
+			for _, sub := range subs {
+				ok = ok && strings.Contains(string(b), sub)
+			}
+			found = found || ok
+			return nil
+		})
+	}
+	return found
+}
+
+// A narrowed glob, left unsaved, is a weaker Oracle: the bar and the
+// Receipt say so, and the Run still starts.
+func TestBareOgeUnsavedNarrowedGlobIsTrustWeakening(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("\t")
+	s.expect("Checks   next Run")
+	s.type_(strings.Repeat("\x1b[B", 40) + "\x1b[A\r")
+	s.expect("> **/*_test.go")
+	s.type_("\x15*_test.go\r")
+	s.expect("test glob 1        *_test.go")
+	s.type_("\t")
+	s.expect("! trust-weakening: test glob removed in setup: **/*_test.go (from setup)")
+	s.expect("Test globs: *_test.go (from setup)")
+	s.type_("fix Add\r")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if !strings.Contains(s.out.String(), "trust-weakening option in effect: test glob removed in setup") {
+		t.Errorf("the Receipt doesn't say so:\n%s", s.out.String())
+	}
+	b, _ := os.ReadFile(filepath.Join(f.repo, ".oge", "oge.toml"))
+	if !strings.Contains(string(b), `"**/*_test.go"`) {
+		t.Errorf("an unsaved edit changed the file:\n%s", b)
+	}
+}
+
+// First run, never saved: the on-screen proposal is what runs, labelled
+// "(from setup)", with the proposal's test_config.
+func TestBareOgeRunsFromTheUnsavedProposal(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	gitIn(t, f.repo, "rm", "-q", ".oge/oge.toml")
+	gitIn(t, f.repo, "commit", "-q", "-m", "no config")
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.expect("Checks: go test -json ./... (from setup)")
+	s.type_("fix Add\r")
+	s.expect("[a] apply")
+	s.type_("q")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if strings.Contains(s.out.String(), "test_config is empty") {
+		t.Error("the proposal's test_config was dropped")
+	}
+	if !anyRunFile(t, f, `"go.mod"`, `"go.sum"`, `"tui"`) {
+		t.Error("the frozen record lacks the proposal's test_config and its source")
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, ".oge", "oge.toml")); err == nil {
+		t.Error("the proposal was written without a yes")
+	}
+}
+
+// A project Öge doesn't recognise opens the composer with empty Checks; a
+// Run can't start until there is a Check and a test glob.
+func TestBareOgeUnknownToolchainOpensEmptyChecks(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	gitIn(t, f.repo, "rm", "-q", ".oge/oge.toml", "go.mod")
+	gitIn(t, f.repo, "commit", "-q", "-m", "no config")
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.expect("no Check command")
+	s.type_("\t")
+	s.expect("Checks   no .oge/oge.toml yet")
+	s.expect("✗ refused: no Check command")
+	s.type_("\x03\x03") // closes the panel, then leaves the empty box
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+}
+
+func TestChecksWriteRefusesAFileChangedSinceTheReview(t *testing.T) {
+	h, repo := checksHome(t, "go test -json ./...")
+	h.sel.globs = append(h.sel.globs, "more/**")
+	h.sel.touchOracle()
+	r, err := h.sel.reviewProject()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repo, ".oge", "oge.toml")
+	writeFile(t, path, []byte("schema = 1\n# edited meanwhile\n"))
+	if err := h.sel.writeProject(r); err != errChanged {
+		t.Fatalf("err %v", err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "edited meanwhile") {
+		t.Errorf("overwritten:\n%s", b)
+	}
+}
+
+// --check and --tests aren't offered for editing (Resolve would add them
+// again); they are shown, and count for the coverage check.
+func TestChecksFlagEntriesAreReadOnly(t *testing.T) {
+	h, _ := checksHome(t, "go test -json ./...")
+	var f runFlags
+	f.o.Checks, f.o.Tests = []string{"go test ./x"}, []string{"x/**"}
+	fr := homeFrozen()
+	fr.Checks = append(fr.Checks, pipeline.CheckCommand{Run: "go test ./x", Source: pipeline.FromCLI})
+	fr.Project.TestGlobs = append(fr.Project.TestGlobs, "x/**")
+	h.sel.ready, h.sel.touched = false, false
+	h.sel.init(&resolved{frozen: fr, flags: f})
+	if len(h.sel.checks) != 1 || len(h.sel.globs) != 1 {
+		t.Fatalf("editable: %v %v", h.sel.checks, h.sel.globs)
+	}
+	press(h, tab())
+	if got := frame(h); !strings.Contains(got, "(from flags) check: go test ./x") || !strings.Contains(got, "(from flags) test glob: x/**") {
+		t.Errorf("flags not shown:\n%s", got)
 	}
 }

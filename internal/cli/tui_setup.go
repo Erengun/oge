@@ -304,6 +304,7 @@ type setupPanel struct {
 	rev0        int              // the state's rev when the panel opened
 	save        bool             // [s] was pressed
 	saveProject bool             // [w] was pressed
+	width       int              // the terminal's, for wrapping
 	pick        *list.Model      // a picker is open for the cursor's row
 	input       *textinput.Model // the model box is open for the cursor's row
 }

@@ -18,7 +18,13 @@ var (
 // globs replaced by the given ones (#132). It changes only those two keys:
 // everything else, comments included, stays as written. A key whose value
 // is already the given one is not touched. existing must be a valid config.
-func RenderOracle(existing string, checks []CheckCommandConfig, globs []string) string {
+//
+// The result is read back with Load and must hold exactly the given values;
+// a layout this edit can't handle (dotted keys, inline tables) is an error,
+// so a file that would not mean what the human reviewed is never offered.
+func RenderOracle(existing string, checks []CheckCommandConfig, globs []string) (string, error) {
+	crlf := strings.Contains(existing, "\r\n")
+	existing = strings.ReplaceAll(existing, "\r\n", "\n")
 	cfg, probs := Load([]byte(existing))
 	if len(probs) > 0 || cfg == nil {
 		cfg = &Config{}
@@ -33,7 +39,15 @@ func RenderOracle(existing string, checks []CheckCommandConfig, globs []string) 
 	if !sameChecks(cfg.Check.Commands, checks) {
 		lines = setChecks(lines, checks)
 	}
-	return strings.Join(lines, "\n") + "\n"
+	out := strings.Join(lines, "\n") + "\n"
+	got, probs := Load([]byte(out))
+	if len(probs) > 0 || got == nil || !equalStrings(got.Project.TestGlobs, globs) || !sameChecks(got.Check.Commands, checks) {
+		return "", fmt.Errorf("this file's layout needs a hand edit: %s", ConfigPath)
+	}
+	if crlf {
+		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	return out, nil
 }
 
 func equalStrings(a, b []string) bool {
@@ -53,9 +67,12 @@ func setTestGlobs(lines, globs []string) []string {
 	section := ""
 	for i, l := range lines {
 		if tableHeader.MatchString(l) {
-			section = strings.TrimSpace(l)
+			section = "other"
+			if projectHeader.MatchString(l) {
+				section = "project"
+			}
 		}
-		if section == "[project]" && testGlobsLine.MatchString(l) {
+		if section == "project" && testGlobsLine.MatchString(l) {
 			end := i
 			for depth := bracketDepth(l); depth > 0 && end+1 < len(lines); {
 				end++
@@ -112,8 +129,19 @@ func setChecks(lines []string, checks []CheckCommandConfig) []string {
 		if at < 0 {
 			at = len(out)
 		}
+		start := i
 		for i+1 < len(lines) && !tableHeader.MatchString(lines[i+1]) {
 			i++
+		}
+		// Comments that end the block belong to what follows it.
+		end := i
+		for end > start && (strings.TrimSpace(lines[end]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end]), "#")) {
+			end--
+		}
+		for _, l := range lines[end+1 : i+1] {
+			if strings.TrimSpace(l) != "" {
+				out = append(out, l)
+			}
 		}
 	}
 	var blocks []string
@@ -143,7 +171,15 @@ func setChecks(lines []string, checks []CheckCommandConfig) []string {
 	if at < len(out) && len(blocks) > 0 {
 		res = append(res, "")
 	}
-	return append(res, out[at:]...)
+	res = append(res, out[at:]...)
+	var tidy []string // no double blank lines
+	for _, l := range res {
+		if n := len(tidy); n > 0 && l == "" && tidy[n-1] == "" {
+			continue
+		}
+		tidy = append(tidy, l)
+	}
+	return tidy
 }
 
 // tomlString is s as a TOML basic string.

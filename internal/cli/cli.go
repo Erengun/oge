@@ -273,9 +273,7 @@ func runCommand(env Env, args []string) int {
 	// after a reviewed diff. Elsewhere the proposal stays on stdin.
 	home := len(positional) == 0 && f.taskFile == "" && !f.dryRun && !cli.unattended && liveView(env, f)
 	if home && noProjectConfig(root, f) {
-		if _, ok := pipeline.Propose(root); ok {
-			return startHome(env, cli, root, nil)
-		}
+		return startHome(env, cli, root, nil)
 	}
 	res, code := resolveRun(env, f, root, attended, user)
 	if code != ExitOK {

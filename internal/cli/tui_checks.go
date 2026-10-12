@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/erengun/oge/internal/pipeline"
@@ -30,6 +31,10 @@ type oracleState struct {
 	noFile     bool // first run: no .oge/oge.toml; the Checks are Öge's proposal
 	seed       string
 	outputs    []string // the proposal's output globs, for a first run
+	testConfig []string // and its test_config
+	// flagChecks and flagTests came from --check and --tests: they are not
+	// the panel's to edit, but they count for the coverage check.
+	flagChecks, flagTests []string
 
 	paths   []string
 	pathsOK bool
@@ -55,13 +60,26 @@ func (s *setupState) seedProposal() bool {
 	s.noFile, s.seed, s.touched = true, p.TOML, true
 	s.checks = append([]pipeline.CheckCommandConfig(nil), cfg.Check.Commands...)
 	s.globs = append([]string(nil), cfg.Project.TestGlobs...)
-	s.outputs = cfg.Project.OutputGlobs
+	s.outputs, s.testConfig = cfg.Project.OutputGlobs, cfg.Project.TestConfig
 	return true
+}
+
+// seedEmpty is the first run of a project Öge doesn't recognise: the Checks
+// section starts empty, and a Run can't start until it has a Check and a glob.
+func (s *setupState) seedEmpty() {
+	s.noFile, s.seed, s.touched = true, "schema = 1\n", true
 }
 
 // syncOracle takes the repo's Checks and globs as the shown ones, unless the
 // human edited them.
 func (s *setupState) syncOracle(res *resolved) {
+	s.flagChecks, s.flagTests = nil, nil
+	for _, c := range res.flags.o.Checks {
+		s.flagChecks = append(s.flagChecks, strings.TrimSpace(c))
+	}
+	for _, g := range res.flags.o.Tests {
+		s.flagTests = append(s.flagTests, strings.TrimSpace(g))
+	}
 	if s.touched || s.noFile {
 		return
 	}
@@ -69,11 +87,24 @@ func (s *setupState) syncOracle(res *resolved) {
 		s.checks = append([]pipeline.CheckCommandConfig(nil), res.cfg.Check.Commands...)
 		s.globs = append([]string(nil), res.cfg.Project.TestGlobs...)
 	} else {
+		// The frozen Pipeline has the flags' entries too; they are shown
+		// apart, so the panel doesn't offer them for editing (Resolve would
+		// add them again).
 		s.checks = nil
 		for _, c := range res.frozen.Checks {
-			s.checks = append(s.checks, pipeline.CheckCommandConfig{Run: c.Run, Report: c.Report})
+			if c.Source != pipeline.FromCLI {
+				s.checks = append(s.checks, pipeline.CheckCommandConfig{Run: c.Run, Report: c.Report})
+			}
 		}
-		s.globs = append([]string(nil), res.frozen.Project.TestGlobs...)
+		s.globs = nil
+		skip := append([]string(nil), s.flagTests...)
+		for _, g := range res.frozen.Project.TestGlobs {
+			if i := slices.Index(skip, g); i >= 0 {
+				skip = slices.Delete(skip, i, i+1)
+				continue
+			}
+			s.globs = append(s.globs, g)
+		}
 	}
 	s.baseChecks = append([]pipeline.CheckCommandConfig(nil), s.checks...)
 	s.baseGlobs = append([]string(nil), s.globs...)
@@ -87,9 +118,8 @@ func (s *setupState) oracleFlags(f runFlags) runFlags {
 	f.o.TUIOracle = true
 	f.o.TUIChecks = append([]pipeline.CheckCommandConfig(nil), s.checks...)
 	f.o.TUITests = append([]string(nil), s.globs...)
-	if s.noFile {
-		f.o.Outputs = append(append([]string(nil), f.o.Outputs...), s.outputs...)
-	}
+	f.o.TUITestConfig = append([]string(nil), s.testConfig...)
+	f.o.TUIOutputs = append([]string(nil), s.outputs...)
 	return f
 }
 
@@ -112,13 +142,13 @@ func nilIfEmpty[T any](v []T) []T {
 // Snapshot as it was when the panel opened. The last answer is kept, so
 // drawing the panel again costs nothing.
 func (s *setupState) coverage(checks []pipeline.CheckCommandConfig, globs []string) (refusal string, warns []string) {
-	var runs []string
+	runs := append([]string(nil), s.flagChecks...)
 	for _, c := range checks {
 		if r := strings.TrimSpace(c.Run); r != "" {
 			runs = append(runs, r)
 		}
 	}
-	var gs []string
+	gs := append([]string(nil), s.flagTests...)
 	for _, g := range globs {
 		if g = strings.TrimSpace(g); g != "" {
 			gs = append(gs, g)
@@ -152,10 +182,14 @@ func (s *setupState) projectPath() string {
 	return filepath.Join(s.root, filepath.FromSlash(pipeline.ConfigPath))
 }
 
+var errChanged = errors.New(pipeline.ConfigPath + " changed since you reviewed it")
+
 // projectReview is the reviewed save of the Checks into .oge/oge.toml.
 type projectReview struct {
 	text string
 	diff []string
+	old  string // the file as reviewed; "" when there was none
+	had  bool
 }
 
 // reviewProject builds the text that would be written and its diff.
@@ -166,29 +200,64 @@ func (s *setupState) reviewProject() (*projectReview, error) {
 	if !s.oracleDirty() {
 		return nil, errors.New("nothing to save: the Checks and test globs are as " + pipeline.ConfigPath + " has them")
 	}
-	old := s.seed
+	old, had := s.seed, false
 	if !s.noFile {
+		had = true
 		b, err := os.ReadFile(s.projectPath())
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %v", pipeline.ConfigPath, err)
 		}
 		old = string(b)
 	}
-	text := pipeline.RenderOracle(old, s.checks, s.globs)
+	text, err := pipeline.RenderOracle(old, s.checks, s.globs)
+	if err != nil {
+		var want []string
+		for _, c := range s.checks {
+			want = append(want, c.Run)
+		}
+		return nil, fmt.Errorf("%v; set Checks %q and test_globs %q by hand", err, want, s.globs)
+	}
 	before := ""
-	if !s.noFile {
+	if had {
 		before = old
 	}
-	return &projectReview{text: text, diff: lineDiff(before, text)}, nil
+	return &projectReview{text: text, diff: lineDiff(before, text), old: before, had: had}, nil
 }
 
 // writeProject writes the reviewed text. It never commits.
+//
+// The file is read again first: if it changed since it was reviewed, nothing
+// is written (errChanged) and the human reviews again.
 func (s *setupState) writeProject(r *projectReview) error {
 	path := s.projectPath()
+	cur, err := os.ReadFile(path)
+	switch {
+	case err == nil && (!r.had || string(cur) != r.old):
+		return errChanged
+	case errors.Is(err, os.ErrNotExist) && r.had:
+		return errChanged
+	case err != nil && !errors.Is(err, os.ErrNotExist):
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(r.text), 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".oge.toml-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(r.text); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
 	// The file is the repo's now: later edits are measured against it.
@@ -269,10 +338,10 @@ func lineDiff(before, after string) []string {
 // checksHeader is the Checks section's title line.
 func (p *setupPanel) checksHeader() string {
 	st, s := p.st, p.sel
-	note := "next Run · [enter] edit · [d] remove · [w] save to " + pipeline.ConfigPath
+	note := "next Run · [enter] edit · [d/x] remove · [w] save to " + pipeline.ConfigPath
 	switch {
 	case s.noFile:
-		note = "no " + pipeline.ConfigPath + " yet: Öge's proposal from your project · [enter] edit · [d] remove · [w] save them to " + pipeline.ConfigPath
+		note = "no " + pipeline.ConfigPath + " yet: Öge's proposal from your project · [enter] edit · [d/x] remove · [w] save them to " + pipeline.ConfigPath
 	case s.oracleDirty():
 		note += " · edited, not saved"
 	}
@@ -352,8 +421,20 @@ func (p *setupPanel) validation(rows []setupRow) []string {
 	refusal, warns := s.coverage(checks, globs)
 	st := p.st
 	var out []string
+	for _, c := range s.flagChecks {
+		out = append(out, "   "+st.dim("(from flags) check: "+clean(c)))
+	}
+	for _, g := range s.flagTests {
+		out = append(out, "   "+st.dim("(from flags) test glob: "+clean(g)))
+	}
 	if refusal != "" {
-		out = append(out, "   "+st.bad("✗ refused: "+clean(refusal)), "   "+st.dim("a Run can't start until this is fixed"))
+		for i, l := range wrapText("✗ refused: "+clean(refusal), max(p.width-4, 40)) {
+			if i > 0 {
+				l = "  " + l
+			}
+			out = append(out, "   "+st.bad(l))
+		}
+		out = append(out, "   "+st.dim("a Run can't start until this is fixed"))
 	} else {
 		out = append(out, "   "+st.ok("✓ these Checks can run the protected tests"))
 	}
@@ -361,4 +442,21 @@ func (p *setupPanel) validation(rows []setupRow) []string {
 		out = append(out, "   "+st.dim("! "+clean(w)))
 	}
 	return out
+}
+
+// wrapText breaks s at spaces into lines of at most width columns.
+func wrapText(s string, width int) []string {
+	var lines []string
+	line := ""
+	for _, w := range strings.Fields(s) {
+		if line != "" && len([]rune(line))+1+len([]rune(w)) > width {
+			lines = append(lines, line)
+			line = ""
+		}
+		if line != "" {
+			line += " "
+		}
+		line += w
+	}
+	return append(lines, line)
 }
