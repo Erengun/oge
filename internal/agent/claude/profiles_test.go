@@ -74,7 +74,8 @@ func TestProfilesParentConfigDirIsTheDefault(t *testing.T) {
 func TestProfilesExtraAddsAndSorts(t *testing.T) {
 	home := t.TempDir()
 	mk(t, filepath.Join(home, ".claude-work", "settings.json"), false)
-	got := Profiles(home, noEnv, map[string]string{"corp": "/srv/corp-claude", "bad name": "/x", "rel": "relative"})
+	abs := filepath.Join(t.TempDir(), "corp-claude") // absolute on every OS
+	got := Profiles(home, noEnv, map[string]string{"corp": abs, "bad name": abs, "rel": "relative"})
 	var names []string
 	for _, p := range got {
 		names = append(names, p.Label())
