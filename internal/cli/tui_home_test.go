@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -343,6 +344,7 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); strings.Contains(string(b), "return a + b") {
 		t.Fatal("typing the next Task applied the Candidate")
 	}
+	s.expect("ÖGE RECEIPT") // the second Run's, after the keys
 	s.ended()
 	s.type_("/diff\r")
 	s.expect("diff --git")
@@ -373,6 +375,28 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 }
 
 // The action bar drops keys typed before it could be seen: an a typed ahead
+// /branch <name> takes the Run as a branch, with oge branch's own code: a
+// second one with the same name gets its refusal.
+func TestBareOgeBranchCommand(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\r")
+	s.ended()
+	s.type_("/branch try1\r")
+	s.expect("Created branch try1")
+	if out, err := exec.Command("git", "-C", f.repo, "rev-parse", "--verify", "refs/heads/try1").CombinedOutput(); err != nil {
+		t.Fatalf("no branch try1: %v %s", err, out)
+	}
+	s.type_("/branch try1\r")
+	s.expect("branch try1 already exists")
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+}
+
 // A Gate in the session: it opens in the live area, and its outcome is
 // printed into the transcript with the stages.
 func TestBareOgeGateInTheTranscript(t *testing.T) {
@@ -403,7 +427,9 @@ func TestHomeDeliveryNeedsAnExplicitAct(t *testing.T) {
 	applied := 0
 	h := testHome(70)
 	h.now = func() time.Time { return at }
-	h.last = &lastRun{apply: func() string { applied++; return "applied" }}
+	diffs := 0
+	h.last = &lastRun{apply: func() string { applied++; return "applied" },
+		diff: func() tea.Cmd { diffs++; return nil }}
 	key := func(k string) {
 		if k == "down" {
 			h.Update(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -426,9 +452,29 @@ func TestHomeDeliveryNeedsAnExplicitAct(t *testing.T) {
 	}
 	at = at.Add(actionsArm)
 	key("a")
-	if applied != 1 {
-		t.Fatalf("a fresh a on the row applied %d times", applied)
+	if applied != 1 || h.actions {
+		t.Fatalf("a fresh a on the row: applied %d times, still focused %v", applied, h.actions)
 	}
+	// Each ↓ allows one action: after d (and its pager) an a is text.
+	key("down")
+	at = at.Add(actionsArm)
+	key("d")
+	key("a")
+	if diffs != 1 || applied != 1 || h.comp.text() != "a" {
+		t.Fatalf("a after d: diffs %d, applied %d, text %q", diffs, applied, h.comp.text())
+	}
+	h.comp = newComposer()
+	// A paste goes to the composer and takes the focus back.
+	key("down")
+	h.Update(tea.PasteMsg{Content: "add tests"})
+	at = at.Add(actionsArm)
+	key("a")
+	if applied != 1 || h.comp.text() != "add testsa" {
+		t.Fatalf("a after a paste: applied %d, text %q", applied, h.comp.text())
+	}
+	h.comp = newComposer()
+	key("down")
+	at = at.Add(actionsArm)
 	key("x")
 	if h.actions || h.comp.text() != "x" {
 		t.Fatalf("typing on the row: focused %v, text %q", h.actions, h.comp.text())
@@ -438,6 +484,24 @@ func TestHomeDeliveryNeedsAnExplicitAct(t *testing.T) {
 	if applied != 2 || !h.comp.empty() || h.run != nil {
 		t.Fatalf("/apply: applied %d, text %q, run %v", applied, h.comp.text(), h.run != nil)
 	}
+	// A command Öge doesn't know is said so, and the text stays; a path is
+	// a Task.
+	var started []string
+	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
+		started = append(started, tk.Title)
+		return newModel(tk, homeFrozen(), newStyles(false), time.Now), nil
+	}
+	h.comp.set("/aply")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(h.msg) == 0 || !strings.Contains(h.msg[0], "/aply: unknown command") || h.comp.text() != "/aply" || len(started) != 0 {
+		t.Fatalf("/aply: msg %q, text %q, started %q", h.msg, h.comp.text(), started)
+	}
+	h.comp.set("/tmp/foo is broken")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(started) != 1 {
+		t.Fatalf("a path didn't start a Task: %q", started)
+	}
+	h.run = nil
 	h.comp.set("/new")
 	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	h.comp.set("/apply")

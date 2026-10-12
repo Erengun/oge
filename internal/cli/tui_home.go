@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -277,19 +278,19 @@ func (h *home) clock() time.Time {
 // branch, oge diff and oge receipt print them.
 type lastRun struct {
 	apply   func() string
-	branch  func() string
-	diff    func() tea.Cmd // printed, or paged with $PAGER
+	branch  func(name string) string // "" is the default name
+	diff    func() tea.Cmd           // printed, or paged with $PAGER
 	receipt func() string
 }
 
-// act runs one of the Run's actions by its key.
-func (l *lastRun) act(key string) tea.Cmd {
+// act runs one of the Run's actions by its key; arg is a branch's name.
+func (l *lastRun) act(key, arg string) tea.Cmd {
 	out := func(s string) tea.Cmd { return tea.Println(strings.TrimSuffix(s, "\n")) }
 	switch key {
 	case "a":
 		return out(l.apply())
 	case "b":
-		return out(l.branch())
+		return out(l.branch(arg))
 	case "d":
 		return l.diff()
 	case "r":
@@ -300,6 +301,10 @@ func (l *lastRun) act(key string) tea.Cmd {
 
 // slashKeys are the composer's delivery commands (#145 adds more).
 var slashKeys = map[string]string{"/apply": "a", "/branch": "b", "/diff": "d", "/receipt": "r"}
+
+// slashWord is what a command's first word looks like: other text that
+// starts with a slash (a path) is a Task.
+var slashWord = regexp.MustCompile(`^/[a-z-]+$`)
 
 // runEndedMsg is the Run's end, after its view has finished.
 type runEndedMsg ended
@@ -360,6 +365,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.msg = []string{"oge: showing the diff: " + clean(msg.err.Error())}
 		return h, nil
 	case tea.PasteMsg:
+		h.actions = false
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
@@ -368,6 +374,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.comp.insert(msg.Content)
 		}
 	case editedMsg:
+		h.actions = false
 		if msg.err != nil {
 			h.msg = []string{"the editor failed: " + clean(msg.err.Error())}
 		} else {
@@ -469,27 +476,34 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // slash runs a delivery command typed in the composer; ok is false when
-// text isn't one (it is then a Task).
+// text isn't one (it is then a Task). /branch takes a name.
 func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
-	key, isKey := slashKeys[text]
-	switch {
-	case text == "/new":
-		h.last = nil
-	case !isKey:
+	word, arg, _ := strings.Cut(text, " ")
+	arg = strings.TrimSpace(arg)
+	if !slashWord.MatchString(word) {
 		return nil, false
+	}
+	key, known := slashKeys[word]
+	switch {
+	case word == "/new" && arg == "":
+		h.last = nil
+	case !known || (arg != "" && word != "/branch"):
+		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new"}
+		return nil, true
 	case h.last == nil:
-		h.msg = []string{text + ": no Accepted Run to take in this session"}
+		h.msg = []string{word + ": no Accepted Run to take in this session"}
 		return nil, true
 	default:
-		cmd = h.last.act(key)
+		cmd = h.last.act(key, arg)
 	}
 	h.comp = newComposer()
 	return cmd, true
 }
 
 // actionKey is a key while the action row has the focus. Its keys act only
-// once actionsArm has passed; Esc or ↑ go back to the composer, and any
-// other key goes back and is typed there.
+// once actionsArm has passed and on an empty composer, and each ↓ allows one
+// action: the focus then goes back. Esc or ↑ go back to the composer, and
+// any other key goes back and is typed there.
 func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
@@ -497,10 +511,11 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.actions = false
 		return h, nil
 	case "a", "b", "d", "r":
-		if h.clock().Sub(h.actionsAt) < actionsArm {
+		if h.clock().Sub(h.actionsAt) < actionsArm || !h.comp.empty() || h.last == nil {
 			return h, nil // typed ahead, before the row could be seen
 		}
-		return h, h.last.act(key)
+		h.actions = false
+		return h, h.last.act(key, "")
 	}
 	h.actions = false
 	return h.Update(msg)
@@ -961,8 +976,10 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		}
 	}
 	s := &lastRun{
-		apply:   deliver(func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) }),
-		branch:  deliver(func(q Env) int { return branchCommand(q, r, root, "", delivery.Choice{}) }),
+		apply: deliver(func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) }),
+		branch: func(name string) string {
+			return deliver(func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })()
+		},
 		receipt: receiptText,
 	}
 	s.diff = func() tea.Cmd {
