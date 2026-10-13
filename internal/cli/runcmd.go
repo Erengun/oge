@@ -296,7 +296,19 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 		return plain
 	}
 	plain.paint = receipt.Colors(colorAllowed(env.Getenv))
-	return newTUI(env, t, frozen, plain)
+	u := newTUI(env, t, frozen, plain)
+	u.notify = notifierFor(env, f, userForNotify(env))
+	u.m.notify = u.notify
+	return u
+}
+
+// userForNotify reads the user config for the view's [notify] settings; a
+// file that doesn't load means the defaults (the Run's own load reports it).
+func userForNotify(env Env) *pipeline.UserConfig {
+	quiet := env
+	quiet.Stderr = io.Discard
+	cfg, _ := loadUserConfig(quiet)
+	return cfg
 }
 
 // liveView reports whether a Run on env draws the live view: see selectView.

@@ -12,6 +12,10 @@ import (
 // historyCap is how many entries a repo's prompt history keeps.
 const historyCap = 500
 
+// historyCompactAt is how many lines the file may hold before it is
+// rewritten down to historyCap.
+const historyCompactAt = 600
+
 // history is the composer's prompt history for one repo (#144): what the
 // human typed as a Task or follow-up message, oldest first. It lives in
 // Öge's private state dir, one file per repo, never in the repo. A nil
@@ -72,23 +76,55 @@ func (h *history) add(text string) error {
 	if len(h.entries) > historyCap {
 		h.entries = h.entries[len(h.entries)-historyCap:]
 	}
+	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
+		return err
+	}
+	// One O_APPEND write per entry, so sessions on the same repo never
+	// lose each other's lines.
+	line, _ := json.Marshal(text)
+	f, err := os.OpenFile(h.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(line, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if b, rerr := os.ReadFile(h.path); rerr == nil && strings.Count(string(b), "\n") > historyCompactAt {
+		return h.compact()
+	}
+	return nil
+}
+
+// compact rewrites the file with its last historyCap entries, through a
+// uniquely named temp file so two sessions never share one.
+func (h *history) compact() error {
+	h.entries = loadHistory(h.path).entries
 	var b strings.Builder
 	for _, e := range h.entries {
 		line, _ := json.Marshal(e)
 		b.Write(line)
 		b.WriteByte('\n')
 	}
-	if err := os.MkdirAll(filepath.Dir(h.path), 0o700); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(h.path), "history-*.tmp")
+	if err != nil {
 		return err
 	}
-	tmp := h.path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
+	_, err = tmp.WriteString(b.String())
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp.Name(), 0o600)
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
 		return err
 	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, h.path)
+	return os.Rename(tmp.Name(), h.path)
 }
 
 func (h *history) len() int {

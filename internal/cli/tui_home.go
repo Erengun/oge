@@ -247,7 +247,8 @@ type home struct {
 	edit func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
 
 	width, height int
-	run           *model // nil while composing
+	run           *model    // nil while composing
+	notify        *notifier // the session's alerts; nil when silent (#170)
 	quit          bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
@@ -372,6 +373,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		was := h.run.finished
 		_, cmd := h.run.Update(msg)
+		alert := h.run.flushAlerts()
 		// Only progress finishes stages. What finished is printed before the
 		// next progress is waited for, so the transcript keeps its order.
 		var print tea.Cmd
@@ -384,12 +386,12 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The view has finished; its tea.Quit is for oge "task". The
 			// session goes on once the Run itself has returned.
 			if h.done == nil {
-				return h, print
+				return h, tea.Sequence(print, alert)
 			}
 			done := h.done
-			return h, tea.Sequence(print, func() tea.Msg { return runEndedMsg(<-done) })
+			return h, tea.Sequence(print, alert, func() tea.Msg { return runEndedMsg(<-done) })
 		}
-		return h, tea.Sequence(print, cmd)
+		return h, tea.Sequence(print, alert, cmd)
 	}
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
@@ -406,6 +408,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case h.saving, h.review != nil, h.search != nil:
 		default:
 			h.comp.insert(msg.Content)
+			h.endNavigation()
 		}
 	case editedMsg:
 		h.actions = false
@@ -522,6 +525,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.navigating {
 				if !h.recall(1) {
 					h.comp.key(msg)
+					h.endNavigation()
 				}
 				return h, nil
 			}
@@ -530,11 +534,22 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 			h.comp.key(msg)
+			h.endNavigation()
 		default:
 			h.comp.key(msg)
+			h.endNavigation()
 		}
 	}
 	return h, nil
+}
+
+// endNavigation stops history navigation once the box no longer holds the
+// entry it showed (an edit or a paste), so ↓ never replaces the edit and
+// an emptied box is an empty composer again (↓ focuses the actions, #184).
+func (h *home) endNavigation() {
+	if h.navigating && h.nav < h.hist.len() && h.comp.text() != h.hist.entries[h.nav] {
+		h.navigating = false
+	}
 }
 
 // recall moves through the history: dir -1 is older (↑), 1 is newer (↓).
@@ -616,10 +631,12 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 	}
 	key, known := slashKeys[word]
 	switch {
+	case word == "/notify" && h.notify != nil:
+		h.msg = []string{h.notify.notifyCommand(arg)}
 	case (word == "/new" || word == "/clear") && arg == "":
 		h.last, h.thread = nil, nil
 	case !known || (arg != "" && word != "/branch"):
-		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new /clear"}
+		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new /clear /notify"}
 		return nil, true
 	case h.last == nil:
 		h.msg = []string{word + ": no Accepted Run to take in this session"}
@@ -991,7 +1008,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel}
+	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify}
 	if res != nil {
 		h.setup = setupLines(res.frozen)
 		sel.init(res)
@@ -1020,6 +1037,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		runIn, used, running = newInterrupts(runCancel), r, make(chan struct{})
 		in.forwardTo(runIn)
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
+		u.m.notify = u.notify
 		u.m.width, u.m.height = w, ht
 		u.m.scroll = true
 		var fu *run.FollowUp

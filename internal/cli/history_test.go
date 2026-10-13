@@ -31,6 +31,9 @@ func TestHistoryCap(t *testing.T) {
 	for i := range historyCap + 20 {
 		h.add(fmt.Sprintf("task %d", i))
 	}
+	if b, _ := os.ReadFile(path); strings.Count(string(b), "\n") > historyCompactAt {
+		t.Error("the file grew past the compaction bound")
+	}
 	got := loadHistory(path).entries
 	if len(got) != historyCap || got[0] != "task 20" || got[len(got)-1] != fmt.Sprintf("task %d", historyCap+19) {
 		t.Errorf("%d entries from %q to %q", len(got), got[0], got[len(got)-1])
@@ -123,14 +126,14 @@ func TestHomeRecallWalksTheHistoryAndBack(t *testing.T) {
 	}
 }
 
-func TestHomeRecallKeepsTheDraftAndNeverEditsHistory(t *testing.T) {
+func TestHomeRecallEditsNeverChangeHistory(t *testing.T) {
 	h := histHome("first")
 	press(h, typed("draft")...)
 	press(h, up())
 	press(h, typed(" edited")...)
 	press(h, down())
-	if h.comp.text() != "draft" {
-		t.Errorf("the draft came back as %q", h.comp.text())
+	if h.comp.text() != "first edited" {
+		t.Errorf("↓ replaced the edit with %q", h.comp.text())
 	}
 	if h.hist.entries[0] != "first" {
 		t.Errorf("history changed: %q", h.hist.entries)
@@ -208,5 +211,62 @@ func TestHomeReverseSearchEscCancels(t *testing.T) {
 	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if h.search != nil || h.comp.text() != "typing" {
 		t.Errorf("esc: search %v text %q", h.search, h.comp.text())
+	}
+}
+
+// Two sessions in one repo append to one file without losing each other's
+// entries.
+func TestHistoryConcurrentSessionsKeepEveryEntry(t *testing.T) {
+	path := historyPath(t.TempDir(), t.TempDir())
+	a, b := loadHistory(path), loadHistory(path)
+	for i := range 10 {
+		a.add(fmt.Sprintf("a%d", i))
+		b.add(fmt.Sprintf("b%d", i))
+	}
+	got := strings.Join(loadHistory(path).entries, "|")
+	for i := range 10 {
+		for _, k := range []string{"a", "b"} {
+			if !strings.Contains("|"+got+"|", fmt.Sprintf("|%s%d|", k, i)) {
+				t.Errorf("%s%d lost: %s", k, i, got)
+			}
+		}
+	}
+}
+
+func TestHomeEditAfterRecallEndsNavigation(t *testing.T) {
+	h := histHome("first", "second")
+	h.last = &lastRun{}
+	press(h, up())
+	press(h, typed("!")...)
+	press(h, down())
+	if h.comp.text() != "second!" || h.navigating {
+		t.Errorf("↓ replaced the edit: %q navigating %v", h.comp.text(), h.navigating)
+	}
+	h.comp.set("")
+	h.navigating = false
+	press(h, up())
+	press(h, tea.KeyPressMsg{Code: tea.KeyBackspace}, tea.KeyPressMsg{Code: tea.KeyBackspace},
+		tea.KeyPressMsg{Code: tea.KeyBackspace}, tea.KeyPressMsg{Code: tea.KeyBackspace},
+		tea.KeyPressMsg{Code: tea.KeyBackspace}, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	press(h, down())
+	if !h.actions {
+		t.Errorf("↓ on a box emptied after a recall should focus the actions: %q", h.comp.text())
+	}
+	h2 := histHome("first")
+	press(h2, up())
+	press(h2, tea.PasteMsg{Content: " pasted"})
+	press(h2, down())
+	if h2.comp.text() != "first pasted" {
+		t.Errorf("paste then ↓: %q", h2.comp.text())
+	}
+}
+
+func TestHomeDraftComesBackPastTheNewest(t *testing.T) {
+	h := histHome("first")
+	press(h, typed("draft")...)
+	press(h, up())
+	press(h, down())
+	if h.comp.text() != "draft" {
+		t.Errorf("the draft came back as %q", h.comp.text())
 	}
 }
