@@ -17,6 +17,10 @@ type Adapter interface {
 type LaunchSpec struct {
 	Role  string // Role kind, e.g. "implementer"
 	Model string
+	// Effort is the thinking/effort level; "" is the agent's default. The
+	// Claude adapter passes it as --effort and hashes it into the Launch
+	// profile (#179).
+	Effort string
 	// Profile names the agent's config profile ("work" for claude@work);
 	// empty is the default. Never a path (ADR-0006).
 	Profile   string

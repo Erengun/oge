@@ -1,0 +1,6 @@
+schema = 1
+
+[repos."$REPO"]
+
+[repos."$REPO".stages.implement]
+effort = "turbo"

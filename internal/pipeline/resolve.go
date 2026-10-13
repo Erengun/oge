@@ -120,6 +120,9 @@ type Overrides struct {
 	// flags above and replace them for the same Stage, with source FromTUI;
 	// a Stage not named here keeps its flag's source.
 	TUIAgents []string
+	// TUIEfforts are the effort levels picked in the setup panel, by Stage
+	// name, for the Stages in TUIAgents (#179).
+	TUIEfforts map[string]string
 	// UnattendedFrom is who set Unattended: FromCLI (--unattended, the zero
 	// value), FromUser (the user config) or FromTUI. Only the last two are
 	// shown as trust-weakening: they remove Gates without a typed flag.
@@ -175,6 +178,10 @@ type Stage struct {
 	Agent   string
 	Profile string // the agent's config profile ("work" for claude@work); "" is the default
 	Model   string
+	// Effort is the agent's thinking/effort level for this Stage, from the
+	// user config or setup; "" is the agent's default (#179). Only Claude
+	// takes one.
+	Effort  string `json:"Effort,omitempty"`
 	Network string
 	Source  Source
 	// NotLoggedIn is set by the CLI, after resolving, when the agent
@@ -471,6 +478,12 @@ func userBinding(s *Stage, u UserStage, name string, registered, profiles []stri
 			s.Source = FromUser
 		}
 	}
+	if u.Effort != "" {
+		if !oneOf(u.Effort, KnownEfforts...) {
+			return []Problem{{"user config: stages." + name + ".effort", "unknown effort; use one of " + strings.Join(KnownEfforts, ", ")}}
+		}
+		s.Effort = u.Effort
+	}
 	return nil
 }
 
@@ -549,6 +562,7 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 			}
 			boundBy[stage] = flag
 			stages[i].Agent, stages[i].Profile, stages[i].Model, stages[i].Source = agent, profile, model, flagsFrom
+			stages[i].Effort = "" // a flag binding starts from the agent's defaults
 			return
 		}
 		probs = append(probs, Problem{flag, fmt.Sprintf("no Stage %q in this mode (Stages: %s)", stage, stageNames(stages))})
@@ -595,6 +609,16 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 		if stage, spec, ok := strings.Cut(a, "="); ok {
 			delete(boundBy, stage)
 			set("setup", stage, spec)
+		}
+	}
+	for stage, e := range o.TUIEfforts {
+		for i := range stages {
+			if stages[i].Name == stage && stages[i].Agent != "" {
+				if !oneOf(e, KnownEfforts...) {
+					probs = append(probs, Problem{"setup", "unknown effort; use one of " + strings.Join(KnownEfforts, ", ")})
+				}
+				stages[i].Effort = e
+			}
 		}
 	}
 	return probs

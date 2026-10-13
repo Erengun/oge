@@ -465,7 +465,7 @@ func TestSetupPanelShowsAgentLaunchProfile(t *testing.T) {
 	h, _ := setupHome(t)
 	press(h, tab())
 	got := frame(h)
-	info, err := claude.LaunchInfoFor("implementer")
+	info, err := claude.LaunchInfoFor("implementer", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,4 +477,32 @@ func TestSetupPanelShowsAgentLaunchProfile(t *testing.T) {
 		t.Errorf("the panel names credential paths:\n%s", got)
 	}
 	golden(t, "setup-agent-launch", got)
+}
+
+func TestSetupEffortPickerChangesTheLaunchProfile(t *testing.T) {
+	h, _ := setupHome(t)
+	press(h, tab())
+	cursorTo(h, rowEffort)
+	before := frame(h)
+	press(h, enter(), down(), down(), down()) // default, low, medium, high
+	press(h, enter())
+	got := frame(h)
+	if before == got || !strings.Contains(got, "implement effort") || !strings.Contains(got, "high") {
+		t.Fatalf("effort not shown as high:\n%s", got)
+	}
+	info, err := claude.LaunchInfoFor("implementer", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("Launch profile v%d %s", info.Version, info.Hash); !strings.Contains(got, want) {
+		t.Errorf("the launch view lacks %q:\n%s", want, got)
+	}
+	if !strings.Contains(got, "--effort high") {
+		t.Errorf("the launch view lacks the effort:\n%s", got)
+	}
+	f := h.panel.sel.flags(runFlags{})
+	if f.o.TUIEfforts["implement"] != "high" {
+		t.Errorf("the next Run is not sent the effort: %+v", f.o)
+	}
+	golden(t, "setup-effort", got)
 }

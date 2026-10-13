@@ -14,7 +14,7 @@ import (
 // ProfileVersion versions the Launch profile: its flags, environment
 // lists, policy JSON and pre-authorised operations. Bump it with any change
 // to them, so the profile hash recorded with each decision changes too.
-const ProfileVersion = 5
+const ProfileVersion = 6
 
 // MinVersion is the oldest claude this adapter supports; LastTested is the
 // newest it was tested against (#35). A newer one only warns.
@@ -22,6 +22,14 @@ const (
 	MinVersion = "2.1.289"
 	LastTested = "2.1.289"
 )
+
+// Efforts are the levels `claude --effort` accepts (2.1.289 --help). A
+// Stage's level is part of its Launch profile (#179).
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// TODO(#179-decision): fast mode has no launch flag in claude 2.1.289 (the
+// binary has a fastMode setting and fast_mode_state in system/init, but
+// nothing in --help documents or verifies either), so it is not offered.
 
 // implementerTools is the implementer's --tools whitelist. Glob and Grep
 // keep the model from reaching for find and grep through Bash, which the
@@ -83,6 +91,8 @@ type profile struct {
 	tools []string
 	// extra are profiles kept outside $HOME, by name (see Profiles).
 	extra map[string]string
+	// effort is the Stage's --effort level, "" for claude's default.
+	effort string
 }
 
 func profileFor(role string) (profile, error) {
@@ -126,6 +136,12 @@ func (p profile) args(spec agent.LaunchSpec, sessionID string, parent []string) 
 	}
 	if spec.Model != "" {
 		a = append(a, "--model", spec.Model)
+	}
+	if p.effort != "" {
+		if !oneOf(p.effort, Efforts) {
+			return nil, fmt.Errorf("claude adapter: unknown effort %q (use one of %s)", p.effort, strings.Join(Efforts, ", "))
+		}
+		a = append(a, "--effort", p.effort)
 	}
 	if spec.RepoInstructions != "" {
 		if len(spec.RepoInstructions) > maxInstructions {
@@ -287,6 +303,7 @@ func (p profile) hash() string {
 		"bash_shapes": describeShapes(), "deny_read_home": homeSecrets,
 		"deny_read_profiles": "every ~/.claude-* dir + extras, symlinks resolved", "config_dir": "from the bound profile",
 		"builtin_plugins": builtinPlugins,
+		"effort":          p.effort, "effort_levels": Efforts,
 	}
 	b, _ := json.Marshal(def)
 	sum := sha256.Sum256(b)

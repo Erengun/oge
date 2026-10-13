@@ -26,9 +26,9 @@ import (
 
 // stageSel is one Stage's binding as the panel shows it.
 type stageSel struct {
-	agent, profile, model string
-	touched               bool // the human changed it: it is sent as a flag
-	inherits              bool // the verifier follows the implementer's agent
+	agent, profile, model, effort string
+	touched                       bool // the human changed it: it is sent as a flag
+	inherits                      bool // the verifier follows the implementer's agent
 }
 
 // setupState is the panel's choices for the session.
@@ -80,7 +80,7 @@ func (s *setupState) syncFrom(res *resolved) {
 		*dst = stageSel{}
 		for _, st := range f.Stages {
 			if st.Role == role {
-				*dst = stageSel{agent: st.Agent, profile: st.Profile, model: st.Model,
+				*dst = stageSel{agent: st.Agent, profile: st.Profile, model: st.Model, effort: st.Effort,
 					inherits: st.Source == pipeline.FromInherited}
 			}
 		}
@@ -217,7 +217,7 @@ func (s *setupState) flags(f runFlags) runFlags {
 	f = s.oracleFlags(f)
 	// Only what the human changed is sent as the panel's; a Stage left alone
 	// keeps the binding (and the source) it already had.
-	f.o.TUIAgents = nil
+	f.o.TUIAgents, f.o.TUIEfforts = nil, nil
 	for _, st := range []struct {
 		name string
 		sel  stageSel
@@ -230,6 +230,12 @@ func (s *setupState) flags(f runFlags) runFlags {
 			sel.agent, sel.profile = s.impl.agent, s.impl.profile
 		}
 		f.o.TUIAgents = append(f.o.TUIAgents, st.name+"="+sel.binding())
+		if sel.effort != "" {
+			if f.o.TUIEfforts == nil {
+				f.o.TUIEfforts = map[string]string{}
+			}
+			f.o.TUIEfforts[st.name] = sel.effort
+		}
 	}
 	return f
 }
@@ -249,14 +255,14 @@ func (s *setupState) defaults(d pipeline.RepoDefaults) pipeline.RepoDefaults {
 		d.Apply = &v
 	}
 	if s.impl.touched {
-		d.Stages.Implement = pipeline.UserStage{Agent: s.impl.agent + atProfile(s.impl.profile), Model: s.impl.model}
+		d.Stages.Implement = pipeline.UserStage{Agent: s.impl.agent + atProfile(s.impl.profile), Model: s.impl.model, Effort: s.impl.effort}
 	}
 	if s.ver.touched && s.mode != pipeline.Fast {
 		agent, profile := s.ver.agent, s.ver.profile
 		if agent == "" {
 			agent, profile = s.impl.agent, s.impl.profile
 		}
-		d.Stages.Verify = pipeline.UserStage{Agent: agent + atProfile(profile), Model: s.ver.model}
+		d.Stages.Verify = pipeline.UserStage{Agent: agent + atProfile(profile), Model: s.ver.model, Effort: s.ver.effort}
 	}
 	return d
 }
@@ -306,6 +312,7 @@ const (
 	rowAgent rowKind = iota
 	rowProfile
 	rowModel
+	rowEffort // Claude only: its --effort level (#179)
 	rowMode
 	rowUnattended
 	rowApply
@@ -369,12 +376,18 @@ func (p *setupPanel) rows() []setupRow {
 		rows = append(rows, setupRow{kind: rowProfile, stage: 0})
 	}
 	rows = append(rows, setupRow{kind: rowModel, stage: 0})
+	if p.sel.impl.agent == claude.Name {
+		rows = append(rows, setupRow{kind: rowEffort, stage: 0})
+	}
 	if p.sel.mode != pipeline.Fast {
 		rows = append(rows, setupRow{kind: rowAgent, stage: 1})
 		if p.sel.ver.agent == claude.Name || (p.sel.ver.agent == "" && p.sel.impl.agent == claude.Name) {
 			rows = append(rows, setupRow{kind: rowProfile, stage: 1})
 		}
 		rows = append(rows, setupRow{kind: rowModel, stage: 1})
+		if p.sel.ver.agent == claude.Name || (p.sel.ver.agent == "" && p.sel.impl.agent == claude.Name) {
+			rows = append(rows, setupRow{kind: rowEffort, stage: 1})
+		}
 	}
 	rows = append(rows, setupRow{kind: rowMode}, setupRow{kind: rowUnattended}, setupRow{kind: rowApply})
 	for i := range p.sel.checks {
@@ -403,6 +416,8 @@ func (p *setupPanel) label(r setupRow) string {
 		return name + " profile"
 	case rowModel:
 		return name + " model"
+	case rowEffort:
+		return name + " effort"
 	case rowMode:
 		return "mode"
 	case rowUnattended:
@@ -446,6 +461,11 @@ func (p *setupPanel) value(r setupRow) string {
 			return "agent's default"
 		}
 		return clean(st.model)
+	case rowEffort:
+		if st.effort == "" {
+			return "agent's default"
+		}
+		return clean(st.effort)
 	case rowMode:
 		return string(p.sel.mode) + "   " + modeNotes[p.sel.mode]
 	case rowUnattended:
@@ -490,6 +510,11 @@ func (p *setupPanel) open(r setupRow) {
 			c := choice{value: pr.Name, label: pr.Label()}
 			c.note = p.sel.loginNote(pr.Dir)
 			add(c, pr.Name == current)
+		}
+	case rowEffort:
+		add(choice{value: "", label: "agent's default"}, st.effort == "")
+		for _, e := range claude.Efforts {
+			add(choice{value: e, label: e}, e == st.effort)
 		}
 	case rowMode:
 		for _, m := range []pipeline.Mode{pipeline.Fast, pipeline.Standard, pipeline.Blind} {
@@ -564,7 +589,7 @@ func (p *setupPanel) commitPick(r setupRow) {
 	switch r.kind {
 	case rowAgent:
 		if st.agent != c.value {
-			st.agent, st.profile, st.model, st.touched, st.inherits = c.value, "", "", true, false
+			st.agent, st.profile, st.model, st.effort, st.touched, st.inherits = c.value, "", "", "", true, false
 			p.sel.touch()
 		}
 	case rowProfile:
@@ -573,6 +598,14 @@ func (p *setupPanel) commitPick(r setupRow) {
 		}
 		if st.profile != c.value {
 			st.profile, st.touched = c.value, true
+			p.sel.touch()
+		}
+	case rowEffort:
+		if st.agent == "" && r.stage == 1 {
+			st.agent, st.profile = p.sel.impl.agent, p.sel.impl.profile // the choice pins the verifier's binding
+		}
+		if st.effort != c.value {
+			st.effort, st.touched = c.value, true
 			p.sel.touch()
 		}
 	case rowMode:

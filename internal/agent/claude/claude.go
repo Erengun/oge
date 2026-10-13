@@ -62,6 +62,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		return nil, err
 	}
 	prof.extra = a.Profiles
+	prof.effort = spec.Effort
 	path := a.Path
 	if path == "" {
 		if path, err = exec.LookPath("claude"); err != nil {

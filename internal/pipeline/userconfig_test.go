@@ -48,7 +48,7 @@ func TestLoadUserConfigParses(t *testing.T) {
 	}
 	d := c.ForRepo(one)
 	if d == nil || d.Mode != "blind" || d.Unattended == nil || !*d.Unattended ||
-		d.Stages.Implement != (UserStage{"claude@z", "sonnet"}) || d.Stages.Verify.Agent != "claude@work" {
+		d.Stages.Implement != (UserStage{Agent: "claude@z", Model: "sonnet"}) || d.Stages.Verify.Agent != "claude@work" {
 		t.Fatalf("defaults = %+v", d)
 	}
 	if c.Profiles["side"] != side || c.ForRepo(abs(t, "other")) != nil {
