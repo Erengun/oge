@@ -66,7 +66,7 @@ var keyTable = []keyBinding{
 	{"Run", "esc", nil, "close the search, then collapse"},
 	{"Run", "type · enter", nil, "next Task, queued under the Run (never sent to it; enter keeps it)"},
 	{"Run", "ctrl+x", []string{"ctrl+x"}, "cancel the queued Task"},
-	{"Run", "ctrl+c", nil, "clear the queued Task, then cancel the Run (twice: force Öge to stop)"},
+	{"Run", "ctrl+c", nil, "clear the queued Task, else cancel the Run"},
 
 	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run"},
 	{"Delivery", "a · b · d · r", []string{"a", "b", "d", "r"}, "apply · branch · diff · receipt (each ↓ allows one)"},
