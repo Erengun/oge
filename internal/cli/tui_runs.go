@@ -131,10 +131,7 @@ func (h *home) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if p.typing {
 		switch key {
-		case "ctrl+c":
-			h.picker = nil
-			return nil
-		case "esc":
+		case "esc", "ctrl+c":
 			p.typing, p.query = false, ""
 			p.l.ResetFilter()
 		case "enter":
@@ -158,13 +155,11 @@ func (h *home) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	r := p.selected()
 	switch key {
-	case "esc":
+	case "esc", "ctrl+c":
 		if p.l.FilterState() == list.FilterApplied {
 			p.l.ResetFilter()
 			return nil
 		}
-		h.picker = nil
-	case "ctrl+c":
 		h.picker = nil
 	case "enter", "d":
 		if r == nil {
