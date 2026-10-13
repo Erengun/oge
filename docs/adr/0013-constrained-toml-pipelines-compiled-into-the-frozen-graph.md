@@ -38,6 +38,7 @@ status: accepted (`verify = "before"` planner requirement amended in part by ADR
 - **Binding.** The canonical form is `--agent <stage>=<agent>[:<model>]`.
   - The Role-kind aliases (`--plan`, `--implement`, `--verify`, `--review`) resolve only when exactly one Stage of that kind exists, and are an error otherwise.
   - Verifier and reviewer may inherit the implementer's agent and model, but always in a fresh Session.
+    - *Amendment (2026-10-13, [#256](https://github.com/Erengun/oge/issues/256)):* bare `oge`'s Chat reuses the implementer Session across turns by default ([docs/ux/chat-first.md](../ux/chat-first.md), D1), outside any Pipeline field and disclosed in each turn's Briefing manifest. Verifier and QA Sessions stay fresh: reusing one is a hard error, not a configurable weakening. One-shot runs are unchanged.
   - With nothing bound, Öge uses the user default, else the one installed agent, else refuses. There is no vendor preference.
 - **Network.**
   - Only planner and implementer Stages take `network = "off" | "on"`, defaulting to off.

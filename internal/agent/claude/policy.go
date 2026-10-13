@@ -39,6 +39,10 @@ const (
 	// ruleUnchecked denies every request until the envelope check has
 	// passed, and after it failed (ADR-0005 as amended).
 	ruleUnchecked = "envelope_not_passed"
+	// ruleAutoAsk is an ask auto mode raised, waiting for the human;
+	// ruleHumanAnswer is the human's answer to it.
+	ruleAutoAsk     = "auto_mode_ask"
+	ruleHumanAnswer = "human_answer"
 )
 
 const denyTail = " Interactive approval isn't available yet, so don't retry this another way. " +

@@ -349,3 +349,7 @@ func (c *Claude) ReadAsk() []Frame {
 	c.t.Helper()
 	return c.Read(func(f Frame) bool { return f.Type() == "control_request" && f.Subtype() == "can_use_tool" })
 }
+
+// BuildClaude compiles fakeclaude and returns its path, for a test that
+// launches it through the claude adapter with OGE_FAKE_CLAUDE_SCENARIO.
+func BuildClaude(t testing.TB) string { return build(t, "claude/fakeclaude", "claude") }

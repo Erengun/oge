@@ -46,6 +46,7 @@ type envelope struct {
 	role  string
 	cwd   string
 	tools []string
+	mode  string // the --permission-mode launched with
 }
 
 // check compares an observed system/init with the envelope. Unexpected
@@ -56,8 +57,12 @@ type envelope struct {
 // ran before init, which is how a SessionStart hook injects context.
 func (e envelope) check(in initFrame, hooksRan bool) (warnings []string, fatal string) {
 	var fatals, injected []string
-	if in.PermissionMode != "default" {
-		fatals = append(fatals, fmt.Sprintf("permission mode is %q, not \"default\": Öge must answer every permission", in.PermissionMode))
+	mode := e.mode
+	if mode == "" {
+		mode = "default"
+	}
+	if in.PermissionMode != mode {
+		fatals = append(fatals, fmt.Sprintf("permission mode is %q, not %q: the Launch profile decides who answers permissions", in.PermissionMode, mode))
 	}
 	if !sameDir(in.Cwd, e.cwd) {
 		fatals = append(fatals, "the working directory isn't the Workspace")

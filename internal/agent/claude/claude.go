@@ -63,6 +63,13 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	}
 	prof.extra = a.Profiles
 	prof.effort = spec.Effort
+	if prof.mode, err = permissionMode(spec.Permissions); err != nil {
+		return nil, err
+	}
+	if prof.mode != "default" && spec.Role != "implementer" {
+		// Only the implementer may run under its own permission mode (D1).
+		return nil, fmt.Errorf("claude adapter: the %s can't run in %s mode", spec.Role, prof.mode)
+	}
 	path := a.Path
 	if path == "" {
 		if path, err = exec.LookPath("claude"); err != nil {
@@ -97,7 +104,8 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		stop: make(chan struct{}), exited: make(chan struct{}),
 		pending: map[string]chan json.RawMessage{}, decided: map[string]agent.HostDecision{},
 		hash: prof.hash(),
-		env:  envelope{role: spec.Role, cwd: spec.Workspace, tools: prof.tools},
+		env:  envelope{role: spec.Role, cwd: spec.Workspace, tools: prof.tools, mode: prof.mode},
+		auto: prof.mode == "auto",
 	}
 	s.policy = newPolicy(spec, s.hash)
 	if s.grace = a.CloseGrace; s.grace == 0 {
@@ -132,6 +140,9 @@ type session struct {
 	policy  *policy
 	hash    string
 	env     envelope
+	// auto is a Chat Session in claude's auto mode: Öge's policy only
+	// hard-denies, and what the mode asks about goes to the host.
+	auto bool
 
 	wmu   sync.Mutex // serialises writes to stdin
 	stdin io.WriteCloser
@@ -649,6 +660,9 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
 		return s.answer(id, r.Subtype, d, input)
 	}
+	if s.auto {
+		return s.autoRequest(id, r.Subtype, tool, useID, input)
+	}
 	d, seen := s.decided[useID]
 	if !seen {
 		d = s.policy.decide(tool, input)
@@ -663,6 +677,58 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
 	}
 	return s.answer(id, r.Subtype, d, input)
+}
+
+// autoRequest is controlRequest in auto mode, with s.mu held: Öge's hard
+// denies (outside the Workspace, Öge's private state, the Oracle's
+// held-out side, .git) answer at once and never reach the human; a call
+// the policy pre-authorises is allowed; anything else is left to claude's
+// auto mode, and what that mode asks about becomes an Ask (D2).
+func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMessage) error {
+	d, seen := s.decided[useID]
+	if !seen {
+		d = s.policy.decide(tool, input)
+	}
+	hard := d.Rule != ruleNoInteractive && d.Rule != rulePreAuthorised
+	if !hard && subtype == "hook_callback" {
+		s.mu.Unlock()
+		// No hook decision: the auto mode decides, and may ask.
+		return s.write(response(id, map[string]any{"continue": true}))
+	}
+	if hard || d.Rule == rulePreAuthorised {
+		if !seen && useID != "" {
+			s.decided[useID] = d
+		}
+		if !seen {
+			s.friction.decided(d)
+		}
+		sofar := s.friction.sofar()
+		s.mu.Unlock()
+		if !seen {
+			s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
+		}
+		return s.answer(id, subtype, d, input)
+	}
+	s.mu.Unlock()
+	ask := d
+	ask.Decision, ask.Rule, ask.By, ask.Reason, ask.Hint = "ask", ruleAutoAsk, "agent_auto_mode", "", ""
+	var once sync.Once
+	reply := func(allow bool) error {
+		err := errors.New("the ask was already answered")
+		once.Do(func() {
+			got := ask
+			got.By, got.Rule, got.Decision = "human", ruleHumanAnswer, "deny"
+			got.Reason = "The user denied this."
+			if allow {
+				got.Decision, got.Reason = "allow", ""
+			}
+			s.emit(agent.Event{Kind: agent.HostRequest, Host: &got})
+			err = s.answer(id, subtype, got, input)
+		})
+		return err
+	}
+	s.emit(agent.Event{Kind: agent.HostRequest, Host: &ask, Ask: agent.NewAsk(tool, ask.Target, reply)})
+	return nil
 }
 
 // answer writes a decision in the form the request's subtype takes.

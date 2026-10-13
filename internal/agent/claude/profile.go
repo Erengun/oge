@@ -93,6 +93,26 @@ type profile struct {
 	extra map[string]string
 	// effort is the Stage's --effort level, "" for claude's default.
 	effort string
+	// mode is claude's --permission-mode: "default", where Öge answers
+	// every permission, or "auto" for a Chat Session (D2).
+	mode string
+}
+
+// permissionMode is the --permission-mode a LaunchSpec's Permissions
+// launch with. Auto mode is `claude --permission-mode auto`, listed in
+// claude 2.1.296's --help (choices acceptEdits, auto, bypassPermissions,
+// manual, dontAsk, plan); its asks arrive as can_use_tool requests over
+// --permission-prompt-tool stdio, like any prompt (spike row 4).
+// TODO(#256-decision): auto mode's classifier was checked against --help
+// only, not live: the scenario fake stands in for its asks.
+func permissionMode(perms string) (string, error) {
+	switch perms {
+	case "":
+		return "default", nil
+	case agent.AutoPermissions:
+		return "auto", nil
+	}
+	return "", fmt.Errorf("claude adapter: unknown permissions %q", perms)
 }
 
 func profileFor(role string) (profile, error) {
@@ -118,16 +138,21 @@ func (p profile) args(spec agent.LaunchSpec, sessionID string, parent []string) 
 	if err != nil {
 		return nil, err
 	}
+	mode := p.mode
+	if mode == "" {
+		mode = "default"
+	}
 	a := []string{
 		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--setting-sources=", "--strict-mcp-config",
 		"--settings", settings,
 		"--tools", strings.Join(p.tools, ","),
-		"--permission-mode", "default", "--permission-prompt-tool", "stdio",
+		"--permission-mode", mode, "--permission-prompt-tool", "stdio",
 		"--session-id", sessionID,
-		// Every MVP Session is one-shot (vendor resume is deferred,
-		// ADR-0016), so the implementer also runs without persistence, as
-		// decided on #44: nothing lands in the user's Claude config dir.
+		// No Session is ever resumed (vendor resume is deferred,
+		// ADR-0016; a Chat keeps one process alive instead), so every
+		// role runs without persistence, as decided on #44: nothing lands
+		// in the user's Claude config dir.
 		"--no-session-persistence",
 	}
 	if p.role == "verifier" {
@@ -304,6 +329,11 @@ func (p profile) hash() string {
 		"deny_read_profiles": "every ~/.claude-* dir + extras, symlinks resolved", "config_dir": "from the bound profile",
 		"builtin_plugins": builtinPlugins,
 		"effort":          p.effort, "effort_levels": Efforts,
+	}
+	if p.mode != "" && p.mode != "default" {
+		// Only a Chat's profile carries its mode, so every one-shot
+		// profile keeps its hash.
+		def["permission_mode"] = p.mode
 	}
 	b, _ := json.Marshal(def)
 	sum := sha256.Sum256(b)

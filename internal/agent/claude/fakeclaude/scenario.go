@@ -150,7 +150,8 @@ func (s *scen) turn(msg map[string]any, t multiturn.Turn) {
 	s.lifecycle(uuid, "queued")
 	s.lifecycle(uuid, "started")
 	s.emit(map[string]any{"type": "system", "subtype": "init", "cwd": s.dir, "model": scenModel,
-		"permissionMode": "auto", "tools": []string{"Bash", "Edit", "Read", "Write"}})
+		"permissionMode": "auto", "tools": []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
+		"claude_code_version": "2.1.289", "capabilities": []string{"interrupt_receipt_v1"}})
 	if t.Reply != "" {
 		s.assistant(map[string]any{"type": "text", "text": t.Reply})
 	}
