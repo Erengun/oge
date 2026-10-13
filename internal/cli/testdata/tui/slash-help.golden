@@ -7,6 +7,7 @@ Composer
   ctrl+c               clear the draft (↑ restores), then leave
   ctrl+l               redraw
   tab                  open setup
+  alt+m                open setup at the implement model
   / · @ · ?            commands · files · this panel (on an empty box)
   ← → · ctrl+b ctrl+f  move
   home · end · ctrl+a  line start · end
@@ -31,7 +32,9 @@ Menus & pickers
 Run
   ctrl+o               expand or collapse the progress
   ↑ ↓ · pgup pgdown    scroll it, expanded
-  esc                  collapse
+  / · n N              expanded: search · next · previous match (enter jumps)
+  { · }                expanded: previous · next Attempt
+  esc                  close the search, then collapse
   ctrl+c               cancel the Run (twice: force Öge to stop)
 Delivery
   ↓ on an empty box    the actions of the last Run
@@ -62,5 +65,6 @@ Commands
   /new                               start a fresh task
   /clear                             start a fresh task
   /notify on|off                     alerts for this session
+  /terminal                          hints for this terminal (Shift+Enter, Alt keys, tmux)
   /resume                            not built yet (#55)
   /quit                              leave

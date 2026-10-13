@@ -498,6 +498,17 @@ func onOff(b bool) string {
 	return "off"
 }
 
+// focusModel puts the cursor on the implement model row and opens its box.
+func (p *setupPanel) focusModel() {
+	for i, r := range p.rows() {
+		if r.kind == rowModel && r.stage == 0 {
+			p.cursor = i
+			p.open(r)
+			return
+		}
+	}
+}
+
 // open starts the editor a row needs.
 func (p *setupPanel) open(r setupRow) {
 	st := p.stage(r.stage)

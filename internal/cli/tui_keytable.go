@@ -33,6 +33,7 @@ var keyTable = []keyBinding{
 	{"Composer", "ctrl+c", []string{"ctrl+c"}, "clear the draft (↑ restores), then leave"},
 	{"Composer", "ctrl+l", []string{"ctrl+l"}, "redraw"},
 	{"Composer", "tab", []string{"tab"}, "open setup"},
+	{"Composer", "alt+m", []string{"alt+m"}, "open setup at the implement model"},
 	{"Composer", "/ · @ · ?", []string{"?"}, "commands · files · this panel (on an empty box)"},
 	{"Composer", "← → · ctrl+b ctrl+f", []string{"left", "right", "ctrl+b", "ctrl+f"}, "move"},
 	{"Composer", "home · end · ctrl+a", []string{"home", "end", "ctrl+a"}, "line start · end"},
@@ -58,7 +59,9 @@ var keyTable = []keyBinding{
 
 	{"Run", "ctrl+o", []string{"ctrl+o"}, "expand or collapse the progress"},
 	{"Run", "↑ ↓ · pgup pgdown", []string{"pgup", "pgdown"}, "scroll it, expanded"},
-	{"Run", "esc", nil, "collapse"},
+	{"Run", "/ · n N", []string{"/", "n", "N"}, "expanded: search · next · previous match (enter jumps)"},
+	{"Run", "{ · }", []string{"{", "}"}, "expanded: previous · next Attempt"},
+	{"Run", "esc", nil, "close the search, then collapse"},
 	{"Run", "ctrl+c", nil, "cancel the Run (twice: force Öge to stop)"},
 
 	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run"},

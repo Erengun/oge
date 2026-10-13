@@ -301,6 +301,7 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	u.notify = notifierFor(env, f, user)
 	u.m.st.setTheme(user.ThemeName())
 	u.vim = user.VimMode()
+	u.m.st.reloadCustomTheme(env.Getenv)
 	u.m.notify = u.notify
 	return u
 }
