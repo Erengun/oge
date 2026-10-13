@@ -236,6 +236,37 @@ func Find(private, repoRoot, id string) (*Run, error) {
 	return nil, refuse("no Run of this repository yet; run oge \"<task>\" first")
 }
 
+// Recent returns up to n Runs whose source is repoRoot, newest first, for
+// /runs; a Run that can't be read is skipped.
+func Recent(private, repoRoot string, n int) ([]*Run, error) {
+	runs := filepath.Join(private, "runs")
+	entries, err := os.ReadDir(runs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	canon := canonical(repoRoot)
+	var out []*Run
+	for _, name := range names {
+		if len(out) == n {
+			break
+		}
+		if r, err := Load(filepath.Join(runs, name)); err == nil && canonical(r.Source) == canon {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 func canonical(p string) string {
 	if c, err := filepath.EvalSymlinks(p); err == nil {
 		return c

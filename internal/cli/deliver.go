@@ -177,10 +177,24 @@ func deliverArgs(cmd string, pos []string) (id, name string, err error) {
 }
 
 func findRun(env Env, root, id string) (*delivery.Run, int) {
+	private, code := privateState(env, root)
+	if code != ExitOK {
+		return nil, code
+	}
+	r, err := delivery.Find(private, root, id)
+	if err != nil {
+		return nil, deliveryFailed(env, err)
+	}
+	return r, ExitOK
+}
+
+// privateState opens the repository's state root and returns its private
+// directory, where the Runs are.
+func privateState(env Env, root string) (string, int) {
 	dir, err := ledger.DefaultStateDir(env.Getenv)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
-		return nil, ExitRefused
+		return "", ExitRefused
 	}
 	repo := root
 	if repo == "" {
@@ -191,16 +205,12 @@ func findRun(env Env, root, id string) (*delivery.Run, int) {
 	switch {
 	case errors.As(err, &refused):
 		fmt.Fprintf(env.Stderr, "oge: %v\n", err)
-		return nil, ExitRefused
+		return "", ExitRefused
 	case err != nil:
 		fmt.Fprintf(env.Stderr, "oge: opening the state root: %v\n", err)
-		return nil, ExitInternal
+		return "", ExitInternal
 	}
-	r, err := delivery.Find(state.Private, root, id)
-	if err != nil {
-		return nil, deliveryFailed(env, err)
-	}
-	return r, ExitOK
+	return state.Private, ExitOK
 }
 
 // deliveryFailed reports err: a refusal is exit 2, anything else Öge's own

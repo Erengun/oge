@@ -8,11 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/delivery"
@@ -245,6 +245,20 @@ type home struct {
 	// msg is what stops or went wrong, shown under the box.
 	msg  []string
 	edit func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
+	// deliver is /receipt, /diff, /apply and /branch of a named Run, and
+	// runs lists the repository's recent Runs for /runs (#145).
+	deliver func(cmd string, args []string) tea.Cmd
+	runs    func(n int) ([]*delivery.Run, string)
+	// menu is the slash menu while it is open: it lists the commands that
+	// complete menuQuery. Esc closes it for the text it was closed on.
+	menu        *list.Model
+	menuQuery   string
+	menuOff     bool
+	menuOffText string
+	// armText and armAt: a delivery command the menu completed runs only on
+	// an Enter that comes actionsArm later, so a double tap never delivers.
+	armText string
+	armAt   time.Time
 
 	width, height int
 	run           *model    // nil while composing
@@ -311,13 +325,6 @@ func (l *lastRun) act(key, arg string) tea.Cmd {
 	return nil
 }
 
-// slashKeys are the composer's delivery commands (#145 adds more).
-var slashKeys = map[string]string{"/apply": "a", "/branch": "b", "/diff": "d", "/receipt": "r"}
-
-// slashWord is what a command's first word looks like: other text that
-// starts with a slash (a path) is a Task.
-var slashWord = regexp.MustCompile(`^/[a-z-]+$`)
-
 // thread is what a follow-up continues: the Task with the follow-ups so far,
 // and the Run whose Candidate the next one starts from.
 type thread struct {
@@ -365,6 +372,12 @@ func (h *home) Init() tea.Cmd {
 }
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := h.update(msg)
+	h.syncMenu()
+	return m, cmd
+}
+
+func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if bg, ok := msg.(tea.BackgroundColorMsg); ok {
 		h.st.setDark(bg.IsDark())
 	}
@@ -451,6 +464,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.searchKey(msg)
 			return h, nil
 		}
+		if h.menu != nil && h.menuKey(msg) {
+			return h, nil
+		}
 		switch msg.String() {
 		case "ctrl+r":
 			if h.hist.len() > 0 {
@@ -476,6 +492,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := task.StripComments(h.comp.text())
 			if task.IsEmpty(text) {
 				return h, nil
+			}
+			if h.armText != "" && strings.TrimSpace(text) == h.armText && h.clock().Sub(h.armAt) < actionsArm {
+				return h, nil // typed ahead of the completion
 			}
 			if cmd, ok := h.slash(strings.TrimSpace(text)); ok {
 				return h, cmd
@@ -510,19 +529,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, h.edit(h.comp.text())
 			}
 		case "tab":
-			if h.sel != nil && !h.sel.ready {
-				// The config didn't resolve when the home opened; it may now.
-				if res, problem := h.resolve(h.sel); problem == nil {
-					h.sel.init(res)
-					h.setup = setupLines(res.frozen)
-				}
+			if p := h.openSetup(); p != "" {
+				h.msg = []string{p}
 			}
-			if h.sel == nil || !h.sel.ready {
-				h.msg = []string{"setup opens once the config resolves: fix what is shown above, then press Tab"}
-				return h, nil
-			}
-			h.sel.reopen()
-			h.panel = &setupPanel{sel: h.sel, st: h.st, rev0: h.sel.rev}
 		case "down":
 			// ↓ is history only once ↑ has started navigating; on an empty
 			// composer otherwise it focuses the action row (#184).
@@ -623,34 +632,6 @@ func (h *home) searchKey(msg tea.KeyPressMsg) {
 			s.hit = h.hist.find(s.query, h.hist.len()-1)
 		}
 	}
-}
-
-// slash runs a delivery command typed in the composer; ok is false when
-// text isn't one (it is then a Task). /branch takes a name.
-func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
-	word, arg, _ := strings.Cut(text, " ")
-	arg = strings.TrimSpace(arg)
-	if !slashWord.MatchString(word) {
-		return nil, false
-	}
-	key, known := slashKeys[word]
-	switch {
-	case word == "/notify" && h.notify != nil:
-		h.msg = []string{h.notify.notifyCommand(arg)}
-	case (word == "/new" || word == "/clear") && arg == "":
-		h.last, h.thread = nil, nil
-	case !known || (arg != "" && word != "/branch"):
-		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new /clear /notify"}
-		return nil, true
-	case h.last == nil:
-		h.msg = []string{word + ": no Accepted Run to take in this session"}
-		return nil, true
-	default:
-		cmd = h.act(key, arg)
-	}
-	h.comp = newComposer()
-	h.navigating = false
-	return cmd, true
 }
 
 // actionKey is a key while the action row has the focus. Its keys act only
@@ -793,6 +774,9 @@ func (h *home) render() (string, int, int) {
 		h.panel.width = width
 		lines = append(lines, h.panel.lines()...)
 	}
+	if h.menu != nil {
+		lines = append(lines, h.menuLines()...)
+	}
 	if h.panel == nil {
 		for _, l := range h.setup {
 			lines = append(lines, " "+st.dim(l))
@@ -819,6 +803,12 @@ func (h *home) render() (string, int, int) {
 func (h *home) closeSetup() {
 	rev0 := h.panel.rev0
 	h.panel = nil
+	h.afterSetup(rev0)
+}
+
+// afterSetup reads what the next Run would use again once setup changed
+// the choices (the panel closing, or a command).
+func (h *home) afterSetup(rev0 int) {
 	if h.sel.rev == rev0 {
 		return // nothing changed: the bar is as it was
 	}
@@ -1078,6 +1068,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.thread = nextThread(h.thread, cur, e.res, used.flags)
 		return text, l, false
 	}
+	h.deliver, h.runs = deliverer(env), recentRuns(env, root)
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
