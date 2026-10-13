@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -68,7 +69,7 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 		frozen = res.frozen
 	}
 	u := selectView(env, f, task.Task{}, frozen).(*tui)
-	code, err := u.home(env, root, starter(env, root, state, u), res, problem,
+	code, err := u.home(env, root, filepath.Join(state.Private, "history"), starter(env, root, state, u), res, problem,
 		func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup)
 	return endCode(env, code, err, u.started)
 }
@@ -396,6 +397,15 @@ func (r *renderer) observe(ev run.Event) {
 			r.p("%-10s %s", "preflight", preflightText(r.frozen))
 		}
 	case run.EvAgent:
+		if ev.Agent.Tool == "TodoWrite" {
+			// The plan, one line per update, with -v (ADR-0019).
+			if r.verbose && ev.Attempt.Role != "verifier" {
+				if line := todoSummary(todoItems(ev.Agent.Todos)); line != "" {
+					r.p("%s", line)
+				}
+			}
+			return
+		}
 		if !r.verbose || (ev.Attempt.Role == "verifier" && !qaStep(ev.Agent)) {
 			return
 		}

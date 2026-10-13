@@ -208,7 +208,11 @@ type (
 		// timed: the lines carry their own durations (Check commands).
 		timed bool
 		step  string // EvAgent: one line of activity
-		next  string // EvResolved: where the walk goes
+		// todoSet: the agent updated its plan (a todo update); todos is
+		// the whole plan, cleaned for the screen.
+		todoSet bool
+		todos   []todoItem
+		next    string // EvResolved: where the walk goes
 		// cost and tokens are what the agent reported for its session so
 		// far (EvAgent usage); nil when it reported none.
 		cost   *float64
@@ -248,7 +252,14 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	case run.EvAgent:
 		// Only what the agent says it's doing; the Session and Exit
 		// bookkeeping stays in -v (ADR-0019).
-		if ev.Attempt.Role != "verifier" || qaStep(ev.Agent) {
+		if ev.Agent.Tool == "TodoWrite" {
+			// The plan is display only: the live list and one activity
+			// line, never QA's.
+			if ev.Attempt.Role != "verifier" {
+				m.todoSet, m.todos = true, todoItems(ev.Agent.Todos)
+				m.step = todoSummary(m.todos)
+			}
+		} else if ev.Attempt.Role != "verifier" || qaStep(ev.Agent) {
 			m.step, _ = activityStep(ev.Agent)
 		}
 		if ev.Agent.Kind == agent.Usage {
@@ -308,7 +319,8 @@ type model struct {
 	stages []stage
 	cur    int
 	steps  []string
-	more   int // steps dropped beyond keptSteps
+	more   int        // steps dropped beyond keptSteps
+	todos  []todoItem // the agent's latest plan, display only
 
 	expanded   bool
 	off        int // expanded: steps scrolled back from the newest
@@ -483,6 +495,9 @@ func (m *model) apply(msg tea.Msg) bool {
 			if msg.cost != nil || msg.tokens != nil {
 				m.record(msg.stage, msg.cost, msg.tokens)
 			}
+			if msg.todoSet {
+				m.todos = msg.todos
+			}
 			if msg.step != "" {
 				m.steps = append(m.steps, msg.step)
 				if m.off > 0 {
@@ -618,6 +633,7 @@ func (m *model) render() string {
 		}
 		add(line + st.dim(elapsed(m.now().Sub(s.start))))
 		if i == m.cur {
+			lines = append(lines, m.todoLines()...)
 			lines = append(lines, m.activity(len(lines))...)
 		}
 	}
@@ -754,6 +770,88 @@ func (m *model) activity(used int) []string {
 			note += fmt.Sprintf("+%d later · ", later)
 		}
 		out = append(out, st.dim(note+"↑/↓ PgUp/PgDn scroll · esc to collapse"))
+	}
+	return out
+}
+
+// todoItem is one item of the agent's plan, cleaned for the screen.
+type todoItem struct {
+	text   string
+	status string // "pending", "in_progress" or "completed"
+}
+
+// maxTodoLines bounds the plan collapsed; ctrl+o shows all of it.
+const maxTodoLines = 6
+
+// todoItems cleans an agent's plan: every text is agent-controlled. An
+// in-progress item shows its present-tense form when it has one.
+func todoItems(in []agent.Todo) []todoItem {
+	out := make([]todoItem, 0, len(in))
+	for _, t := range in {
+		text := t.Text
+		if t.Status == "in_progress" && strings.TrimSpace(t.Active) != "" {
+			text = t.Active
+		}
+		first, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+		out = append(out, todoItem{text: clean(first), status: t.Status})
+	}
+	return out
+}
+
+// todoSummary is a plan update as one line: "todo: 2/5 done · now: Running
+// tests". Empty for an empty plan.
+func todoSummary(items []todoItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	done := 0
+	now := ""
+	for _, t := range items {
+		switch t.status {
+		case "completed":
+			done++
+		case "in_progress":
+			if now == "" {
+				now = t.text
+			}
+		}
+	}
+	s := fmt.Sprintf("todo: %d/%d done", done, len(items))
+	if now != "" {
+		s += " · now: " + now
+	}
+	return s
+}
+
+// todoLines is the agent's plan under the running stage: ☐ pending, ◐ in
+// progress, ☑ done. Collapsed it keeps to maxTodoLines; ctrl+o shows all.
+func (m *model) todoLines() []string {
+	items := m.todos
+	if len(items) == 0 {
+		return nil
+	}
+	hidden := 0
+	if !m.expanded && len(items) > maxTodoLines {
+		hidden = len(items) - (maxTodoLines - 1)
+		items = items[:maxTodoLines-1]
+	}
+	var out []string
+	for _, t := range items {
+		mark := "☐"
+		switch t.status {
+		case "in_progress":
+			mark = "◐"
+		case "completed":
+			mark = "☑"
+		}
+		line := "    " + mark + " " + t.text
+		if t.status == "completed" {
+			line = m.st.dim(line)
+		}
+		out = append(out, line)
+	}
+	if hidden > 0 {
+		out = append(out, m.st.dim(fmt.Sprintf("    +%d more · ctrl+o to expand", hidden)))
 	}
 	return out
 }

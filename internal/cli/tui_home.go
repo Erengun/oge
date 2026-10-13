@@ -217,10 +217,17 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 // home is the session program's root model: the composer, the Run's own
 // model once Enter starts it, then the composer again.
 type home struct {
-	comp  *composer
-	title string   // the box's title: repo and branch
-	setup []string // the setup bar, as lines
-	st    styles
+	comp *composer
+	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
+	// first ↑. search is Ctrl+R's search while it is open.
+	hist       *history
+	nav        int // the entry shown; meaningful only while navigating
+	navigating bool
+	draft      string
+	search     *histSearch
+	title      string   // the box's title: repo and branch
+	setup      []string // the setup bar, as lines
+	st         styles
 	// start begins the Run for a Task in this program: it returns the Run's
 	// model and its first command.
 	start func(task.Task, *resolved, int, int) (*model, tea.Cmd)
@@ -402,9 +409,10 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving, h.review != nil:
+		case h.saving, h.review != nil, h.search != nil:
 		default:
 			h.comp.insert(msg.Content)
+			h.endNavigation()
 		}
 	case editedMsg:
 		h.actions = false
@@ -439,7 +447,19 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return h, nil
 		}
+		if h.search != nil {
+			h.searchKey(msg)
+			return h, nil
+		}
 		switch msg.String() {
+		case "ctrl+r":
+			if h.hist.len() > 0 {
+				h.search = &histSearch{hit: -1}
+			}
+		case "up":
+			if !h.recall(-1) {
+				h.comp.key(msg)
+			}
 		case "esc", "ctrl+c":
 			// On an empty box both leave. With a Task in the box Esc does
 			// nothing, so it never wipes one; Ctrl+C clears it first (as
@@ -450,6 +470,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if msg.String() == "ctrl+c" {
 				h.comp.set("")
+				h.navigating = false
 			}
 		case "enter":
 			text := task.StripComments(h.comp.text())
@@ -471,6 +492,8 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.setup = setupLines(res.frozen)
 			h.sel.syncFrom(res)
+			h.hist.add(text) // what the human typed, never the agent's output
+			h.navigating = false
 			t := task.Parse(text)
 			if h.thread != nil {
 				// A follow-up: the whole thread, this message last.
@@ -501,16 +524,105 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.sel.reopen()
 			h.panel = &setupPanel{sel: h.sel, st: h.st, rev0: h.sel.rev}
 		case "down":
+			// ↓ is history only once ↑ has started navigating; on an empty
+			// composer otherwise it focuses the action row (#184).
+			if h.navigating {
+				if !h.recall(1) {
+					h.comp.key(msg)
+					h.endNavigation()
+				}
+				return h, nil
+			}
 			if h.last != nil && h.comp.empty() {
 				h.actions, h.actionsAt = true, h.clock()
 				return h, nil
 			}
 			h.comp.key(msg)
+			h.endNavigation()
 		default:
 			h.comp.key(msg)
+			h.endNavigation()
 		}
 	}
 	return h, nil
+}
+
+// endNavigation stops history navigation once the box no longer holds the
+// entry it showed (an edit or a paste), so ↓ never replaces the edit and
+// an emptied box is an empty composer again (↓ focuses the actions, #184).
+func (h *home) endNavigation() {
+	if h.navigating && h.nav < h.hist.len() && h.comp.text() != h.hist.entries[h.nav] {
+		h.navigating = false
+	}
+}
+
+// recall moves through the history: dir -1 is older (↑), 1 is newer (↓).
+// ↑ acts on the first line of the box and ↓ on the last, so multi-line text
+// is still walked line by line; it reports false when the key isn't history's
+// and the box should take it. Entries are copied into the box, so editing
+// one never changes the history. Past the newest entry the box gets back
+// what was in it before the first ↑.
+func (h *home) recall(dir int) bool {
+	n := h.hist.len()
+	if dir < 0 {
+		if n == 0 || h.comp.row != 0 {
+			return false
+		}
+		if !h.navigating {
+			h.draft, h.nav, h.navigating = h.comp.text(), n, true
+		}
+		if h.nav == 0 {
+			return true
+		}
+		h.nav--
+		h.comp.set(h.hist.entries[h.nav])
+		h.comp.row, h.comp.col = 0, len(h.comp.lines[0])
+		return true
+	}
+	if !h.navigating || h.comp.row != len(h.comp.lines)-1 {
+		return false
+	}
+	h.nav++
+	if h.nav >= n {
+		h.navigating = false
+		h.comp.set(h.draft)
+		return true
+	}
+	h.comp.set(h.hist.entries[h.nav])
+	return true
+}
+
+// searchKey is a key while Ctrl+R's search is open: text narrows the
+// query, Ctrl+R steps to an older match, Enter puts the match in the box
+// (it never submits) and Esc leaves the box as it was.
+func (h *home) searchKey(msg tea.KeyPressMsg) {
+	s := h.search
+	switch msg.String() {
+	case "esc", "ctrl+c", "ctrl+g":
+		h.search = nil
+	case "enter":
+		if s.hit >= 0 {
+			h.comp.set(h.hist.entries[s.hit])
+			h.navigating = false
+		}
+		h.search = nil
+	case "ctrl+r":
+		if s.hit > 0 {
+			if i := h.hist.find(s.query, s.hit-1); i >= 0 {
+				s.hit = i
+			}
+		}
+	case "backspace":
+		if r := []rune(s.query); len(r) > 0 {
+			s.query = string(r[:len(r)-1])
+			s.hit = h.hist.find(s.query, h.hist.len()-1)
+		}
+	default:
+		if msg.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) == 0 && msg.Text != "" {
+			s.query += msg.Text
+			s.hit = h.hist.find(s.query, h.hist.len()-1)
+		}
+	}
 }
 
 // slash runs a delivery command typed in the composer; ok is false when
@@ -537,6 +649,7 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		cmd = h.act(key, arg)
 	}
 	h.comp = newComposer()
+	h.navigating = false
 	return cmd, true
 }
 
@@ -588,6 +701,7 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 func (h *home) reopen() {
 	h.run, h.done, h.actions = nil, nil, false
 	h.comp = newComposer()
+	h.navigating = false
 	res, problem := h.resolve(h.sel)
 	h.msg, h.setup = problem, nil
 	if res != nil {
@@ -645,6 +759,15 @@ func (h *home) render() (string, int, int) {
 	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
 	for _, l := range h.msg {
 		lines = append(lines, " "+st.bad(l))
+	}
+	if s := h.search; s != nil {
+		label, match := "(reverse-i-search)", ""
+		if s.hit >= 0 {
+			match, _, _ = strings.Cut(h.hist.entries[s.hit], "\n")
+		} else if s.query != "" {
+			label = "(failed reverse-i-search)"
+		}
+		lines = append(lines, " "+st.dim(label+"'"+clean(s.query)+"': ")+clean(match)+st.dim("   enter use · esc cancel"))
 	}
 	if h.note != "" {
 		lines = append(lines, " "+st.ok(h.note))
@@ -880,7 +1003,7 @@ func editInEditor(env Env, text string, hold func(bool)) tea.Cmd {
 // it or Öge is interrupted while composing. code is the last Run's exit
 // code. res is the config as of now (nil when problem says why it can't be
 // resolved); resolve reads it again when a Task is sent.
-func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved, *run.FollowUp) startFunc,
+func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *resolved, *run.FollowUp) startFunc,
 	res *resolved, problem []string, resolve func(*setupState) (*resolved, []string), sel *setupState) (code int, err error) {
 	// A signal while composing ends the session; during a Run it goes to
 	// the Run (forwardTo), as Ctrl+C does.
@@ -889,7 +1012,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved, *ru
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify}
+	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify}
 	if res != nil {
 		h.setup = setupLines(res.frozen)
 		sel.init(res)

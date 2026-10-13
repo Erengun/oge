@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
@@ -1175,5 +1176,30 @@ func TestVerifierLaunchDisablesSkills(t *testing.T) {
 		if got := strings.Contains(strings.Join(args, " "), "--disable-slash-commands"); got != want {
 			t.Errorf("%s: --disable-slash-commands = %v", role, got)
 		}
+	}
+}
+
+func TestTodoWriteFrameIsNormalised(t *testing.T) {
+	frame := `{"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "TodoWrite", "input": {"todos": [` +
+		`{"content": "Read add.go", "status": "completed", "activeForm": "Reading add.go"},` +
+		`{"content": "Fix Add", "status": "in_progress", "activeForm": "Fixing Add"},` +
+		`{"content": "Run tests", "status": "bogus", "activeForm": "Running tests"}]}}]}`
+	var m struct {
+		Content []content `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(frame), &m); err != nil {
+		t.Fatal(err)
+	}
+	got := todos(m.Content[0].Input)
+	want := []agent.Todo{
+		{Text: "Read add.go", Status: "completed", Active: "Reading add.go"},
+		{Text: "Fix Add", Status: "in_progress", Active: "Fixing Add"},
+		{Text: "Run tests", Status: "pending", Active: "Running tests"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("todos = %+v, want %+v", got, want)
+	}
+	if todos(json.RawMessage(`{"todos": 3}`)) != nil {
+		t.Error("an unreadable plan should be nil")
 	}
 }
