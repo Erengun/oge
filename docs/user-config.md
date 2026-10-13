@@ -34,3 +34,14 @@ agent = "claude@work"
 `mode`, the Stage bindings, `[profiles]`, `unattended` (as `--unattended`) and `apply` (as `--apply`) take effect on a Run. A typed flag beats them. The TUI setup (Tab on the home) sets the same keys for the session, with the source `tui` (it beats this file, like a flag), and offers once to save them here.
 
 **Writing:** `pipeline.SaveRepoDefaults` is the only writer and runs only on an explicit save. It writes atomically (0600 file in a 0700 directory, through a symlinked config), keeps other repos' sections and `[profiles]`, and refuses to overwrite an invalid file. Comments are not preserved.
+
+**Notifications.** The live view rings the terminal bell and sends a desktop notification (OSC 9) when a Run needs you (a Gate opens) and when it ends. The texts are fixed ("oge: waiting for you", "oge: Run accepted", "oge: Run ended: <outcome>"), never agent text. The `[notify]` table is global, not per repo, and every key defaults to on:
+
+```toml
+[notify]
+attention = true   # a Gate opened
+run_end = true     # the Run ended, any outcome
+bell = true        # ring the bell with either
+```
+
+`/notify on|off` in the home turns both alerts (and so the bell) on or off for the session. Nothing is sent in plain mode, without a TTY, with `--unattended`, or in dry-run. Under tmux the OSC goes through the passthrough (needs `allow-passthrough on`); under GNU screen only the bell rings; foot and rxvt get OSC 777.
