@@ -224,6 +224,26 @@ func (s *homeSession) expect(text string) {
 	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
 }
 
+// expectScreen waits until text shows on the rendered screen more often
+// than it did when the last keys were typed. The renderer rewrites only the
+// cells that changed, so a hint that differs from the previous frame by a
+// few characters never appears whole in the raw output; the screen does.
+func (s *homeSession) expectScreen(text string) {
+	s.t.Helper()
+	screen := func(b string) string {
+		var v vt
+		v.write([]byte(b))
+		return v.String()
+	}
+	before := strings.Count(screen(s.out.String()[:s.mark]), text)
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if strings.Count(screen(s.out.String()), text) > before {
+			return
+		}
+	}
+	s.t.Fatalf("%q never showed on the screen after the last keys:\n%s", text, screen(s.out.String()))
+}
+
 // ended waits for the composer back after an Accepted Run: its hint line
 // names the actions.
 func (s *homeSession) ended() {
@@ -308,8 +328,8 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	s.composer()
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x05")             // Ctrl+E on an empty box
-	s.expect("second task zq7") // the box shows what the editor left
+	s.type_("\x05")                   // Ctrl+E on an empty box
+	s.expectScreen("second task zq7") // the box shows what the editor left
 	s.type_("\r")
 	s.ended()
 	s.type_("\x03")
@@ -570,7 +590,7 @@ func TestBareOgeStatusLineAndCtrlO(t *testing.T) {
 	s.type_("\x0f")
 	// The renderer rewrites only changed cells, so a short run of new text
 	// is the marker; the collapse is covered by TestTUIEscCollapsesAtAGate.
-	s.expect("ctrl+o to collapse")
+	s.expectScreen("ctrl+o to collapse")
 	s.type_("\x0f")
 	s.type_("t\r")
 	s.ended()
