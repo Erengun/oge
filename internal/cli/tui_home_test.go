@@ -189,7 +189,6 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pw.Close(); pr.Close() })
 	script := filepath.Join(filepath.Dir(f.repo), "agent.sh")
 	if err := os.WriteFile(script, []byte(fixScript), 0o644); err != nil {
 		t.Fatal(err)
@@ -200,7 +199,19 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 	if tweak != nil {
 		tweak(&env)
 	}
-	go func() { s.exit <- Main(env, args) }()
+	done := make(chan struct{})
+	go func() { defer close(done); s.exit <- Main(env, args) }()
+	// Close only the write end first: the program reads EOF and stops its
+	// input reader. Closing the read end while that reader is still in
+	// read(2) races with it (the race detector caught it in CI).
+	t.Cleanup(func() {
+		pw.Close()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+		pr.Close()
+	})
 	return s
 }
 

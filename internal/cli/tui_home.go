@@ -1064,8 +1064,20 @@ func (e editorCmd) Run() error {
 		e.hold(true)
 		defer e.hold(false)
 	}
+	// Bubble Tea (v2.0.10 and v2.1.0) stops its frame ticker from the old
+	// renderer goroutine after releasing the terminal, and restarts that same
+	// ticker when it takes the terminal back. If the command returns before
+	// that goroutine has run (an editor or a pager that exits at once, a busy
+	// machine), the stop lands after the restart and the screen never
+	// repaints again. Sleeping here lets that goroutine stop the ticker first.
+	time.Sleep(rendererSettle)
 	return e.run()
 }
+
+// rendererSettle is how long a terminal hand-over waits for Bubble Tea's
+// old renderer to stop: about a frame, unnoticed before an editor or pager.
+const rendererSettle = 20 * time.Millisecond
+
 func (e editorCmd) SetStdin(io.Reader)  {}
 func (e editorCmd) SetStdout(io.Writer) {}
 func (e editorCmd) SetStderr(io.Writer) {}
