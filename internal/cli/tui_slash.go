@@ -420,7 +420,7 @@ func deliverSlash(key, cli string) func(*home, []string) (tea.Cmd, string) {
 			if cli == "apply" && h.thread != nil && strings.HasPrefix(h.thread.from.Run, id) {
 				h.thread = nil
 			}
-			return h.deliver(cli, args), ""
+			return h.delivered(cli, args), ""
 		case h.last != nil:
 			return h.act(key, name), ""
 		case cli == "apply" || cli == "branch":
@@ -428,15 +428,24 @@ func deliverSlash(key, cli string) func(*home, []string) (tea.Cmd, string) {
 		case h.deliver == nil:
 			return nil, "/" + cli + ": no Runs to take here"
 		}
-		return h.deliver(cli, nil), ""
+		return h.delivered(cli, nil), ""
 	}
 }
 
+// delivered prints what the CLI's command printed, in pieces that fit above
+// the frame: a whole Receipt can be taller than the room (#188).
+func (h *home) delivered(cmd string, args []string) tea.Cmd {
+	if out := h.deliver(cmd, args); out != "" {
+		return h.println(out)
+	}
+	return nil
+}
+
 // deliverer is home.deliver: the CLI's receipt, diff, apply and branch for
-// a Run, printed. Its output is read here and never a terminal: a diff is
-// printed, not paged.
-func deliverer(env Env) func(cmd string, args []string) tea.Cmd {
-	return func(cmd string, args []string) tea.Cmd {
+// a Run, as text to print. Its output is read here and never a terminal: a
+// diff is printed, not paged.
+func deliverer(env Env) func(cmd string, args []string) string {
+	return func(cmd string, args []string) string {
 		var b strings.Builder
 		q := env
 		q.Stdout, q.Stderr = &b, &b
@@ -447,10 +456,7 @@ func deliverer(env Env) func(cmd string, args []string) tea.Cmd {
 		} else {
 			deliverCommand(q, cmd, args)
 		}
-		if out := strings.TrimSuffix(b.String(), "\n"); out != "" {
-			return tea.Println(out)
-		}
-		return nil
+		return strings.TrimSuffix(b.String(), "\n")
 	}
 }
 

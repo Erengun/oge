@@ -342,7 +342,7 @@ type home struct {
 	edit func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
 	// deliver is /receipt, /diff, /apply and /branch of a named Run, and
 	// runs lists the repository's recent Runs for /runs (#145).
-	deliver func(cmd string, args []string) tea.Cmd
+	deliver func(cmd string, args []string) string
 	runs    func(n int) ([]*delivery.Run, string)
 	// label is /label and the picker's l: it names a Run beside its
 	// Ledger (#177).

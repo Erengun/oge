@@ -14,7 +14,7 @@ func (h *home) terminalCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/terminal")
 	}
-	return tea.Println(terminalHints(h.getenv)), ""
+	return h.fit(terminalHints(h.getenv)), ""
 }
 
 // terminalHints is the /terminal checklist for the environment getenv reads

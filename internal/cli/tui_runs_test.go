@@ -24,9 +24,9 @@ func pickerHome(t *testing.T) (*home, *[]string) {
 	h := testHome(80)
 	h.runs = func(int) ([]*delivery.Run, string) { return pickerRuns(), "" }
 	var calls []string
-	h.deliver = func(cmd string, args []string) tea.Cmd {
+	h.deliver = func(cmd string, args []string) string {
 		calls = append(calls, cmd+" "+strings.Join(args, ","))
-		return nil
+		return ""
 	}
 	submit(h, "/runs")
 	if h.picker == nil {
