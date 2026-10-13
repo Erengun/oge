@@ -152,6 +152,7 @@ func (c *composer) kill(toRow, toCol int, back bool) {
 	merged := append(append([]rune(nil), c.lines[r0][:c0]...), c.lines[r1][c1:]...)
 	c.lines = append(c.lines[:r0], append([][]rune{merged}, c.lines[r1+1:]...)...)
 	c.row, c.col = r0, c0
+	c.killLine = false
 	switch {
 	case !c.killing:
 		c.kills = text

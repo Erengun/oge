@@ -45,11 +45,12 @@ type composer struct {
 	row, col int
 	top      int // first visible row of the wrapped text
 
-	kills   string   // the kill ring's one entry (tui_edit.go)
-	killing bool     // the last edit was a kill
-	undo    []snap   // what undo brings back, newest last
-	lastOp  string   // the last edit's kind, to join typing into one undo step
-	pastes  []string // the text behind each large-paste placeholder (tui_paste.go)
+	kills    string   // the kill ring's one entry (tui_edit.go)
+	killing  bool     // the last edit was a kill
+	killLine bool     // the ring's text was taken as whole lines (vim's dd, yy)
+	undo     []snap   // what undo brings back, newest last
+	lastOp   string   // the last edit's kind, to join typing into one undo step
+	pastes   []string // the text behind each large-paste placeholder (tui_paste.go)
 }
 
 func newComposer() *composer { return &composer{lines: [][]rune{nil}} }
@@ -430,6 +431,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
 	h.syncMenu()
 	h.syncAt()
+	h.dropRecordingInOverlay()
 	return m, cmd
 }
 
@@ -533,8 +535,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
-		if h.vim && !h.normal && h.insRec != nil {
-			h.insRec = append(h.insRec, msg)
+		if h.vim && !h.normal && h.insRec != nil && !h.replay {
+			h.recordInsert(msg)
 		}
 		if h.vim && h.normal && h.normalKey(msg) {
 			return h, nil

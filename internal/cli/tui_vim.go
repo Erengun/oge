@@ -191,17 +191,20 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	if k.Text == "?" && c.empty() {
 		return false // an empty box opens the panel
 	}
-	h.cmd = append(h.cmd, k)
 	if d := int(k.Text[0] - '0'); len(k.Text) == 1 && d >= 0 && d <= 9 && (d > 0 || h.count > 0) {
 		h.count = h.count*10 + d
 		return true
 	}
+	h.cmd = append(h.cmd, k)
 	n := max(h.count, 1)
 	if h.vimOp != "" {
+		n *= max(h.opCount, 1)
+		h.effCount = n
 		h.operatorKey(k.Text, n)
 		h.endCommand()
 		return true
 	}
+	h.effCount = n
 	l := c.lines[c.row]
 	switch k.Text {
 	case "i":
@@ -254,7 +257,7 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	case "$":
 		c.col = lastCol(l)
 	case "d", "c", "y":
-		h.vimOp = k.Text
+		h.vimOp, h.opCount, h.count = k.Text, h.count, 0
 		return true // the command goes on with the next key
 	case "x":
 		h.operate("d", "l", n)

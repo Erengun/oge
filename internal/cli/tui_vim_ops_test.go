@@ -3,8 +3,10 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/erengun/oge/internal/task"
 )
 
 // vimRun sets the text up, presses Esc and then keys, where <esc> is Esc.
@@ -139,5 +141,65 @@ func TestVimRegisterIsTheKillRing(t *testing.T) {
 	typeText(h, "0P")
 	if h.comp.text() != "barfoo " {
 		t.Errorf("P after ctrl+k: %q", h.comp.text())
+	}
+}
+
+func TestVimDotNeverSubmits(t *testing.T) {
+	h := vimRun("foo bar", "0cwX")
+	runs := 0
+	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
+		runs++
+		return newModel(tk, homeFrozen(), newStyles(false), time.Now), nil
+	}
+	h.hist = &history{}
+	h.sel = &setupState{}
+	h.Update(enter())
+	if runs != 1 {
+		t.Fatalf("enter started %d runs", runs)
+	}
+	h.comp.set("")
+	h.Update(escKey())
+	typeText(h, "inext")
+	h.Update(escKey())
+	typeText(h, ".")
+	if runs != 1 {
+		t.Errorf("dot started another run: %d", runs)
+	}
+	// a menu opened in the insert is not replayed either
+	h = vimRun("foo", "0cw")
+	typeText(h, "/")
+	h.Update(escKey())
+	h.Update(escKey())
+	typeText(h, ".")
+	if h.menu != nil {
+		t.Error("dot opened the slash menu")
+	}
+}
+
+func TestVimCountsMultiply(t *testing.T) {
+	for _, tc := range []struct{ text, keys, want string }{
+		{"a b c d e f g", "02d3w", "g"},
+		{"a b c d e f g", "03d2w", "g"},
+		{"a b c d e f g", "02dw3.", "f g"},
+		{"a b c d e f g", "02dw.", "e f g"},
+		{"a\nb\nc\nd\ne", "kkkk2d2d", "e"},
+	} {
+		if h := vimRun(tc.text, tc.keys); h.comp.text() != tc.want {
+			t.Errorf("%q + %q: %q, want %q", tc.text, tc.keys, h.comp.text(), tc.want)
+		}
+	}
+}
+
+func TestVimPutsLinesOnlyAfterALineKill(t *testing.T) {
+	h := vimRun("a b\nc", "yykyw")
+	typeText(h, "$p") // charwise now: the yw replaced the line
+	if h.comp.text() != "a ba \nc" {
+		t.Errorf("p after yy then yw: %q", h.comp.text())
+	}
+	h = vimRun("ab\ncd", "ddk")
+	h.Update(edKey(tea.ModCtrl, 'k'))
+	typeText(h, "p")
+	if h.comp.text() != "ab" {
+		t.Errorf("p after dd then ctrl+k put a line: %q", h.comp.text())
 	}
 }

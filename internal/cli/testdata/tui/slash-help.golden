@@ -49,7 +49,7 @@ Vim (when enabled)
   h j k l              left · down · up · right (NORMAL)
   w e b                next word · word end · previous (NORMAL)
   0 ^ $                line start · first char · end (NORMAL)
-  d c y                operator + motion or iw i" i( · dd cc yy lines
+  d c y                operator + motion or iw i" i( · dd cc yy (NORMAL)
   x · D                delete the character · to the line end (NORMAL)
   p · P                put after · before (the kill ring)
   u · .                undo · repeat the last change

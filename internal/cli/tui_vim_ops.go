@@ -2,6 +2,7 @@ package cli
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -9,8 +10,8 @@ import (
 
 // The vim operators d c y with motions and text objects, x D p P u and the
 // dot (#157). The register is the composer's kill ring, so Ctrl+Y brings
-// back what d or y took and p puts back what Ctrl+K killed; regLine only
-// remembers that the ring's text was taken by whole lines.
+// back what d or y took and p puts back what Ctrl+K killed; killLine on the
+// composer remembers that the ring's text was taken by whole lines.
 
 // vimState is what a NORMAL command in progress and the last change need.
 type vimState struct {
@@ -18,8 +19,8 @@ type vimState struct {
 	vimObj string // "i" once an operator has been followed by i
 	count  int    // the digits typed so far
 
-	regText string // what the kill ring held when a line was put in it
-	regLine bool   // ...and that it was whole lines
+	opCount                       int // the count typed before the operator: 2d3w is 6dw
+	effCount, lastCount, insCount int // the command's whole count; of the last change; of the insert under way
 
 	cmd        []tea.KeyPressMsg // the keys of the command in progress
 	changed    bool              // that command edited the text or entered INSERT
@@ -29,7 +30,7 @@ type vimState struct {
 	insMark    int // 1 + len(undo) when INSERT began, so u undoes the whole change
 }
 
-func (v *vimState) cancel() { v.vimOp, v.vimObj, v.count, v.cmd = "", "", 0, nil }
+func (v *vimState) cancel() { v.vimOp, v.vimObj, v.count, v.opCount, v.cmd = "", "", 0, 0, nil }
 
 // vimRange is the text an operator acts on: from (r0, c0) up to but not
 // including (r1, c1), or the whole lines r0..r1.
@@ -44,13 +45,15 @@ func (h *home) endCommand() {
 		return
 	}
 	if h.changed && !h.replay {
+		h.insCount = h.effCount
 		if h.normal {
+			h.lastCount = h.effCount
 			h.lastChange = h.cmd
 		} else {
 			h.insRec = slices.Clone(h.cmd) // . gets it when Esc ends the insert
 		}
 	}
-	h.count, h.changed, h.cmd = 0, false, nil
+	h.count, h.opCount, h.changed, h.cmd = 0, 0, false, nil
 	h.comp.lastOp = ""
 	h.endNavigation()
 }
@@ -64,16 +67,27 @@ func (h *home) endInsert() {
 	}
 	h.insMark = 0
 	if h.insRec != nil && !h.replay {
-		h.lastChange = h.insRec
+		h.lastChange, h.lastCount = h.insRec, h.insCount
 	}
 	h.insRec = nil
 }
 
-// repeat replays the last change, typed text and Esc included.
+// repeat replays the last change, typed text and Esc included. A count
+// before the dot replaces the one the change had.
 func (h *home) repeat() {
 	keys := h.lastChange
+	n := h.count
+	if n == 0 {
+		n = h.lastCount
+	}
+	h.count = 0
 	h.replay = true
 	defer func() { h.replay = false }()
+	if n > 1 {
+		for _, d := range strconv.Itoa(n) {
+			h.Update(tea.KeyPressMsg{Code: d, Text: string(d)})
+		}
+	}
 	for _, k := range keys {
 		h.Update(k)
 	}
@@ -215,6 +229,8 @@ func (c *composer) textObject(t string) (vimRange, bool) {
 		}
 		return vimRange{r0: c.row, c0: lo, r1: c.row, c1: hi}, true
 	case "\"":
+		// Unlike vim, outside a pair this takes the next one on the line,
+		// even when the cursor sits between two pairs: on purpose.
 		var qs []int
 		for i, r := range l {
 			if r == '"' {
@@ -292,7 +308,7 @@ func (h *home) apply(op string, r vimRange) {
 	text := c.rangeText(r)
 	if op == "y" {
 		c.kills, c.killing = text, false
-		h.regText, h.regLine = text, r.line
+		c.killLine = r.line
 		if !r.line {
 			c.row, c.col = r.r0, r.c0
 			c.col = min(c.col, lastCol(c.lines[c.row]))
@@ -329,7 +345,7 @@ func (h *home) apply(op string, r vimRange) {
 			c.col = min(c.col, lastCol(c.lines[c.row]))
 		}
 	})
-	h.regText, h.regLine = c.kills, r.line
+	c.killLine = r.line
 	if op == "c" {
 		h.enterInsert()
 	}
@@ -365,7 +381,7 @@ func (h *home) put(after bool, n int) {
 		return
 	}
 	h.changed = true
-	line := h.regLine && h.regText == text
+	line := c.killLine
 	c.change("vimput", func() {
 		if line {
 			var add [][]rune
@@ -394,4 +410,25 @@ func (h *home) put(after bool, n int) {
 			c.row, c.col = r0, c0
 		}
 	})
+}
+
+// recordInsert keeps the keys of an INSERT that . can replay: text,
+// Backspace, Delete and Esc. Anything else (Enter, Tab, Ctrl keys, arrows)
+// ends the recording, so . never submits a Task or opens a menu.
+func (h *home) recordInsert(k tea.KeyPressMsg) {
+	plain := k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) == 0
+	switch {
+	case plain && (k.Text != "" || k.Code == tea.KeyBackspace || k.Code == tea.KeyDelete || k.Code == tea.KeyEscape):
+		h.insRec = append(h.insRec, k)
+	default:
+		h.insRec, h.lastChange = nil, nil
+	}
+}
+
+// dropRecordingInOverlay forgets the INSERT in progress when a key opened a
+// menu or panel (a / or @ typed in it), which a replay must not do.
+func (h *home) dropRecordingInOverlay() {
+	if h.insRec != nil && (h.menu != nil || h.at.list != nil || h.search != nil || h.panel != nil || h.keys != nil || h.review != nil || h.saving || h.picker != nil) {
+		h.insRec, h.lastChange = nil, nil
+	}
 }
