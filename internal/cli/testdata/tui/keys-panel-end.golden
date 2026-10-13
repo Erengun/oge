@@ -1,8 +1,8 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-   esc                  close the search, then collapse
-   ctrl+c               cancel the Run (twice: force Öge to stop)
+   ctrl+x               cancel the queued Task
+   ctrl+c               clear the queued Task, then cancel the Run (twice: forc…
  Delivery
    ↓ on an empty box    the actions of the last Run
    a · b · d · r        apply · branch · diff · receipt (each ↓ allows one)
@@ -21,4 +21,4 @@
    p · P                put after · before (the kill ring)
    v · V                select · select lines (then d x c y p; esc)
    u · .                undo · repeat the last change
- ↑ ↓ scroll (38-57 of 57) · esc or ? close
+ ↑ ↓ scroll (40-59 of 59) · esc or ? close
