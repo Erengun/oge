@@ -22,9 +22,20 @@ type palette struct{ accent, ok, bad color.Color }
 // shares one, so choosing a theme in the setup panel repaints the view
 // that is already open.
 type themeState struct {
-	name  string // one of pipeline.KnownThemes
-	dark  bool   // the terminal's background, once it has said (see known)
-	known bool
+	name   string // one of pipeline.KnownThemes
+	dark   bool   // the terminal's background, once it has said (see known)
+	known  bool
+	custom *customTheme // the theme file's overrides (#175), nil without one
+}
+
+// palette is the colours now: the preset (the file's base, if it names one)
+// with the file's overrides on top.
+func (t *themeState) palette() palette {
+	name := t.name
+	if t.custom != nil && t.custom.base != "" {
+		name = t.custom.base
+	}
+	return t.custom.overlay(paletteOf(name, t.dark, t.known))
 }
 
 func rgb(hex uint32) color.Color {
@@ -72,7 +83,7 @@ func newStyles(colour bool) styles {
 	th := &themeState{name: "ansi"}
 	paint := func(pick func(palette) color.Color) func(string) string {
 		return func(t string) string {
-			return lipgloss.NewStyle().Foreground(pick(paletteOf(th.name, th.dark, th.known))).Render(t)
+			return lipgloss.NewStyle().Foreground(pick(th.palette())).Render(t)
 		}
 	}
 	return styles{
