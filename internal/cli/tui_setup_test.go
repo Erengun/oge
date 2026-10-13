@@ -657,3 +657,91 @@ func TestHelpListsAltM(t *testing.T) {
 		t.Error("/help lacks alt+m")
 	}
 }
+
+func shiftTab() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift} }
+
+// modeHome is a setup home whose resolver follows the panel's mode, as the
+// real one does, so the bar can show Fast's warning.
+func modeHome(t *testing.T) *home {
+	t.Helper()
+	h, _ := setupHome(t)
+	h.resolve = func(s *setupState) (*resolved, []string) {
+		f := homeFrozen()
+		f.Mode = s.mode
+		if s.mode == pipeline.Fast {
+			f.TrustWeakening = []pipeline.Weakening{{Option: "mode = fast", Source: pipeline.FromTUI, Detail: "no independent verifier"}}
+		}
+		return &resolved{frozen: f}, nil
+	}
+	return h
+}
+
+func TestShiftTabCyclesStandardAndFast(t *testing.T) {
+	h := modeHome(t)
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Fast || !h.sel.tMode || !strings.Contains(h.note, "(from setup)") {
+		t.Fatalf("mode %v tMode %v note %q", h.sel.mode, h.sel.tMode, h.note)
+	}
+	got := frame(h)
+	if !strings.Contains(got, "Fast · implement") || !strings.Contains(got, "! trust-weakening: mode = fast") {
+		t.Errorf("the bar lacks Fast and its warning:\n%s", got)
+	}
+	golden(t, "home-fast-shift-tab", got)
+	h.saving = false
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Standard || strings.Contains(frame(h), "trust-weakening") {
+		t.Errorf("second press: mode %v\n%s", h.sel.mode, frame(h))
+	}
+	press(h, shiftTab(), shiftTab(), shiftTab())
+	if h.sel.mode == pipeline.Blind {
+		t.Error("Blind is in the cycle")
+	}
+}
+
+func TestShiftTabSkipsBlindAndKeepsTheFrozenConfig(t *testing.T) {
+	h := modeHome(t)
+	h.sel.mode = pipeline.Blind
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Fast {
+		t.Errorf("from Blind: %v, want Fast", h.sel.mode)
+	}
+	// Only the session's choice moves; a Run is frozen when it starts.
+	if h.run != nil {
+		t.Error("the press started a Run")
+	}
+	h.run = &model{}
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Fast {
+		t.Errorf("during a Run the press changed the mode: %v", h.sel.mode)
+	}
+}
+
+func TestShiftTabDoesNothingAtAGateOrInAMenu(t *testing.T) {
+	h := modeHome(t)
+	h.run = &model{gate: &gateState{}}
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Standard || h.sel.tMode {
+		t.Errorf("at a Gate: mode %v", h.sel.mode)
+	}
+	h.run = nil
+	typeText(h, "/")
+	press(h, shiftTab())
+	if h.sel.tMode {
+		t.Error("changed the mode with the slash menu open")
+	}
+}
+
+func TestShiftTabWorksInVimNormalAndInsert(t *testing.T) {
+	h := modeHome(t)
+	h.vim = true
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Fast {
+		t.Fatalf("INSERT: %v", h.sel.mode)
+	}
+	h.saving = false // the first change offers the save
+	h.enterNormal()
+	press(h, shiftTab())
+	if h.sel.mode != pipeline.Standard || !h.normal {
+		t.Errorf("NORMAL: mode %v normal %v", h.sel.mode, h.normal)
+	}
+}

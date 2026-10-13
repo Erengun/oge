@@ -274,6 +274,22 @@ func (h *home) modeCmd(args []string) (tea.Cmd, string) {
 	return nil, ""
 }
 
+// cycleMode is Shift+Tab: Fast becomes Standard and anything else Fast. The
+// setup bar then shows the mode, with Fast marked trust-weakening.
+func (h *home) cycleMode() {
+	if h.setupReady() != "" {
+		return
+	}
+	m := pipeline.Fast
+	if h.sel.mode == pipeline.Fast {
+		m = pipeline.Standard
+	}
+	h.setupEdit("mode "+string(m), func(s *setupState) {
+		s.mode, s.tMode = m, true
+		s.touch()
+	})
+}
+
 func (h *home) agentCmd(args []string) (tea.Cmd, string) {
 	st, problem := h.stageCmd("/agent", args)
 	if problem != "" {
