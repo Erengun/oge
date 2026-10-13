@@ -548,16 +548,6 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
-// waitForN waits until text has been written at least n times.
-func (s *syncBuf) waitForN(t *testing.T, text string, n int) {
-	t.Helper()
-	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if strings.Count(s.String(), text) >= n {
-			return
-		}
-	}
-	t.Fatalf("%q never appeared %d times in:\n%s", text, n, s.String())
-}
 
 func TestSetupBarNamesAProfile(t *testing.T) {
 	f := homeFrozen()
