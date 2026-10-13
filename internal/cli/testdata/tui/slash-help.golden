@@ -57,6 +57,8 @@ Commands
   /apply [run]                       apply a Run's Candidate to your tree
   /branch [run] [name]               a Run's Candidate as a branch
   /label [run] <text>                name a Run (yours; not Evidence); no text clears
+  /export                            write this session's transcript to a file (redacted)
+  /copy                              copy the last Receipt to the clipboard (redacted)
   /new                               start a fresh task
   /clear                             start a fresh task
   /notify on|off                     alerts for this session

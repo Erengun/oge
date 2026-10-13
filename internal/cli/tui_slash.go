@@ -48,6 +48,8 @@ func slashCommands() []slashCmd {
 		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
 		{name: "/branch", guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
 		{name: "/label", usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
+		{name: "/export", usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
+		{name: "/copy", usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
 		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/clear", usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/notify", usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
