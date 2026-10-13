@@ -61,16 +61,16 @@ func (h *home) queueKey(msg tea.Msg) bool {
 		if r.expanded {
 			return false
 		}
-		switch key {
+		switch resolve(ctxRun, key) {
 		case "ctrl+c":
 			if !has || r.cancelling {
 				return false
 			}
 			h.next = nil // the first Ctrl+C clears the Task, not the Run
 			return true
-		case "esc", "ctrl+o":
+		case "esc", actExpand:
 			return false
-		case "ctrl+x":
+		case actCancelQueue:
 			h.next = nil
 			return true
 		case "enter":

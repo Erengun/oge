@@ -11,6 +11,25 @@ import (
 	"testing"
 )
 
+// actionConsts maps the action constants' identifiers to their names.
+func actionConsts(t *testing.T) map[string]string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "tui_actions.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if vs, ok := n.(*ast.ValueSpec); ok && len(vs.Names) == 1 && len(vs.Values) == 1 && strings.HasPrefix(vs.Names[0].Name, "act") {
+			if lit, ok := vs.Values[0].(*ast.BasicLit); ok {
+				out[vs.Names[0].Name], _ = strconv.Unquote(lit.Value)
+			}
+		}
+		return true
+	})
+	return out
+}
+
 // handlerKeys reads the case labels of the key handlers' source, so the
 // table is checked against what they really accept.
 func handlerKeys(t *testing.T) map[string]bool {
@@ -34,6 +53,9 @@ func handlerKeys(t *testing.T) map[string]bool {
 	}
 	got := map[string]bool{}
 	fset := token.NewFileSet()
+	// A case label that is an action name (actEditor...) stands for the
+	// action's keys: the handlers reach them through resolve.
+	actNames := actionConsts(t)
 	for _, h := range handlers {
 		f, err := parser.ParseFile(fset, h[0], nil, 0)
 		if err != nil {
@@ -60,6 +82,15 @@ func handlerKeys(t *testing.T) map[string]bool {
 							s, _ := strconv.Unquote(lit.Value)
 							got[s] = true
 						}
+						if id, ok := e.(*ast.Ident); ok && actNames[id.Name] != "" {
+							for _, a := range actionTable {
+								if a.name == actNames[id.Name] {
+									for _, k := range a.keys {
+										got[k] = true
+									}
+								}
+							}
+						}
 					}
 				}
 				return true
@@ -83,7 +114,7 @@ func TestKeyTableCoversTheHandlers(t *testing.T) {
 		if !slices.Contains(keyGroups, b.group) {
 			t.Errorf("%q: unknown group %q", b.keys, b.group)
 		}
-		for _, k := range b.probe {
+		for _, k := range b.probes() {
 			inTable[k] = true
 			if !handled[k] {
 				t.Errorf("the table lists %q (%s) but no handler switches on it", k, b.keys)
