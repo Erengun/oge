@@ -307,6 +307,7 @@ type home struct {
 	width, height int
 	run           *model    // nil while composing
 	notify        *notifier // the session's alerts; nil when silent (#170)
+	keys          *keyPanel // the ? panel, when open (#155)
 	quit          bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
@@ -483,6 +484,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
 		switch {
+		case h.keys != nil:
+			h.keysKey(msg)
+			return h, nil
 		case h.hidden != nil:
 			return h.hiddenKey(msg)
 		case h.picker != nil:
@@ -571,6 +575,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+e", "ctrl+g":
 			if h.edit != nil {
 				return h, h.edit(h.comp.expanded())
+			}
+		case "?":
+			if !h.openKeys() {
+				h.comp.key(msg)
+				h.endNavigation()
 			}
 		case "tab":
 			if p := h.openSetup(); p != "" {
@@ -852,6 +861,8 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, " "+st.dim("stashed · ctrl+s restores it on an empty box"))
 	}
 	switch {
+	case h.keys != nil:
+		lines = append(lines, h.keysFrame(max(h.height-len(lines), 4))...)
 	case h.hidden != nil:
 		lines = append(lines, h.hidden.lines(st)...)
 	case h.saving:
@@ -886,7 +897,7 @@ func (h *home) render() (string, int, int) {
 	if h.at.list != nil {
 		lines = append(lines, h.atLines()...)
 	}
-	if h.panel == nil {
+	if h.panel == nil && h.keys == nil {
 		for _, l := range h.setup {
 			lines = append(lines, " "+st.dim(l))
 		}
