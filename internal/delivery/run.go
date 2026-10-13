@@ -58,6 +58,10 @@ type Run struct {
 	// Unresolved are the Ambiguous files the Run ended or parked with,
 	// never promoted or dropped (#105).
 	Unresolved []string
+	// Follows is the Run this one continues (#185); Rebased says its
+	// Candidate was carried over onto a changed repository.
+	Follows string
+	Rebased bool
 }
 
 func (r *Run) repo() *workspace.RunRepo {
@@ -93,14 +97,14 @@ func Load(dir string) (*Run, error) {
 	for _, rec := range recs {
 		switch rec.Type {
 		case run.RecRunStarted:
-			var d struct{ Run, Source, Task, Frozen string }
+			var d struct{ Run, Source, Task, Frozen, Follows string }
 			if err := json.Unmarshal(rec.Data, &d); err != nil {
 				return nil, err
 			}
 			if d.Run != "" {
 				r.ID = d.Run
 			}
-			r.Source = d.Source
+			r.Source, r.Follows = d.Source, d.Follows
 			if blobs, err := ledger.OpenBlobs(dir); err == nil {
 				if b, err := blobs.Get(d.Task); err == nil {
 					r.Title = task.Parse(string(b)).Title
@@ -122,6 +126,8 @@ func Load(dir string) (*Run, error) {
 			}
 			r.Snapshot, r.Head, r.Branch = d.Commit, d.Head, d.Branch
 			r.Dirty = d.Modified > 0 || d.Untracked > 0
+		case run.RecFollowUpRebased:
+			r.Rebased = true
 		case run.RecOracleVersion:
 			var d struct{ Version int }
 			_ = json.Unmarshal(rec.Data, &d)
