@@ -31,6 +31,21 @@ type UserConfig struct {
 	// Notify is the live view's bell and desktop notification (#170). It is
 	// global, not per repo: how a person is told belongs to them, not the repo.
 	Notify *NotifyConfig `toml:"notify,omitempty"`
+	// Theme is the live view's palette preset (#174), one of KnownThemes;
+	// "" is auto. Global: how the terminal looks is the person's, not the repo's.
+	Theme string `toml:"theme,omitempty"`
+}
+
+// KnownThemes are the palette presets of the live view. Status is never
+// shown by colour alone, so every one keeps the same glyphs and words.
+var KnownThemes = []string{"auto", "dark", "light", "daltonized", "ansi"}
+
+// ThemeName returns the configured palette preset, "" when there is none.
+func (c *UserConfig) ThemeName() string {
+	if c == nil {
+		return ""
+	}
+	return c.Theme
 }
 
 // NotifyConfig holds the [notify] settings. Each is on when absent.
@@ -126,6 +141,9 @@ func LoadUserConfig(data []byte) (*UserConfig, []Problem) {
 func (c *UserConfig) validate() []Problem {
 	var probs []Problem
 	add := func(key, msg string) { probs = append(probs, Problem{key, msg}) }
+	if c.Theme != "" && !oneOf(c.Theme, KnownThemes...) {
+		add("theme", "must be one of "+strings.Join(KnownThemes, ", "))
+	}
 	for _, name := range sortedKeys(c.Profiles) {
 		key := "profiles." + name
 		switch {
@@ -199,6 +217,12 @@ func (c *UserConfig) ForRepo(repoRoot string) *RepoDefaults {
 // are kept. An existing file that doesn't parse is never overwritten.
 // Comments in the file are not preserved.
 func SaveRepoDefaults(path, repoRoot string, defaults RepoDefaults) error {
+	return SaveUserDefaults(path, repoRoot, defaults, "")
+}
+
+// SaveUserDefaults is SaveRepoDefaults that also sets the global theme when
+// theme is not "".
+func SaveUserDefaults(path, repoRoot string, defaults RepoDefaults, theme string) error {
 	if !filepath.IsAbs(repoRoot) {
 		return fmt.Errorf("repo root %q must be absolute", repoRoot)
 	}
@@ -224,6 +248,9 @@ func SaveRepoDefaults(path, repoRoot string, defaults RepoDefaults) error {
 		cfg.Repos = map[string]RepoDefaults{}
 	}
 	cfg.Repos[repoRoot] = defaults
+	if theme != "" {
+		cfg.Theme = theme
+	}
 	if probs := cfg.validate(); len(probs) > 0 {
 		return fmt.Errorf("not saved: %s", probs[0])
 	}

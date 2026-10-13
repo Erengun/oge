@@ -45,3 +45,12 @@ bell = true        # ring the bell with either
 ```
 
 `/notify on|off` in the home turns both alerts (and so the bell) on or off for the session. Nothing is sent in plain mode, without a TTY, with `--unattended`, or in dry-run. Under tmux the OSC goes through the passthrough (needs `allow-passthrough on`); under GNU screen only the bell rings; foot and rxvt get OSC 777.
+
+**Theme.** `theme` is a global key (not per repo) that sets the live view's palette: `auto` (the default: follows the terminal's background, and is the terminal's own 16 colours until it answers), `dark`, `light`, `daltonized` (blue and orange, never red against green) or `ansi` (16 colours only). An unknown value is a Problem.
+
+```toml
+schema = 1
+theme = "daltonized"
+```
+
+The setup panel has a `theme` row; picking one repaints the open view at once, and [s] saves it here with the other choices. `NO_COLOR` still wins: no colour at all, and the row says so. A theme only changes colour: every status keeps its glyph and its word (`✓`, `✗`, `+`, `-`), so none is shown by colour alone.

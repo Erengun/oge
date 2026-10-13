@@ -10,7 +10,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/gate"
@@ -393,7 +392,10 @@ func (m *model) Init() tea.Cmd {
 	if m.still {
 		return m.waitCmd()
 	}
-	return tea.Batch(m.waitCmd(), tick())
+	if m.scroll { // the home asked already
+		return tea.Batch(m.waitCmd(), tick())
+	}
+	return tea.Batch(m.waitCmd(), tick(), askBackground(m.st))
 }
 
 // withAlerts puts the queued alerts before next. The home (scroll) sends
@@ -438,6 +440,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+	case tea.BackgroundColorMsg:
+		m.st.setDark(msg.IsDark())
 	case tea.KeyPressMsg:
 		if m.gate != nil && m.gateKey(msg) {
 			return m, nil
@@ -1017,26 +1021,4 @@ func elapsed(d time.Duration) string {
 	}
 	d = d.Round(time.Second)
 	return fmt.Sprintf("%dm%02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
-}
-
-// styles paint text; without colour each is the identity, so a NO_COLOR
-// frame holds no escape sequences at all.
-type styles struct {
-	bold, dim, accent, ok, bad func(string) string
-}
-
-func newStyles(color bool) styles {
-	if !color {
-		id := func(s string) string { return s }
-		return styles{id, id, id, id, id}
-	}
-	// The 16 basic colours: the user's palette decides the exact shades.
-	style := func(s lipgloss.Style) func(string) string { return func(t string) string { return s.Render(t) } }
-	return styles{
-		bold:   style(lipgloss.NewStyle().Bold(true)),
-		dim:    style(lipgloss.NewStyle().Faint(true)),
-		accent: style(lipgloss.NewStyle().Foreground(lipgloss.Magenta)),
-		ok:     style(lipgloss.NewStyle().Foreground(lipgloss.Green)),
-		bad:    style(lipgloss.NewStyle().Foreground(lipgloss.Red)),
-	}
 }

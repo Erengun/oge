@@ -354,16 +354,20 @@ type editedMsg struct {
 type ctxDoneMsg struct{}
 
 func (h *home) Init() tea.Cmd {
+	ask := askBackground(h.st)
 	if h.ctx == nil {
-		return nil
+		return ask
 	}
-	return func() tea.Msg {
+	return tea.Batch(ask, func() tea.Msg {
 		<-h.ctx.Done()
 		return ctxDoneMsg{}
-	}
+	})
 }
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if bg, ok := msg.(tea.BackgroundColorMsg); ok {
+		h.st.setDark(bg.IsDark())
+	}
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		h.width, h.height = ws.Width, ws.Height
 	}

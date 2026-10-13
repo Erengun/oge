@@ -43,6 +43,8 @@ type setupState struct {
 	// human set them, so they override the user config.
 	unattended, apply     bool
 	tMode, tUnatt, tApply bool
+	theme                 string // the preset the human picked (#174), saved globally
+	tTheme                bool
 	changed, asked        bool // any change; the save prompt was shown
 	rev                   int  // counts changes
 	agents                []string
@@ -293,7 +295,11 @@ func (s *setupState) save() (string, error) {
 	case !os.IsNotExist(err):
 		return "", err
 	}
-	return path, pipeline.SaveRepoDefaults(path, s.root, s.defaults(cur))
+	theme := ""
+	if s.tTheme {
+		theme = s.theme
+	}
+	return path, pipeline.SaveUserDefaults(path, s.root, s.defaults(cur), theme)
 }
 
 // modelSuggestions are the aliases an agent's CLI takes for --model.
@@ -316,6 +322,7 @@ const (
 	rowMode
 	rowUnattended
 	rowApply
+	rowTheme    // the palette preset (#174)
 	rowCheck    // a Check command: idx
 	rowAddCheck // add one
 	rowGlob     // a test glob: idx
@@ -389,7 +396,7 @@ func (p *setupPanel) rows() []setupRow {
 			rows = append(rows, setupRow{kind: rowEffort, stage: 1})
 		}
 	}
-	rows = append(rows, setupRow{kind: rowMode}, setupRow{kind: rowUnattended}, setupRow{kind: rowApply})
+	rows = append(rows, setupRow{kind: rowMode}, setupRow{kind: rowUnattended}, setupRow{kind: rowApply}, setupRow{kind: rowTheme})
 	for i := range p.sel.checks {
 		rows = append(rows, setupRow{kind: rowCheck, idx: i})
 	}
@@ -422,6 +429,8 @@ func (p *setupPanel) label(r setupRow) string {
 		return "mode"
 	case rowUnattended:
 		return "unattended"
+	case rowTheme:
+		return "theme"
 	case rowCheck:
 		return fmt.Sprintf("check %d", r.idx+1)
 	case rowAddCheck:
@@ -468,6 +477,11 @@ func (p *setupPanel) value(r setupRow) string {
 		return clean(st.effort)
 	case rowMode:
 		return string(p.sel.mode) + "   " + modeNotes[p.sel.mode]
+	case rowTheme:
+		if p.st.themeName() == "" {
+			return "none   NO_COLOR is set"
+		}
+		return p.st.themeName() + "   " + themeNotes[p.st.themeName()]
 	case rowUnattended:
 		return onOff(p.sel.unattended) + "   never stops at an optional Gate (ADR-0008)"
 	}
@@ -515,6 +529,13 @@ func (p *setupPanel) open(r setupRow) {
 		add(choice{value: "", label: "agent's default"}, st.effort == "")
 		for _, e := range claude.Efforts {
 			add(choice{value: e, label: e}, e == st.effort)
+		}
+	case rowTheme:
+		if p.st.themeName() == "" {
+			return // NO_COLOR wins: there is nothing to choose
+		}
+		for _, n := range pipeline.KnownThemes {
+			add(choice{value: n, label: n, note: themeNotes[n]}, n == p.st.themeName())
 		}
 	case rowMode:
 		for _, m := range []pipeline.Mode{pipeline.Fast, pipeline.Standard, pipeline.Blind} {
@@ -606,6 +627,12 @@ func (p *setupPanel) commitPick(r setupRow) {
 		}
 		if st.effort != c.value {
 			st.effort, st.touched = c.value, true
+			p.sel.touch()
+		}
+	case rowTheme:
+		if p.st.themeName() != c.value {
+			p.st.setTheme(c.value) // the live view repaints at once
+			p.sel.theme, p.sel.tTheme = c.value, true
 			p.sel.touch()
 		}
 	case rowMode:
