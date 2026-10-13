@@ -687,7 +687,6 @@ func TestShiftTabCyclesStandardAndFast(t *testing.T) {
 		t.Errorf("the bar lacks Fast and its warning:\n%s", got)
 	}
 	golden(t, "home-fast-shift-tab", got)
-	h.saving = false
 	press(h, shiftTab())
 	if h.sel.mode != pipeline.Standard || strings.Contains(frame(h), "trust-weakening") {
 		t.Errorf("second press: mode %v\n%s", h.sel.mode, frame(h))
@@ -738,10 +737,22 @@ func TestShiftTabWorksInVimNormalAndInsert(t *testing.T) {
 	if h.sel.mode != pipeline.Fast {
 		t.Fatalf("INSERT: %v", h.sel.mode)
 	}
-	h.saving = false // the first change offers the save
 	h.enterNormal()
 	press(h, shiftTab())
 	if h.sel.mode != pipeline.Standard || !h.normal {
 		t.Errorf("NORMAL: mode %v normal %v", h.sel.mode, h.normal)
+	}
+}
+
+func TestShiftTabNeverOffersTheSave(t *testing.T) {
+	h := modeHome(t)
+	press(h, shiftTab(), shiftTab())
+	if h.sel.mode != pipeline.Standard || h.saving {
+		t.Fatalf("mode %v saving %v", h.sel.mode, h.saving)
+	}
+	press(h, shiftTab())
+	typeText(h, "yes")
+	if h.comp.text() != "yes" || h.saving || h.sel.asked {
+		t.Errorf("composer %q saving %v asked %v", h.comp.text(), h.saving, h.sel.asked)
 	}
 }
