@@ -124,6 +124,9 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 // then the commands from the command table.
 func helpText(kb *keyMap) string {
 	lines := append([]string{"Keys"}, keyLines(kb)...)
+	if n := kb.note(); n != "" {
+		lines = append(lines, "  "+n)
+	}
 	lines = append(lines, "Commands")
 	for _, c := range slashCommands() {
 		lines = append(lines, fmt.Sprintf("  %-34s %s", c.usage, c.desc))
