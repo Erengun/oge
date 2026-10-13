@@ -98,6 +98,20 @@ func (c *composer) newline() {
 	c.row, c.col = c.row+1, 0
 }
 
+// backslashNewline is "\\" then Enter: the backslash before the cursor
+// becomes a newline, so a newline can be typed where Ctrl+J and Shift+Enter
+// don't reach. It reports whether it did.
+func (c *composer) backslashNewline() bool {
+	if c.col == 0 || c.lines[c.row][c.col-1] != '\\' {
+		return false
+	}
+	c.change("newline", func() {
+		c.backspace()
+		c.newline()
+	})
+	return true
+}
+
 func (c *composer) backspace() {
 	switch {
 	case c.col > 0:
@@ -235,9 +249,11 @@ type home struct {
 	navigating bool
 	draft      string
 	search     *histSearch
-	title      string   // the box's title: repo and branch
-	setup      []string // the setup bar, as lines
-	st         styles
+	// stash is Ctrl+S's one slot: a draft put aside for this session.
+	stash string
+	title string   // the box's title: repo and branch
+	setup []string // the setup bar, as lines
+	st    styles
 	// start begins the Run for a Task in this program: it returns the Run's
 	// model and its first command.
 	start func(task.Task, *resolved, int, int) (*model, tea.Cmd)
@@ -509,6 +525,10 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.navigating = false
 			}
 		case "enter":
+			if h.comp.backslashNewline() {
+				h.endNavigation()
+				return h, nil
+			}
 			text := task.StripComments(h.comp.text())
 			if task.IsEmpty(text) {
 				return h, nil
@@ -546,7 +566,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
 			}
 			return h, cmd
-		case "ctrl+e":
+		case "ctrl+s":
+			h.stashDraft()
+		case "ctrl+l":
+			return h, tea.ClearScreen
+		case "ctrl+e", "ctrl+g":
 			if h.edit != nil {
 				return h, h.edit(h.comp.text())
 			}
@@ -576,6 +600,19 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return h, nil
+}
+
+// stashDraft is Ctrl+S: it puts the draft aside and clears the box; on an
+// empty box it brings the stash back. With both a draft and a stash it
+// swaps them, so neither is lost.
+func (h *home) stashDraft() {
+	h.navigating = false
+	draft := h.comp.text()
+	if draft == "" && h.stash == "" {
+		return
+	}
+	h.comp.set(h.stash)
+	h.stash = draft
 }
 
 // endNavigation stops history navigation once the box no longer holds the
@@ -774,6 +811,9 @@ func (h *home) render() (string, int, int) {
 	}
 	if h.note != "" {
 		lines = append(lines, " "+st.ok(h.note))
+	}
+	if h.stash != "" {
+		lines = append(lines, " "+st.dim("stashed · ctrl+s restores it on an empty box"))
 	}
 	switch {
 	case h.saving:

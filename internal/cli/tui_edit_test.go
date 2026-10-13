@@ -170,3 +170,83 @@ func TestHomeEditKeysAndSubmit(t *testing.T) {
 		t.Error("undo survived the submit")
 	}
 }
+
+func homeKey(h *home, k tea.KeyPressMsg) tea.Cmd {
+	_, cmd := h.Update(k)
+	return cmd
+}
+
+func TestBackslashEnterInsertsANewlineWithoutSubmitting(t *testing.T) {
+	h := testHome(70)
+	h.start = func(task.Task, *resolved, int, int) (*model, tea.Cmd) {
+		t.Fatal("a backslash then Enter submitted")
+		return nil, nil
+	}
+	h.comp.insert(`fix \ the bug`)
+	h.comp.col = 5 // right after the backslash, in the middle of the text
+	homeKey(h, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := h.comp.text(); got != "fix \n the bug" || h.comp.row != 1 || h.comp.col != 0 {
+		t.Fatalf("text %q at %d,%d", got, h.comp.row, h.comp.col)
+	}
+	homeKey(h, edKey(tea.ModCtrl, 'z')) // one undo step
+	if got := h.comp.text(); got != `fix \ the bug` {
+		t.Fatalf("after undo: %q", got)
+	}
+}
+
+func TestStashRoundTrip(t *testing.T) {
+	h := testHome(70)
+	ctrlS := edKey(tea.ModCtrl, 's')
+	h.comp.insert("half a thought\nsecond line")
+	homeKey(h, ctrlS)
+	if !h.comp.empty() || h.stash != "half a thought\nsecond line" {
+		t.Fatalf("stash %q, box %q", h.stash, h.comp.text())
+	}
+	if f := frame(h); !strings.Contains(f, "stashed") {
+		t.Errorf("no stashed hint:\n%s", f)
+	}
+	homeKey(h, ctrlS) // empty box restores
+	if h.comp.text() != "half a thought\nsecond line" || h.stash != "" {
+		t.Fatalf("restore: box %q, stash %q", h.comp.text(), h.stash)
+	}
+	if f := frame(h); strings.Contains(f, "stashed") {
+		t.Errorf("hint stayed after restore:\n%s", f)
+	}
+	homeKey(h, ctrlS) // an empty box and an empty stash do nothing
+	homeKey(h, ctrlS)
+	h.comp.set("")
+	homeKey(h, ctrlS)
+	if h.stash != "" || !h.comp.empty() {
+		t.Fatalf("empty stash: %q %q", h.stash, h.comp.text())
+	}
+	// A draft with a stash held swaps, so neither is lost.
+	h.comp.set("one")
+	homeKey(h, ctrlS)
+	h.comp.set("two")
+	homeKey(h, ctrlS)
+	if h.comp.text() != "one" || h.stash != "two" {
+		t.Fatalf("swap: box %q, stash %q", h.comp.text(), h.stash)
+	}
+}
+
+func TestCtrlLRedrawsAndKeepsTheDraft(t *testing.T) {
+	h := testHome(70)
+	h.comp.insert("keep me")
+	cmd := homeKey(h, edKey(tea.ModCtrl, 'l'))
+	if cmd == nil {
+		t.Fatal("no command")
+	}
+	if cmd() == nil || h.comp.text() != "keep me" {
+		t.Fatalf("draft %q", h.comp.text())
+	}
+}
+
+func TestCtrlGIsTheEditorAlias(t *testing.T) {
+	h := testHome(70)
+	var got string
+	h.edit = func(text string) tea.Cmd { got = text; return func() tea.Msg { return nil } }
+	h.comp.insert("draft")
+	if cmd := homeKey(h, edKey(tea.ModCtrl, 'g')); cmd == nil || got != "draft" {
+		t.Fatalf("editor not opened: %q", got)
+	}
+}
