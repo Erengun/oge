@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -624,3 +625,49 @@ func (e *AddError) Unwrap() error { return e.Err }
 // SnapshotPaths lists the Snapshot's paths under root, sorted: tracked files
 // plus untracked files git doesn't ignore. It reads nothing but the index.
 func SnapshotPaths(root string) ([]string, error) { return snapshotPaths(root) }
+
+// Rebase carries commit, work done on base, over to onto (#185). When
+// onto's tree is base's, commit itself is returned, not rebased. Otherwise
+// commit's change since base is merged into onto three ways, base the
+// merge base, and committed on onto. conflicted reports a merge that
+// doesn't go through cleanly; nothing is committed then. It needs git
+// 2.40 or later (merge-tree --write-tree --merge-base).
+func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conflicted bool, err error) {
+	trees, err := r.git("", "", nil, "rev-parse", base+"^{tree}", onto+"^{tree}")
+	if err != nil {
+		return "", false, false, err
+	}
+	if t := strings.Fields(string(trees)); len(t) == 2 && t[0] == t[1] {
+		return commit, false, false, nil
+	}
+	// The merge runs in a scratch git dir that writes to this one's
+	// objects: this repository's info/attributes (ByteExactAttributes)
+	// would make every file both sides changed a binary conflict. As in
+	// delivery's merges, no attributes or merge drivers apply.
+	scratch, err := os.MkdirTemp(r.Dir, "merge-")
+	if err != nil {
+		return "", false, false, err
+	}
+	defer os.RemoveAll(scratch)
+	if _, err := r.git("", "", nil, "init", "-q", "--bare", "--template=", scratch); err != nil {
+		return "", false, false, err
+	}
+	cmd := exec.Command("git", "--git-dir="+scratch, "merge-tree", "--write-tree", "--no-messages", "--merge-base="+base, onto, commit)
+	cmd.Dir, cmd.Env = scratch, append(gitEnv(), "GIT_OBJECT_DIRECTORY="+filepath.Join(r.Dir, "objects"))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return "", true, true, nil
+	}
+	if err != nil {
+		return "", false, false, fmt.Errorf("git merge-tree: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	tree, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	c, err := r.git("", "", nil, "commit-tree", "--no-gpg-sign", tree, "-p", onto, "-m", "Rebased "+commit)
+	if err != nil {
+		return "", false, false, err
+	}
+	return strings.TrimSpace(string(c)), true, false, nil
+}

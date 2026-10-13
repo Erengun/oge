@@ -59,6 +59,10 @@ func TestBriefingWithFollowUps(t *testing.T) {
 			t.Errorf("Briefing doesn't hold the thread in order:\n%s", b)
 		}
 	}
+	withCriteria := task.Parse("fix Add").FollowUp("add Sub too\n\n## Acceptance criteria\n- Sub subtracts\n")
+	if b := Verifier(withCriteria, nil, nil); !strings.Contains(b, "(Its acceptance criteria are AC-1, numbered on from the Task's.)") {
+		t.Errorf("the follow-up's criteria aren't named:\n%s", b)
+	}
 	if b := Implementer(task.Task{Text: "fix Add"}, nil); strings.Contains(b, "follow-up") {
 		t.Errorf("a first Run's Briefing mentions follow-ups:\n%s", b)
 	}

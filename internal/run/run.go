@@ -49,6 +49,7 @@ const (
 const (
 	RecRunStarted        = "RunStarted"
 	RecSnapshotTaken     = "SnapshotTaken"
+	RecFollowUpRebased   = "FollowUpRebased"
 	RecOracleVersion     = "OracleVersion"
 	RecPreflightObserved = "PreflightObserved"
 	RecAttemptStarting   = "AttemptStarting"
@@ -98,6 +99,32 @@ type FollowUp struct {
 	Run       string // its id
 	Dir       string // its private directory, which holds its Run repository
 	Candidate string // its final Candidate
+	Snapshot  string // its Snapshot, the Candidate's merge base on a rebase
+}
+
+// addFollows notes in RunStarted's data which Run a follow-up continues,
+// and the human's messages.
+func addFollows(begun map[string]any, p Params) {
+	if fu := p.Follows; fu != nil {
+		begun["follows"] = fu.Run
+		begun["follow_ups"] = p.Task.FollowUps
+	}
+}
+
+// followUpStart is where a follow-up's implementer starts (#185): the
+// previous Run's Candidate, copied from its Run repository, or, when the
+// repository changed since that Run's Snapshot, the Candidate's change
+// merged onto snap three ways (rebased). conflict reports a merge that
+// doesn't go through: the follow-up is refused before any agent starts.
+func followUpStart(repo *workspace.RunRepo, fu *FollowUp, snap string) (start string, rebased, conflict bool, err error) {
+	from := filepath.Join(fu.Dir, "repo.git")
+	if err := repo.Import(from, fu.Snapshot, "refs/oge/follows-snapshot"); err != nil {
+		return "", false, false, fmt.Errorf("taking Run %s's Snapshot: %w", fu.Run, err)
+	}
+	if err := repo.Import(from, fu.Candidate, "refs/oge/follows"); err != nil {
+		return "", false, false, fmt.Errorf("taking Run %s's Candidate: %w", fu.Run, err)
+	}
+	return repo.Rebase(fu.Snapshot, snap, fu.Candidate)
 }
 
 // EventKind names a progress event.
@@ -332,10 +359,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		"run": res.ID, "oge_version": p.Version, "created": res.Started.UTC(), "source": p.Repo,
 		"task": taskBlob, "frozen": frozenBlob, "graph_hash": f.Hash, "mode": f.Mode,
 	}
-	if fu := p.Follows; fu != nil {
-		begun["follows"] = fu.Run
-		begun["follow_ups"] = p.Task.FollowUps
-	}
+	addFollows(begun, p)
 	if err := l.Append(RecRunStarted, begun); err != nil {
 		return nil, err
 	}
@@ -359,17 +383,29 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		"modified": info.Modified, "untracked": info.Untracked}); err != nil {
 		return nil, err
 	}
+	p.Observe(Event{Kind: EvStarted, Result: res})
 	start := snap
 	if fu := p.Follows; fu != nil {
 		// The implementer starts from the previous Run's Candidate, as a
-		// send-back starts from the one it sends back. Only the Candidate
-		// comes across: held-out tests live in the other Run's Oracle and
-		// never enter a Candidate (ADR-0009). Scope, Tamper and the
-		// additive rules still compare with this Run's Snapshot.
-		if err := repo.Import(filepath.Join(fu.Dir, "repo.git"), fu.Candidate, "refs/oge/follows"); err != nil {
-			return nil, fmt.Errorf("taking Run %s's Candidate: %w", fu.Run, err)
+		// send-back starts from the one it sends back, rebased onto this
+		// Snapshot when the repository changed since that Run's. Only the
+		// Candidate comes across: held-out tests live in the other Run's
+		// Oracle and never enter a Candidate (ADR-0009). Scope, Tamper and
+		// the additive rules still compare with this Run's Snapshot.
+		var rebased, conflict bool
+		start, rebased, conflict, err = followUpStart(repo, fu, snap)
+		if err != nil {
+			return nil, err
 		}
-		start = fu.Candidate
+		if conflict {
+			return end(Refused, fmt.Sprintf("your repository changed since Run %s in a way that conflicts with its result; /new for a fresh task", fu.Run))
+		}
+		if rebased {
+			if err := l.Append(RecFollowUpRebased, map[string]any{"follows": fu.Run, "candidate": fu.Candidate,
+				"base": fu.Snapshot, "onto": snap, "start": start}); err != nil {
+				return nil, err
+			}
+		}
 		if err := os.RemoveAll(ws); err != nil {
 			return nil, err
 		}
@@ -383,7 +419,6 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 	}
-	p.Observe(Event{Kind: EvStarted, Result: res})
 
 	// The config Öge resolved must be the Snapshot's.
 	got, inSnap, err := repo.Show(snap, pipeline.ConfigPath)

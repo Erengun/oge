@@ -94,7 +94,11 @@ func (r *Receipt) Lines() []Line {
 		add("Task", val(r.Task), Plain)
 	}
 	if r.Follows != "" {
-		add("Continues", "Run "+r.Follows, Plain)
+		text := "Run " + r.Follows
+		if r.Rebased {
+			text += " · rebased onto the current repository"
+		}
+		add("Continues", text, Plain)
 	}
 	if r.Claim != nil {
 		text := "(no final message) · Exit " + r.Claim.Exit

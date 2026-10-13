@@ -452,8 +452,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t := task.Parse(text)
 			if h.thread != nil {
 				// A follow-up: the whole thread, this message last.
-				t = h.thread.task
-				t.FollowUps = append(append([]string(nil), t.FollowUps...), text)
+				t = h.thread.task.FollowUp(text)
 			}
 			m, cmd := h.start(t, res, h.width, h.height)
 			h.run = m
@@ -929,10 +928,11 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved, *ru
 		var l *lastRun
 		text, l, last = u.summary(env, used.flags, root, e.res, h.hold)
 		// The next message continues this Run's Candidate, unless it was
-		// applied or the session never prompts (TUI sessions only, #185).
+		// applied, a human rejected it at a Gate, or the session never
+		// prompts (TUI sessions only, #185).
 		h.thread = nil
-		if res := e.res; res.Candidate != "" && res.Dir != "" && !used.flags.unattended && !used.flags.apply {
-			h.thread = &thread{task: cur, from: run.FollowUp{Run: res.ID, Dir: res.Dir, Candidate: res.Candidate}}
+		if res := e.res; res.Candidate != "" && res.Dir != "" && res.Outcome != run.Rejected && !used.flags.unattended && !used.flags.apply {
+			h.thread = &thread{task: cur, from: run.FollowUp{Run: res.ID, Dir: res.Dir, Candidate: res.Candidate, Snapshot: res.Snapshot}}
 		}
 		return text, l, false
 	}

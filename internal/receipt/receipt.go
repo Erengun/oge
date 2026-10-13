@@ -53,6 +53,9 @@ type Receipt struct {
 	Task   string `json:"task"`
 	// Follows is the Run this follow-up continues (#185).
 	Follows string `json:"follows,omitempty"`
+	// Rebased: the repository changed since that Run, and its Candidate
+	// was merged onto the current one before this Run's implementer began.
+	Rebased bool   `json:"rebased,omitempty"`
 	Outcome string `json:"outcome"`
 	// Headline is the outcome as the Receipt's first line says it.
 	// Headline, Why, Found and NotCovered mark the values in them (val),
@@ -451,6 +454,8 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 	for _, rec := range recs {
 		lastAt = rec.At
 		switch rec.Type {
+		case run.RecFollowUpRebased:
+			r.Rebased = true
 		case run.RecRunStarted:
 			var d struct{ Run, Task, Frozen, Mode, Follows string }
 			if !get(rec.Data, &d) {

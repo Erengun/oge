@@ -225,14 +225,15 @@ func (s *homeSession) expect(text string) {
 }
 
 // ended waits for the composer back after an Accepted Run: its hint line
-// names the actions.
+// names the actions. An Accepted Run that wasn't applied is continued by
+// the next message (#185), so the frame's last line, drawn after the hint,
+// names that Run.
 func (s *homeSession) ended() {
 	s.t.Helper()
 	s.expect("↓ actions")
-	// The whole frame: its last line comes after the hint.
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		out := s.out.String()
-		if strings.Contains(out[strings.LastIndex(out, "↓ actions"):], "[ctrl+e] editor") {
+		if strings.Contains(out[strings.LastIndex(out, "↓ actions"):], "(/new for a fresh task)") {
 			return
 		}
 	}

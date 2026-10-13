@@ -465,3 +465,23 @@ func TestImplementerTestsCount(t *testing.T) {
 		t.Errorf("Protected line:\n%s", got)
 	}
 }
+
+// A follow-up rebased onto a changed repository says so (#185).
+func TestReceiptSaysAFollowUpWasRebased(t *testing.T) {
+	for _, rebased := range []bool{false, true} {
+		r := &receipt.Receipt{Run: "r2", Follows: "r1", Rebased: rebased}
+		var got string
+		for _, l := range r.Lines() {
+			if l.Label == "Continues" {
+				got = l.Text
+			}
+		}
+		want := "Run r1"
+		if rebased {
+			want += " · rebased onto the current repository"
+		}
+		if got != want {
+			t.Errorf("rebased=%v: Continues %q, want %q", rebased, got, want)
+		}
+	}
+}

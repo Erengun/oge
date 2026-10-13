@@ -137,6 +137,15 @@ func taskText(t task.Task) string {
 	text := strings.TrimSpace(t.Text)
 	for i, n := range t.FollowUps {
 		text += fmt.Sprintf("\n\n---\nHuman follow-up %d of %d (it continues the Task above; the repository holds the work so far):\n%s", i+1, len(t.FollowUps), strings.TrimSpace(n))
+		var ids []string
+		for _, c := range t.Criteria {
+			if c.FollowUp == i+1 {
+				ids = append(ids, c.ID)
+			}
+		}
+		if len(ids) > 0 {
+			text += "\n(Its acceptance criteria are " + strings.Join(ids, ", ") + ", numbered on from the Task's.)"
+		}
 	}
 	return text
 }
