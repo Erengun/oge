@@ -259,3 +259,34 @@ func TestRunShellRealCommand(t *testing.T) {
 		t.Errorf("%+v", res)
 	}
 }
+
+func TestShellMultiLineIsRefusedAndBackslashBangIsATask(t *testing.T) {
+	called := false
+	h := shellHome(t, func(context.Context, string, string) shellResult { called = true; return shellResult{} })
+	typeText(h, "!echo a")
+	h.Update(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	typeText(h, "echo b")
+	h.Update(enter())
+	if called || len(h.msg) == 0 || !strings.Contains(h.msg[0], "one line") {
+		t.Errorf("ran=%v msg=%v", called, h.msg)
+	}
+	h = shellHome(t, fakeRunner(shellResult{}))
+	var got string
+	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
+		got = tk.Text
+		return &model{}, nil
+	}
+	typeText(h, `\!important`)
+	h.Update(enter())
+	if h.job != nil || got == "" || !strings.HasPrefix(got, "!important") {
+		t.Errorf("job=%v task=%q", h.job, got)
+	}
+}
+
+func TestShellFooter(t *testing.T) {
+	h := testHome(70)
+	typeText(h, "!ls")
+	if f := frame(h); !strings.Contains(f, "[enter] run shell") {
+		t.Errorf("shell footer:\n%s", f)
+	}
+}

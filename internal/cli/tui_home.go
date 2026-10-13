@@ -562,7 +562,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.shellDone(msg)
 	case ctxDoneMsg:
 		if h.job != nil {
+			// Stop the command's group before the program ends.
 			h.job.cancel()
+			select {
+			case <-h.job.finished:
+			case <-time.After(shellGrace + 500*time.Millisecond):
+			}
 		}
 		h.quit = true
 		return h, tea.Quit
@@ -593,7 +598,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.msg, h.note = nil, ""
 		switch {
 		case h.job != nil:
-			// A shell command runs: Ctrl+C stops it (never Öge), the rest waits.
+			// A shell command runs: Ctrl+C stops it (never Öge); other keys are dropped.
 			if msg.String() == "ctrl+c" {
 				h.job.cancel()
 			}
@@ -681,7 +686,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.endNavigation()
 				return h, nil
 			}
-			if line, ok := shellLine(h.comp.expanded()); ok {
+			if esc, escaped := unescapeBang(h.comp.expanded()); escaped {
+				h.comp.set(esc) // a Task that starts with !
+			} else if line, ok := shellLine(esc); ok {
 				return h, h.shellSubmit(line)
 			}
 			text := task.StripComments(h.comp.expanded())
@@ -1114,7 +1121,16 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, h.atLines()...)
 	}
 	if h.panel == nil && h.keys == nil {
-		for _, l := range h.setup {
+		_, shell := shellLine(h.comp.expanded())
+		for i, l := range h.setup {
+			if i == len(h.setup)-1 && strings.HasPrefix(l, "[tab]") {
+				switch {
+				case h.job != nil:
+					l = "running… ctrl+c stop"
+				case shell:
+					l = "[enter] run shell  [ctrl+j] newline"
+				}
+			}
 			lines = append(lines, " "+st.dim(l))
 		}
 		if h.thread != nil {

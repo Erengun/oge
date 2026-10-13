@@ -35,7 +35,7 @@ var keyTable = []keyBinding{
 	{"Composer", "tab", []string{"tab"}, "open setup"},
 	{"Composer", "shift+tab", []string{"shift+tab"}, "switch Standard / Fast (this session)"},
 	{"Composer", "alt+m", []string{"alt+m"}, "open setup at the implement model"},
-	{"Composer", "!", nil, "shell mode: run a command between Runs (ctrl+c stops)"},
+	{"Composer", "!", nil, "shell mode, one line (ctrl+c stops · \\! is a Task)"},
 	{"Composer", "/ · @ · ?", []string{"?"}, "commands · files · this panel (on an empty box)"},
 	{"Composer", "← → · ctrl+b ctrl+f", []string{"left", "right", "ctrl+b", "ctrl+f"}, "move"},
 	{"Composer", "home · end · ctrl+a", []string{"home", "end", "ctrl+a"}, "line start · end"},

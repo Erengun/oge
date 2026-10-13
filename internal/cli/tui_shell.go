@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,11 +20,15 @@ import (
 // shell command for the human, run in the repo between Runs. Its output
 // goes above the composer and nowhere else: never to an agent, a Briefing or
 // the Ledger, and the line is kept in a shell history of its own, not the
-// Task history. ↑ does not walk that history yet.
+// Task history. ↑ does not walk that history yet. A leading \! types a Task that starts
+// with !; shell mode takes one line.
 
 const (
 	shellMaxBytes = 256 << 10 // the output kept: its tail
 	shellMaxLines = 2000
+	// shellGrace is how long a stopped command has to exit on SIGINT before
+	// its group is killed.
+	shellGrace = time.Second
 )
 
 // shellResult is what a shell command left.
@@ -32,6 +37,9 @@ type shellResult struct {
 	cut  int    // lines dropped before it
 	code int
 	err  error // the command could not start, or was stopped
+	// detached: the command exited, but something it started kept the
+	// output pipe open and was cut off.
+	detached bool
 }
 
 // shellJob is the command in flight.
@@ -39,6 +47,8 @@ type shellJob struct {
 	cancel context.CancelFunc
 	ctx    context.Context
 	line   string
+	// finished closes once the runner has returned.
+	finished chan struct{}
 }
 
 // shellDoneMsg is a shell command's end.
@@ -56,6 +66,16 @@ func shellLine(text string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(t[1:]), true
+}
+
+// unescapeBang drops the backslash of a leading \!, so a Task that starts
+// with ! can be typed.
+func unescapeBang(text string) (string, bool) {
+	t := strings.TrimLeft(text, " \t")
+	if !strings.HasPrefix(t, "\\!") {
+		return text, false
+	}
+	return t[1:], true
 }
 
 // shellArgv is the command line that runs line: the user's $SHELL -c
@@ -127,15 +147,33 @@ func runShell(ctx context.Context, root, line string) shellResult {
 	var w tailWriter
 	cmd.Stdout, cmd.Stderr = &w, &w
 	setGroup(cmd)
-	cmd.Cancel = func() error { return killGroup(cmd) }
+	done := make(chan struct{})
+	defer close(done)
+	// Ctrl+C: SIGINT to the group first, so git can remove its lock files;
+	// the group is killed if it is still there after shellGrace.
+	cmd.Cancel = func() error {
+		err := interruptGroup(cmd)
+		go func() {
+			select {
+			case <-time.After(shellGrace):
+				killGroup(cmd)
+			case <-done:
+			}
+		}()
+		return err
+	}
 	cmd.WaitDelay = 2 * time.Second
 	err := cmd.Run()
 	out, cut := w.tail()
 	res := shellResult{out: out, cut: cut}
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
+		var ee *exec.ExitError
+		switch {
+		case errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil:
+			res.detached = true // the command's own status was 0
+		case errors.As(err, &ee) && ctx.Err() == nil:
 			res.code = ee.ExitCode()
-		} else {
+		default:
 			res.code, res.err = -1, err
 		}
 	}
@@ -145,6 +183,10 @@ func runShell(ctx context.Context, root, line string) shellResult {
 // shellSubmit starts line, which Enter took from the composer.
 func (h *home) shellSubmit(line string) tea.Cmd {
 	if line == "" {
+		return nil
+	}
+	if strings.Contains(line, "\n") {
+		h.msg = []string{"shell mode runs one line; remove the newlines"}
 		return nil
 	}
 	if hiddenCount(line) > 0 {
@@ -162,12 +204,13 @@ func (h *home) shellSubmit(line string) tea.Cmd {
 	h.navigating = false
 	h.visual = 0
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &shellJob{cancel: cancel, ctx: ctx, line: line}
+	job := &shellJob{cancel: cancel, ctx: ctx, line: line, finished: make(chan struct{})}
 	h.job = job
 	run, root := h.shell, h.root
 	echo := h.println(h.st.dim("! " + clean(line)))
 	return tea.Sequence(echo, func() tea.Msg {
 		res := run(ctx, root, line)
+		close(job.finished)
 		return shellDoneMsg{line: line, res: res, stop: ctx.Err() != nil}
 	})
 }
@@ -199,6 +242,8 @@ func (h *home) shellDone(m shellDoneMsg) tea.Cmd {
 		lines = append(lines, h.st.bad("exit: "+clean(m.res.err.Error())))
 	case m.res.code != 0:
 		lines = append(lines, h.st.bad(fmt.Sprintf("exit %d", m.res.code)))
+	case m.res.detached:
+		lines = append(lines, h.st.dim("exit 0 (background output cut off)"))
 	default:
 		lines = append(lines, h.st.dim("exit 0"))
 	}

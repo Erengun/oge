@@ -6,23 +6,44 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
 
-// Cancelling kills the whole process group, not just the shell.
+// Cancelling stops the whole process group, not just the shell: a
+// background job that ignores SIGINT is killed after the grace period.
 func TestRunShellCancelKillsTheGroup(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "survived")
+	pidFile := filepath.Join(dir, "pid")
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
-	start := time.Now()
-	res := runShell(ctx, dir, "(sleep 2; echo x > survived) & sleep 30")
-	if res.err == nil || time.Since(start) > 5*time.Second {
-		t.Fatalf("not stopped: %+v after %v", res, time.Since(start))
+	go func() {
+		for {
+			if b, err := os.ReadFile(pidFile); err == nil && strings.HasSuffix(string(b), "\n") {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	res := runShell(ctx, dir, "sleep 30 & echo $! > pid; wait")
+	if res.err == nil {
+		t.Fatalf("not stopped: %+v", res)
 	}
-	time.Sleep(2500 * time.Millisecond)
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("a grandchild outlived the cancel")
+	b, _ := os.ReadFile(pidFile)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if syscall.Kill(pid, 0) == syscall.ESRCH {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a grandchild outlived the cancel")
+		}
 	}
 }
