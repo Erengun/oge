@@ -61,7 +61,12 @@ func (h *home) queueKey(msg tea.Msg) bool {
 		if r.expanded {
 			return false
 		}
-		switch resolve(ctxRun, key) {
+		if h.kb.actionFor(ctxComposer, key) == actSubmit {
+			key = "enter" // the queue box's Enter is the submit key
+		} else if key == "enter" {
+			key = "" // submit was remapped away from Enter: it is a plain key here
+		}
+		switch h.kb.resolve(ctxRun, key) {
 		case "ctrl+c":
 			if !has || r.cancelling {
 				return false
@@ -89,7 +94,7 @@ func (h *home) queueKey(msg tea.Msg) bool {
 
 func (h *home) queueComp() *composer {
 	if h.next == nil {
-		h.next = &queued{comp: newComposer()}
+		h.next = &queued{comp: h.composer()}
 	}
 	return h.next.comp
 }

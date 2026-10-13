@@ -27,7 +27,7 @@ func TestActionDefaultKeys(t *testing.T) {
 		t.Errorf("%d actions, want %d", len(actionTable), len(want))
 	}
 	for _, w := range want {
-		if got := actionKeys(w.ctx, w.name); !slices.Equal(got, w.keys) {
+		if got := defaultKeyMap.actionKeys(w.ctx, w.name); !slices.Equal(got, w.keys) {
 			t.Errorf("%s.%s: keys %v, want %v", w.ctx, w.name, got, w.keys)
 		}
 	}
@@ -44,26 +44,27 @@ func TestActionLookup(t *testing.T) {
 		{"composer", "ctrl+q", ""},
 		{"nowhere", "enter", ""},
 	} {
-		if got := actionFor(c.ctx, c.key); got != c.want {
+		if got := defaultKeyMap.actionFor(c.ctx, c.key); got != c.want {
 			t.Errorf("actionFor(%s, %s) = %q, want %q", c.ctx, c.key, got, c.want)
 		}
 	}
-	if got := resolve("composer", "up"); got != "up" {
+	if got := defaultKeyMap.resolve("composer", "up"); got != "up" {
 		t.Errorf("an unbound key resolves to itself, got %q", got)
 	}
 }
 
 // A rebind is what the key table and the handlers both see.
 func TestActionRebindReachesTheTable(t *testing.T) {
-	old := slices.Clone(actionKeys("composer", "stash"))
-	t.Cleanup(func() { setActionKeys("composer", "stash", old) })
-	setActionKeys("composer", "stash", []string{"ctrl+t"})
-	if actionFor("composer", "ctrl+s") != "" || actionFor("composer", "ctrl+t") != "stash" {
+	kb := defaultKeyMap.with(map[keyOverride][]string{{"composer", "stash"}: {"ctrl+t"}})
+	if kb.actionFor("composer", "ctrl+s") != "" || kb.actionFor("composer", "ctrl+t") != "stash" {
 		t.Error("the rebind didn't take")
+	}
+	if defaultKeyMap.actionFor("composer", "ctrl+s") != "stash" {
+		t.Error("the defaults changed")
 	}
 	found := false
 	for _, b := range keyTable {
-		if b.act == "composer.stash" && b.label() == "ctrl+t" {
+		if b.act == "composer.stash" && b.label(kb) == "ctrl+t" {
 			found = true
 		}
 	}

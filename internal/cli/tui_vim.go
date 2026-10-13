@@ -195,7 +195,7 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	if k.Text == "" || k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) != 0 {
 		return false
 	}
-	if k.Text == "?" && c.empty() {
+	if h.kb.actionFor(ctxComposer, k.Text) == actKeysPanel && c.empty() {
 		return false // an empty box opens the panel
 	}
 	if d := int(k.Text[0] - '0'); len(k.Text) == 1 && d >= 0 && d <= 9 && (d > 0 || h.count > 0) {

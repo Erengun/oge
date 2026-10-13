@@ -53,7 +53,7 @@ func TestParseSlash(t *testing.T) {
 }
 
 func TestSlashHelpListsEveryCommand(t *testing.T) {
-	got := helpText()
+	got := helpText(nil)
 	for _, c := range slashCommands() {
 		if !strings.Contains(got, c.usage) {
 			t.Errorf("/help lacks %q", c.usage)

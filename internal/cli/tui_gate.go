@@ -64,11 +64,10 @@ func (u *tui) askPlain(ctx context.Context, r gate.Request) (gate.Decision, erro
 }
 
 // gateKey takes a key while a Gate is open. ok is false for keys the
-// view's usual handling keeps (Ctrl-C at the choice, ctrl+o).
+// view's usual handling keeps (Ctrl-C at the choice, the expand key).
 func (m *model) gateKey(k tea.KeyPressMsg) (ok bool) {
 	g := m.gate
-	switch k.String() {
-	case "ctrl+o":
+	if m.kb.actionFor(ctxRun, k.String()) == actExpand {
 		return false
 	}
 	if k.String() == "esc" && m.expanded && g.choice == nil && g.inspect == nil && !g.recording {

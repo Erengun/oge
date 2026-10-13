@@ -653,7 +653,7 @@ func TestAltMDoesNothingDuringARun(t *testing.T) {
 }
 
 func TestHelpListsAltM(t *testing.T) {
-	if !strings.Contains(helpText(), "alt+m") {
+	if !strings.Contains(helpText(nil), "alt+m") {
 		t.Error("/help lacks alt+m")
 	}
 }

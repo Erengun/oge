@@ -99,7 +99,7 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		h.msg = []string{problem}
 		return nil, true
 	}
-	h.comp = newComposer()
+	h.comp = h.composer()
 	h.navigating = false
 	return cmd, true
 }
@@ -117,13 +117,13 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/help")
 	}
-	return h.println(helpText()), ""
+	return h.println(helpText(h.kb)), ""
 }
 
 // helpText is /help: the keys (from the key table the ? panel shows too),
 // then the commands from the command table.
-func helpText() string {
-	lines := append([]string{"Keys"}, keyLines()...)
+func helpText(kb *keyMap) string {
+	lines := append([]string{"Keys"}, keyLines(kb)...)
 	lines = append(lines, "Commands")
 	for _, c := range slashCommands() {
 		lines = append(lines, fmt.Sprintf("  %-34s %s", c.usage, c.desc))

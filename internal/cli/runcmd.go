@@ -303,6 +303,7 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	u.vim = user.VimMode()
 	u.vimEscape = user.VimEscapeKeys()
 	u.m.st.reloadCustomTheme(env.Getenv)
+	u.m.kb, _ = loadKeybindings(env.Getenv)
 	u.m.notify = u.notify
 	return u
 }
