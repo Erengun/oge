@@ -73,12 +73,13 @@ var keyTable = []keyBinding{
 	{"Setup", "d · x", []string{"x"}, "remove the row"},
 
 	{"Vim (when enabled)", "esc · i a I A o O", []string{"i", "a", "I", "A", "o", "O"}, "NORMAL · INSERT (enter runs in both)"},
-	{"Vim (when enabled)", "h j k l", []string{"h", "j", "k", "l"}, "left · down · up · right (NORMAL)"},
+	{"Vim (when enabled)", "h j k l", []string{"h", "j", "k", "l"}, "left · down · up · right (k, j at the edge: history)"},
 	{"Vim (when enabled)", "w e b", []string{"w", "e", "b"}, "next word · word end · previous (NORMAL)"},
 	{"Vim (when enabled)", "0 ^ $", []string{"0", "^", "$"}, "line start · first char · end (NORMAL)"},
 	{"Vim (when enabled)", "d c y", []string{"d", "c", "y"}, "operator + motion or iw i\" i( · dd cc yy (NORMAL)"},
 	{"Vim (when enabled)", "x · D", []string{"x", "D"}, "delete the character · to the line end (NORMAL)"},
 	{"Vim (when enabled)", "p · P", []string{"p", "P"}, "put after · before (the kill ring)"},
+	{"Vim (when enabled)", "v · V", []string{"v", "V"}, "select · select lines (then d x c y p; esc)"},
 	{"Vim (when enabled)", "u · .", []string{"u", "."}, "undo · repeat the last change"},
 }
 

@@ -20,6 +20,8 @@ func handlerKeys(t *testing.T) map[string]bool {
 		{"tui_home.go", "composer", "key"},
 		{"tui_edit.go", "composer", "editKey"},
 		{"tui_vim.go", "home", "normalKey"},
+		{"tui_vim.go", "home", "visualKey"},
+		{"tui_vim.go", "home", "motion"},
 		{"tui_home.go", "home", "update"},
 		{"tui_home.go", "home", "searchKey"},
 		{"tui_home.go", "home", "actionKey"},

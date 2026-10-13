@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,7 +11,8 @@ import (
 // The composer's vim mode (#156), off unless `vim = true` is in the user
 // config: INSERT is the composer as it is; Esc enters NORMAL, where h j k l,
 // w e b, 0 ^ $ move and i a I A o O go back to INSERT. Operators, edits and
-// text objects are #157 (tui_vim_ops.go), visual mode #158. Enter still runs
+// text objects are #157 (tui_vim_ops.go), visual mode and the vim_escape
+// sequence #158. Enter still runs
 // the task in both modes (as Claude Code's vim mode does), and Ctrl keys keep
 // their Emacs meaning. Any other plain key is swallowed in NORMAL.
 
@@ -185,6 +187,11 @@ func (h *home) enterInsert() {
 // on an empty box, which opens the key panel.
 func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	c := h.comp
+	if h.visual != 0 && k.Code == tea.KeyBackspace && k.Mod == 0 {
+		h.motion("h", max(h.count, 1)) // as h, never a deletion
+		h.count = 0
+		return true
+	}
 	if k.Text == "" || k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) != 0 {
 		return false
 	}
@@ -193,6 +200,11 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	}
 	if d := int(k.Text[0] - '0'); len(k.Text) == 1 && d >= 0 && d <= 9 && (d > 0 || h.count > 0) {
 		h.count = h.count*10 + d
+		return true
+	}
+	if h.visual != 0 {
+		h.visualKey(k.Text, max(h.count, 1))
+		h.count = 0
 		return true
 	}
 	h.cmd = append(h.cmd, k)
@@ -206,6 +218,11 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	}
 	h.effCount = n
 	l := c.lines[c.row]
+	if (k.Text == "k" && c.row == 0) || (k.Text == "j" && c.row == len(c.lines)-1) {
+		h.walkHistory(k.Text, n) // k on the first line and j on the last are ↑ and ↓
+		h.endCommand()
+		return true
+	}
 	switch k.Text {
 	case "i":
 		h.enterInsert()
@@ -228,6 +245,39 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 		h.insMark = len(c.undo) + 1
 		c.change("newline", func() { c.col = 0; c.newline(); c.row-- })
 		h.enterInsert()
+	case "d", "c", "y":
+		h.vimOp, h.opCount, h.count = k.Text, h.count, 0
+		return true // the command goes on with the next key
+	case "x":
+		h.operate("d", "l", n)
+	case "D":
+		h.operate("d", "$", n)
+	case "p":
+		h.put(true, n)
+	case "P":
+		h.put(false, n)
+	case "u":
+		for range n {
+			c.undoStep()
+		}
+		c.col = min(snapCol(c.lines[c.row], c.col, -1), lastCol(c.lines[c.row]))
+	case ".":
+		h.repeat()
+	case "v", "V":
+		h.visual, h.anchor = rune(k.Text[0]), [2]int{c.row, c.col}
+	default:
+		h.motion(k.Text, n)
+	}
+	h.endCommand()
+	return true
+}
+
+// motion moves the cursor by one of the NORMAL motions and reports whether
+// t was one.
+func (h *home) motion(t string, n int) bool {
+	c := h.comp
+	l := c.lines[c.row]
+	switch t {
 	case "h":
 		for range n {
 			c.col = snapCol(l, max(c.col-1, 0), -1)
@@ -248,7 +298,7 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 		}
 	case "w", "e", "b":
 		for range n {
-			c.vimWord(k.Text)
+			c.vimWord(t)
 		}
 	case "0":
 		c.col = 0
@@ -256,25 +306,144 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 		c.col = firstNonBlank(l)
 	case "$":
 		c.col = lastCol(l)
-	case "d", "c", "y":
-		h.vimOp, h.opCount, h.count = k.Text, h.count, 0
-		return true // the command goes on with the next key
-	case "x":
-		h.operate("d", "l", n)
-	case "D":
-		h.operate("d", "$", n)
-	case "p":
-		h.put(true, n)
-	case "P":
-		h.put(false, n)
-	case "u":
-		for range n {
-			c.undoStep()
-		}
-		c.col = min(snapCol(c.lines[c.row], c.col, -1), lastCol(c.lines[c.row]))
-	case ".":
-		h.repeat()
+	default:
+		return false
 	}
-	h.endCommand()
 	return true
+}
+
+// walkHistory is k on the first line or j on the last, n times: ↑ and ↓ as
+// history knows them. j only walks while history is being walked: it never
+// focuses the action row, so a key typed in NORMAL can't apply a Run
+// (ADR-0015). The cursor rests on a character, as NORMAL keeps it.
+func (h *home) walkHistory(t string, n int) {
+	for range n {
+		if t == "k" {
+			h.recall(-1)
+		} else if h.navigating {
+			h.recall(1)
+		}
+	}
+	c := h.comp
+	c.col = min(snapCol(c.lines[c.row], c.col, -1), lastCol(c.lines[c.row]))
+}
+
+// vimEscapeWindow is how soon the second key of vim_escape must follow the first.
+const vimEscapeWindow = 300 * time.Millisecond
+
+// escapeSeq handles the vim_escape sequence ("jj") in INSERT: the second key
+// within the window removes the first and acts as Esc. It reports whether it
+// took the key.
+func (h *home) escapeSeq(k tea.KeyPressMsg) bool {
+	seq := []rune(h.vimEscape)
+	if len(seq) != 2 {
+		return false
+	}
+	armed := h.escArmed && h.clock().Sub(h.escAt) < vimEscapeWindow
+	h.escArmed = false
+	r := []rune(k.Text)
+	if len(r) != 1 || k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) != 0 {
+		return false
+	}
+	c := h.comp
+	if armed && r[0] == seq[1] && c.col > 0 && c.lines[c.row][c.col-1] == seq[0] {
+		m := len(c.undo)
+		c.key(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		c.undo = c.undo[:min(m, len(c.undo))] // taking the key back is no undo step of its own
+		if h.menu != nil {                    // the first key may have opened the slash menu
+			h.menu, h.menuOff, h.menuOffText = nil, true, c.text()
+		}
+		if n := len(h.insRec); n > 0 {
+			h.insRec = h.insRec[:n-1] // . never replays the first key
+		}
+		h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		return true
+	}
+	h.escArmed, h.escAt = r[0] == seq[0], h.clock()
+	return false
+}
+
+// visualRange is what the selection covers: the cursor's grapheme included,
+// or whole lines in VISUAL LINE.
+func (h *home) visualRange() vimRange {
+	c := h.comp
+	ar := min(h.anchor[0], len(c.lines)-1)
+	al := c.lines[ar]
+	a := [2]int{ar, snapCol(al, min(h.anchor[1], len(al)), -1)}
+	b := [2]int{c.row, c.col}
+	if b[0] < a[0] || (b[0] == a[0] && b[1] < a[1]) {
+		a, b = b, a
+	}
+	if h.visual == 'V' {
+		return vimRange{r0: a[0], r1: b[0], line: true}
+	}
+	return vimRange{r0: a[0], c0: a[1], r1: b[0], c1: snapCol(c.lines[b[0]], min(b[1]+1, len(c.lines[b[0]])), 1)}
+}
+
+// visualKey is a key in VISUAL or VISUAL LINE: motions extend the selection;
+// d x c y p act on it and leave; v or V again leaves.
+func (h *home) visualKey(t string, n int) {
+	switch t {
+	case "v", "V":
+		if h.visual == rune(t[0]) {
+			h.visual = 0
+		} else {
+			h.visual = rune(t[0])
+		}
+	case "d", "x", "c", "y":
+		r := h.visualRange()
+		h.visual = 0
+		op := t
+		if t == "x" {
+			op = "d"
+		}
+		if !r.line && r.r0 == r.r1 && r.c0 == r.c1 { // an empty line: nothing to take
+			if op == "c" {
+				h.enterInsert()
+			}
+		} else {
+			h.apply(op, r)
+		}
+	case "p":
+		h.visualPut(h.visualRange())
+	default:
+		h.motion(t, n)
+	}
+	// A visual command isn't what . repeats.
+	h.changed, h.cmd = false, nil
+}
+
+// visualPut replaces the selection with the register, and the register gets
+// what was replaced, as in vim. It is one undo step.
+func (h *home) visualPut(r vimRange) {
+	c := h.comp
+	h.visual = 0
+	text := c.kills
+	if text == "" {
+		return
+	}
+	m := len(c.undo)
+	last := r.line && r.r1 == len(c.lines)-1
+	toEnd := !r.line && r.c1 >= len(c.lines[r.r1])
+	whole := r.line && r.r0 == 0 && last
+	h.apply("d", r)
+	deleted, dline := c.kills, c.killLine
+	c.kills, c.killLine = text, r.line // V takes the text as lines, v as characters
+	h.put(last || toEnd, 1)
+	if whole { // the emptied box's blank line is not part of the text
+		c.lines, c.row, c.col = c.lines[1:], 0, firstNonBlank(c.lines[1])
+	}
+	c.kills, c.killLine = deleted, dline
+	if len(c.undo) > m+1 {
+		c.undo = c.undo[:m+1]
+	}
+}
+
+// selection is what the composer paints in reverse video: nil outside VISUAL.
+func (h *home) selection() *vimRange {
+	if h.visual == 0 || !h.normal {
+		return nil
+	}
+	r := h.visualRange()
+	return &r
 }

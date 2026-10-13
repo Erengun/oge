@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -28,6 +29,13 @@ type vimState struct {
 	lastChange []tea.KeyPressMsg // what . replays
 	replay     bool
 	insMark    int // 1 + len(undo) when INSERT began, so u undoes the whole change
+
+	visual rune   // 'v' or 'V' in VISUAL or VISUAL LINE, else 0 (#158)
+	anchor [2]int // where the selection began: row, col
+
+	vimEscape string    // user config vim_escape: "jj" typed in INSERT is Esc
+	escArmed  bool      // the last key was the first of vimEscape ...
+	escAt     time.Time // ... typed at this time
 }
 
 func (v *vimState) cancel() { v.vimOp, v.vimObj, v.count, v.opCount, v.cmd = "", "", 0, 0, nil }

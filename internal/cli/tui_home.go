@@ -51,6 +51,21 @@ type composer struct {
 	undo     []snap   // what undo brings back, newest last
 	lastOp   string   // the last edit's kind, to join typing into one undo step
 	pastes   []string // the text behind each large-paste placeholder (tui_paste.go)
+
+	sel      *vimRange           // the VISUAL selection to paint, set by the home's render (#158)
+	selPaint func(string) string // how it is painted
+}
+
+// inSel reports whether the cluster at rune n of line i is selected.
+func (c *composer) inSel(i, n int) bool {
+	r := c.sel
+	switch {
+	case r == nil || i < r.r0 || i > r.r1:
+		return false
+	case r.line:
+		return true
+	}
+	return (i > r.r0 || n >= r.c0) && (i < r.r1 || n < r.c1)
 }
 
 func newComposer() *composer { return &composer{lines: [][]rune{nil}} }
@@ -201,7 +216,13 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 	width = max(width, 1)
 	var all []string
 	for i, l := range c.lines {
-		var row strings.Builder
+		var row, seg strings.Builder // seg is the run of selected clusters not yet in row
+		flush := func() {
+			if seg.Len() > 0 {
+				row.WriteString(c.selPaint(seg.String()))
+				seg.Reset()
+			}
+		}
 		w, n := 0, 0 // columns in the row; runes before the cluster
 		rest := string(l)
 		for rest != "" {
@@ -212,6 +233,7 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 				cw = uniseg.StringWidth(cl)
 			}
 			if w+cw > width && w > 0 {
+				flush()
 				all = append(all, row.String())
 				row.Reset()
 				w = 0
@@ -219,11 +241,17 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 			if i == c.row && c.col >= n && c.col < n+k {
 				curRow, curCol = len(all), w
 			}
-			row.WriteString(cl)
+			if c.inSel(i, n) {
+				seg.WriteString(cl)
+			} else {
+				flush()
+				row.WriteString(cl)
+			}
 			w += cw
 			n += k
 			rest = tail
 		}
+		flush()
 		if i == c.row && c.col >= n {
 			if w >= width { // the cursor wraps onto a fresh row
 				all = append(all, row.String())
@@ -231,6 +259,9 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 				w = 0
 			}
 			curRow, curCol = len(all), w
+		}
+		if len(l) == 0 && c.inSel(i, 0) {
+			row.WriteString(c.selPaint(" ")) // a selected empty line shows as a cell
 		}
 		all = append(all, row.String())
 	}
@@ -530,7 +561,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		return h, h.wheel(msg)
 	case tea.PasteMsg:
-		h.actions = false
+		h.actions, h.escArmed = false, false
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
@@ -589,6 +620,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if h.vim && !h.normal && !h.replay && h.escapeSeq(msg) {
+			return h, nil
+		}
 		if h.vim && !h.normal && h.insRec != nil && !h.replay {
 			h.recordInsert(msg)
 		}
@@ -611,6 +645,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.vim && !h.normal {
 				h.enterNormal()
 			}
+			h.visual = 0
 			h.vimState.cancel()
 		case "ctrl+c":
 			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
@@ -622,6 +657,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.cleared = h.comp.expanded()
 			h.comp.set("")
 			h.navigating = false
+			h.visual = 0
 		case "enter":
 			if h.comp.backslashNewline() {
 				h.endNavigation()
@@ -716,6 +752,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.hist.add(text)                         // what the human typed, never the agent's output
 	h.comp.clearUndo()
 	h.navigating = false
+	h.visual = 0
 	t := task.Parse(text)
 	if h.thread != nil {
 		// A follow-up: the whole thread, this message last.
@@ -733,7 +770,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 // empty box it brings the stash back. With both a draft and a stash it
 // swaps them, so neither is lost.
 func (h *home) stashDraft() {
-	h.navigating = false
+	h.navigating, h.visual = false, 0
 	draft := h.comp.expanded()
 	if draft == "" && h.stash == "" {
 		return
@@ -948,6 +985,7 @@ func (h *home) render() (string, int, int) {
 		width = 80
 	}
 	inner := max(width-4, 1)
+	h.comp.sel, h.comp.selPaint = h.selection(), st.selected
 	rows, cr, cc := h.comp.layout(inner)
 	blank := len(h.comp.lines) == 1 && len(h.comp.lines[0]) == 0
 
@@ -974,7 +1012,12 @@ func (h *home) render() (string, int, int) {
 	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
 	if h.vim {
 		mode := "-- INSERT --"
-		if h.normal {
+		switch {
+		case h.normal && h.visual == 'v':
+			mode = "-- VISUAL --"
+		case h.normal && h.visual == 'V':
+			mode = "-- VISUAL LINE --"
+		case h.normal:
 			mode = "-- NORMAL --"
 		}
 		lines = append(lines, " "+st.dim(mode))
@@ -1271,7 +1314,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim}
+	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 	}

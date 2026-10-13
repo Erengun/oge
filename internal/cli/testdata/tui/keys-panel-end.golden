@@ -1,7 +1,6 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-   { · }                expanded: previous · next Attempt
    esc                  close the search, then collapse
    ctrl+c               cancel the Run (twice: force Öge to stop)
  Delivery
@@ -14,11 +13,12 @@
    d · x                remove the row
  Vim (when enabled)
    esc · i a I A o O    NORMAL · INSERT (enter runs in both)
-   h j k l              left · down · up · right (NORMAL)
+   h j k l              left · down · up · right (k, j at the edge: history)
    w e b                next word · word end · previous (NORMAL)
    0 ^ $                line start · first char · end (NORMAL)
    d c y                operator + motion or iw i" i( · dd cc yy (NORMAL)
    x · D                delete the character · to the line end (NORMAL)
    p · P                put after · before (the kill ring)
+   v · V                select · select lines (then d x c y p; esc)
    u · .                undo · repeat the last change
- ↑ ↓ scroll (35-54 of 54) · esc or ? close
+ ↑ ↓ scroll (36-55 of 55) · esc or ? close
