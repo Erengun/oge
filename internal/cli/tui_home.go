@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -325,8 +326,8 @@ type home struct {
 	// resolve reads the config again, for the Task about to start and with
 	// the setup panel's choices (sel) added.
 	resolve func(*setupState) (*resolved, []string)
-	// reloadTheme re-reads the custom theme file (#175); it returns a notice
-	// when the file is bad. Called when the composer opens and on Ctrl+L,
+	// reloadTheme re-reads the custom theme file (#175) and the keybindings
+	// file (#163); it returns a notice when one is bad. Called when the composer opens and on Ctrl+L,
 	// never during a Run.
 	reloadTheme func() string
 	// sel is what the setup panel edits; it lives for the session.
@@ -1417,7 +1418,10 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	if histDir != "" {
 		h.shellHist = loadHistory(shellHistoryFile(histDir, root))
 	}
-	h.reloadTheme = func() string { return h.st.reloadCustomTheme(env.Getenv) }
+	h.reloadTheme = func() string {
+		theme, keys := h.st.reloadCustomTheme(env.Getenv), reloadKeybindings(env.Getenv)
+		return strings.Join(slices.DeleteFunc([]string{theme, keys}, func(s string) bool { return s == "" }), "; ")
+	}
 	if n := h.themeNotice(); n != "" {
 		h.msg = append(h.msg, n)
 	}

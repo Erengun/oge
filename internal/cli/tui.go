@@ -675,7 +675,7 @@ func (m *model) render() string {
 		add(m.statusLine())
 		hint := "ctrl+c to cancel"
 		if m.expanded {
-			hint = "ctrl+o to collapse · " + hint
+			hint = expandLabel() + " to collapse · " + hint
 		}
 		if m.cancelling {
 			hint = "cancelling… ctrl+c again to stop now"
@@ -793,12 +793,12 @@ func (m *model) activity(used int) []string {
 	}
 	switch {
 	case !m.expanded && hidden > 0:
-		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · ctrl+o to expand", hidden)))
+		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · %s to expand", hidden, expandLabel())))
 	case m.expanded:
 		note := "    "
 		if m.gate != nil {
 			// A Gate takes the arrows; only ctrl+o and esc are the view's.
-			out = append(out, st.dim(note+"ctrl+o to collapse"))
+			out = append(out, st.dim(note+expandLabel()+" to collapse"))
 			break
 		}
 		if m.find != nil {
@@ -893,7 +893,7 @@ func (m *model) todoLines() []string {
 		out = append(out, line)
 	}
 	if hidden > 0 {
-		out = append(out, m.st.dim(fmt.Sprintf("    +%d more · ctrl+o to expand", hidden)))
+		out = append(out, m.st.dim(fmt.Sprintf("    +%d more · %s to expand", hidden, expandLabel())))
 	}
 	return out
 }

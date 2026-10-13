@@ -77,6 +77,27 @@ vim = true
 vim_escape = "jj"
 ```
 
+## Keybindings
+
+To change the home's shortcuts, put a `keybindings.toml` next to the user config (`$XDG_CONFIG_HOME/oge/keybindings.toml`, else `~/.config/oge/keybindings.toml`). Each table is a context, each key an action, each value one key or a list of keys. An action you list gets exactly those keys; the others keep theirs. The file is read when the composer opens, and `/help` and the `?` panel show your keys.
+
+```toml
+[composer]
+editor = "ctrl+g"
+newline = ["ctrl+j", "alt+enter"]
+[run]
+expand = "ctrl+t"
+```
+
+Actions in `[composer]`: `submit`, `newline`, `editor`, `stash`, `redraw`, `keysPanel`, `cycleMode`, `model`, `historySearch`. Actions in `[run]`: `expand`, `cancelQueue`. Key names are the ones Bubble Tea prints: `ctrl+g`, `alt+enter`, `shift+tab`, `f2`, with modifiers in the order ctrl, alt, shift.
+
+The file is strict, like `theme.toml`. An unknown context, action or key name, a key used twice (the composer and the run view count as one, because the queued Task's box answers both), or an action left with no key is a problem. oge then prints one line naming the file and the entry, ignores the whole file and uses the defaults. It never stops oge.
+
+Some keys can't be bound, so a shortcut can never get in the way of a decision (ADR-0015, ADR-0022):
+
+- `ctrl+c` and `esc` always cancel and back out. `enter`, `backspace`, `space` and typed characters are how you answer a Gate, so they stay the Gate's. A Gate also keeps working whatever you remap.
+- Editing and navigation keys, which are not actions: `tab`, the arrows, `home`, `end`, `pgup`, `pgdown`, `delete`, the Emacs keys (`ctrl+a`, `ctrl+e`, `ctrl+b`, `ctrl+f`, `ctrl+k`, `ctrl+u`, `ctrl+w`, `ctrl+y`, `ctrl+d`, `ctrl+h`, `ctrl+p`, `ctrl+n`, `ctrl+z`, `alt+b`, `alt+f`, `alt+d`) and their word and undo variants. An action may keep its own default among these, such as `ctrl+e` for `editor`.
+
 ## Mouse
 
 The mouse works only while a list is open: scroll the wheel over the slash menu, the `/runs` picker or the `/diff` viewer to move the highlight, or the diff. Mouse reporting is off the rest of the time, on purpose. Öge prints the transcript into your terminal's own scrollback, and turning mouse reporting on would take over drag-to-select, copy, and the terminal's wheel scrollback for the whole session. So the composer and the transcript don't capture the mouse: select and copy text, and scroll back, the way your terminal does. Clicks aren't handled either: an inline frame has no known screen row to map a click to.
