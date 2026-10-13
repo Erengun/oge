@@ -2,7 +2,7 @@ Keys
   enter run · ctrl+j or \+enter newline · ctrl+e or ctrl+g editor · ctrl+s stash draft · ctrl+l redraw · tab setup · ctrl+c clear (↑ restores), then leave
   ↑ ↓ history · ctrl+r search history · ↓ on an empty box: the actions of the last Run
   ctrl+k kill to line end · ctrl+u to line start · ctrl+w word back · alt+d word forward · ctrl+y yank
-  alt+b alt+f move by word · ctrl+_ or ctrl+z undo
+  alt+b alt+f move by word · ctrl+_ or ctrl+z undo · alt+m setup at the model box
 Commands
   /help                              keys and commands
   /setup                             open setup (same as tab)

@@ -626,3 +626,34 @@ func TestSetupPanelScrollsToReadOnlySections(t *testing.T) {
 		t.Errorf("up should scroll back first: scroll=%d", h.panel.scroll)
 	}
 }
+
+func TestAltMOpensSetupAtModelBoxKeepingDraft(t *testing.T) {
+	h, _ := setupHome(t)
+	press(h, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	press(h, tea.KeyPressMsg{Code: 'm', Mod: tea.ModAlt})
+	if h.panel == nil || h.panel.input == nil {
+		t.Fatalf("alt+m did not open the model box:\n%s", frame(h))
+	}
+	if r := h.panel.rows()[h.panel.cursor]; r.kind != rowModel || r.stage != 0 {
+		t.Errorf("cursor on %+v, want the implement model row", r)
+	}
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape}, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.comp.expanded() != "x" {
+		t.Errorf("draft = %q, want it kept", h.comp.expanded())
+	}
+}
+
+func TestAltMDoesNothingDuringARun(t *testing.T) {
+	h, _ := setupHome(t)
+	h.run = &model{}
+	press(h, tea.KeyPressMsg{Code: 'm', Mod: tea.ModAlt})
+	if h.panel != nil {
+		t.Error("alt+m opened setup during a Run")
+	}
+}
+
+func TestHelpListsAltM(t *testing.T) {
+	if !strings.Contains(helpText(), "alt+m") {
+		t.Error("/help lacks alt+m")
+	}
+}

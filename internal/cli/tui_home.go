@@ -576,6 +576,14 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p := h.openSetup(); p != "" {
 				h.msg = []string{p}
 			}
+		case "alt+m":
+			// Alt+M: setup with the implement model box open; the draft
+			// stays. During a Run the keys go to the Run, so no mid-Run change.
+			if p := h.openSetup(); p != "" {
+				h.msg = []string{p}
+			} else {
+				h.panel.focusModel()
+			}
 		case "down":
 			// ↓ is history only once ↑ has started navigating; on an empty
 			// composer otherwise it focuses the action row (#184).
