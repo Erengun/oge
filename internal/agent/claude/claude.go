@@ -456,10 +456,15 @@ type frame struct {
 	Parent    *string         `json:"parent_tool_use_id"`
 	Error     string          `json:"error"`
 	// result
-	IsError        bool   `json:"is_error"`
-	Result         string `json:"result"`
-	TerminalReason string `json:"terminal_reason"`
-	NumTurns       int    `json:"num_turns"`
+	IsError        bool     `json:"is_error"`
+	Result         string   `json:"result"`
+	TerminalReason string   `json:"terminal_reason"`
+	NumTurns       int      `json:"num_turns"`
+	CostUSD        *float64 `json:"total_cost_usd"`
+	TokenUsage     *struct {
+		In  int `json:"input_tokens"`
+		Out int `json:"output_tokens"`
+	} `json:"usage"`
 	// rate_limit_event
 	RateLimit *struct {
 		Status string `json:"status"`
@@ -770,7 +775,12 @@ var (
 )
 
 func (s *session) result(f frame) {
-	s.emit(agent.Event{Kind: agent.Usage, Text: fmt.Sprintf("%d model turns", f.NumTurns)})
+	use := agent.Event{Kind: agent.Usage, Text: fmt.Sprintf("%d model turns", f.NumTurns), CostUSD: f.CostUSD}
+	if u := f.TokenUsage; u != nil && u.In+u.Out > 0 {
+		n := u.In + u.Out
+		use.Tokens = &n
+	}
+	s.emit(use)
 	s.mu.Lock()
 	interrupted, apiErr := s.interrupt, s.apiError
 	s.mu.Unlock()

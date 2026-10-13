@@ -568,3 +568,24 @@ func TestSetupBarNamesAProfile(t *testing.T) {
 		t.Errorf("setup bar: %s", got)
 	}
 }
+
+// The status line sits in the live area during a Run, and Ctrl+O toggles
+// the expanded activity there without disturbing an open Gate (#147).
+func TestBareOgeStatusLineAndCtrlO(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake", "--confirm")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("Result gate")
+	s.expect("Fast mode · implement")
+	s.expect("Waiting for you")
+	s.type_("\x0f")
+	s.type_("\x0f")
+	s.type_("t\r")
+	s.ended()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+}

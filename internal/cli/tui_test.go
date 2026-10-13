@@ -515,3 +515,73 @@ func TestTUIMatchesStagesByName(t *testing.T) {
 		t.Errorf("the unlisted stage isn't before the Check:\n%s", got)
 	}
 }
+
+func TestTUIStatusLine(t *testing.T) {
+	h := newTUIHarness(t, false, 100)
+	h.f.Stages[0].Profile, h.f.Stages[0].Model = "work", "opus"
+	h.working()
+	golden(t, "status-no-cost", h.m.render())
+	cost, tokens := 0.4217, 12345
+	h.agent(agent.Event{Kind: agent.Usage, Text: "3 model turns", CostUSD: &cost, Tokens: &tokens})
+	got := h.m.render()
+	golden(t, "status-cost", got)
+	if !strings.Contains(got, "implement fake@work:opus") || !strings.Contains(got, "$0.42 · 12.3k tok") {
+		t.Errorf("status line lacks the agent or the reported spend:\n%s", got)
+	}
+}
+
+// Narrow, the line drops its least telling parts; what needs the human stays.
+func TestTUIStatusLineNarrow(t *testing.T) {
+	h := newTUIHarness(t, false, 50)
+	cost := 1.5
+	h.working()
+	h.agent(agent.Event{Kind: agent.Usage, CostUSD: &cost})
+	for _, l := range strings.Split(h.m.render(), "\n") {
+		if strings.Contains(l, "mode") && strings.Contains(l, "$") {
+			t.Errorf("a narrow status line keeps everything: %q", l)
+		}
+		if strings.Contains(l, "implement fake") && !strings.Contains(l, "Nothing needs you.") {
+			t.Errorf("a narrow status line lost the attention: %q", l)
+		}
+	}
+}
+
+func TestTUIExpandedScrolls(t *testing.T) {
+	h := newTUIHarness(t, false, 80)
+	h.m.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	h.working()
+	for i := 0; i < 30; i++ {
+		h.agent(agent.Event{Kind: agent.Claim, Tool: "Read", Target: fmt.Sprintf("file%02d.go", i)})
+	}
+	h.m.Update(ctrlKey('o'))
+	if got := h.m.render(); !strings.Contains(got, "file29.go") || strings.Contains(got, "file05.go") {
+		t.Errorf("expanded view isn't at the newest steps:\n%s", got)
+	}
+	h.m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	got := h.m.render()
+	golden(t, "running-expanded-scrolled", got)
+	if strings.Contains(got, "file29.go") || !strings.Contains(got, "+") {
+		t.Errorf("PgUp didn't scroll back:\n%s", got)
+	}
+	h.m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.m.expanded || strings.Contains(h.m.render(), "PgUp") {
+		t.Error("esc didn't collapse")
+	}
+}
+
+// What the agent or the Candidate controls reaches the transcript escaped.
+func TestTUIExpandedEscapesHostileOutput(t *testing.T) {
+	h := newTUIHarness(t, false, 120)
+	h.working()
+	h.agent(agent.Event{Kind: agent.Claim, Tool: "Bash\x1b]0;pwned\x07", Target: "echo \x1b[31mred\x1b[0m\r\x08\x00 done"})
+	h.m.Update(ctrlKey('o'))
+	got := h.m.render()
+	for _, bad := range []string{"\x07", "\x1b]", "\x1b[31m", "\r", "\x08", "\x00"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("the transcript holds %q:\n%q", bad, got)
+		}
+	}
+	if strings.Contains(strings.ReplaceAll(got, "\x1b[2J", ""), "\x1b") {
+		t.Errorf("an escape got through:\n%q", got)
+	}
+}

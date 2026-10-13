@@ -1,0 +1,14 @@
+fix Add
+Run 20261005T090000-a1b2c3 · Fast mode · HEAD 84ca1bd (main) + 1 untracked
+
+✓ preflight  ok · 0.4s
+⠸ implement  fake · 3.8s
+  ⎿ Read file20.go
+    Read file21.go
+    Read file22.go
+    Read file23.go
+    +25 earlier · +6 later · ↑/↓ PgUp/PgDn scroll · esc to collapse
+· check      go test -json ./...
+
+Fast mode · implement · implement fake · 4.2s · Nothing needs you.
+ctrl+c to cancel

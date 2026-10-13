@@ -7,5 +7,5 @@ Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
   ⎿ Write neg_test.go
 · check      go test -json ./...
 
-Nothing needs you.
+Standard mode · QA · implement claude · 8.0s · Nothing needs you.
 ctrl+c to cancel
