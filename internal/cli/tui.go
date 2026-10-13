@@ -311,6 +311,7 @@ type model struct {
 
 	expanded   bool
 	off        int // expanded: steps scrolled back from the newest
+	used       int // lines above the activity in the last frame
 	started    time.Time
 	usage      map[string]reported // what each stage's session reported, latest
 	cancelling bool
@@ -464,6 +465,9 @@ func (m *model) apply(msg tea.Msg) bool {
 			}
 			if msg.step != "" {
 				m.steps = append(m.steps, msg.step)
+				if m.off > 0 {
+					m.off++ // a scrolled view stays on the same steps
+				}
 				if len(m.steps) > keptSteps {
 					m.steps = m.steps[1:]
 					m.more++
@@ -600,6 +604,9 @@ func (m *model) render() string {
 		add("")
 		add(m.statusLine())
 		hint := "ctrl+c to cancel"
+		if m.expanded {
+			hint = "ctrl+o to collapse · " + hint
+		}
 		if m.cancelling {
 			hint = "cancelling… ctrl+c again to stop now"
 		}
@@ -689,6 +696,7 @@ func (m *model) activity(used int) []string {
 		return nil
 	}
 	st := m.st
+	m.used = used
 	limit := m.window(used)
 	hidden, later := m.more, 0
 	if m.expanded {
@@ -712,6 +720,11 @@ func (m *model) activity(used int) []string {
 		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · ctrl+o to expand", hidden)))
 	case m.expanded:
 		note := "    "
+		if m.gate != nil {
+			// A Gate takes the arrows; only ctrl+o and esc are the view's.
+			out = append(out, st.dim(note+"ctrl+o to collapse"))
+			break
+		}
 		if hidden > 0 {
 			note += fmt.Sprintf("+%d earlier · ", hidden)
 		}
@@ -739,7 +752,7 @@ func (m *model) window(used int) int {
 
 // scrollBy moves the expanded view back (up) or forward (down) in steps.
 func (m *model) scrollBy(key string) {
-	page := max(m.window(0)-1, 1)
+	page := max(m.window(m.used)-1, 1)
 	switch key {
 	case "up":
 		m.off++
@@ -750,7 +763,7 @@ func (m *model) scrollBy(key string) {
 	case "pgdown":
 		m.off -= page
 	}
-	m.off = max(min(m.off, max(len(m.steps)-recentSteps, 0)), 0)
+	m.off = max(min(m.off, max(len(m.steps)-m.window(m.used), 0)), 0)
 }
 
 // reported is what an agent's session reported; a nil field was not reported.
@@ -785,7 +798,7 @@ func (m *model) statusLine() string {
 		text string
 		drop int // lower goes first when the line is too wide; 0 stays
 	}
-	parts := []part{{string(m.frozen.Mode) + " mode", 3}, {label, 0}}
+	parts := []part{{string(m.frozen.Mode) + " mode", 3}, {label, 6}}
 	for _, s := range m.frozen.Stages {
 		word, drop := "implement", 2
 		if s.Role == "verifier" {
@@ -800,7 +813,7 @@ func (m *model) statusLine() string {
 		}
 		parts = append(parts, part{word + " " + clean(who), drop})
 	}
-	parts = append(parts, part{elapsed(m.now().Sub(m.started)), 0})
+	parts = append(parts, part{elapsed(m.now().Sub(m.started)), 7})
 	var cost float64
 	var tokens int
 	var haveCost, haveTokens bool
@@ -822,6 +835,12 @@ func (m *model) statusLine() string {
 	if width <= 0 {
 		width = 80
 	}
+	// The attention is reserved first; the rest fills what is left, the
+	// least telling parts going first, and is cut before the attention is.
+	if w := ansi.StringWidth(attention); w > width-1 {
+		attention = shortAttention(m.gate != nil, width)
+	}
+	room := width - 1 - ansi.StringWidth(attention) - 3
 	join := func() string {
 		var texts []string
 		for _, p := range parts {
@@ -829,12 +848,12 @@ func (m *model) statusLine() string {
 				texts = append(texts, p.text)
 			}
 		}
-		return strings.Join(append(texts, attention), " · ")
+		return strings.Join(texts, " · ")
 	}
-	for ansi.StringWidth(join()) > width-1 {
+	for ansi.StringWidth(join()) > room {
 		best := -1
 		for i, p := range parts {
-			if p.drop > 0 && p.text != "" && (best < 0 || p.drop < parts[best].drop) {
+			if p.text != "" && (best < 0 || p.drop < parts[best].drop) {
 				best = i
 			}
 		}
@@ -843,7 +862,25 @@ func (m *model) statusLine() string {
 		}
 		parts[best].text = ""
 	}
-	return m.st.dim(join())
+	if pre := join(); pre != "" && room > 0 {
+		return m.st.dim(pre + " · " + attention)
+	}
+	return m.st.dim(attention)
+}
+
+// shortAttention is the attention in at most w columns, never claiming
+// "Nothing needs you" for a Run that is waiting.
+func shortAttention(waiting bool, w int) string {
+	forms := []string{"Nothing needs you.", "Nothing needs you", "All clear", "Clear", "OK", "·"}
+	if waiting {
+		forms = []string{"Waiting for you", "Waiting", "Wait", "!"}
+	}
+	for _, f := range forms {
+		if ansi.StringWidth(f) <= w {
+			return f
+		}
+	}
+	return forms[len(forms)-1]
 }
 
 // tokenText is 950 tok, then 12.3k tok.

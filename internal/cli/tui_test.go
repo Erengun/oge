@@ -585,3 +585,41 @@ func TestTUIExpandedEscapesHostileOutput(t *testing.T) {
 		t.Errorf("an escape got through:\n%q", got)
 	}
 }
+
+func TestTUIStatusLineKeepsAttention(t *testing.T) {
+	for _, w := range []int{24, 12, 1} {
+		h := newTUIHarness(t, false, w)
+		h.working()
+		got := h.m.render()
+		want := "Nothing needs you."
+		if w < 18 {
+			want = shortAttention(false, w)
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("width %d lost the attention %q:\n%s", w, want, got)
+		}
+		if w == 1 && strings.Contains(got, "Nothing needs you") {
+			t.Errorf("width 1 shows a long attention:\n%s", got)
+		}
+		h.m.gate = &gateState{}
+		if got := h.m.statusLine(); strings.Contains(got, "Nothing needs") || got == "" {
+			t.Errorf("width %d at a Gate: %q", w, got)
+		}
+	}
+}
+
+func TestTUIEscCollapsesAtAGate(t *testing.T) {
+	h := newTUIHarness(t, false, 80)
+	h.working()
+	h.implemented("")
+	h.checked(true)
+	h.openGate(boundExhaustionAt(h))
+	h.m.Update(ctrlKey('o'))
+	if !h.m.expanded {
+		t.Fatal("ctrl+o didn't expand at a Gate")
+	}
+	h.m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.m.expanded || h.m.gate == nil {
+		t.Errorf("esc: expanded=%v gate open=%v", h.m.expanded, h.m.gate != nil)
+	}
+}

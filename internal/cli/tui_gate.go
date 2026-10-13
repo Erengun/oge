@@ -71,6 +71,9 @@ func (m *model) gateKey(k tea.KeyPressMsg) (ok bool) {
 	case "ctrl+o":
 		return false
 	}
+	if k.String() == "esc" && m.expanded && g.choice == nil && g.inspect == nil && !g.recording {
+		return false // collapses the transcript
+	}
 	if g.recording {
 		return k.String() != "ctrl+c"
 	}
