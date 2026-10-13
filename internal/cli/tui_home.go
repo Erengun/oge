@@ -247,7 +247,9 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 // home is the session program's root model: the composer, the Run's own
 // model once Enter starts it, then the composer again.
 type home struct {
-	comp *composer
+	// getenv reads the environment for /terminal; nil reads nothing.
+	getenv func(string) string
+	comp   *composer
 	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
 	// first ↑. search is Ctrl+R's search while it is open.
 	hist       *history
@@ -1161,6 +1163,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
 	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify}
+	h.getenv = env.Getenv
 	h.reloadTheme = func() string { return h.st.reloadCustomTheme(env.Getenv) }
 	if n := h.themeNotice(); n != "" {
 		h.msg = append(h.msg, n)
