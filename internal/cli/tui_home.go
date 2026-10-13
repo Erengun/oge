@@ -179,7 +179,7 @@ func (c *composer) key(k tea.KeyPressMsg) bool {
 	if c.editKey(k) {
 		return true
 	}
-	switch k.String() {
+	switch resolve(ctxComposer, k.String()) {
 	case "backspace", "ctrl+h":
 		c.change("del", c.backspace)
 	case "delete", "ctrl+d":
@@ -196,7 +196,7 @@ func (c *composer) key(k tea.KeyPressMsg) bool {
 		c.change("move", func() { c.col = 0 })
 	case "end":
 		c.change("move", func() { c.col = len(c.lines[c.row]) })
-	case "ctrl+j", "shift+enter", "alt+enter":
+	case actNewline:
 		c.change("newline", c.newline)
 	default:
 		if k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) == 0 && k.Text != "" {
@@ -683,8 +683,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.vim && h.normal && h.normalKey(msg) {
 			return h, nil
 		}
-		switch msg.String() {
-		case "ctrl+r":
+		switch resolve(ctxComposer, msg.String()) {
+		case actHistorySearch:
 			if h.hist.len() > 0 {
 				h.search = &histSearch{hit: -1}
 			}
@@ -712,7 +712,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.comp.set("")
 			h.navigating = false
 			h.visual = 0
-		case "enter":
+		case actSubmit:
 			if h.comp.backslashNewline() {
 				h.endNavigation()
 				return h, nil
@@ -739,18 +739,18 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 			return h.submit(text)
-		case "ctrl+s":
+		case actStash:
 			h.stashDraft()
-		case "ctrl+l":
+		case actRedraw:
 			if n := h.themeNotice(); n != "" {
 				h.msg = []string{n}
 			}
 			return h, tea.ClearScreen
-		case "ctrl+e", "ctrl+g":
+		case actEditor:
 			if h.edit != nil {
 				return h, h.edit(h.comp.expanded())
 			}
-		case "?":
+		case actKeysPanel:
 			if !h.openKeys() {
 				h.comp.key(msg)
 				h.endNavigation()
@@ -759,7 +759,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p := h.openSetup(); p != "" {
 				h.msg = []string{p}
 			}
-		case "shift+tab":
+		case actCycleMode:
 			// Standard <-> Fast through the setup state, as /mode does; Blind
 			// is not in the cycle. A menu owns its keys; a Run never gets here.
 			if h.menu == nil && h.at.list == nil {
@@ -768,7 +768,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					h.msg = []string{p}
 				}
 			}
-		case "alt+m":
+		case actModel:
 			// Alt+M: setup with the implement model box open; the draft
 			// stays. During a Run the keys go to the Run, so no mid-Run change.
 			if p := h.openSetup(); p != "" {
@@ -902,6 +902,14 @@ func (h *home) recall(dir int) bool {
 // (it never submits) and Esc leaves the box as it was.
 func (h *home) searchKey(msg tea.KeyPressMsg) {
 	s := h.search
+	if actionFor(ctxComposer, msg.String()) == actHistorySearch { // again: older
+		if s.hit > 0 {
+			if i := h.hist.find(s.query, s.hit-1); i >= 0 {
+				s.hit = i
+			}
+		}
+		return
+	}
 	switch msg.String() {
 	case "esc", "ctrl+c", "ctrl+g":
 		h.search = nil
@@ -911,12 +919,6 @@ func (h *home) searchKey(msg tea.KeyPressMsg) {
 			h.navigating = false
 		}
 		h.search = nil
-	case "ctrl+r":
-		if s.hit > 0 {
-			if i := h.hist.find(s.query, s.hit-1); i >= 0 {
-				s.hit = i
-			}
-		}
 	case "backspace":
 		if r := []rune(s.query); len(r) > 0 {
 			s.query = string(r[:len(r)-1])

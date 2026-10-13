@@ -23,68 +23,98 @@ type keyBinding struct {
 	keys  string
 	probe []string
 	desc  string
+	act   string // "context.action" in the action table (#162): keys and probe come from there
+}
+
+// ctxAct splits act into its context and action name.
+func (b keyBinding) ctxAct() (ctx, name string) {
+	ctx, name, _ = strings.Cut(b.act, ".")
+	return ctx, name
+}
+
+// probes are the key names the handlers must switch on for this row.
+func (b keyBinding) probes() []string {
+	if b.act == "" {
+		return b.probe
+	}
+	return actionKeys(b.ctxAct())
+}
+
+// label is the key column: as written, or built from the action's keys.
+func (b keyBinding) label() string {
+	if b.act == "" {
+		return b.keys
+	}
+	ks := b.probes()
+	switch _, name := b.ctxAct(); name {
+	case actNewline: // the first key, then the typed backslash form
+		return ks[0] + ` · \+enter`
+	case actKeysPanel:
+		return "/ · @ · " + strings.Join(ks, " · ")
+	}
+	return strings.Join(ks, " · ")
 }
 
 var keyTable = []keyBinding{
-	{"Composer", "enter", []string{"enter"}, "run the task"},
-	{"Composer", "ctrl+j · \\+enter", []string{"ctrl+j", "shift+enter", "alt+enter"}, "newline"},
-	{"Composer", "ctrl+e · ctrl+g", []string{"ctrl+e", "ctrl+g"}, "write the task in $EDITOR"},
-	{"Composer", "ctrl+s", []string{"ctrl+s"}, "stash the draft (again on an empty box restores)"},
-	{"Composer", "ctrl+c", []string{"ctrl+c"}, "clear the draft (↑ restores), then leave"},
-	{"Composer", "ctrl+l", []string{"ctrl+l"}, "redraw"},
-	{"Composer", "tab", []string{"tab"}, "open setup"},
-	{"Composer", "shift+tab", []string{"shift+tab"}, "switch Standard / Fast (this session)"},
-	{"Composer", "alt+m", []string{"alt+m"}, "open setup at the implement model"},
-	{"Composer", "!", nil, "shell mode, one line (ctrl+c stops · \\! is a Task)"},
-	{"Composer", "/ · @ · ?", []string{"?"}, "commands · files · this panel (on an empty box)"},
-	{"Composer", "← → · ctrl+b ctrl+f", []string{"left", "right", "ctrl+b", "ctrl+f"}, "move"},
-	{"Composer", "home · end · ctrl+a", []string{"home", "end", "ctrl+a"}, "line start · end"},
-	{"Composer", "alt+b alt+f", []string{"alt+b", "alt+f", "ctrl+left", "ctrl+right", "alt+left", "alt+right"}, "move by word"},
-	{"Composer", "backspace · delete", []string{"backspace", "ctrl+h", "delete", "ctrl+d"}, "delete back · forward"},
-	{"Composer", "ctrl+k · ctrl+u", []string{"ctrl+k", "ctrl+u"}, "kill to line end · start"},
-	{"Composer", "ctrl+w · alt+d", []string{"ctrl+w", "alt+backspace", "alt+d"}, "kill word back · forward"},
-	{"Composer", "ctrl+y", []string{"ctrl+y"}, "yank what was killed"},
-	{"Composer", "ctrl+_ · ctrl+z", []string{"ctrl+_", "ctrl+/", "ctrl+z"}, "undo"},
+	{"Composer", "", nil, "run the task", "composer.submit"},
+	{"Composer", "", nil, "newline", "composer.newline"},
+	{"Composer", "", nil, "write the task in $EDITOR", "composer.editor"},
+	{"Composer", "", nil, "stash the draft (again on an empty box restores)", "composer.stash"},
+	{"Composer", "ctrl+c", []string{"ctrl+c"}, "clear the draft (↑ restores), then leave", ""},
+	{"Composer", "", nil, "redraw", "composer.redraw"},
+	{"Composer", "tab", []string{"tab"}, "open setup", ""},
+	{"Composer", "", nil, "switch Standard / Fast (this session)", "composer.cycleMode"},
+	{"Composer", "", nil, "open setup at the implement model", "composer.model"},
+	{"Composer", "!", nil, "shell mode, one line (ctrl+c stops · \\! is a Task)", ""},
+	{"Composer", "", nil, "commands · files · this panel (on an empty box)", "composer.keysPanel"},
+	{"Composer", "← → · ctrl+b ctrl+f", []string{"left", "right", "ctrl+b", "ctrl+f"}, "move", ""},
+	{"Composer", "home · end · ctrl+a", []string{"home", "end", "ctrl+a"}, "line start · end", ""},
+	{"Composer", "alt+b alt+f", []string{"alt+b", "alt+f", "ctrl+left", "ctrl+right", "alt+left", "alt+right"}, "move by word", ""},
+	{"Composer", "backspace · delete", []string{"backspace", "ctrl+h", "delete", "ctrl+d"}, "delete back · forward", ""},
+	{"Composer", "ctrl+k · ctrl+u", []string{"ctrl+k", "ctrl+u"}, "kill to line end · start", ""},
+	{"Composer", "ctrl+w · alt+d", []string{"ctrl+w", "alt+backspace", "alt+d"}, "kill word back · forward", ""},
+	{"Composer", "ctrl+y", []string{"ctrl+y"}, "yank what was killed", ""},
+	{"Composer", "ctrl+_ · ctrl+z", []string{"ctrl+_", "ctrl+/", "ctrl+z"}, "undo", ""},
 
-	{"History", "↑ ↓ · ctrl+p ctrl+n", []string{"up", "down", "ctrl+p", "ctrl+n"}, "earlier · later tasks (↑ on the first line)"},
-	{"History", "ctrl+r", []string{"ctrl+r"}, "search history (again: older)"},
-	{"History", "enter · esc", nil, "in a search: use the match · cancel"},
+	{"History", "↑ ↓ · ctrl+p ctrl+n", []string{"up", "down", "ctrl+p", "ctrl+n"}, "earlier · later tasks (↑ on the first line)", ""},
+	{"History", "", nil, "search history (again: older)", "composer.historySearch"},
+	{"History", "enter · esc", nil, "in a search: use the match · cancel", ""},
 
-	{"Menus & pickers", "↑ ↓", nil, "move in the slash menu or the @ picker"},
-	{"Menus & pickers", "tab · enter", nil, "complete a command · insert a path"},
-	{"Menus & pickers", "esc", []string{"esc"}, "close it"},
-	{"Menus & pickers", "/ · esc", []string{"/"}, "in the Run picker: filter · clear it"},
-	{"Menus & pickers", "enter · d", nil, "in the Run picker: receipt · diff of a Run"},
-	{"Menus & pickers", "a · b", nil, "in the Run picker: apply · branch (confirm by typing)"},
+	{"Menus & pickers", "↑ ↓", nil, "move in the slash menu or the @ picker", ""},
+	{"Menus & pickers", "tab · enter", nil, "complete a command · insert a path", ""},
+	{"Menus & pickers", "esc", []string{"esc"}, "close it", ""},
+	{"Menus & pickers", "/ · esc", []string{"/"}, "in the Run picker: filter · clear it", ""},
+	{"Menus & pickers", "enter · d", nil, "in the Run picker: receipt · diff of a Run", ""},
+	{"Menus & pickers", "a · b", nil, "in the Run picker: apply · branch (confirm by typing)", ""},
 
-	{"Menus & pickers", "l", []string{"l"}, "in the Run picker: label the Run"},
+	{"Menus & pickers", "l", []string{"l"}, "in the Run picker: label the Run", ""},
 
-	{"Run", "ctrl+o", []string{"ctrl+o"}, "expand or collapse the progress"},
-	{"Run", "↑ ↓ · pgup pgdown", []string{"pgup", "pgdown"}, "scroll it, expanded"},
-	{"Run", "/ · n N", []string{"/", "n", "N"}, "expanded: search · next · previous match (enter jumps)"},
-	{"Run", "{ · }", []string{"{", "}"}, "expanded: previous · next Attempt"},
-	{"Run", "esc", nil, "close the search, then collapse"},
-	{"Run", "type · enter", nil, "the next Task; enter queues it, never sent to the Run"},
-	{"Run", "ctrl+x", []string{"ctrl+x"}, "cancel the queued Task"},
-	{"Run", "ctrl+c", nil, "clear the queued Task, else cancel the Run"},
+	{"Run", "", nil, "expand or collapse the progress", "run.expand"},
+	{"Run", "↑ ↓ · pgup pgdown", []string{"pgup", "pgdown"}, "scroll it, expanded", ""},
+	{"Run", "/ · n N", []string{"/", "n", "N"}, "expanded: search · next · previous match (enter jumps)", ""},
+	{"Run", "{ · }", []string{"{", "}"}, "expanded: previous · next Attempt", ""},
+	{"Run", "esc", nil, "close the search, then collapse", ""},
+	{"Run", "type · enter", nil, "the next Task; enter queues it, never sent to the Run", ""},
+	{"Run", "", nil, "cancel the queued Task", "run.cancelQueue"},
+	{"Run", "ctrl+c", nil, "clear the queued Task, else cancel the Run", ""},
 
-	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run"},
-	{"Delivery", "a · b · d · r", []string{"a", "b", "d", "r"}, "apply · branch · diff · receipt (each ↓ allows one)"},
+	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run", ""},
+	{"Delivery", "a · b · d · r", []string{"a", "b", "d", "r"}, "apply · branch · diff · receipt (each ↓ allows one)", ""},
 
-	{"Setup", "tab · esc", nil, "close setup"},
-	{"Setup", "↑ ↓ · enter", nil, "move · change the row"},
-	{"Setup", "s · w", []string{"s", "w"}, "save as default · write the project Checks"},
-	{"Setup", "d · x", []string{"x"}, "remove the row"},
+	{"Setup", "tab · esc", nil, "close setup", ""},
+	{"Setup", "↑ ↓ · enter", nil, "move · change the row", ""},
+	{"Setup", "s · w", []string{"s", "w"}, "save as default · write the project Checks", ""},
+	{"Setup", "d · x", []string{"x"}, "remove the row", ""},
 
-	{"Vim (when enabled)", "esc · i a I A o O", []string{"i", "a", "I", "A", "o", "O"}, "NORMAL · INSERT (enter runs in both)"},
-	{"Vim (when enabled)", "h j k l", []string{"h", "j", "k", "l"}, "left · down · up · right (k, j at the edge: history)"},
-	{"Vim (when enabled)", "w e b", []string{"w", "e", "b"}, "next word · word end · previous (NORMAL)"},
-	{"Vim (when enabled)", "0 ^ $", []string{"0", "^", "$"}, "line start · first char · end (NORMAL)"},
-	{"Vim (when enabled)", "d c y", []string{"d", "c", "y"}, "operator + motion or iw i\" i( · dd cc yy (NORMAL)"},
-	{"Vim (when enabled)", "x · D", []string{"x", "D"}, "delete the character · to the line end (NORMAL)"},
-	{"Vim (when enabled)", "p · P", []string{"p", "P"}, "put after · before (the kill ring)"},
-	{"Vim (when enabled)", "v · V", []string{"v", "V"}, "select · select lines (then d x c y p; esc)"},
-	{"Vim (when enabled)", "u · .", []string{"u", "."}, "undo · repeat the last change"},
+	{"Vim (when enabled)", "esc · i a I A o O", []string{"i", "a", "I", "A", "o", "O"}, "NORMAL · INSERT (enter runs in both)", ""},
+	{"Vim (when enabled)", "h j k l", []string{"h", "j", "k", "l"}, "left · down · up · right (k, j at the edge: history)", ""},
+	{"Vim (when enabled)", "w e b", []string{"w", "e", "b"}, "next word · word end · previous (NORMAL)", ""},
+	{"Vim (when enabled)", "0 ^ $", []string{"0", "^", "$"}, "line start · first char · end (NORMAL)", ""},
+	{"Vim (when enabled)", "d c y", []string{"d", "c", "y"}, "operator + motion or iw i\" i( · dd cc yy (NORMAL)", ""},
+	{"Vim (when enabled)", "x · D", []string{"x", "D"}, "delete the character · to the line end (NORMAL)", ""},
+	{"Vim (when enabled)", "p · P", []string{"p", "P"}, "put after · before (the kill ring)", ""},
+	{"Vim (when enabled)", "v · V", []string{"v", "V"}, "select · select lines (then d x c y p; esc)", ""},
+	{"Vim (when enabled)", "u · .", []string{"u", "."}, "undo · repeat the last change", ""},
 }
 
 // keyLines is the table as plain lines: a heading per group, then its rows
@@ -92,14 +122,14 @@ var keyTable = []keyBinding{
 func keyLines() []string {
 	w := 0
 	for _, b := range keyTable {
-		w = max(w, ansi.StringWidth(b.keys))
+		w = max(w, ansi.StringWidth(b.label()))
 	}
 	var out []string
 	for _, g := range keyGroups {
 		out = append(out, g)
 		for _, b := range keyTable {
 			if b.group == g {
-				out = append(out, fmt.Sprintf("  %-*s  %s", w, b.keys, b.desc))
+				out = append(out, fmt.Sprintf("  %-*s  %s", w, b.label(), b.desc))
 			}
 		}
 	}
@@ -121,8 +151,8 @@ func (h *home) openKeys() bool {
 // keysKey is a key while the panel is open: Esc, ? or Ctrl+C close it, the
 // arrows scroll it, and nothing else reaches the composer.
 func (h *home) keysKey(msg tea.KeyPressMsg) {
-	switch msg.String() {
-	case "esc", "?", "ctrl+c":
+	switch resolve(ctxComposer, msg.String()) {
+	case "esc", actKeysPanel, "ctrl+c":
 		h.keys = nil
 	case "up", "ctrl+p":
 		h.keys.scroll--

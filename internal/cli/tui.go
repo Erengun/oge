@@ -458,8 +458,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.expanded && m.findKey(msg) {
 			return m, nil
 		}
-		switch msg.String() {
-		case "ctrl+o":
+		switch resolve(ctxRun, msg.String()) {
+		case actExpand:
 			m.expanded, m.off, m.find = !m.expanded, 0, nil
 		case "esc":
 			if m.expanded && m.find != nil {
