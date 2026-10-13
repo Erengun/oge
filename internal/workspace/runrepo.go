@@ -630,8 +630,8 @@ func SnapshotPaths(root string) ([]string, error) { return snapshotPaths(root) }
 // Rebase carries commit, work done on base, over to onto (#185). When
 // onto's tree is base's, commit itself is returned, not rebased. Otherwise
 // commit's change since base is merged into onto three ways, base the
-// merge base, and committed on onto. conflicted reports a merge that
-// doesn't go through cleanly; nothing is committed then. It needs git
+// merge base, and committed on onto (moved). conflicted reports a merge
+// that doesn't go through cleanly; nothing is committed or moved then. It needs git
 // 2.40 or later (merge-tree --write-tree --merge-base).
 func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conflicted bool, err error) {
 	trees, err := r.git("", "", nil, "rev-parse", base+"^{tree}", onto+"^{tree}")
@@ -663,7 +663,7 @@ func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conf
 	out, err := cmd.Output()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return "", true, true, nil
+		return "", false, true, nil
 	}
 	if errors.As(err, &exit) && exit.ExitCode() == 129 { // usage: an option it doesn't know
 		return "", false, false, ErrGitTooOld

@@ -448,6 +448,20 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := l.Append(RecOracleVersion, map[string]any{"version": m.Version, "manifest": mBlob, "tests": len(m.Tests)}); err != nil {
 		return nil, err
 	}
+	if fu := p.Follows; fu != nil {
+		// The follow-up's implementer is held to this Run's Snapshot,
+		// Oracle and config. Should the inherited change break them (the
+		// user protected a path it edits, say), the scope check would
+		// revert it as this Attempt's Tamper: refuse instead, before any
+		// agent starts. The thread stays.
+		path, err := inheritedOutOfScope(repo, ws, snap, implementerScope(m, f))
+		if err != nil {
+			return nil, err
+		}
+		if path != "" {
+			return end(Refused, fmt.Sprintf("your repository changed since Run %s; its result now touches protected %s; /new for a fresh task", fu.Run, path))
+		}
+	}
 
 	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, SeedTemplate: p.CacheSeedTemplate}
 	pre := map[string]any{"checks": []string{"submodules", "lfs", "unmerged", "operation_in_progress"}}

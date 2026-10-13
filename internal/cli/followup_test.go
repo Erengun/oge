@@ -164,8 +164,10 @@ func TestBareOgeFollowUpKeepsHeldOutTestsOut(t *testing.T) {
 	s.type_(standardTask + "\r")
 	s.expect("ÖGE RECEIPT")
 	s.expect("(/new for a fresh task)")
+	// A user edit between Runs: the follow-up rebases (#185).
+	writeFile(t, filepath.Join(f.repo, "notes.txt"), []byte("the user's notes\n"))
 	s.type_("add Sub too\r")
-	s.expect("Continues     Run ")
+	s.expect("· rebased onto the current repository")
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -367,6 +369,43 @@ func TestBareOgeRejectEndsTheThread(t *testing.T) {
 	for _, r := range runs {
 		if r.follows != "" {
 			t.Errorf("Run %s follows %s after a Reject", r.id, r.follows)
+		}
+	}
+}
+
+// The user protected a path the first Candidate edited: the inherited edit
+// would be reverted as the follow-up's Tamper, so the follow-up is refused
+// before any agent starts, with no Tamper event (#185).
+func TestBareOgeFollowUpRefusesAnInheritedProtectedEdit(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSessionWith(t, f, func(*Env) {
+		writeFile(t, filepath.Join(filepath.Dir(f.repo), "agent.sh"), []byte(followScript+fixScript))
+	}, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\r")
+	s.ended()
+	cfg := strings.Replace(fxConfig, "[project]\n", "[project]\ntest_config = [\"add.go\"]\n", 1)
+	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
+	s.type_("add Sub too\r")
+	s.expect("its result now touches protected add.go; /new for a fresh task")
+	s.composer()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitRefused {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(f.repo), "out", "implementer-2.turn")); err == nil {
+		t.Error("an implementer started on the refused follow-up")
+	}
+	for _, d := range runDirs(t, f) {
+		recs, err := ledger.Replay(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rec := range recs {
+			if rec.Type == run.RecTamperEvent || rec.Type == run.RecScopeReverted && strings.Contains(string(rec.Data), "add.go") {
+				t.Errorf("%s: %s %s", filepath.Base(d), rec.Type, rec.Data)
+			}
 		}
 	}
 }
