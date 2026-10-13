@@ -342,6 +342,29 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	}
 }
 
+// Ctrl+S stashes a draft, Ctrl+L redraws, and \+Enter adds a line, in the
+// real program.
+func TestBareOgeStashAndBackslashNewline(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("half a thought zq7")
+	s.expectScreen("half a thought zq7")
+	s.type_("\x13") // Ctrl+S
+	s.expectScreen("stashed")
+	s.type_("\x0c") // Ctrl+L
+	s.composer()
+	s.type_("\x13") // restores
+	s.expectScreen("│ half a thought zq7")
+	s.type_("\\\rmore")
+	s.expectScreen("│ more")
+	s.type_("\x03\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d", code)
+	}
+}
+
 // A second Task in the same session, written in $EDITOR with Ctrl+E.
 func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	t.Parallel()

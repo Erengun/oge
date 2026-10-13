@@ -121,7 +121,7 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 func helpText() string {
 	lines := []string{
 		"Keys",
-		"  enter run · ctrl+j newline · ctrl+e editor · tab setup · esc or ctrl+c clear, then leave",
+		"  enter run · ctrl+j or \\+enter newline · ctrl+e or ctrl+g editor · ctrl+s stash draft · ctrl+l redraw · tab setup · esc or ctrl+c clear, then leave",
 		"  ↑ ↓ history · ctrl+r search history · ↓ on an empty box: the actions of the last Run",
 		"  ctrl+k kill to line end · ctrl+u to line start · ctrl+w word back · alt+d word forward · ctrl+y yank",
 		"  alt+b alt+f move by word · ctrl+_ or ctrl+z undo",
