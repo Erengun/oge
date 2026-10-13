@@ -486,7 +486,7 @@ func (r *RunRepo) ShowAll(commit string, paths []string) (map[string][]byte, err
 			return nil, fmt.Errorf("git cat-file --batch: %s is a %s, not a file", p, header[1])
 		}
 		var size int
-		if _, err := fmt.Sscan(header[2], &size); err != nil || size < 0 || size+1 > len(out) {
+		if _, err := fmt.Sscan(header[2], &size); err != nil || size < 0 || size+1 > len(out) || out[size] != '\n' {
 			return nil, fmt.Errorf("git cat-file --batch: %s: bad size %q", p, header[2])
 		}
 		files[p] = out[:size:size]

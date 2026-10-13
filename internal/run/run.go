@@ -137,6 +137,9 @@ type Event struct {
 	Conflicts []string
 	// EvResolved: "verify" or "check".
 	Next string
+	// EvPreflight: why setup failed on the Snapshot; empty when Preflight
+	// passed. Only a Run with setup sends it, at the join, before it ends.
+	Why string
 }
 
 // Attempt is one execution of a Stage.
@@ -222,6 +225,10 @@ const DefaultCacheWait = 30 * time.Second
 // TODO(#40-decision): ADR-0012's interrupted status and exit 130 come
 // later; until then a cancelled Run is an Infrastructure stop.
 const interrupted = "interrupted: the Run was cancelled"
+
+// errSetupFailed is the cause of an Attempt cancelled because setup failed
+// on the Snapshot (#198).
+var errSetupFailed = errors.New("setup failed on the Snapshot")
 
 // ErrNoAdapter means the Stage's agent has no adapter in this build.
 var ErrNoAdapter = errors.New("no adapter")
@@ -403,8 +410,11 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	// all while the implementer works: nothing the Attempt does depends on
 	// them (#195). A failing setup cancels the Attempt and refuses the Run,
 	// and nothing after the first Attempt starts before they're done.
-	attemptCtx, cancelAttempt := context.WithCancel(ctx)
-	defer cancelAttempt()
+	// A Refused Run can still hold a committed Candidate: the agent may
+	// finish before setup fails. Delivery refuses Refused Runs, so that
+	// Candidate is never delivered.
+	attemptCtx, cancelAttempt := context.WithCancelCause(ctx)
+	defer cancelAttempt(nil)
 	seedCtx, cancelSeed := context.WithCancel(ctx)
 	type preflight struct {
 		seed    *oracle.Seed
@@ -417,7 +427,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		var pf preflight
 		pf.seed, pf.setup, pf.err = runner.NewSeed(seedCtx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
 		if pf.err != nil || (pf.setup != nil && !pf.setup.Pass) {
-			cancelAttempt()
+			cancelAttempt(errSetupFailed)
 		} else {
 			pf.control = startControl(seedCtx, runner, pf.seed, repo, m, snap, f.Setup.Run, res.Dir)
 		}
@@ -459,6 +469,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return true, r, err
 		}
 		if !e.Pass {
+			p.Observe(Event{Kind: EvPreflight, Result: res, Why: e.Why})
 			r, err = end(Refused, fmt.Sprintf("setup %q fails on the Snapshot (%s); fix it before running", f.Setup.Run, e.Why))
 			return true, r, err
 		}
@@ -845,6 +856,9 @@ loop:
 		case <-ctx.Done():
 			_ = sess.Interrupt()
 			a.Failure = "interrupted"
+			if errors.Is(context.Cause(ctx), errSetupFailed) {
+				a.Failure = "cancelled: " + errSetupFailed.Error()
+			}
 			break loop
 		}
 	}

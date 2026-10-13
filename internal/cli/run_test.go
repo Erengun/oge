@@ -518,7 +518,8 @@ func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
 	// fails while the agent works: the Attempt is cancelled and Preflight
 	// refuses (#195).
 	marker := filepath.Join(t.TempDir(), "agent-ran")
-	writeFile(t, filepath.Join(f.repo, "setup.sh"), []byte(waitForScript(marker, "test -f add_test.go && exit 7\n")))
+	pwdFile := filepath.Join(t.TempDir(), "setup-pwd")
+	writeFile(t, filepath.Join(f.repo, "setup.sh"), []byte(waitForScript(marker, "pwd > '"+filepath.ToSlash(pwdFile)+"'\ntest -f add_test.go && exit 7\n")))
 	cfg := fxConfig + "[setup]\nrun = \"sh setup.sh\"\n"
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
 	start := time.Now()
@@ -528,6 +529,33 @@ func TestRunPreflightRunsSetupOnTheSnapshot(t *testing.T) {
 	}
 	if d := time.Since(start); d > 30*time.Second {
 		t.Errorf("the Run took %v: the failing setup didn't cancel the Attempt", d)
+	}
+	// Setup ran in the cache seed, not in the implementer's Workspace.
+	pwd, err := os.ReadFile(pwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.ToSlash(strings.TrimSpace(string(pwd))); !strings.Contains(got, "cache-seed") || strings.Contains(got, "work/implement") {
+		t.Errorf("setup ran in %q, want the cache seed", got)
+	}
+	dir := f.onlyRun(t)
+	ended := records(t, dir, run.RecAttemptEnded)
+	if len(ended) != 1 {
+		t.Fatalf("want one AttemptEnded, got %d", len(ended))
+	}
+	if fail, _ := ended[0]["failure"].(string); fail != "cancelled: setup failed on the Snapshot" {
+		t.Errorf("AttemptEnded failure = %q", fail)
+	}
+	if c, _ := ended[0]["candidate"].(string); c != "" {
+		t.Errorf("AttemptEnded has candidate %q", c)
+	}
+	pre := records(t, dir, run.RecPreflightObserved)
+	if len(pre) != 1 {
+		t.Fatalf("want one PreflightObserved, got %d", len(pre))
+	}
+	setup, _ := pre[0]["setup"].(map[string]any)
+	if pass, ok := setup["pass"].(bool); !ok || pass {
+		t.Errorf("PreflightObserved setup = %v, want pass=false", setup)
 	}
 }
 

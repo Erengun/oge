@@ -378,7 +378,9 @@ func (r *renderer) observe(ev run.Event) {
 	case run.EvStarted:
 		r.p("%s", startedLine(ev.Result, r.frozen))
 	case run.EvPreflight:
-		r.p("%-10s %s", "preflight", preflightText(r.frozen))
+		if ev.Why == "" { // a failing setup is the refusal's to report
+			r.p("%-10s %s", "preflight", preflightText(r.frozen))
+		}
 	case run.EvAgent:
 		if !r.verbose || (ev.Attempt.Role == "verifier" && !qaStep(ev.Agent)) {
 			return
