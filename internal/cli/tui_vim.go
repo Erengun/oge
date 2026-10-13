@@ -187,6 +187,11 @@ func (h *home) enterInsert() {
 // on an empty box, which opens the key panel.
 func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	c := h.comp
+	if h.visual != 0 && k.Code == tea.KeyBackspace && k.Mod == 0 {
+		h.motion("h", max(h.count, 1)) // as h, never a deletion
+		h.count = 0
+		return true
+	}
 	if k.Text == "" || k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) != 0 {
 		return false
 	}
@@ -214,7 +219,7 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	h.effCount = n
 	l := c.lines[c.row]
 	if (k.Text == "k" && c.row == 0) || (k.Text == "j" && c.row == len(c.lines)-1) {
-		h.walkHistory(k.Text) // k on the first line and j on the last are ↑ and ↓
+		h.walkHistory(k.Text, n) // k on the first line and j on the last are ↑ and ↓
 		h.endCommand()
 		return true
 	}
@@ -307,15 +312,18 @@ func (h *home) motion(t string, n int) bool {
 	return true
 }
 
-// walkHistory is k on the first line or j on the last: the same as ↑ or ↓,
-// so history is walked by one piece of code. The cursor is put back on a
-// character, as NORMAL keeps it.
-func (h *home) walkHistory(t string) {
-	code := tea.KeyUp
-	if t == "j" {
-		code = tea.KeyDown
+// walkHistory is k on the first line or j on the last, n times: ↑ and ↓ as
+// history knows them. j only walks while history is being walked: it never
+// focuses the action row, so a key typed in NORMAL can't apply a Run
+// (ADR-0015). The cursor rests on a character, as NORMAL keeps it.
+func (h *home) walkHistory(t string, n int) {
+	for range n {
+		if t == "k" {
+			h.recall(-1)
+		} else if h.navigating {
+			h.recall(1)
+		}
 	}
-	h.Update(tea.KeyPressMsg{Code: code})
 	c := h.comp
 	c.col = min(snapCol(c.lines[c.row], c.col, -1), lastCol(c.lines[c.row]))
 }
@@ -342,6 +350,9 @@ func (h *home) escapeSeq(k tea.KeyPressMsg) bool {
 		m := len(c.undo)
 		c.key(tea.KeyPressMsg{Code: tea.KeyBackspace})
 		c.undo = c.undo[:min(m, len(c.undo))] // taking the key back is no undo step of its own
+		if h.menu != nil {                    // the first key may have opened the slash menu
+			h.menu, h.menuOff, h.menuOffText = nil, true, c.text()
+		}
 		if n := len(h.insRec); n > 0 {
 			h.insRec = h.insRec[:n-1] // . never replays the first key
 		}

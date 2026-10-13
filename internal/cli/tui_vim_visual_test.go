@@ -219,3 +219,58 @@ func TestVimJKMoveWithinLinesBeforeTheEdge(t *testing.T) {
 		t.Errorf("j on the last line: %q", h.comp.text())
 	}
 }
+
+// ADR-0015: applying is an explicit act, so a NORMAL key never reaches it.
+func TestVimJDoesNotFocusTheActionRow(t *testing.T) {
+	applied := 0
+	h := vimRun("", "")
+	h.last = &lastRun{apply: func() string { applied++; return "applied" }}
+	typeText(h, "j")
+	if h.actions {
+		t.Fatal("j focused the action row")
+	}
+	typeText(h, "a")
+	if applied != 0 || h.normal {
+		t.Errorf("applied %d, normal %v: a should append in INSERT", applied, h.normal)
+	}
+}
+
+func TestVimEdgeHistoryCounts(t *testing.T) {
+	h := vimRun("draft", "")
+	h.hist = &history{entries: []string{"one", "two", "three"}}
+	typeText(h, "2k")
+	if h.comp.text() != "two" {
+		t.Errorf("2k: %q", h.comp.text())
+	}
+}
+
+func TestVimBackspaceInVisualMovesLeft(t *testing.T) {
+	h := vimRun("abc", "v")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if h.comp.text() != "abc" || h.comp.col != 1 || h.visual != 'v' {
+		t.Errorf("text %q col %d visual %q", h.comp.text(), h.comp.col, h.visual)
+	}
+}
+
+func TestVimEscapeClosesTheMenuTheFirstKeyOpened(t *testing.T) {
+	h := testHome(80)
+	h.vim, h.vimEscape = true, "rr"
+	now := time.Unix(1000, 0)
+	h.now = func() time.Time { return now }
+	typeText(h, "/rr")
+	if !h.normal || h.menu != nil || h.comp.text() != "/" {
+		t.Errorf("normal=%v menu=%v text=%q", h.normal, h.menu != nil, h.comp.text())
+	}
+}
+
+func TestVimEscapeIsDisarmedByAPaste(t *testing.T) {
+	h := testHome(80)
+	h.vim, h.vimEscape = true, "jj"
+	h.now = func() time.Time { return time.Unix(1000, 0) }
+	typeText(h, "aj")
+	h.Update(tea.PasteMsg{Content: "x"})
+	typeText(h, "j")
+	if h.normal || h.comp.text() != "ajxj" {
+		t.Errorf("normal=%v text=%q", h.normal, h.comp.text())
+	}
+}

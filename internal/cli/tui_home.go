@@ -515,7 +515,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		return h, h.wheel(msg)
 	case tea.PasteMsg:
-		h.actions = false
+		h.actions, h.escArmed = false, false
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
