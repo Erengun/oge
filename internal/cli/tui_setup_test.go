@@ -600,3 +600,29 @@ func TestSetupPanelTooSmall(t *testing.T) {
 		t.Errorf("no too-small line:\n%s", f)
 	}
 }
+
+// Down past the last row scrolls through the read-only sections, so the whole
+// launch section can be read at 80x24 (#212).
+func TestSetupPanelScrollsToReadOnlySections(t *testing.T) {
+	h, _ := setupHome(t)
+	h.width, h.height = 80, 24
+	press(h, tab())
+	cursorTo(h, rowAddGlob)
+	if f := frame(h); strings.Contains(f, "no reads of") {
+		t.Fatalf("launch section visible before scrolling:\n%s", f)
+	}
+	for i := 0; i < 40; i++ {
+		press(h, down())
+	}
+	f := frame(h)
+	for _, w := range []string{"Agent launched with", "MCP servers", "no reads of", "verify     codex"} {
+		if !strings.Contains(f, w) {
+			t.Errorf("%q not visible at the end:\n%s", w, f)
+		}
+	}
+	golden(t, "setup-panel-scrolled-end", f)
+	press(h, tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.panel.scroll == 0 || h.panel.cursor != len(h.panel.rows())-1 {
+		t.Errorf("up should scroll back first: scroll=%d", h.panel.scroll)
+	}
+}

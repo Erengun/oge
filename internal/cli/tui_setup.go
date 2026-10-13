@@ -375,6 +375,7 @@ type setupPanel struct {
 	width       int              // the terminal's, for wrapping
 	height      int              // lines the panel may use; 0 is no limit (#212)
 	termHeight  int              // the terminal's height; 0 if unknown
+	scroll      int              // lines scrolled past the last row, into the read-only sections
 	pick        *list.Model      // a picker is open for the cursor's row
 	input       *textinput.Model // the model box is open for the cursor's row
 }
@@ -694,10 +695,19 @@ func (p *setupPanel) key(k tea.KeyPressMsg) (closed bool) {
 			p.remove(r)
 			p.cursor = min(p.cursor, len(p.rows())-1)
 		case "up", "ctrl+p":
-			p.cursor = max(p.cursor-1, 0)
+			if p.scroll > 0 {
+				p.scroll--
+			} else {
+				p.cursor = max(p.cursor-1, 0)
+			}
 		case "down", "ctrl+n":
-			p.cursor = min(p.cursor+1, len(rows)-1)
+			if p.cursor == len(rows)-1 { // past the last row: scroll the read-only lines
+				p.scroll++
+			} else {
+				p.cursor++
+			}
 		case "enter", "space", " ":
+			p.scroll = 0
 			p.open(r)
 		}
 	}
@@ -749,7 +759,16 @@ func (p *setupPanel) lines() []string {
 			focusHi = len(out) - 1
 		}
 	}
+	if p.cursor != len(rows)-1 {
+		p.scroll = 0
+	}
+	last := focusHi
 	out = append(out, p.validation(rows)...)
 	out = append(out, p.launchLines()...)
+	if p.scroll > 0 { // the focus walks on through the read-only lines
+		p.scroll = min(p.scroll, len(out)-1-last)
+		focusLo = last + p.scroll
+		focusHi = focusLo
+	}
 	return windowLines(out, focusLo, focusHi, p.height, p.moreUp, p.moreDown)
 }
