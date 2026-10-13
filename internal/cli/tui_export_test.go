@@ -136,8 +136,44 @@ func TestCopyTooLongIsPrintedNotSent(t *testing.T) {
 	if seq, _ := h.copySeq(); seq != "" {
 		t.Error("sent an oversize payload")
 	}
-	cmd, _ := h.copyCmd(nil)
-	if s := fmt.Sprint(cmd()); !strings.Contains(s, "too long for the clipboard") {
+	if cmd, _ := h.copyCmd(nil); cmd == nil {
+		t.Fatal("printed nothing")
+	}
+	if s := strings.Join(h.scroll, "\n"); !strings.Contains(s, "too long for the clipboard") {
 		t.Errorf("printed %.80q", s)
+	}
+}
+
+// A print taller than the room above the frame goes in pieces that each
+// fit, or insertAbove lands it over the frame (#247).
+func TestFitPieces(t *testing.T) {
+	lines := make([]string, 30)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i)
+	}
+	text := strings.Join(lines, "\n")
+	pieces := fitPieces(text, 80, 24, 9) // room: 14 rows
+	if got := strings.Join(pieces, "\n"); got != text {
+		t.Fatalf("the pieces don't make the text:\n%s", got)
+	}
+	for _, p := range pieces {
+		if n := strings.Count(p, "\n") + 1; n > 14 {
+			t.Errorf("a piece of %d rows, room 14", n)
+		}
+	}
+	if len(pieces) != 3 {
+		t.Errorf("%d pieces, want 3", len(pieces))
+	}
+	// A wide line counts the rows it wraps to.
+	wide := strings.Repeat("x", 200) // 3 rows at width 80
+	if p := fitPieces(wide+"\n"+wide+"\nend", 80, 10, 3); len(p) != 2 {
+		t.Errorf("wrapped rows: %d pieces, want 2", len(p))
+	}
+	// Unknown height or no room: whole, or one line at a time.
+	if p := fitPieces(text, 80, 0, 9); len(p) != 1 {
+		t.Errorf("unknown height: %d pieces", len(p))
+	}
+	if p := fitPieces("a\nb", 80, 5, 9); len(p) != 2 {
+		t.Errorf("no room: %d pieces, want one line each", len(p))
 	}
 }
