@@ -54,3 +54,13 @@ theme = "daltonized"
 ```
 
 The setup panel has a `theme` row; picking one repaints the open view at once, and [s] saves it here with the other choices. `NO_COLOR` still wins: no colour at all, and the row says so. A theme only changes colour: every status keeps its glyph and its word (`✓`, `✗`, `+`, `-`), so none is shown by colour alone.
+
+**Custom theme.** For your own colours, put a `theme.toml` next to the user config (`$XDG_CONFIG_HOME/oge/theme.toml`, else `~/.config/oge/theme.toml`). It overrides colours on top of a base preset. Keys are `base` (one of the presets above; without it, the preset chosen by `theme`), and the colour roles `accent`, `ok` and `bad`, each `"#rrggbb"` or an ANSI colour number 0 to 15.
+
+```toml
+base = "dark"
+accent = "#ff9e64"
+ok = 10
+```
+
+The file is strict: an unknown key or a bad colour is named in a one-line notice in the home (with the file), and the view uses the base preset alone; it never stops oge. The file is re-read when the composer opens after a Run, and on Ctrl+L, never in the middle of a Run. `NO_COLOR` still wins, and the file changes colours only: every status keeps its glyph and its word.

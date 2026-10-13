@@ -300,6 +300,7 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	user := userForNotify(env)
 	u.notify = notifierFor(env, f, user)
 	u.m.st.setTheme(user.ThemeName())
+	u.m.st.reloadCustomTheme(env.Getenv)
 	u.m.notify = u.notify
 	return u
 }
