@@ -253,7 +253,7 @@ func (s *homeSession) settledScreen() string {
 func (s *homeSession) expectScreen(text string) {
 	s.t.Helper()
 	screen := func(b string) string {
-		var v vt
+		v := vt{height: 24} // inline printing needs the terminal's height
 		v.write([]byte(b))
 		return v.String()
 	}

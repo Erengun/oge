@@ -99,7 +99,11 @@ func Add(a, b int) int {
 EOF
 `
 		code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
-		if !neverAccepted(code, out) || !strings.Contains(out, "fx.ExampleAdd started but never finished") {
+		// Under -race the comparison can win the race against the exit; the
+		// Example then fails normally. Either way it is never attested passing.
+		honest := strings.Contains(out, "fx.ExampleAdd started but never finished") ||
+			strings.Contains(out, "fx.ExampleAdd failed")
+		if !neverAccepted(code, out) || !honest || strings.Contains(out, "fx.ExampleAdd passed") {
 			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 		}
 	})
