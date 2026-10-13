@@ -76,6 +76,10 @@ var keyTable = []keyBinding{
 	{"Vim (when enabled)", "h j k l", []string{"h", "j", "k", "l"}, "left · down · up · right (NORMAL)"},
 	{"Vim (when enabled)", "w e b", []string{"w", "e", "b"}, "next word · word end · previous (NORMAL)"},
 	{"Vim (when enabled)", "0 ^ $", []string{"0", "^", "$"}, "line start · first char · end (NORMAL)"},
+	{"Vim (when enabled)", "d c y", []string{"d", "c", "y"}, "operator + motion or iw i\" i( · dd cc yy (NORMAL)"},
+	{"Vim (when enabled)", "x · D", []string{"x", "D"}, "delete the character · to the line end (NORMAL)"},
+	{"Vim (when enabled)", "p · P", []string{"p", "P"}, "put after · before (the kill ring)"},
+	{"Vim (when enabled)", "u · .", []string{"u", "."}, "undo · repeat the last change"},
 }
 
 // keyLines is the table as plain lines: a heading per group, then its rows

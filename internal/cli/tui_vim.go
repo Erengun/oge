@@ -10,9 +10,9 @@ import (
 // The composer's vim mode (#156), off unless `vim = true` is in the user
 // config: INSERT is the composer as it is; Esc enters NORMAL, where h j k l,
 // w e b, 0 ^ $ move and i a I A o O go back to INSERT. Operators, edits and
-// text objects are #157, visual mode #158. Enter still runs the task in
-// both modes (as Claude Code's vim mode does), and Ctrl keys keep their
-// Emacs meaning. Any other plain key is swallowed in NORMAL.
+// text objects are #157 (tui_vim_ops.go), visual mode #158. Enter still runs
+// the task in both modes (as Claude Code's vim mode does), and Ctrl keys keep
+// their Emacs meaning. Any other plain key is swallowed in NORMAL.
 
 // graphemes returns where each grapheme cluster of l starts.
 func graphemes(l []rune) []int {
@@ -45,6 +45,16 @@ const (
 	clsEmpty
 )
 
+func runeClass(r rune) int {
+	switch {
+	case unicode.IsSpace(r):
+		return clsBlank
+	case isWordRune(r):
+		return clsWord
+	}
+	return clsPunct
+}
+
 type cell struct{ row, col, cls int }
 
 // cells lays the text out as one list: a cluster each, a blank for every
@@ -56,14 +66,7 @@ func (c *composer) cells() []cell {
 			out = append(out, cell{r, 0, clsEmpty})
 		}
 		for _, g := range graphemes(l) {
-			cls := clsPunct
-			switch {
-			case unicode.IsSpace(l[g]):
-				cls = clsBlank
-			case isWordRune(l[g]):
-				cls = clsWord
-			}
-			out = append(out, cell{r, g, cls})
+			out = append(out, cell{r, g, runeClass(l[g])})
 		}
 		if r+1 < len(c.lines) {
 			out = append(out, cell{r, len(l), clsBlank})
@@ -72,8 +75,8 @@ func (c *composer) cells() []cell {
 	return out
 }
 
-// vimWord moves the cursor by w (dir 1, to), e (dir 1, end) or b (dir -1).
-func (c *composer) vimWord(key string) {
+// cellIndex is the cell under the cursor.
+func (c *composer) cellIndex() ([]cell, int) {
 	cs := c.cells()
 	i := 0
 	for j, x := range cs {
@@ -81,6 +84,20 @@ func (c *composer) vimWord(key string) {
 			i = j
 		}
 	}
+	return cs, i
+}
+
+// vimWord moves the cursor by w (to), e (end) or b (previous).
+func (c *composer) vimWord(key string) {
+	cs, i := c.wordIdx(key)
+	i = min(i, len(cs)-1)
+	c.row, c.col = cs[i].row, min(cs[i].col, lastCol(c.lines[cs[i].row]))
+}
+
+// wordIdx is the cell a word motion lands on; for w it is len(cs) when no
+// word follows, which an operator needs (dw on the last word takes it whole).
+func (c *composer) wordIdx(key string) ([]cell, int) {
+	cs, i := c.cellIndex()
 	n := len(cs)
 	switch key {
 	case "w":
@@ -94,7 +111,6 @@ func (c *composer) vimWord(key string) {
 		for i < n && cs[i].cls == clsBlank {
 			i++
 		}
-		i = min(i, n-1)
 	case "e":
 		i = min(i+1, n-1)
 		for i < n-1 && (cs[i].cls == clsBlank || cs[i].cls == clsEmpty) {
@@ -112,7 +128,7 @@ func (c *composer) vimWord(key string) {
 			i--
 		}
 	}
-	c.row, c.col = cs[i].row, min(cs[i].col, lastCol(c.lines[cs[i].row]))
+	return cs, i
 }
 
 // vimLine moves up or down a line, keeping the display column, so a wide
@@ -147,6 +163,7 @@ func firstNonBlank(l []rune) int {
 func (h *home) enterNormal() {
 	h.normal = true
 	h.comp.lastOp = ""
+	h.endInsert()
 	l := h.comp.lines[h.comp.row]
 	if h.comp.col > 0 { // vim steps back onto the character it was after
 		h.comp.col = snapCol(l, h.comp.col-1, -1)
@@ -157,6 +174,10 @@ func (h *home) enterNormal() {
 func (h *home) enterInsert() {
 	h.normal = false
 	h.comp.lastOp = ""
+	h.changed = true
+	if h.insMark == 0 {
+		h.insMark = len(h.comp.undo) + 1
+	}
 }
 
 // normalKey applies a NORMAL-mode key and reports whether it took it. Enter,
@@ -167,10 +188,25 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 	if k.Text == "" || k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) != 0 {
 		return false
 	}
+	if k.Text == "?" && c.empty() {
+		return false // an empty box opens the panel
+	}
+	if d := int(k.Text[0] - '0'); len(k.Text) == 1 && d >= 0 && d <= 9 && (d > 0 || h.count > 0) {
+		h.count = h.count*10 + d
+		return true
+	}
+	h.cmd = append(h.cmd, k)
+	n := max(h.count, 1)
+	if h.vimOp != "" {
+		n *= max(h.opCount, 1)
+		h.effCount = n
+		h.operatorKey(k.Text, n)
+		h.endCommand()
+		return true
+	}
+	h.effCount = n
 	l := c.lines[c.row]
 	switch k.Text {
-	case "?":
-		return !c.empty() // an empty box opens the panel
 	case "i":
 		h.enterInsert()
 	case "a":
@@ -185,33 +221,60 @@ func (h *home) normalKey(k tea.KeyPressMsg) bool {
 		c.col = len(l)
 		h.enterInsert()
 	case "o":
+		h.insMark = len(c.undo) + 1
 		c.change("newline", func() { c.col = len(l); c.newline() })
 		h.enterInsert()
 	case "O":
+		h.insMark = len(c.undo) + 1
 		c.change("newline", func() { c.col = 0; c.newline(); c.row-- })
 		h.enterInsert()
 	case "h":
-		c.col = snapCol(l, max(c.col-1, 0), -1)
+		for range n {
+			c.col = snapCol(l, max(c.col-1, 0), -1)
+		}
 	case "l":
-		if c.col < lastCol(l) {
-			c.col = snapCol(l, c.col+1, 1)
+		for range n {
+			if c.col < lastCol(l) {
+				c.col = snapCol(l, c.col+1, 1)
+			}
 		}
 	case "j":
-		c.vimLine(1)
+		for range n {
+			c.vimLine(1)
+		}
 	case "k":
-		c.vimLine(-1)
+		for range n {
+			c.vimLine(-1)
+		}
 	case "w", "e", "b":
-		c.vimWord(k.Text)
+		for range n {
+			c.vimWord(k.Text)
+		}
 	case "0":
 		c.col = 0
 	case "^":
 		c.col = firstNonBlank(l)
 	case "$":
 		c.col = lastCol(l)
+	case "d", "c", "y":
+		h.vimOp, h.opCount, h.count = k.Text, h.count, 0
+		return true // the command goes on with the next key
+	case "x":
+		h.operate("d", "l", n)
+	case "D":
+		h.operate("d", "$", n)
+	case "p":
+		h.put(true, n)
+	case "P":
+		h.put(false, n)
+	case "u":
+		for range n {
+			c.undoStep()
+		}
+		c.col = min(snapCol(c.lines[c.row], c.col, -1), lastCol(c.lines[c.row]))
+	case ".":
+		h.repeat()
 	}
-	if h.normal {
-		c.lastOp = ""
-	}
-	h.endNavigation()
+	h.endCommand()
 	return true
 }

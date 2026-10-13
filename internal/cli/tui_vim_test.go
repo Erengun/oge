@@ -28,7 +28,7 @@ func TestVimModeSwitches(t *testing.T) {
 	if !h.normal || h.comp.col != 2 {
 		t.Fatalf("esc: normal=%v col=%d, want NORMAL on the last character", h.normal, h.comp.col)
 	}
-	typeText(h, "x") // swallowed
+	typeText(h, "z") // swallowed
 	if h.comp.text() != "abc" {
 		t.Errorf("a plain key typed in NORMAL: %q", h.comp.text())
 	}

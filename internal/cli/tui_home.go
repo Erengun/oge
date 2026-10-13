@@ -45,11 +45,12 @@ type composer struct {
 	row, col int
 	top      int // first visible row of the wrapped text
 
-	kills   string   // the kill ring's one entry (tui_edit.go)
-	killing bool     // the last edit was a kill
-	undo    []snap   // what undo brings back, newest last
-	lastOp  string   // the last edit's kind, to join typing into one undo step
-	pastes  []string // the text behind each large-paste placeholder (tui_paste.go)
+	kills    string   // the kill ring's one entry (tui_edit.go)
+	killing  bool     // the last edit was a kill
+	killLine bool     // the ring's text was taken as whole lines (vim's dd, yy)
+	undo     []snap   // what undo brings back, newest last
+	lastOp   string   // the last edit's kind, to join typing into one undo step
+	pastes   []string // the text behind each large-paste placeholder (tui_paste.go)
 }
 
 func newComposer() *composer { return &composer{lines: [][]rune{nil}} }
@@ -252,6 +253,7 @@ type home struct {
 	comp   *composer
 	// vim is the composer's vim mode (#156); normal is its NORMAL state.
 	vim, normal bool
+	vimState    // the pending operator, count and last change (tui_vim_ops.go)
 	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
 	// first ↑. search is Ctrl+R's search while it is open.
 	hist       *history
@@ -429,6 +431,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
 	h.syncMenu()
 	h.syncAt()
+	h.dropRecordingInOverlay()
 	return m, cmd
 }
 
@@ -534,6 +537,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if h.vim && !h.normal && h.insRec != nil && !h.replay {
+			h.recordInsert(msg)
+		}
 		if h.vim && h.normal && h.normalKey(msg) {
 			return h, nil
 		}
@@ -553,6 +559,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.vim && !h.normal {
 				h.enterNormal()
 			}
+			h.vimState.cancel()
 		case "ctrl+c":
 			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
 			// box, leaves (as Claude Code's prompt does).
