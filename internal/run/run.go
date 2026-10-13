@@ -336,7 +336,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	var w *walk // the walk of the graph, once it starts
 	end := func(o Outcome, why ...string) (*Result, error) {
 		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
-		if o != Accepted && w != nil {
+		if o != Accepted && w != nil && res.Candidate != "" {
+			// The final Candidate's: a Run that stops before its Check
+			// never classified it, and the last list is an earlier one's.
+			if err := w.classify(res.Candidate); err != nil {
+				return nil, err
+			}
 			res.Unresolved = w.ambiguousPaths()
 		}
 		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": res.Candidate}

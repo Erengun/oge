@@ -538,18 +538,18 @@ func TestReceiptShowsALongParkReasonWhole(t *testing.T) {
 	for i := range 60 {
 		files = append(files, fmt.Sprintf("docs/notes-%02d.md", i))
 	}
-	files = append(files, "a‮b.md")
+	files = append(files, "a\u202eb.md")
 	why := strings.Join(files, ", ")
 	b := receipttest.New(pipeline.Fast)
 	b.Attempt(receipttest.Attempt{ID: "implement#1", From: time.Second, To: 2 * time.Second, Candidate: receipttest.C1, Exit: "done"})
 	b.Check(1, receipttest.C1, 0, 3*time.Second, 4*time.Second, []receipttest.Test{{Name: "TestAdd", Attested: "pass"}}, nil)
 	b.Unresolved(5*time.Second, run.Parked, "gate.ambiguous_file", files, why)
 	r := b.Receipt()
-	want := strings.ReplaceAll(why, "‮", "<U+202E>")
+	want := strings.ReplaceAll(why, "\u202e", "<U+202E>")
 	if len([]rune(want)) <= 400 {
 		t.Fatalf("the reason is only %d runes", len([]rune(want)))
 	}
-	if out := unmarked(r.Markdown()); !strings.Contains(out, want) || strings.ContainsRune(out, '‮') {
+	if out := unmarked(r.Markdown()); !strings.Contains(out, want) || strings.ContainsRune(out, '\u202e') {
 		t.Errorf("the park reason isn't whole and escaped:\n%s", out)
 	}
 	text := r.Text(receipt.Paint{})

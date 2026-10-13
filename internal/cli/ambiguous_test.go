@@ -454,3 +454,89 @@ func TestShownLine(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+// A Run that stops before its final Candidate's Check names that
+// Candidate's Ambiguous files, never an earlier one's (#109). The first
+// Attempt leaves docs/debug.md and a failing Check, so the list it gets
+// is docs/debug.md; the send-back drops it and leaves tmp/notes.md.
+const (
+	strayThenFail = `mkdir -p docs
+printf '# debug notes\n' > docs/debug.md
+`
+	swapStray = `rm -rf docs
+mkdir -p tmp
+printf 'notes\n' > tmp/notes.md
+`
+)
+
+// unresolvedAtEnd is the Run's RunEnded or RunParked unresolved list and
+// the Candidate it names.
+func unresolvedAtEnd(t *testing.T, dir, rec string) (string, string) {
+	t.Helper()
+	var d struct {
+		Candidate  string   `json:"candidate"`
+		Unresolved []string `json:"unresolved"`
+	}
+	recordData(t, dir, rec, &d)
+	return strings.Join(d.Unresolved, ","), d.Candidate
+}
+
+// An implementer failure makes no new Candidate: the Run ends on the one
+// sent back, with its list.
+func TestAmbiguousImplementerFailureKeepsItsCandidatesList(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	script := recordTurn + `[ -e "$OGE_TEST_OUT/implementer-2.turn" ] && exit 1
+` + strayThenFail
+	code, out, errOut := f.run(t, script, "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if !strings.Contains(out, "the implementer Attempt failed") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	dir := f.onlyRun(t)
+	var first struct{ Candidate string }
+	recordData(t, dir, run.RecAttemptEnded, &first)
+	got, cand := unresolvedAtEnd(t, dir, run.RecRunEnded)
+	if got != "docs/debug.md" || cand != first.Candidate {
+		t.Errorf("RunEnded names %q on %s, want docs/debug.md on %s", got, cand, first.Candidate)
+	}
+}
+
+// A QA stop after the send-back: the new Candidate's list.
+func TestAmbiguousQAStopNamesTheNewCandidatesFiles(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	impl := `if [ -e "$OGE_TEST_OUT/implementer-2.turn" ]; then
+` + swapStray + fixScript + `exit 0
+fi
+` + strayThenFail
+	verifier := `[ -e "$OGE_TEST_OUT/verifier-2.turn" ] && exit 1`
+	code, out, errOut := f.run(t, verifierThen(verifier, impl), standardTask, "--agent", "fake", "--unattended")
+	if !strings.Contains(out, "send back") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if got, _ := unresolvedAtEnd(t, f.onlyRun(t), run.RecRunEnded); got != "tmp/notes.md" {
+		t.Errorf("RunEnded names %q, want tmp/notes.md\nstdout:\n%s", got, out)
+	}
+}
+
+// A held-out-conflict park after the send-back: the new Candidate's list.
+func TestAmbiguousHeldOutParkNamesTheNewCandidatesFiles(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	impl := `case "$OGE_FAKE_TURN" in
+*"held-out test"*)
+` + swapStray + fixScript + ` exit 0 ;;
+esac
+` + strayThenFail + `printf 'package fx\n\nfunc Neg(x int) int { return -x }\n\nfunc Add(a, b int) int {\n\tif a < 0 {\n\t\treturn 0\n\t}\n\treturn a + b\n}\n' > add.go
+`
+	verifier := `if [ -e "$OGE_TEST_OUT/verifier-2.turn" ]; then exit 0; fi
+printf 'package fx\n\nimport "testing"\n\n// AC-1\nfunc TestAddNeg(t *testing.T) {\n\tif Add(Neg(2), 1) != -1 {\n\t\tt.Fatal("negatives")\n\t}\n}\n' > neg_test.go
+`
+	code, out, errOut := f.run(t, verifierThen(verifier, impl), standardTask, "--agent", "fake", "--unattended")
+	if code != ExitParked || !strings.Contains(out, "no longer builds against the Candidate") {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	if got, _ := unresolvedAtEnd(t, f.onlyRun(t), run.RecRunParked); got != "tmp/notes.md" {
+		t.Errorf("RunParked names %q, want tmp/notes.md\nstdout:\n%s", got, out)
+	}
+}
