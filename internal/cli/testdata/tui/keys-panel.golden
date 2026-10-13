@@ -11,6 +11,7 @@
    tab                  open setup
    shift+tab            switch Standard / Fast (this session)
    alt+m                open setup at the implement model
+   !                    shell mode: run a command between Runs (ctrl+c stops)
    / · @ · ?            commands · files · this panel (on an empty box)
    ← → · ctrl+b ctrl+f  move
    home · end · ctrl+a  line start · end
@@ -20,5 +21,4 @@
    ctrl+w · alt+d       kill word back · forward
    ctrl+y               yank what was killed
    ctrl+_ · ctrl+z      undo
- History
- ↑ ↓ scroll (1-20 of 56) · esc or ? close
+ ↑ ↓ scroll (1-20 of 57) · esc or ? close
