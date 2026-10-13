@@ -146,10 +146,12 @@ func (h *home) atKey(msg tea.KeyPressMsg) (handled bool) {
 		a.list = &l
 	case "tab", "enter":
 		sel, _ := a.list.SelectedItem().(fileItem)
-		line := h.comp.lines[h.comp.row]
-		h.comp.lines[h.comp.row] = append(line[:a.col:a.col], line[h.comp.col:]...)
-		h.comp.col = a.col
-		h.comp.insert("@" + sel.path + " ")
+		h.comp.change("pick", func() {
+			line := h.comp.lines[h.comp.row]
+			h.comp.lines[h.comp.row] = append(line[:a.col:a.col], line[h.comp.col:]...)
+			h.comp.col = a.col
+			h.comp.insert("@" + sel.path + " ")
+		})
 		h.navigating = false
 	case "esc":
 		a.off, a.offText = true, h.comp.text()
