@@ -19,6 +19,7 @@ import (
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
+	"github.com/erengun/oge/internal/workspace"
 	"github.com/rivo/uniseg"
 )
 
@@ -43,6 +44,11 @@ type composer struct {
 	lines    [][]rune
 	row, col int
 	top      int // first visible row of the wrapped text
+
+	kills   string // the kill ring's one entry (tui_edit.go)
+	killing bool   // the last edit was a kill
+	undo    []snap // what undo brings back, newest last
+	lastOp  string // the last edit's kind, to join typing into one undo step
 }
 
 func newComposer() *composer { return &composer{lines: [][]rune{nil}} }
@@ -57,9 +63,13 @@ func (c *composer) text() string {
 
 func (c *composer) empty() bool { return strings.TrimSpace(c.text()) == "" }
 
+// set replaces the text and puts the cursor at its end; undo can bring the
+// old text back, and the kill ring is kept.
 func (c *composer) set(text string) {
-	*c = composer{lines: [][]rune{nil}}
-	c.insert(text)
+	c.change("set", func() {
+		c.lines, c.row, c.col, c.top = [][]rune{nil}, 0, 0, 0
+		c.insert(text)
+	})
 }
 
 // insert types s at the cursor. Newlines split the line; tabs become spaces
@@ -134,31 +144,31 @@ func (c *composer) move(dr, dc int) {
 
 // key applies an editing key; it reports whether the key was one.
 func (c *composer) key(k tea.KeyPressMsg) bool {
+	if c.editKey(k) {
+		return true
+	}
 	switch k.String() {
 	case "backspace", "ctrl+h":
-		c.backspace()
+		c.change("del", c.backspace)
 	case "delete", "ctrl+d":
-		c.delete()
+		c.change("del", c.delete)
 	case "left", "ctrl+b":
-		c.move(0, -1)
+		c.change("move", func() { c.move(0, -1) })
 	case "right", "ctrl+f":
-		c.move(0, 1)
+		c.change("move", func() { c.move(0, 1) })
 	case "up", "ctrl+p":
-		c.move(-1, 0)
+		c.change("move", func() { c.move(-1, 0) })
 	case "down", "ctrl+n":
-		c.move(1, 0)
+		c.change("move", func() { c.move(1, 0) })
 	case "home", "ctrl+a":
-		c.col = 0
+		c.change("move", func() { c.col = 0 })
 	case "end":
-		c.col = len(c.lines[c.row])
-	case "ctrl+u":
-		c.lines[c.row] = append([]rune(nil), c.lines[c.row][c.col:]...)
-		c.col = 0
+		c.change("move", func() { c.col = len(c.lines[c.row]) })
 	case "ctrl+j", "shift+enter", "alt+enter":
-		c.newline()
+		c.change("newline", c.newline)
 	default:
 		if k.Mod&(tea.ModCtrl|tea.ModAlt|tea.ModMeta|tea.ModSuper) == 0 && k.Text != "" {
-			c.insert(k.Text)
+			c.change("type", func() { c.insert(k.Text) })
 			return true
 		}
 		return false
@@ -255,6 +265,9 @@ type home struct {
 	menuQuery   string
 	menuOff     bool
 	menuOffText string
+	// at is the @file picker (#146); listFiles reads the tracked files.
+	at        atState
+	listFiles func() ([]string, error)
 	// armText and armAt: a delivery command the menu completed runs only on
 	// an Enter that comes actionsArm later, so a double tap never delivers.
 	armText string
@@ -374,6 +387,7 @@ func (h *home) Init() tea.Cmd {
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
 	h.syncMenu()
+	h.syncAt()
 	return m, cmd
 }
 
@@ -424,7 +438,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.panel.paste(msg.Content)
 		case h.saving, h.review != nil, h.search != nil:
 		default:
-			h.comp.insert(msg.Content)
+			h.comp.change("paste", func() { h.comp.insert(msg.Content) })
 			h.endNavigation()
 		}
 	case editedMsg:
@@ -465,6 +479,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h, nil
 		}
 		if h.menu != nil && h.menuKey(msg) {
+			return h, nil
+		}
+		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
 		switch msg.String() {
@@ -511,7 +528,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.setup = setupLines(res.frozen)
 			h.sel.syncFrom(res)
-			h.hist.add(text) // what the human typed, never the agent's output
+			h.at.files, h.at.filesReady = nil, false // listed again for the next composer
+			h.hist.add(text)                         // what the human typed, never the agent's output
+			h.comp.clearUndo()
 			h.navigating = false
 			t := task.Parse(text)
 			if h.thread != nil {
@@ -780,6 +799,9 @@ func (h *home) render() (string, int, int) {
 	}
 	if h.menu != nil {
 		lines = append(lines, h.menuLines()...)
+	}
+	if h.at.list != nil {
+		lines = append(lines, h.atLines()...)
 	}
 	if h.panel == nil {
 		for _, l := range h.setup {
@@ -1073,6 +1095,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		return text, l, false
 	}
 	h.deliver, h.runs = deliverer(env), recentRuns(env, root)
+	h.listFiles = func() ([]string, error) { return workspace.TrackedFiles(root) }
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}

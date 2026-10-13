@@ -666,3 +666,20 @@ func TestBareOgeHistoryRecallAndSearch(t *testing.T) {
 		t.Errorf("history %q", got)
 	}
 }
+
+// Kill, yank and undo in the composer, then submit what is left (#151).
+func TestBareOgeComposerKillYankUndoAndSubmit(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	// Ctrl+W kills "stale"; "x" is typed; Ctrl+Y brings the kill back; Ctrl+_
+	// undoes the yank; Ctrl+Y yanks it again.
+	s.type_("fix Add stale\x17x\x19\x1f\x19\r")
+	s.expect("> fix Add xstale")
+	s.ended()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+}
