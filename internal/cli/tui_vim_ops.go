@@ -436,7 +436,7 @@ func (h *home) recordInsert(k tea.KeyPressMsg) {
 // dropRecordingInOverlay forgets the INSERT in progress when a key opened a
 // menu or panel (a / or @ typed in it), which a replay must not do.
 func (h *home) dropRecordingInOverlay() {
-	if h.insRec != nil && (h.menu != nil || h.at.list != nil || h.search != nil || h.panel != nil || h.keys != nil || h.review != nil || h.saving || h.picker != nil) {
+	if h.insRec != nil && (h.menu != nil || h.at.list != nil || h.search != nil || h.panel != nil || h.keys != nil || h.review != nil || h.saving || h.picker != nil || h.diff != nil) {
 		h.insRec, h.lastChange = nil, nil
 	}
 }

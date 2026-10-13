@@ -39,6 +39,11 @@ func TestBareOgeInterruptInPagerOrEditorIsTheirs(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond) // let the signal arrive while it runs
 	}
+	// The viewer would take /diff; a terminal too short for it leaves the
+	// pager, which is what this test is about.
+	old := diffMinHeight
+	diffMinHeight = 1 << 20
+	t.Cleanup(func() { diffMinHeight = old })
 	paged := make(chan struct{}, 1)
 	f.edit = func(path string) error {
 		interrupt()
@@ -53,7 +58,11 @@ func TestBareOgeInterruptInPagerOrEditorIsTheirs(t *testing.T) {
 	s.type_("\r")
 	s.ended()
 	s.type_("/diff\r")
-	<-paged
+	select {
+	case <-paged:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the pager never ran")
+	}
 	s.type_("still here")
 	s.expect("still here")
 	s.type_("\x03\x03") // clear it, then leave

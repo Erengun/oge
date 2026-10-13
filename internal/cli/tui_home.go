@@ -336,8 +336,12 @@ type home struct {
 	label func(id, text string) (string, string)
 	// menu is the slash menu while it is open: it lists the commands that
 	// complete menuQuery. Esc closes it for the text it was closed on.
-	menu        *list.Model
-	picker      *runPicker // /runs: the Run picker while it is open (#176)
+	menu   *list.Model
+	picker *runPicker // /runs: the Run picker while it is open (#176)
+	// diff is the /diff viewer while it is open (#169); diffOf reads a
+	// Run's Candidate as files.
+	diff        *diffViewer
+	diffOf      func(id string) (string, []diffFile, bool)
 	menuQuery   string
 	menuOff     bool
 	menuOffText string
@@ -508,6 +512,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		h.width, h.height = ws.Width, ws.Height
+		if h.diff != nil {
+			h.diff.resize(ws.Width)
+		}
 	}
 	if h.run != nil {
 		if _, ok := msg.(gateSettledMsg); ok {
@@ -565,7 +572,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.hidden != nil:
+		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.diff != nil, h.hidden != nil:
 		default:
 			h.comp.change("paste", func() { h.comp.insertPaste(msg.Content) })
 			h.endNavigation()
@@ -587,6 +594,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.hiddenKey(msg)
 		case h.picker != nil:
 			return h, h.pickerKey(msg)
+		case h.diff != nil:
+			return h, h.diffKey(msg)
 		case h.actions:
 			return h.actionKey(msg)
 		case h.review != nil:
@@ -898,6 +907,9 @@ func (h *home) act(key, arg string) tea.Cmd {
 	if key == "a" {
 		h.thread = nil
 	}
+	if key == "d" && h.last != nil && h.openDiff(h.last.id) {
+		return nil // the viewer; the pager is its fallback
+	}
 	return h.last.act(key, arg)
 }
 
@@ -957,11 +969,12 @@ func (h *home) View() tea.View {
 	return v
 }
 
-// wantsMouse is true only while the slash menu or the Run picker is open.
+// wantsMouse is true only while the slash menu, the Run picker or the diff
+// viewer is open.
 // Mouse reporting takes the wheel and selection from the terminal, so it
 // is never on while the transcript or the composer is what is on screen.
 func (h *home) wantsMouse() bool {
-	return h.menu != nil || h.picker != nil
+	return h.menu != nil || h.picker != nil || h.diff != nil
 }
 
 // wheel turns a wheel tick over an open list into Up or Down. Clicks are
@@ -980,6 +993,8 @@ func (h *home) wheel(msg tea.MouseWheelMsg) tea.Cmd {
 	switch {
 	case h.picker != nil:
 		return h.pickerKey(k)
+	case h.diff != nil:
+		return h.diffKey(k)
 	case h.menu != nil:
 		h.menuKey(k)
 	}
@@ -1079,6 +1094,8 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, h.panel.lines()...)
 	case h.picker != nil:
 		lines = append(lines, h.picker.lines()...)
+	case h.diff != nil:
+		lines = append(lines, h.diff.lines()...)
 	}
 	if h.menu != nil {
 		lines = append(lines, h.menuLines()...)
@@ -1398,6 +1415,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		return text, l, false
 	}
 	h.deliver, h.runs, h.label = deliverer(env), recentRuns(env, root), labeller(env, root)
+	h.diffOf = diffLoader(env)
 	h.listFiles = func() ([]string, error) { return workspace.TrackedFiles(root) }
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
