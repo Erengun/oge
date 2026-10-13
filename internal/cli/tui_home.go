@@ -455,8 +455,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var print tea.Cmd
 		if _, ok := msg.(batchMsg); ok {
 			if lines := h.run.take(); len(lines) > 0 {
-				h.logScroll(strings.Join(lines, "\n"))
-				print = tea.Println(strings.Join(lines, "\n"))
+				print = h.println(strings.Join(lines, "\n"))
 			}
 		}
 		if !was && h.run.finished {
@@ -661,8 +660,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	m, cmd := h.start(t, res, h.width, h.height)
 	h.run = m
 	if lines := m.take(); len(lines) > 0 { // the Task's echo
-		h.logScroll(strings.Join(lines, "\n"))
-		cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
+		cmd = tea.Sequence(h.println(strings.Join(lines, "\n")), cmd)
 	}
 	return h, cmd
 }
@@ -802,9 +800,8 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 		return h, tea.Quit
 	}
 	h.last = last
-	h.logScroll(text)
 	h.reopen()
-	return h, tea.Println(text)
+	return h, h.println(text)
 }
 
 // reopen opens the composer again after a Run: empty, with what the next

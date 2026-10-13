@@ -2,9 +2,12 @@ package cli
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,7 +22,23 @@ import (
 func (h *home) logScroll(text string) {
 	if text != "" {
 		h.scroll = append(h.scroll, strings.TrimSuffix(text, "\n"))
+		if len(h.scroll) > maxScroll {
+			h.scroll = slices.Delete(h.scroll, 0, len(h.scroll)-maxScroll)
+		}
 	}
+}
+
+// maxScroll caps what /export keeps: the last lines (entries) printed.
+const maxScroll = 5000
+
+// maxOSC52 is the largest base64 payload /copy sends; terminals and tmux
+// drop longer ones.
+const maxOSC52 = 74000
+
+// println prints text above the program and keeps it for /export.
+func (h *home) println(text string) tea.Cmd {
+	h.logScroll(text)
+	return tea.Println(text)
 }
 
 // redacted is text with the escape sequences stripped and the known secret
@@ -35,19 +54,38 @@ func (h *home) exportCmd(args []string) (tea.Cmd, string) {
 	if len(h.scroll) == 0 {
 		return nil, "/export: nothing to export yet"
 	}
-	dir := h.exportDir
-	if dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			dir = ""
-		}
+	if h.exportDir == "" {
+		return nil, "export: no private state dir: nothing was written"
 	}
-	name := "oge-transcript-" + h.clock().Format("20060102-150405") + ".txt"
-	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(h.exportDir, 0o700); err != nil {
+		return nil, "export: no private state dir: " + clean(err.Error())
+	}
+	base := "oge-transcript-" + h.clock().Format("20060102-150405")
 	body := redacted(strings.Join(h.scroll, "\n")) + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		return nil, "/export: " + clean(err.Error())
+	var path string
+	for i := 1; ; i++ {
+		name := base + ".txt"
+		if i > 1 {
+			name = fmt.Sprintf("%s-%d.txt", base, i)
+		}
+		path = filepath.Join(h.exportDir, name)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if errors.Is(err, fs.ErrExist) && i < 1000 {
+			continue
+		}
+		if err != nil {
+			return nil, "/export: " + clean(err.Error())
+		}
+		_, werr := f.WriteString(body)
+		if cerr := f.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return nil, "/export: " + clean(werr.Error())
+		}
+		break
 	}
-	return tea.Println("transcript written to " + path + " (known secret patterns redacted)"), ""
+	return h.println("transcript written to " + path + " (known secret patterns redacted)"), ""
 }
 
 func (h *home) copyCmd(args []string) (tea.Cmd, string) {
@@ -55,16 +93,23 @@ func (h *home) copyCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/copy")
 	}
 	if h.last == nil {
-		return tea.Println("nothing to copy yet"), ""
+		return h.println("nothing to copy yet"), ""
 	}
 	seq, n := h.copySeq()
-	return tea.Sequence(tea.Raw(seq), tea.Println(fmt.Sprintf("copied %d lines (if your terminal supports OSC 52; run /terminal for help)", n))), ""
+	if seq == "" {
+		text := strings.TrimRight(redacted(h.last.receipt()), "\n")
+		return h.println(text + "\n(too long for the clipboard; printed it instead)"), ""
+	}
+	return tea.Sequence(tea.Raw(seq), h.println(fmt.Sprintf("copied %d lines (if your terminal supports OSC 52; run /terminal for help)", n))), ""
 }
 
 // copySeq is the OSC 52 for the last Receipt's redacted text and its line
 // count.
 func (h *home) copySeq() (string, int) {
 	text := strings.TrimRight(redacted(h.last.receipt()), "\n")
+	if base64.StdEncoding.EncodedLen(len(text)) > maxOSC52 {
+		return "", strings.Count(text, "\n") + 1
+	}
 	return osc52(text, h.tmux), strings.Count(text, "\n") + 1
 }
 

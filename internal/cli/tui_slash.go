@@ -117,7 +117,7 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/help")
 	}
-	return tea.Println(helpText()), ""
+	return h.println(helpText()), ""
 }
 
 // helpText is /help: the keys (from the key table the ? panel shows too),
@@ -363,7 +363,7 @@ func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 		return nil, problem
 	}
 	if len(runs) == 0 {
-		return tea.Println("no Runs of this repository yet"), ""
+		return h.println("no Runs of this repository yet"), ""
 	}
 	if h.height >= pickerMinHeight {
 		h.picker = newRunPicker(runs, h.st, h.height)
@@ -373,7 +373,7 @@ func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 	for _, r := range runs {
 		lines = append(lines, runLine(r))
 	}
-	return tea.Println(strings.Join(lines, "\n")), ""
+	return h.println(strings.Join(lines, "\n")), ""
 }
 
 // deliverSlash is /receipt, /diff, /apply and /branch: with a Run id they
