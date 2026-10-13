@@ -291,9 +291,14 @@ func showDiff(env Env, r *delivery.Run, patch []byte) error {
 // diffText is the diff as oge diff shows it: a head line, then the patch.
 func diffText(env Env, r *delivery.Run, patch []byte) string {
 	st := newStyles(colorAllowed(env.Getenv))
-	head := st.dim(fmt.Sprintf("Run %s · %s · Candidate %s against the Snapshot %s", r.ID, outcomeWord(r),
-		delivery.Short(r.Candidate), delivery.Short(r.Snapshot)))
-	return head + "\n\n" + colorDiff(delivery.Clean(patch), st)
+	return st.dim(diffHead(r)) + "\n\n" + colorDiff(delivery.Clean(patch), st)
+}
+
+// diffHead is the line over a diff: which Run, and what against what. The
+// diff viewer (#169) shows the same line.
+func diffHead(r *delivery.Run) string {
+	return fmt.Sprintf("Run %s · %s · Candidate %s against the Snapshot %s", r.ID, outcomeWord(r),
+		delivery.Short(r.Candidate), delivery.Short(r.Snapshot))
 }
 
 // colorDiff paints a patch: file headers bold, hunk headers in the accent,

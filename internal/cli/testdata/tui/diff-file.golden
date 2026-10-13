@@ -1,0 +1,18 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Run 20261013T101010-abcdef · Accepted · Candidate abc against the Snapshot def
+ CLAUDE.md  +2 −0 · held back
+ # Öge: CLAUDE.md is an agent-config change, held back: oge apply and oge branc
+ diff --git a/CLAUDE.md b/CLAUDE.md
+ new file mode 100644
+ index 0000000..3333333
+ --- /dev/null
+ +++ b/CLAUDE.md
+ @@ -0,0 +1,2 @@
+ +# notes
+ +more
+ ↑↓ pgup pgdn scroll · 100% · esc back
+ Standard · implement claude:sonnet · verify codex
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor

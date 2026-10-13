@@ -28,6 +28,7 @@ import (
 //	setup picker/editor     closes it, panel stays     same
 //	Run picker              closes it                  same (a filter first)
 //	Run picker confirm      cancels the confirmation   same
+//	diff viewer             back to the list, then closes   same
 //	Gate                    nothing                    cancels the Run
 //	Gate reason prompt      back to the Gate           back to the Gate
 //	Run in progress         nothing (collapses ^O)     cancels; the second forces
@@ -51,6 +52,8 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 		add(h.panel != nil && h.panel.input != nil, "input")
 		add(h.picker != nil, "picker")
 		add(h.picker != nil && h.picker.cmd != "", "confirm")
+		add(h.diff != nil, "diff")
+		add(h.diff != nil && h.diff.viewing, "file")
 		add(h.vim && h.normal, "normal")
 		add(h.quit, "QUIT")
 		if h.comp.empty() {
@@ -139,6 +142,14 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 			h, _ := pickerHome(t)
 			return h
 		}, "empty", "empty"},
+		{"diff viewer", func(t *testing.T) *home {
+			return diffHome(t)
+		}, "empty", "empty"},
+		{"diff viewer file", func(t *testing.T) *home {
+			h := diffHome(t)
+			h.Update(enter())
+			return h
+		}, "diff+empty", "diff+empty"},
 		{"Run picker confirmation", func(t *testing.T) *home {
 			h, _ := pickerHome(t)
 			key(h, "a")

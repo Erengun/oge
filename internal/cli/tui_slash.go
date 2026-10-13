@@ -44,7 +44,7 @@ func slashCommands() []slashCmd {
 		{name: "/effort", usage: "/effort <stage> <level>", desc: "a Stage's effort, Claude only (from setup)", args: true, run: (*home).effortCmd},
 		{name: "/runs", usage: "/runs", desc: "recent Runs in this repo", run: (*home).runsCmd},
 		{name: "/receipt", usage: "/receipt [run]", desc: "the Receipt of a Run", run: deliverSlash("r", "receipt")},
-		{name: "/diff", usage: "/diff [run]", desc: "a Run's Candidate against the Snapshot", run: deliverSlash("d", "diff")},
+		{name: "/diff", usage: "/diff [run]", desc: "a Run's Candidate: files, then each diff", run: (*home).diffCmd},
 		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
 		{name: "/branch", guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
 		{name: "/label", usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},

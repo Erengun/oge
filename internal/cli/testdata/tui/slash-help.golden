@@ -62,7 +62,7 @@ Commands
   /effort <stage> <level>            a Stage's effort, Claude only (from setup)
   /runs                              recent Runs in this repo
   /receipt [run]                     the Receipt of a Run
-  /diff [run]                        a Run's Candidate against the Snapshot
+  /diff [run]                        a Run's Candidate: files, then each diff
   /apply [run]                       apply a Run's Candidate to your tree
   /branch [run] [name]               a Run's Candidate as a branch
   /label [run] <text>                name a Run (yours; not Evidence); no text clears
