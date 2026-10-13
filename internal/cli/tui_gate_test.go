@@ -209,3 +209,32 @@ func TestTUIAttentionLine(t *testing.T) {
 		t.Errorf("at a Gate:\n%s", got)
 	}
 }
+
+// The resolved Gate frame is still on the terminal when its outcome and the
+// Receipt are printed; the print scrolls it into the transcript (#233). So
+// the update that resolves a Gate waits a frame before it prints anything.
+func TestHomeWaitsAFrameBeforePrintingPastAResolvedGate(t *testing.T) {
+	h := newTUIHarness(t, false, 70)
+	r := boundExhaustionAt(h)
+	h.openGate(r)
+	home := testHome(70)
+	home.run = h.m
+	ev := run.Event{Kind: run.EvDecided, Gate: &r, Decision: &gate.Decision{}}
+	_, cmd := home.Update(batchMsg{progressOf(ev, h.f, h.clock)})
+	if h.m.gate != nil {
+		t.Fatal("the Gate is still open after its decision")
+	}
+	// The first step must be the wait: with nothing else to print the
+	// command is that wait alone, otherwise a sequence that starts with it.
+	start := time.Now()
+	msg := cmd()
+	if steps := reflect.ValueOf(msg); steps.Kind() == reflect.Slice {
+		msg = steps.Index(0).Interface().(tea.Cmd)()
+	}
+	if msg != nil {
+		t.Fatalf("the first step is %T, want a wait", msg)
+	}
+	if time.Since(start) < time.Second/tuiFPS {
+		t.Errorf("waited %v, less than a frame", time.Since(start))
+	}
+}

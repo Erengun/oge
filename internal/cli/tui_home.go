@@ -403,6 +403,12 @@ type editedMsg struct {
 	err  error
 }
 
+// gateSettle waits out two frames, so the renderer has drawn the view
+// without the resolved Gate before anything is printed above it.
+func gateSettle() tea.Cmd {
+	return tea.Tick(2*time.Second/tuiFPS, func(time.Time) tea.Msg { return nil })
+}
+
 // ctxDoneMsg tells the composer that Öge was interrupted.
 type ctxDoneMsg struct{}
 
@@ -436,26 +442,33 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.onEnded(ended(e))
 		}
 		was := h.run.finished
+		gated := h.run.gate != nil
 		_, cmd := h.run.Update(msg)
 		alert := h.run.flushAlerts()
 		// Only progress finishes stages. What finished is printed before the
 		// next progress is waited for, so the transcript keeps its order.
-		var print tea.Cmd
+		var print, settle tea.Cmd
 		if _, ok := msg.(batchMsg); ok {
 			if lines := h.run.take(); len(lines) > 0 {
 				print = tea.Println(strings.Join(lines, "\n"))
 			}
 		}
+		if gated && h.run.gate == nil {
+			// The open Gate frame is still what the terminal shows: a print
+			// now would scroll it into the transcript (#233). Let a frame
+			// without it be drawn first.
+			settle = gateSettle()
+		}
 		if !was && h.run.finished {
 			// The view has finished; its tea.Quit is for oge "task". The
 			// session goes on once the Run itself has returned.
 			if h.done == nil {
-				return h, tea.Sequence(print, alert)
+				return h, tea.Sequence(settle, print, alert)
 			}
 			done := h.done
-			return h, tea.Sequence(print, alert, func() tea.Msg { return runEndedMsg(<-done) })
+			return h, tea.Sequence(settle, print, alert, func() tea.Msg { return runEndedMsg(<-done) })
 		}
-		return h, tea.Sequence(print, alert, cmd)
+		return h, tea.Sequence(settle, print, alert, cmd)
 	}
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
