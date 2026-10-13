@@ -72,9 +72,19 @@ func TestTUITodosAreNotQAs(t *testing.T) {
 func TestPlainTodoLine(t *testing.T) {
 	h := newTUIHarness(t, false, 80)
 	var out bytes.Buffer
-	r := &renderer{w: &out, frozen: h.f}
+	r := &renderer{w: &out, verbose: true, frozen: h.f}
 	for _, e := range []agent.Event{todoEvent(sixTodos()[:5]...), todoEvent(sixTodos()...), {Kind: agent.Claim, Tool: "TodoWrite"}} {
 		r.observe(run.Event{Kind: run.EvAgent, Agent: e, Attempt: h.att})
 	}
 	golden(t, "plain-todos", out.String())
+}
+
+func TestPlainNoTodoLineWithoutV(t *testing.T) {
+	h := newTUIHarness(t, false, 80)
+	var out bytes.Buffer
+	r := &renderer{w: &out, frozen: h.f}
+	r.observe(run.Event{Kind: run.EvAgent, Agent: todoEvent(sixTodos()...), Attempt: h.att})
+	if out.Len() != 0 {
+		t.Errorf("default plain output shows the plan:\n%s", out.String())
+	}
 }

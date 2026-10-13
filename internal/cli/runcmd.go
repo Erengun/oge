@@ -395,8 +395,8 @@ func (r *renderer) observe(ev run.Event) {
 		}
 	case run.EvAgent:
 		if ev.Agent.Tool == "TodoWrite" {
-			// The plan, one line per update (display only).
-			if ev.Attempt.Role != "verifier" {
+			// The plan, one line per update, with -v (ADR-0019).
+			if r.verbose && ev.Attempt.Role != "verifier" {
 				if line := todoSummary(todoItems(ev.Agent.Todos)); line != "" {
 					r.p("%s", line)
 				}
