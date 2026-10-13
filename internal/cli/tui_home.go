@@ -472,6 +472,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pageFailedMsg:
 		h.msg = []string{"oge: showing the diff: " + clean(msg.err.Error())}
 		return h, nil
+	case tea.MouseWheelMsg:
+		return h, h.wheel(msg)
 	case tea.PasteMsg:
 		h.actions = false
 		switch {
@@ -844,7 +846,39 @@ func (h *home) View() tea.View {
 	c := tea.NewCursor(x, y)
 	c.Blink = false
 	v.Cursor = c
+	if h.wantsMouse() {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
+}
+
+// wantsMouse is true only while the slash menu or the Run picker is open.
+// Mouse reporting takes the wheel and selection from the terminal, so it
+// is never on while the transcript or the composer is what is on screen.
+func (h *home) wantsMouse() bool {
+	return h.menu != nil || h.picker != nil
+}
+
+// wheel turns a wheel tick over an open list into Up or Down. Clicks are
+// not handled: an inline frame has no known screen row to map them to.
+func (h *home) wheel(msg tea.MouseWheelMsg) tea.Cmd {
+	var code rune
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		code = tea.KeyUp
+	case tea.MouseWheelDown:
+		code = tea.KeyDown
+	default:
+		return nil
+	}
+	k := tea.KeyPressMsg{Code: code}
+	switch {
+	case h.picker != nil:
+		return h.pickerKey(k)
+	case h.menu != nil:
+		h.menuKey(k)
+	}
+	return nil
 }
 
 // render is the composer frame, and where the cursor is in it.
