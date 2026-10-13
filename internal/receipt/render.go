@@ -93,6 +93,9 @@ func (r *Receipt) Lines() []Line {
 	if r.Task != "" {
 		add("Task", val(r.Task), Plain)
 	}
+	if r.Follows != "" {
+		add("Continues", "Run "+r.Follows, Plain)
+	}
 	if r.Claim != nil {
 		text := "(no final message) · Exit " + r.Claim.Exit
 		if r.Claim.Text != "" {

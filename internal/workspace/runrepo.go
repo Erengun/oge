@@ -400,6 +400,17 @@ func (r *RunRepo) Checkout(commit, dir string) error {
 	return err
 }
 
+// Import copies commit, with what it reaches, from the Run repository at
+// from into this one, under ref. A follow-up Run starts from the previous
+// Run's Candidate this way (#185); the objects are byte for byte the same.
+func (r *RunRepo) Import(from, commit, ref string) error {
+	if _, err := r.git("", "", nil, "fetch", "-q", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", from, commit); err != nil {
+		return err
+	}
+	_, err := r.git("", "", nil, "update-ref", ref, commit)
+	return err
+}
+
 // ChangedFiles lists paths that differ between two commits.
 func (r *RunRepo) ChangedFiles(from, to string) ([]string, error) {
 	out, err := r.git("", "", nil, "diff-tree", "-r", "--name-only", "-z", "--no-renames", from, to)

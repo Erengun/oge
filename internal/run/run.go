@@ -87,6 +87,17 @@ type Params struct {
 	// Gates is where a Gate waits for a human. Nil means unattended: a
 	// mandatory Gate parks the Run (ADR-0008).
 	Gates gate.Port
+	// Follows, when set, makes this a follow-up Run (#185): a new Run on a
+	// fresh Snapshot whose implementer starts from the previous Run's
+	// Candidate. Task.FollowUps carries the human's messages.
+	Follows *FollowUp
+}
+
+// FollowUp is the Run a follow-up continues.
+type FollowUp struct {
+	Run       string // its id
+	Dir       string // its private directory, which holds its Run repository
+	Candidate string // its final Candidate
 }
 
 // EventKind names a progress event.
@@ -310,10 +321,15 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := l.Append(RecRunStarted, map[string]any{
+	begun := map[string]any{
 		"run": res.ID, "oge_version": p.Version, "created": res.Started.UTC(), "source": p.Repo,
 		"task": taskBlob, "frozen": frozenBlob, "graph_hash": f.Hash, "mode": f.Mode,
-	}); err != nil {
+	}
+	if fu := p.Follows; fu != nil {
+		begun["follows"] = fu.Run
+		begun["follow_ups"] = p.Task.FollowUps
+	}
+	if err := l.Append(RecRunStarted, begun); err != nil {
 		return nil, err
 	}
 
@@ -335,6 +351,30 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err := l.Append(RecSnapshotTaken, map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
 		"modified": info.Modified, "untracked": info.Untracked}); err != nil {
 		return nil, err
+	}
+	start := snap
+	if fu := p.Follows; fu != nil {
+		// The implementer starts from the previous Run's Candidate, as a
+		// send-back starts from the one it sends back. Only the Candidate
+		// comes across: held-out tests live in the other Run's Oracle and
+		// never enter a Candidate (ADR-0009). Scope, Tamper and the
+		// additive rules still compare with this Run's Snapshot.
+		if err := repo.Import(filepath.Join(fu.Dir, "repo.git"), fu.Candidate, "refs/oge/follows"); err != nil {
+			return nil, fmt.Errorf("taking Run %s's Candidate: %w", fu.Run, err)
+		}
+		start = fu.Candidate
+		if err := os.RemoveAll(ws); err != nil {
+			return nil, err
+		}
+		if err := repo.Checkout(start, ws); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(ws, ledger.WorkspaceMarker), nil, 0o600); err != nil {
+			return nil, err
+		}
+		if err := repo.InitWorkspaceGit(ws); err != nil {
+			return nil, err
+		}
 	}
 	p.Observe(Event{Kind: EvStarted, Result: res})
 
@@ -444,7 +484,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
 			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, runDir: res.Dir} // its seed once joined
 	}
-	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
+	next := attemptSpec{n: 1, cause: "first", start: start, ws: ws}
 	var a *Attempt
 	// resume is where an Ambiguous-file review sends the walk: "verify" or
 	// "check", from the resolved Candidate, with no implementer Attempt.

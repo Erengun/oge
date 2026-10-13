@@ -248,6 +248,10 @@ type home struct {
 	// after takes the Run's end: it returns the summary to print and, after
 	// an Accepted Run, what can take it. stop ends the session (Öge failed).
 	after func(ended) (text string, last *lastRun, stop bool)
+	// thread is the Run the next message continues (#185): set when a Run
+	// ends with a Candidate that wasn't applied, until /new, /clear or
+	// /apply. nil: the next message is a fresh Task.
+	thread *thread
 	// last is the latest ended Run the human can take: /apply, /diff,
 	// /receipt, /branch, or ↓ and a key. nil when there is none.
 	last *lastRun
@@ -305,6 +309,13 @@ var slashKeys = map[string]string{"/apply": "a", "/branch": "b", "/diff": "d", "
 // slashWord is what a command's first word looks like: other text that
 // starts with a slash (a path) is a Task.
 var slashWord = regexp.MustCompile(`^/[a-z-]+$`)
+
+// thread is what a follow-up continues: the Task with the follow-ups so far,
+// and the Run whose Candidate the next one starts from.
+type thread struct {
+	task task.Task
+	from run.FollowUp
+}
 
 // runEndedMsg is the Run's end, after its view has finished.
 type runEndedMsg ended
@@ -438,7 +449,13 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.setup = setupLines(res.frozen)
 			h.sel.syncFrom(res)
-			m, cmd := h.start(task.Parse(text), res, h.width, h.height)
+			t := task.Parse(text)
+			if h.thread != nil {
+				// A follow-up: the whole thread, this message last.
+				t = h.thread.task
+				t.FollowUps = append(append([]string(nil), t.FollowUps...), text)
+			}
+			m, cmd := h.start(t, res, h.width, h.height)
 			h.run = m
 			if lines := m.take(); len(lines) > 0 { // the Task's echo
 				cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
@@ -485,16 +502,16 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 	}
 	key, known := slashKeys[word]
 	switch {
-	case word == "/new" && arg == "":
-		h.last = nil
+	case (word == "/new" || word == "/clear") && arg == "":
+		h.last, h.thread = nil, nil
 	case !known || (arg != "" && word != "/branch"):
-		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new"}
+		h.msg = []string{word + ": unknown command · /apply /diff /receipt /branch /new /clear"}
 		return nil, true
 	case h.last == nil:
 		h.msg = []string{word + ": no Accepted Run to take in this session"}
 		return nil, true
 	default:
-		cmd = h.last.act(key, arg)
+		cmd = h.act(key, arg)
 	}
 	h.comp = newComposer()
 	return cmd, true
@@ -515,10 +532,19 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return h, nil // typed ahead, before the row could be seen
 		}
 		h.actions = false
-		return h, h.last.act(key, "")
+		return h, h.act(key, "")
 	}
 	h.actions = false
 	return h.Update(msg)
+}
+
+// act runs one of the last Run's actions. Applying it ends the thread: the
+// next message is a fresh Task.
+func (h *home) act(key, arg string) tea.Cmd {
+	if key == "a" {
+		h.thread = nil
+	}
+	return h.last.act(key, arg)
 }
 
 // onEnded prints the Run's summary above the program (its stages are
@@ -624,6 +650,9 @@ func (h *home) render() (string, int, int) {
 	if h.panel == nil {
 		for _, l := range h.setup {
 			lines = append(lines, " "+st.dim(l))
+		}
+		if h.thread != nil {
+			lines = append(lines, " "+st.dim("continuing Run "+h.thread.from.Run+" (/new for a fresh task)"))
 		}
 		if h.sel != nil && h.sel.noFile {
 			lines = append(lines, " "+st.dim("no "+pipeline.ConfigPath+" yet: [tab] shows the proposed Checks; [w] there saves them"))
@@ -828,7 +857,7 @@ func editInEditor(env Env, text string, hold func(bool)) tea.Cmd {
 // it or Öge is interrupted while composing. code is the last Run's exit
 // code. res is the config as of now (nil when problem says why it can't be
 // resolved); resolve reads it again when a Task is sent.
-func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) startFunc,
+func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved, *run.FollowUp) startFunc,
 	res *resolved, problem []string, resolve func(*setupState) (*resolved, []string), sel *setupState) (code int, err error) {
 	// A signal while composing ends the session; during a Run it goes to
 	// the Run (forwardTo), as Ctrl+C does.
@@ -850,6 +879,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		running   chan struct{} // closed once the Run has ended
 		used      *resolved     // the Run's config
 		failed    *ended        // Öge itself failed or panicked
+		cur       task.Task     // the Run's Task, with its follow-ups
 	)
 	last := ExitOK
 	h.hold = func(on bool) {
@@ -867,9 +897,16 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
 		u.m.width, u.m.height = w, ht
 		u.m.scroll = true
+		var fu *run.FollowUp
+		if h.thread != nil && !r.flags.unattended {
+			from := h.thread.from
+			fu = &from
+			u.m.title = task.Parse(t.FollowUps[len(t.FollowUps)-1]).Title // the echo is the message
+		}
+		cur = t
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn
 		u.plain.applying = r.flags.apply
-		h.done = u.launch(runCtx, runIn, startFor(t, r))
+		h.done = u.launch(runCtx, runIn, startFor(t, r, fu))
 		go func(forced, ended <-chan struct{}) {
 			select {
 			case <-forced:
@@ -891,6 +928,12 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		var text string
 		var l *lastRun
 		text, l, last = u.summary(env, used.flags, root, e.res, h.hold)
+		// The next message continues this Run's Candidate, unless it was
+		// applied or the session never prompts (TUI sessions only, #185).
+		h.thread = nil
+		if res := e.res; res.Candidate != "" && res.Dir != "" && !used.flags.unattended && !used.flags.apply {
+			h.thread = &thread{task: cur, from: run.FollowUp{Run: res.ID, Dir: res.Dir, Candidate: res.Candidate}}
+		}
 		return text, l, false
 	}
 	if env.Edit != nil {

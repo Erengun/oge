@@ -13,6 +13,9 @@ type Task struct {
 	Title    string
 	Text     string
 	Criteria []Criterion
+	// FollowUps are the human's follow-up messages in a session, in order,
+	// after the Task they continue (#185).
+	FollowUps []string
 }
 
 // Criterion is one Acceptance criterion with its stable id (AC-1, AC-2, …).
