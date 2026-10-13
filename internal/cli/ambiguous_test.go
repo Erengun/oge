@@ -336,7 +336,6 @@ package fx
 import "testing"
 
 func TestHelper(t *testing.T) {
-	t.Parallel()
 	if helper() != 42 {
 		t.Fatalf("helper() = %d, want 42", helper())
 	}
