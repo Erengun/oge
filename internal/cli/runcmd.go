@@ -394,6 +394,15 @@ func (r *renderer) observe(ev run.Event) {
 			r.p("%-10s %s", "preflight", preflightText(r.frozen))
 		}
 	case run.EvAgent:
+		if ev.Agent.Tool == "TodoWrite" {
+			// The plan, one line per update (display only).
+			if ev.Attempt.Role != "verifier" {
+				if line := todoSummary(todoItems(ev.Agent.Todos)); line != "" {
+					r.p("%s", line)
+				}
+			}
+			return
+		}
 		if !r.verbose || (ev.Attempt.Role == "verifier" && !qaStep(ev.Agent)) {
 			return
 		}

@@ -111,6 +111,18 @@ type Event struct {
 	// far, on a Usage event; nil when it reported none. Never estimated.
 	CostUSD *float64 `json:",omitempty"`
 	Tokens  *int     `json:",omitempty"`
+	// Todos is the agent's plan after a todo update (a Claim with Tool
+	// "TodoWrite"): display only, never written to the stream or Ledger.
+	Todos []Todo `json:"-"`
+}
+
+// Todo is one item of an agent's plan; Text is redacted but not yet cleaned
+// for display.
+type Todo struct {
+	Text   string
+	Status string // "pending", "in_progress" or "completed"
+	// Active is the present-tense form of an in-progress item.
+	Active string
 }
 
 // Friction is a turn's policy friction (ADR-0019, #90).
