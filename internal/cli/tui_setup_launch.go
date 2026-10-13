@@ -34,7 +34,7 @@ func (p *setupPanel) launchLines() []string {
 			out = append(out, head+st.dim("   no Launch profile is described for this agent"))
 			continue
 		}
-		info, err := claude.LaunchInfoFor(s.role)
+		info, err := claude.LaunchInfoFor(s.role, s.sel.effort)
 		if err != nil {
 			out = append(out, head+st.dim("   "+clean(err.Error())))
 			continue
@@ -52,11 +52,13 @@ func (p *setupPanel) launchLines() []string {
 func launchFacts(i claude.LaunchInfo) []string {
 	plugins := fmt.Sprintf("plugins: only the %d pinned builtins (part of the pinned binary)", len(i.BuiltinPlugins))
 	facts := []string{
-		"MCP servers: none from your config (--strict-mcp-config)",
-		"settings, hooks: none loaded from your user or project config",
+		"MCP servers, settings, hooks: none loaded from your user or project config",
 		plugins,
 		"memory: auto-memory off, nothing persisted to your Claude config",
 		"tools: " + strings.Join(i.Tools, ", "),
+	}
+	if i.Effort != "" {
+		facts = append(facts, "effort: --effort "+i.Effort+" (part of the Launch profile hash)")
 	}
 	if i.NetworkOff {
 		facts = append(facts, "network: off in the sandbox; web tools denied")

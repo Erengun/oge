@@ -1,0 +1,10 @@
+schema = 1
+
+[repos."$REPO"]
+
+[repos."$REPO".stages.implement]
+model = "opus"
+effort = "high"
+
+[repos."$REPO".stages.verify]
+effort = "low"

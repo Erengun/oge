@@ -784,6 +784,9 @@ func launchProfile(stage pipeline.Stage) map[string]string {
 	if stage.Profile != "" {
 		m["profile"] = stage.Profile
 	}
+	if stage.Effort != "" {
+		m["effort"] = stage.Effort
+	}
 	return m
 }
 
@@ -809,7 +812,7 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 		return nil, err
 	}
 	spec := agent.LaunchSpec{
-		Role: stage.Role, Model: stage.Model, Profile: stage.Profile, Workspace: ws, Network: stage.Network, RunID: runID,
+		Role: stage.Role, Model: stage.Model, Effort: stage.Effort, Profile: stage.Profile, Workspace: ws, Network: stage.Network, RunID: runID,
 		RepoInstructions: instructions, CheckCommands: checks, DenyRead: append([]string{p.State.Private}, at.denyRead...), Cache: cache,
 		WriteGlobs: at.writeGlobs,
 	}

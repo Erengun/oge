@@ -1,0 +1,5 @@
+exit: 2
+--- stdout
+--- stderr
+oge: $XDG_CONFIG_HOME/oge/config.toml isn't valid
+  repos."$REPO".stages.implement.effort: must be one of low, medium, high, xhigh, max

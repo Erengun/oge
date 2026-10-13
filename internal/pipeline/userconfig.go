@@ -65,7 +65,12 @@ type RepoDefaults struct {
 type UserStage struct {
 	Agent string `toml:"agent,omitempty"`
 	Model string `toml:"model,omitempty"`
+	// Effort is Claude's --effort level (#179); "" is its default.
+	Effort string `toml:"effort,omitempty"`
 }
+
+// KnownEfforts are the levels `claude --effort` accepts (claude 2.1.289).
+var KnownEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // UserConfigPath returns where the user config lives, or "" when neither
 // XDG_CONFIG_HOME nor HOME is set.
@@ -145,6 +150,9 @@ func (c *UserConfig) validate() []Problem {
 		}{{"implement", d.Stages.Implement}, {"verify", d.Stages.Verify}} {
 			if s.st.Agent != "" && strings.TrimSpace(s.st.Agent) == "" {
 				add(key+".stages."+s.name+".agent", "must not be blank")
+			}
+			if s.st.Effort != "" && !oneOf(s.st.Effort, KnownEfforts...) {
+				add(key+".stages."+s.name+".effort", "must be one of "+strings.Join(KnownEfforts, ", "))
 			}
 			for field, v := range map[string]string{"agent": s.st.Agent, "model": s.st.Model} {
 				if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {

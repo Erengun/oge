@@ -83,6 +83,9 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 		if s.Role == "verifier" {
 			extra = "   fresh Session every Attempt"
 		}
+		if s.Effort != "" {
+			extra += "   effort " + s.Effort
+		}
 		if s.NotLoggedIn {
 			extra += "   (not logged in)"
 		}

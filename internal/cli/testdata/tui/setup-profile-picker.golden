@@ -8,6 +8,7 @@ Setup   next Run · [enter] change · [s] save as default · [tab] done
         claude@work
         claude@z
    implement model    sonnet
+   implement effort   agent's default
    verify agent       codex
    verify model       agent's default
    mode               Standard   implementer, then a fresh verifier writes held…
@@ -21,9 +22,8 @@ Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
    ✓ these Checks can run the protected tests
 
  Agent launched with   read-only · ADR-0004
-   implement  claude · profile claude · Launch profile v5 e53a5b7e3b0a
-      MCP servers: none from your config (--strict-mcp-config)
-      settings, hooks: none loaded from your user or project config
+   implement  claude · profile claude · Launch profile v6 eb590692940d
+      MCP servers, settings, hooks: none loaded from your user or project config
       plugins: only the 4 pinned builtins (part of the pinned binary)
       memory: auto-memory off, nothing persisted to your Claude config
       tools: Read, Edit, Write, Bash, Glob, Grep

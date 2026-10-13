@@ -48,7 +48,7 @@ func TestLoadUserConfigParses(t *testing.T) {
 	}
 	d := c.ForRepo(one)
 	if d == nil || d.Mode != "blind" || d.Unattended == nil || !*d.Unattended ||
-		d.Stages.Implement != (UserStage{"claude@z", "sonnet"}) || d.Stages.Verify.Agent != "claude@work" {
+		d.Stages.Implement != (UserStage{Agent: "claude@z", Model: "sonnet"}) || d.Stages.Verify.Agent != "claude@work" {
 		t.Fatalf("defaults = %+v", d)
 	}
 	if c.Profiles["side"] != side || c.ForRepo(abs(t, "other")) != nil {
@@ -339,5 +339,29 @@ func TestLoadUserConfigNotify(t *testing.T) {
 	}
 	if _, probs := LoadUserConfig([]byte("schema = 1\n[notify]\nsound = true\n")); len(probs) == 0 {
 		t.Fatal("an unknown notify key was accepted")
+	}
+}
+
+func TestEffortIsClaudeOnlyAndInherited(t *testing.T) {
+	stages := func(agent, effort string) []Stage {
+		return []Stage{
+			{Name: "implement", Role: "implementer", Agent: agent, Effort: effort},
+			{Name: "verify", Role: "verifier"},
+		}
+	}
+	got := stages("claude", "high")
+	if probs := defaultBindings(got, nil); len(probs) != 0 || got[1].Effort != "high" || got[1].Source != FromInherited {
+		t.Errorf("verifier = %+v, problems %v", got[1], probs)
+	}
+	got = stages("claude", "high")
+	got[1].Agent, got[1].Effort = "claude", "low"
+	if probs := defaultBindings(got, nil); len(probs) != 0 || got[1].Effort != "low" {
+		t.Errorf("own effort lost: %+v %v", got[1], probs)
+	}
+	for _, agent := range []string{"codex", "fake"} {
+		probs := defaultBindings(stages(agent, "high"), nil)
+		if len(probs) == 0 || !strings.Contains(probs[0].Msg, "claude only") {
+			t.Errorf("%s: effort accepted: %v", agent, probs)
+		}
 	}
 }
