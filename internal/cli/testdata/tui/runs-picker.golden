@@ -4,7 +4,7 @@
  > 20261013T101010-abcdef  Accepted    2026-10-13 10:10Z  fix Add
    20261013T090000-123456  Rejected    2026-10-13 09:00Z  try again  continues …
    20261012T080000-aaaaaa  Parked      2026-10-12 08:00Z  add [31mlogging
- / filter · enter receipt · d diff · a apply · b branch · r resume · esc
+ / filter · ⏎ receipt · d diff · a apply · b branch · l label · r resume · esc
  Standard · implement claude:sonnet · verify codex
  Checks: go test -json ./...
  [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor

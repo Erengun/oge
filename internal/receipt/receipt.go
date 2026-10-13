@@ -53,6 +53,9 @@ type Receipt struct {
 	Task   string `json:"task"`
 	// Follows is the Run this follow-up continues (#185).
 	Follows string `json:"follows,omitempty"`
+	// Label is the human's own name for the Run, read from beside it: not
+	// Ledger data and not Evidence.
+	Label string `json:"label,omitempty"`
 	// Rebased: the repository changed since that Run, and its Candidate
 	// was merged onto the current one before this Run's implementer began.
 	Rebased bool   `json:"rebased,omitempty"`
@@ -316,6 +319,7 @@ func Build(runDir string) (*Receipt, error) {
 	blobs, _ := ledger.OpenBlobs(runDir)
 	src := runSource{blobs: blobs, repo: &workspace.RunRepo{Dir: filepath.Join(runDir, "repo.git")}}
 	r := FromRecords(recs, head, src)
+	r.Label = clean(run.ReadLabel(runDir))
 	if torn != "" {
 		r.LedgerUnreadable = clean(torn)
 		r.NotCovered = append([]string{r.LedgerUnreadable}, r.NotCovered...)
