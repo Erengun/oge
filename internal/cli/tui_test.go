@@ -69,7 +69,7 @@ func newTUIHarness(t *testing.T, color bool, width int) *tuiHarness {
 	h.m = newModel(tk, f, newStyles(color), func() time.Time { return h.clock })
 	h.m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
 	h.res = &run.Result{ID: "20261005T090000-a1b2c3", Source: workspace.SnapshotInfo{Head: "84ca1bd0e1f2", Branch: "main", Untracked: 1}}
-	h.att = &run.Attempt{ID: "implement#1", Stage: "implement", Agent: "fake"}
+	h.att = &run.Attempt{ID: "implement#1", Stage: "implement", Role: "implementer", Agent: "fake"}
 	return h
 }
 
