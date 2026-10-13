@@ -3,8 +3,8 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
  Composer
    enter                run the task
-   ctrl+j · \+enter     newline
-   ctrl+g               write the task in $EDITOR
+   ctrl+j · \+enter *   newline
+   ctrl+g *             write the task in $EDITOR
    ctrl+s               stash the draft (again on an empty box restores)
    ctrl+c               clear the draft (↑ restores), then leave
    ctrl+l               redraw
@@ -20,5 +20,5 @@
    ctrl+k · ctrl+u      kill to line end · start
    ctrl+w · alt+d       kill word back · forward
    ctrl+y               yank what was killed
-   ctrl+_ · ctrl+z      undo
- ↑ ↓ scroll (1-20 of 59) · esc or ? close
+ * keys from ~/.config/oge/keybindings.toml
+ ↑ ↓ scroll (1-19 of 59) · esc or ? close

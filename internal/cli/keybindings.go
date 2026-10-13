@@ -324,13 +324,33 @@ func loadKeybindings(getenv func(string) string) (*keyMap, string) {
 		return defaultKeyMap, ""
 	}
 	if err != nil {
-		return defaultKeyMap, fmt.Sprintf("oge: reading %s: %v; using the default keys", path, err)
+		return ignoredKeys(path, getenv, err.Error()), fmt.Sprintf("oge: reading %s: %v; using the default keys", path, err)
 	}
 	over, probs := parseKeybindings(data)
 	if len(probs) > 0 {
-		return defaultKeyMap, fmt.Sprintf("oge: %s: %s; using the default keys", path, probs[0])
+		return ignoredKeys(path, getenv, probs[0].String()), fmt.Sprintf("oge: %s: %s; using the default keys", path, probs[0])
 	}
-	return defaultKeyMap.with(over), ""
+	kb := defaultKeyMap.with(over)
+	kb.src = shortPath(path, getenv)
+	return kb, ""
+}
+
+// ignoredKeys is the defaults, remembering why the file was not used, for the
+// panel's note.
+func ignoredKeys(path string, getenv func(string) string, why string) *keyMap {
+	return &keyMap{binds: actionTable, src: shortPath(path, getenv), problem: why}
+}
+
+// shortPath writes a path under the home directory as ~/....
+func shortPath(path string, getenv func(string) string) string {
+	home := getenv("HOME")
+	if home == "" {
+		return path
+	}
+	if rel, err := filepath.Rel(home, path); err == nil && filepath.IsLocal(rel) {
+		return "~/" + filepath.ToSlash(rel)
+	}
+	return path
 }
 
 // expandLabel is the key that expands the run view, for the hints.

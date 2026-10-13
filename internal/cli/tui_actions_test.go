@@ -64,7 +64,7 @@ func TestActionRebindReachesTheTable(t *testing.T) {
 	}
 	found := false
 	for _, b := range keyTable {
-		if b.act == "composer.stash" && b.label(kb) == "ctrl+t" {
+		if b.act == "composer.stash" && b.label(kb) == "ctrl+t *" {
 			found = true
 		}
 	}

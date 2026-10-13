@@ -1,6 +1,9 @@
 package cli
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 // The action table (#162): the home's app-level shortcuts, as context →
 // action name → keys. Handlers ask which action a key means in their context
@@ -58,7 +61,12 @@ var actionTable = []actionBinding{
 // on top (#163). It is immutable: a reload builds a new one and the holder
 // (home, model) swaps the pointer, so nothing is shared or mutated across
 // sessions. A nil *keyMap is the defaults.
-type keyMap struct{ binds []actionBinding }
+type keyMap struct {
+	binds   []actionBinding
+	custom  map[keyOverride]bool // the actions the file rebinds
+	src     string               // where they came from, as shown: ~/.config/oge/keybindings.toml
+	problem string               // why the file was ignored, if it was
+}
 
 // defaultKeyMap is the shipped table; actionTable is never written to.
 var defaultKeyMap = &keyMap{binds: actionTable}
@@ -78,7 +86,33 @@ func (k *keyMap) with(over map[keyOverride][]string) *keyMap {
 			binds[i].keys = slices.Clone(keys)
 		}
 	}
-	return &keyMap{binds: binds}
+	custom := maps.Clone(k.custom)
+	if custom == nil {
+		custom = map[keyOverride]bool{}
+	}
+	for id := range over {
+		custom[id] = true
+	}
+	return &keyMap{binds: binds, custom: custom, src: k.src}
+}
+
+// isCustom reports whether the file rebinds the action.
+func (k *keyMap) isCustom(ctx, name string) bool {
+	return k != nil && k.custom[keyOverride{ctx, name}]
+}
+
+// note is the line the `?` panel and /help end with when the file matters:
+// which keys are the file's, or why it was ignored. "" for the defaults.
+func (k *keyMap) note() string {
+	switch {
+	case k == nil:
+		return ""
+	case k.problem != "":
+		return "keybindings.toml ignored: " + k.problem
+	case len(k.custom) > 0:
+		return "* keys from " + k.src
+	}
+	return ""
 }
 
 // actionFor is the action key means in ctx, or "" when it means none.

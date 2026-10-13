@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func keysEnv(t *testing.T, content string) func(string) string {
@@ -67,6 +68,7 @@ func TestKeybindingsShowInHelpAndPanel(t *testing.T) {
 			t.Errorf("/help lacks %q", want)
 		}
 	}
+	kb.src = "~/.config/oge/keybindings.toml" // the temp dir isn't stable
 	h := testHome(80)
 	h.setKeys(kb)
 	typeText(h, "?")
@@ -116,8 +118,13 @@ func TestKeybindingsProblems(t *testing.T) {
 			if !strings.Contains(n, "default keys") {
 				t.Errorf("notice %q doesn't say the defaults are used", n)
 			}
-			if kb != defaultKeyMap {
+			if !slices.EqualFunc(kb.binds, defaultKeyMap.binds, func(a, b actionBinding) bool {
+				return a.ctx == b.ctx && a.name == b.name && slices.Equal(a.keys, b.keys)
+			}) || len(kb.custom) > 0 {
 				t.Error("a bad file was partly applied")
+			}
+			if !strings.Contains(kb.note(), "keybindings.toml ignored: ") {
+				t.Errorf("the panel note is %q", kb.note())
 			}
 		})
 	}
@@ -257,5 +264,95 @@ func TestQueueBoxFollowsSubmitKeys(t *testing.T) {
 	}
 	if kb.actionFor("composer", "ctrl+q") != "submit" || kb.actionFor("composer", "enter") == "submit" {
 		t.Error("submit not remapped")
+	}
+}
+
+func TestKeybindingsPanelMarksOverrides(t *testing.T) {
+	kb, _ := withKeys(t, "[composer]\neditor = \"ctrl+g\"\n")
+	kb.src = "~/.config/oge/keybindings.toml" // the temp dir isn't stable
+	h := testHome(80)
+	h.setKeys(kb)
+	typeText(h, "?")
+	got := frame(h)
+	for _, want := range []string{"ctrl+g *", "* keys from ~/.config/oge/keybindings.toml"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("panel lacks %q", want)
+		}
+	}
+	if strings.Contains(frame(func() *home { h := testHome(80); typeText(h, "?"); return h }()), " *") {
+		t.Error("the default panel marks a key")
+	}
+	if !strings.Contains(helpText(kb), "* keys from ~/.config/oge/keybindings.toml") {
+		t.Error("/help lacks the note")
+	}
+	checkPanelWidth(t, got)
+	golden(t, "keys-panel-custom", got)
+}
+
+func TestKeybindingsPanelShowsProblem(t *testing.T) {
+	kb, _ := withKeys(t, "[composer]\nstash = \"ctrl+c\"\n")
+	h := testHome(80)
+	h.setKeys(kb)
+	typeText(h, "?")
+	got := frame(h)
+	if !strings.Contains(got, "keybindings.toml ignored: composer.stash") {
+		t.Errorf("panel lacks the problem:\n%s", got)
+	}
+	checkPanelWidth(t, got)
+	golden(t, "keys-panel-problem", got)
+}
+
+func checkPanelWidth(t *testing.T, frame string) {
+	t.Helper()
+	for _, l := range strings.Split(frame, "\n") {
+		if w := ansi.StringWidth(l); w > 80 {
+			t.Errorf("line is %d columns: %q", w, l)
+		}
+	}
+}
+
+func TestShortPath(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "me")
+	env := func(k string) string {
+		if k == "HOME" {
+			return home
+		}
+		return ""
+	}
+	if got := shortPath(filepath.Join(home, ".config", "oge", "keybindings.toml"), env); got != "~/.config/oge/keybindings.toml" {
+		t.Errorf("got %q", got)
+	}
+	other := filepath.Join(t.TempDir(), "k.toml")
+	if got := shortPath(other, env); got != other {
+		t.Errorf("got %q", got)
+	}
+}
+
+// docs/user-config.md lists every action with its default keys; this keeps
+// the list and the table from drifting.
+func TestKeybindingsDocsMatchTable(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "user-config.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(data)
+	for _, a := range actionTable {
+		var keys []string
+		for _, k := range a.keys {
+			keys = append(keys, "`"+k+"`")
+		}
+		row := "| `" + a.name + "` | " + strings.Join(keys, ", ") + " |"
+		i := strings.Index(doc, "### `["+a.ctx+"]`")
+		if i < 0 || !strings.Contains(doc[i:], row) {
+			t.Errorf("docs/user-config.md lacks %s in [%s]", row, a.ctx)
+		}
+	}
+	if n := strings.Count(doc, "| `"); n < len(actionTable) {
+		t.Errorf("docs list %d rows for %d actions", n, len(actionTable))
+	}
+	for k := range lockedKeys {
+		if !strings.Contains(doc, "`"+k+"`") {
+			t.Errorf("docs don't mention the locked key %s", k)
+		}
 	}
 }

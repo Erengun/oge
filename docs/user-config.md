@@ -89,13 +89,36 @@ newline = ["ctrl+j", "alt+enter"]
 expand = "ctrl+t"
 ```
 
-Actions in `[composer]`: `submit`, `newline`, `editor`, `stash`, `redraw`, `keysPanel`, `cycleMode`, `model`, `historySearch`. Actions in `[run]`: `expand`, `cancelQueue`. Key names are the ones Bubble Tea prints: `ctrl+g`, `alt+enter`, `shift+tab`, `f2`, with modifiers in the order ctrl, alt, shift.
+Key names are the ones Bubble Tea prints: `ctrl+g`, `alt+enter`, `shift+tab`, `f2`, with modifiers in the order ctrl, alt, shift. The actions and their default keys:
+
+### `[composer]`
+
+| Action | Default keys |
+| --- | --- |
+| `submit` | `enter` |
+| `newline` | `ctrl+j`, `shift+enter`, `alt+enter` |
+| `editor` | `ctrl+e`, `ctrl+g` |
+| `stash` | `ctrl+s` |
+| `redraw` | `ctrl+l` |
+| `keysPanel` | `?` |
+| `cycleMode` | `shift+tab` |
+| `model` | `alt+m` |
+| `historySearch` | `ctrl+r` |
+
+### `[run]`
+
+| Action | Default keys |
+| --- | --- |
+| `expand` | `ctrl+o` |
+| `cancelQueue` | `ctrl+x` |
+
+`/help` and the `?` panel show the keys in force. A key the file changed is marked `*`, and the panel's last lines name the file; if the file was ignored, they say `keybindings.toml ignored:` and why.
 
 The file is strict, like `theme.toml`. An unknown context, action or key name, a key used twice (the composer and the run view count as one, because the queued Task's box answers both), or an action left with no key is a problem. oge then prints one line naming the file and the entry, ignores the whole file and uses the defaults. It never stops oge.
 
 Some keys can't be bound, so a shortcut can never get in the way of a decision (ADR-0015, ADR-0022):
 
-- `ctrl+c` and `esc` always cancel and back out. `enter`, `backspace`, `space` and typed characters are how you answer a Gate, so they stay the Gate's. A Gate also keeps working whatever you remap.
+- `ctrl+c` and `esc` always cancel and back out (`ctrl+[` is `esc`). `enter` (`ctrl+m` is the same key), `backspace`, `space` and typed characters are how you answer a Gate, so they stay the Gate's. `ctrl+i` is `tab`. A Gate also keeps working whatever you remap. A key that types text, such as a plain letter or `shift+` a letter, can't be bound either.
 - Editing and navigation keys, which are not actions: `tab`, the arrows, `home`, `end`, `pgup`, `pgdown`, `delete`, the Emacs keys (`ctrl+a`, `ctrl+e`, `ctrl+b`, `ctrl+f`, `ctrl+k`, `ctrl+u`, `ctrl+w`, `ctrl+y`, `ctrl+d`, `ctrl+h`, `ctrl+p`, `ctrl+n`, `ctrl+z`, `alt+b`, `alt+f`, `alt+d`) and their word and undo variants. An action may keep its own default among these, such as `ctrl+e` for `editor`.
 
 ## Mouse

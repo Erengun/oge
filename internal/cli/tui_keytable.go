@@ -46,13 +46,20 @@ func (b keyBinding) label(kb *keyMap) string {
 		return b.keys
 	}
 	ks := b.probes(kb)
-	switch _, name := b.ctxAct(); name {
+	ctx, name := b.ctxAct()
+	var l string
+	switch name {
 	case actNewline: // the first key, then the typed backslash form
-		return ks[0] + ` · \+enter`
+		l = ks[0] + ` · \+enter`
 	case actKeysPanel:
-		return "/ · @ · " + strings.Join(ks, " · ")
+		l = "/ · @ · " + strings.Join(ks, " · ")
+	default:
+		l = strings.Join(ks, " · ")
 	}
-	return strings.Join(ks, " · ")
+	if kb.isCustom(ctx, name) {
+		l += " *" // from the keybindings file; the note says which
+	}
+	return l
 }
 
 var keyTable = []keyBinding{
@@ -170,7 +177,11 @@ func (h *home) keysKey(msg tea.KeyPressMsg) {
 func (h *home) keysFrame(height int) []string {
 	st := h.st
 	all := keyLines(h.kb)
-	rows := max(height-1, 1)
+	foots := 1
+	if h.kb.note() != "" {
+		foots = 2
+	}
+	rows := max(height-foots, 1)
 	if h.height <= 0 {
 		rows = len(all)
 	}
@@ -187,6 +198,12 @@ func (h *home) keysFrame(height int) []string {
 	foot := "esc or ? close"
 	if len(all) > rows {
 		foot = fmt.Sprintf("↑ ↓ scroll (%d-%d of %d) · %s", h.keys.scroll+1, end, len(all), foot)
+	}
+	if n := h.kb.note(); n != "" {
+		if h.width > 2 {
+			n = ansi.Truncate(n, h.width-2, "…")
+		}
+		out = append(out, " "+st.dim(n))
 	}
 	return append(out, " "+st.dim(foot))
 }
