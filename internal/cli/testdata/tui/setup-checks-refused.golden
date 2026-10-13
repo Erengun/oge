@@ -21,13 +21,4 @@ Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
      the Run would end in an Infrastructure stop. Scope project.test_globs to
      what the Check runs (e.g. sub/**/*_test.go), or widen the Check to ./...
    a Run can't start until this is fixed
-
- Agent launched with   read-only · ADR-0004
-   implement  claude · profile claude · Launch profile v6 eb590692940d
-      MCP servers, settings, hooks: none loaded from your user or project config
-      plugins: only the 4 pinned builtins (part of the pinned binary)
-      memory: auto-memory off, nothing persisted to your Claude config
-      tools: Read, Edit, Write, Bash, Glob, Grep
-      network: off in the sandbox; web tools denied
-      no reads of: Öge state, other profiles, 17 credential locations
-   verify     codex   no Launch profile is described for this agent
+   ↓ 10 more

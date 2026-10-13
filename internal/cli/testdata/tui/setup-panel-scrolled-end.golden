@@ -1,0 +1,24 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Setup   next Run · [enter] change · [s] save as default · [tab] done
+   ↑ 7 more
+   unattended         off   never stops at an optional Gate (ADR-0008)
+   apply on accept    off   applies an Accepted Candidate to your working tree
+   theme              none   NO_COLOR is set
+Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
+   check 1            go test -json ./...
+   + Check command    
+   test glob 1        **/*_test.go
+ > + test glob        
+   ✓ these Checks can run the protected tests
+
+ Agent launched with   read-only · ADR-0004
+   implement  claude · profile claude · Launch profile v6 eb590692940d
+      MCP servers, settings, hooks: none loaded from your user or project config
+      plugins: only the 4 pinned builtins (part of the pinned binary)
+      memory: auto-memory off, nothing persisted to your Claude config
+      tools: Read, Edit, Write, Bash, Glob, Grep
+      network: off in the sandbox; web tools denied
+      no reads of: Öge state, other profiles, 17 credential locations
+   verify     codex   no Launch profile is described for this agent
