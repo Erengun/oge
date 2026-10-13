@@ -266,6 +266,20 @@ func (s *homeSession) expectScreen(text string) {
 	s.t.Fatalf("%q never showed on the screen after the last keys:\n%s", text, screen(s.out.String()))
 }
 
+// cursorTo presses ↓ until the setup panel's cursor is on the row whose label
+// starts with label, so a test names the row instead of counting keys, and
+// scrolls the panel to it (#212).
+func (s *homeSession) cursorTo(label string) {
+	s.t.Helper()
+	for i := 0; i < 60; i++ {
+		if strings.Contains(s.settledScreen(), "> "+label) {
+			return
+		}
+		s.type_("\x1b[B")
+	}
+	s.t.Fatalf("the cursor never reached %q:\n%s", label, s.settledScreen())
+}
+
 // ended waits for the composer back after an Accepted Run: its hint line
 // names the actions. An Accepted Run that wasn't applied is continued by
 // the next message (#185), so the frame's last line, drawn after the hint,
@@ -339,6 +353,29 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	end.write([]byte(s.out.String()))
 	if strings.Contains(end.String(), "Describe the task") {
 		t.Errorf("the composer's frame stayed after quitting:\n%s", end.String())
+	}
+}
+
+// Ctrl+S stashes a draft, Ctrl+L redraws, and \+Enter adds a line, in the
+// real program.
+func TestBareOgeStashAndBackslashNewline(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("half a thought zq7")
+	s.expectScreen("half a thought zq7")
+	s.type_("\x13") // Ctrl+S
+	s.expectScreen("stashed")
+	s.type_("\x0c") // Ctrl+L
+	s.composer()
+	s.type_("\x13") // restores
+	s.expectScreen("│ half a thought zq7")
+	s.type_("\\\rmore")
+	s.expectScreen("│ more")
+	s.type_("\x03\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d", code)
 	}
 }
 

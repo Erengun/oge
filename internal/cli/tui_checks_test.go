@@ -140,12 +140,13 @@ func TestBareOgeSetupEditsAGlobSavesItAndRuns(t *testing.T) {
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("\t")
-	s.expect("Checks   next Run")
-	// To the last row ("+ test glob": the keys stop there), then the glob above it.
-	s.type_(strings.Repeat("\x1b[B", 40) + "\x1b[A\r")
-	s.expect("> **/*_test.go")
+	s.expectScreen("Checks   next Run")
+	// Down to the glob row, whatever the rows above it.
+	s.cursorTo("test glob 1")
+	s.type_("\r")
+	s.expectScreen("> **/*_test.go")
 	s.type_("\x15*_test.go\r")
-	s.expect("test glob 1        *_test.go")
+	s.expectScreen("test glob 1        *_test.go")
 	// Narrowing the glob is a weaker Oracle, and the Run says so.
 	s.type_("w")
 	s.expect("Save these Checks to .oge/oge.toml?")
@@ -175,9 +176,12 @@ func TestBareOgeFirstRunChecksSectionIsTheProposal(t *testing.T) {
 	gitIn(t, f.repo, "commit", "-q", "-m", "no config")
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
-	s.expect("no .oge/oge.toml yet")
+	s.expectScreen("no .oge/oge.toml yet")
 	s.type_("\t")
-	s.expect("go test -json ./...")
+	s.cursorTo("check 1") // the Checks section is below the window until the cursor gets there
+	if !strings.Contains(s.settledScreen(), "go test -json ./...") {
+		t.Fatalf("the proposal's Check isn't shown:\n%s", s.settledScreen())
+	}
 	s.type_("w")
 	s.expect("Save these Checks to .oge/oge.toml?")
 	s.expect("+ run     = \"go test -json ./...\"")
@@ -228,11 +232,12 @@ func TestBareOgeUnsavedNarrowedGlobIsTrustWeakening(t *testing.T) {
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("\t")
-	s.expect("Checks   next Run")
-	s.type_(strings.Repeat("\x1b[B", 40) + "\x1b[A\r")
-	s.expect("> **/*_test.go")
+	s.expectScreen("Checks   next Run")
+	s.cursorTo("test glob 1")
+	s.type_("\r")
+	s.expectScreen("> **/*_test.go")
 	s.type_("\x15*_test.go\r")
-	s.expect("test glob 1        *_test.go")
+	s.expectScreen("test glob 1        *_test.go")
 	s.type_("\t")
 	s.expect("! trust-weakening: test glob removed in setup: **/*_test.go (from setup)")
 	s.expect("Test globs: *_test.go (from setup)")
@@ -286,10 +291,14 @@ func TestBareOgeUnknownToolchainOpensEmptyChecks(t *testing.T) {
 	gitIn(t, f.repo, "rm", "-q", ".oge/oge.toml", "go.mod")
 	gitIn(t, f.repo, "commit", "-q", "-m", "no config")
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
-	s.expect("no Check command")
+	s.expectScreen("no Check command")
 	s.type_("\t")
-	s.expect("Checks   no .oge/oge.toml yet")
-	s.expect("✗ refused: no Check command")
+	s.cursorTo("+ test glob") // the last row, so the section's end is in view
+	for _, w := range []string{"Checks   no .oge/oge.toml yet", "✗ refused: no Check command"} {
+		if !strings.Contains(s.settledScreen(), w) {
+			t.Fatalf("%q not shown:\n%s", w, s.settledScreen())
+		}
+	}
 	s.type_("\x03\x03") // closes the panel, then leaves the empty box
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())

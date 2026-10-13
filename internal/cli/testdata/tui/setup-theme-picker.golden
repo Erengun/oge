@@ -2,8 +2,7 @@
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Setup   next Run · [enter] change · [s] save as default · [tab] done
-   implement agent    claude
-   implement profile  claude
+   ↑ 2 more
    implement model    sonnet
    implement effort   agent's default
    verify agent       codex
@@ -22,14 +21,4 @@ Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
    + Check command    
    test glob 1        **/*_test.go
    + test glob        
-   ✓ these Checks can run the protected tests
-
- Agent launched with   read-only · ADR-0004
-   implement  claude · profile claude · Launch profile v6 eb590692940d
-      MCP servers, settings, hooks: none loaded from your user or project config
-      plugins: only the 4 pinned builtins (part of the pinned binary)
-      memory: auto-memory off, nothing persisted to your Claude config
-      tools: Read, Edit, Write, Bash, Glob, Grep
-      network: off in the sandbox; web tools denied
-      no reads of: Öge state, other profiles, 17 credential locations
-   verify     codex   no Launch profile is described for this agent
+   ↓ 11 more
