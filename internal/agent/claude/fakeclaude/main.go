@@ -8,6 +8,8 @@
 //	OGE_FAKE_CLAUDE_FIXTURE  the transcript to replay (testdata format)
 //	OGE_FAKE_CLAUDE_FIXTURE_<ROLE>  the one to replay instead for $OGE_ROLE,
 //	                         e.g. OGE_FAKE_CLAUDE_FIXTURE_VERIFIER
+//	OGE_FAKE_CLAUDE_SCENARIO  a multiturn.Scenario (JSON) to serve instead,
+//	                         over many turns (scenario.go)
 //	OGE_FAKE_CLAUDE_RECORD   where to write its argv and environment as JSON
 //	OGE_FAKE_CLAUDE_RECORD_<ROLE>  where to write them instead for $OGE_ROLE
 //	OGE_FAKE_CLAUDE_STDIN    where to append every line it reads
@@ -99,6 +101,10 @@ func main() {
 		if err := os.WriteFile(path, b, 0o600); err != nil {
 			fail("recording: %v", err)
 		}
+	}
+	if path := os.Getenv("OGE_FAKE_CLAUDE_SCENARIO"); path != "" {
+		runScenario(path)
+		return
 	}
 	fixture := os.Getenv("OGE_FAKE_CLAUDE_FIXTURE")
 	if f := os.Getenv("OGE_FAKE_CLAUDE_FIXTURE_" + strings.ToUpper(os.Getenv("OGE_ROLE"))); f != "" && os.Getenv("OGE_ROLE") != "" {
