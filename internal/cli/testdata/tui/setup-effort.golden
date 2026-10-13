@@ -11,6 +11,7 @@ Setup   next Run · [enter] change · [s] save as default · [tab] done
    mode               Standard   implementer, then a fresh verifier writes held…
    unattended         off   never stops at an optional Gate (ADR-0008)
    apply on accept    off   applies an Accepted Candidate to your working tree
+   theme              none   NO_COLOR is set
 Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
    check 1            go test -json ./...
    + Check command    

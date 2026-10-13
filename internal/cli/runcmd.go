@@ -296,7 +296,9 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	}
 	plain.paint = receipt.Colors(colorAllowed(env.Getenv))
 	u := newTUI(env, t, frozen, plain)
-	u.notify = notifierFor(env, f, userForNotify(env))
+	user := userForNotify(env)
+	u.notify = notifierFor(env, f, user)
+	u.m.st.setTheme(user.ThemeName())
 	u.m.notify = u.notify
 	return u
 }

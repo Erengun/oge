@@ -365,3 +365,41 @@ func TestEffortIsClaudeOnlyAndInherited(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadUserConfigTheme(t *testing.T) {
+	for _, name := range KnownThemes {
+		c, probs := LoadUserConfig([]byte("schema = 1\ntheme = \"" + name + "\"\n"))
+		if len(probs) > 0 || c.ThemeName() != name {
+			t.Errorf("theme %q: %v, %q", name, probs, c.ThemeName())
+		}
+	}
+	if c, probs := LoadUserConfig([]byte("schema = 1\n")); len(probs) > 0 || c.ThemeName() != "" {
+		t.Errorf("no theme = %q, %v", c.ThemeName(), probs)
+	}
+	_, probs := LoadUserConfig([]byte("schema = 1\ntheme = \"neon\"\n"))
+	if len(probs) != 1 || probs[0].Key != "theme" {
+		t.Errorf("a bad theme gave %v", probs)
+	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\ntheme = 3\n")); len(probs) == 0 {
+		t.Error("a non-string theme was accepted")
+	}
+	if (*UserConfig)(nil).ThemeName() != "" {
+		t.Error("a nil config has a theme")
+	}
+}
+
+func TestSaveUserDefaultsKeepsAndSetsTheme(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oge", "config.toml")
+	root := t.TempDir()
+	if err := SaveUserDefaults(path, root, RepoDefaults{Mode: "fast"}, "daltonized"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRepoDefaults(path, root, RepoDefaults{Mode: "standard"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	c, probs := LoadUserConfig(data)
+	if len(probs) > 0 || c.ThemeName() != "daltonized" || c.ForRepo(root).Mode != "standard" {
+		t.Fatalf("saved %s: %v", data, probs)
+	}
+}
