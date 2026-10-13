@@ -70,21 +70,16 @@ func implementerScope(m *oracle.Manifest, f *pipeline.Frozen) func(string) strin
 	}
 }
 
-// enforceScope compares the Workspace with the Snapshot once the agent's
-// process tree is gone, records what is outside the Write scope, then
-// reverts it (ADR-0012: the plan is recorded first). A comparison or
-// revert that the Workspace's content defeats fails the Attempt, not Öge;
-// every Tamper event found reaches the Ledger either way.
-func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo, a *Attempt, snap, ws string,
-	protected func(string) string) error {
-	rules := workspace.ScopeRules{Protected: protected, Put: blobs.Put}
-	if a.Role == "verifier" {
+// scopeRules are the scope rules a role is held to. added collects, by
+// path, the tests each kept additive edit adds.
+func scopeRules(role string, protected func(string) string, put func([]byte) (string, error), added map[string][]string) workspace.ScopeRules {
+	rules := workspace.ScopeRules{Protected: protected, Put: put}
+	if role == "verifier" {
 		// Not a judged role: a write outside its scope is an ordinary
 		// violation, discarded and recorded, never a Tamper event (spec #35).
 		rules.Tamper = func(string) bool { return false }
 	}
-	added := map[string][]string{}
-	if a.Role == "implementer" {
+	if role == "implementer" {
 		// An edit that only adds to an Oracle test file is the
 		// implementer's own test, as a new test file is (#117): kept, and
 		// no Tamper event. The Check runs the Oracle's version anyway.
@@ -99,7 +94,36 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 			return ok
 		}
 	}
-	s, err := repo.CheckScope(ws, snap, rules)
+	return rules
+}
+
+// inheritedOutOfScope is the first path of a follow-up's start revision,
+// checked out in the implementer's Workspace ws, that the scope check
+// would revert after the implementer's Attempt (#185): the previous Run's
+// change, held to this Run's Snapshot, Oracle and config, which the user
+// may have changed since. "" when there is none. Nothing is stored or
+// reverted.
+func inheritedOutOfScope(repo *workspace.RunRepo, ws, snap string, protected func(string) string) (string, error) {
+	noPut := func([]byte) (string, error) { return "", nil }
+	s, err := repo.CheckScope(ws, snap, scopeRules("implementer", protected, noPut, map[string][]string{}))
+	if err != nil {
+		return "", err
+	}
+	if len(s.Reverts) == 0 {
+		return "", nil
+	}
+	return s.Reverts[0].Path, nil
+}
+
+// enforceScope compares the Workspace with the Snapshot once the agent's
+// process tree is gone, records what is outside the Write scope, then
+// reverts it (ADR-0012: the plan is recorded first). A comparison or
+// revert that the Workspace's content defeats fails the Attempt, not Öge;
+// every Tamper event found reaches the Ledger either way.
+func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo, a *Attempt, snap, ws string,
+	protected func(string) string) error {
+	added := map[string][]string{}
+	s, err := repo.CheckScope(ws, snap, scopeRules(a.Role, protected, blobs.Put, added))
 	if err != nil {
 		a.Failure = failAttempt(a.Failure, "scope_check_failed: "+err.Error())
 		return nil

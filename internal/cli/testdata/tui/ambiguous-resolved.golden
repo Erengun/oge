@@ -11,5 +11,5 @@ Run 20261005T090000-a1b2c3 · Standard mode · HEAD 84ca1bd (main)
 ⠸ QA         Fresh Claude · reviewing · 0.0s
 · check      go test -json ./...
 
-Nothing needs you.
+Standard mode · QA · implement claude · 11.0s · Nothing needs you.
 ctrl+c to cancel

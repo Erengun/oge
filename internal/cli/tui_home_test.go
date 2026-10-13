@@ -161,7 +161,7 @@ func TestHomeTitleAndSetupAreEscaped(t *testing.T) {
 }
 
 // homeNorm hides what differs between runs: ids, hashes and durations.
-var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|\d+(\.\d+)?m?s\b`)
+var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|(\d+m)?\d+(\.\d+)?m?s\b`)
 
 // homeSession runs Main on a pipe the test types into, with the fake agent.
 type homeSession struct {
@@ -224,11 +224,62 @@ func (s *homeSession) expect(text string) {
 	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
 }
 
+// settledScreen is the screen on an 80x24 terminal once it has stopped
+// changing. A line printed above the live area lands before the renderer
+// repaints the area below it, so a snapshot taken on the first sign of
+// the composer can catch the two halfway.
+func (s *homeSession) settledScreen() string {
+	s.t.Helper()
+	render := func() string {
+		v := vt{height: 24}
+		v.write([]byte(s.out.String()))
+		return v.String()
+	}
+	last, since := render(), time.Now()
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if cur := render(); cur != last {
+			last, since = cur, time.Now()
+		} else if time.Since(since) >= 300*time.Millisecond {
+			return last
+		}
+	}
+	return last
+}
+
+// expectScreen waits until text shows on the rendered screen more often
+// than it did when the last keys were typed. The renderer rewrites only the
+// cells that changed, so a hint that differs from the previous frame by a
+// few characters never appears whole in the raw output; the screen does.
+func (s *homeSession) expectScreen(text string) {
+	s.t.Helper()
+	screen := func(b string) string {
+		v := vt{height: 24} // inline printing needs the terminal's height
+		v.write([]byte(b))
+		return v.String()
+	}
+	before := strings.Count(screen(s.out.String()[:s.mark]), text)
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if strings.Count(screen(s.out.String()), text) > before {
+			return
+		}
+	}
+	s.t.Fatalf("%q never showed on the screen after the last keys:\n%s", text, screen(s.out.String()))
+}
+
 // ended waits for the composer back after an Accepted Run: its hint line
-// names the actions.
+// names the actions. An Accepted Run that wasn't applied is continued by
+// the next message (#185), so the frame's last line, drawn after the hint,
+// names that Run.
 func (s *homeSession) ended() {
 	s.t.Helper()
 	s.expect("↓ actions")
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		out := s.out.String()
+		if strings.Contains(out[strings.LastIndex(out, "↓ actions"):], "(/new for a fresh task)") {
+			return
+		}
+	}
+	s.t.Fatalf("the composer after the Run was never drawn whole:\n%s", s.out.String())
 }
 
 // actions moves the focus to the action row (↓ on an empty composer) and
@@ -271,9 +322,7 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	s.ended()
 	// The whole scrollback now, on an 80x24 terminal (the pipe reports no
 	// size): the transcript of the Run, and the composer back, empty.
-	screen := vt{height: 24}
-	screen.write([]byte(s.out.String()))
-	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -299,19 +348,17 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	f := newRunFixture(t)
 	var s *homeSession
 	var edited []string
-	shown := make(chan int, 1) // how often the Task was on screen when the editor ran
 	f.edit = func(path string) error {
 		b, _ := os.ReadFile(path)
 		edited = append(edited, string(b))
-		shown <- strings.Count(s.out.String(), "fix Add")
-		return os.WriteFile(path, append([]byte("fix Add\n"), b...), 0o644)
+		return os.WriteFile(path, append([]byte("second task zq7\n"), b...), 0o644)
 	}
 	s = startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x05")                         // Ctrl+E on an empty box
-	s.out.waitForN(t, "fix Add", <-shown+1) // the box shows what the editor left
+	s.type_("\x05")                   // Ctrl+E on an empty box
+	s.expectScreen("second task zq7") // the box shows what the editor left
 	s.type_("\r")
 	s.ended()
 	s.type_("\x03")
@@ -411,9 +458,7 @@ func TestBareOgeGateInTheTranscript(t *testing.T) {
 	s.expect("Result gate")
 	s.type_("t\r")
 	s.ended()
-	screen := vt{height: 24}
-	screen.write([]byte(s.out.String()))
-	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -550,21 +595,34 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
-// waitForN waits until text has been written at least n times.
-func (s *syncBuf) waitForN(t *testing.T, text string, n int) {
-	t.Helper()
-	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if strings.Count(s.String(), text) >= n {
-			return
-		}
-	}
-	t.Fatalf("%q never appeared %d times in:\n%s", text, n, s.String())
-}
-
 func TestSetupBarNamesAProfile(t *testing.T) {
 	f := homeFrozen()
 	f.Stages[0].Profile = "z"
 	if got := setupLines(f)[0]; !strings.Contains(got, "implement claude@z:sonnet") {
 		t.Errorf("setup bar: %s", got)
+	}
+}
+
+// The status line sits in the live area during a Run, and Ctrl+O toggles
+// the expanded activity there without disturbing an open Gate (#147).
+func TestBareOgeStatusLineAndCtrlO(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake", "--confirm")
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("Result gate")
+	s.expect("Fast mode · implement")
+	s.expect("Waiting for you")
+	s.type_("\x0f")
+	// The renderer rewrites only changed cells, so a short run of new text
+	// is the marker; the collapse is covered by TestTUIEscCollapsesAtAGate.
+	s.expectScreen("ctrl+o to collapse")
+	s.type_("\x0f")
+	s.type_("t\r")
+	s.ended()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }

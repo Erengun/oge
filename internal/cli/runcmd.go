@@ -183,14 +183,15 @@ func openState(env Env, root string) (*ledger.StateRoot, int) {
 }
 
 // starter returns how a Task starts with its resolved config, reporting its
-// Gates to v.
-func starter(env Env, root string, state *ledger.StateRoot, v view) func(task.Task, *resolved) startFunc {
-	return func(t task.Task, res *resolved) startFunc {
+// Gates to v. fu, when set, makes it a follow-up of that Run (the home).
+func starter(env Env, root string, state *ledger.StateRoot, v view) func(task.Task, *resolved, *run.FollowUp) startFunc {
+	return func(t task.Task, res *resolved, fu *run.FollowUp) startFunc {
 		frozen, cfgData := res.frozen, res.cfgData
 		return func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 			p := run.Params{
 				Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 				State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
+				Follows: fu,
 			}
 			if !res.flags.unattended {
 				p.Gates = viewPort{v}
@@ -217,7 +218,7 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved) int
 	v := selectView(env, f, *t, res.frozen)
 	plainOf(v).applying = res.flags.apply
 	withWarning(v, res.warn)
-	out, err := v.show(ctx, in, starter(env, root, state, v)(*t, res))
+	out, err := v.show(ctx, in, starter(env, root, state, v)(*t, res, nil))
 	if err != nil {
 		return endCode(env, 0, err, true)
 	}
@@ -294,7 +295,19 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 		return plain
 	}
 	plain.paint = receipt.Colors(colorAllowed(env.Getenv))
-	return newTUI(env, t, frozen, plain)
+	u := newTUI(env, t, frozen, plain)
+	u.notify = notifierFor(env, f, userForNotify(env))
+	u.m.notify = u.notify
+	return u
+}
+
+// userForNotify reads the user config for the view's [notify] settings; a
+// file that doesn't load means the defaults (the Run's own load reports it).
+func userForNotify(env Env) *pipeline.UserConfig {
+	quiet := env
+	quiet.Stderr = io.Discard
+	cfg, _ := loadUserConfig(quiet)
+	return cfg
 }
 
 // liveView reports whether a Run on env draws the live view: see selectView.

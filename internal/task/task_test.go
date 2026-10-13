@@ -87,3 +87,17 @@ func TestParseCRLF(t *testing.T) {
 		t.Fatalf("Text keeps CR: %q", got.Text)
 	}
 }
+
+// A follow-up's own acceptance criteria are added to the Task's, numbered
+// on and marked with the follow-up they came from (#185).
+func TestFollowUpAddsItsCriteria(t *testing.T) {
+	first := Parse("# Fix Add\n\n## Acceptance criteria\n- Add sums\n")
+	got := first.FollowUp("add Sub too\n\n## Acceptance criteria\n- Sub subtracts\n- Sub(0, 0) is 0\n").FollowUp("and tidy up")
+	want := []Criterion{{ID: "AC-1", Text: "Add sums"}, {ID: "AC-2", Text: "Sub subtracts", FollowUp: 1}, {ID: "AC-3", Text: "Sub(0, 0) is 0", FollowUp: 1}}
+	if !reflect.DeepEqual(got.Criteria, want) || len(got.FollowUps) != 2 || got.Title != "Fix Add" {
+		t.Errorf("got %+v", got)
+	}
+	if len(first.Criteria) != 1 || len(first.FollowUps) != 0 {
+		t.Errorf("the Task followed up changed: %+v", first)
+	}
+}

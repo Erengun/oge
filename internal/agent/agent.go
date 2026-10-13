@@ -111,6 +111,10 @@ type Event struct {
 	// (ADR-0019): on a settled turn, the turn's; on a Host request, the
 	// turn's so far, for a turn that never settles. nil when it doesn't.
 	Friction *Friction `json:",omitempty"`
+	// CostUSD and Tokens are what the agent reported for its session so
+	// far, on a Usage event; nil when it reported none. Never estimated.
+	CostUSD *float64 `json:",omitempty"`
+	Tokens  *int     `json:",omitempty"`
 }
 
 // Friction is a turn's policy friction (ADR-0019, #90).

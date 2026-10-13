@@ -2,12 +2,14 @@ package workspace
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/erengun/oge/internal/ledger"
@@ -400,6 +402,17 @@ func (r *RunRepo) Checkout(commit, dir string) error {
 	return err
 }
 
+// Import copies commit, with what it reaches, from the Run repository at
+// from into this one, under ref. A follow-up Run starts from the previous
+// Run's Candidate this way (#185); the objects are byte for byte the same.
+func (r *RunRepo) Import(from, commit, ref string) error {
+	if _, err := r.git("", "", nil, "fetch", "-q", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", from, commit); err != nil {
+		return err
+	}
+	_, err := r.git("", "", nil, "update-ref", ref, commit)
+	return err
+}
+
 // ChangedFiles lists paths that differ between two commits.
 func (r *RunRepo) ChangedFiles(from, to string) ([]string, error) {
 	out, err := r.git("", "", nil, "diff-tree", "-r", "--name-only", "-z", "--no-renames", from, to)
@@ -613,3 +626,78 @@ func (e *AddError) Unwrap() error { return e.Err }
 // SnapshotPaths lists the Snapshot's paths under root, sorted: tracked files
 // plus untracked files git doesn't ignore. It reads nothing but the index.
 func SnapshotPaths(root string) ([]string, error) { return snapshotPaths(root) }
+
+// Rebase carries commit, work done on base, over to onto (#185). When
+// onto's tree is base's, commit itself is returned, not rebased. Otherwise
+// commit's change since base is merged into onto three ways, base the
+// merge base, and committed on onto (moved). conflicted reports a merge
+// that doesn't go through cleanly; nothing is committed or moved then. It needs git
+// 2.40 or later (merge-tree --write-tree --merge-base).
+func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conflicted bool, err error) {
+	trees, err := r.git("", "", nil, "rev-parse", base+"^{tree}", onto+"^{tree}")
+	if err != nil {
+		return "", false, false, err
+	}
+	if t := strings.Fields(string(trees)); len(t) == 2 && t[0] == t[1] {
+		return commit, false, false, nil
+	}
+	if v, err := exec.Command("git", "version").Output(); err == nil && !gitAtLeast(string(v), 2, 40) {
+		return "", false, false, ErrGitTooOld
+	}
+	// The merge runs in a scratch git dir that writes to this one's
+	// objects: this repository's info/attributes (ByteExactAttributes)
+	// would make every file both sides changed a binary conflict. As in
+	// delivery's merges, no attributes or merge drivers apply.
+	scratch, err := os.MkdirTemp(r.Dir, "merge-")
+	if err != nil {
+		return "", false, false, err
+	}
+	defer os.RemoveAll(scratch)
+	if _, err := r.git("", "", nil, "init", "-q", "--bare", "--template=", scratch); err != nil {
+		return "", false, false, err
+	}
+	cmd := exec.Command("git", "--git-dir="+scratch, "merge-tree", "--write-tree", "--no-messages", "--merge-base="+base, onto, commit)
+	cmd.Dir, cmd.Env = scratch, append(gitEnv(), "GIT_OBJECT_DIRECTORY="+filepath.Join(r.Dir, "objects"))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return "", false, true, nil
+	}
+	if errors.As(err, &exit) && exit.ExitCode() == 129 { // usage: an option it doesn't know
+		return "", false, false, ErrGitTooOld
+	}
+	if err != nil {
+		return "", false, false, fmt.Errorf("git merge-tree: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	tree, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	c, err := r.git("", "", nil, "commit-tree", "--no-gpg-sign", tree, "-p", onto, "-m", "Rebased "+commit)
+	if err != nil {
+		return "", false, false, err
+	}
+	return strings.TrimSpace(string(c)), true, false, nil
+}
+
+// ErrGitTooOld is Rebase on a git without merge-tree --merge-base.
+var ErrGitTooOld = errors.New("rebasing needs git 2.40 or newer")
+
+// gitAtLeast reports whether `git version` output names major.minor or
+// later. Output it can't read counts as new enough: merge-tree says so if
+// it isn't.
+func gitAtLeast(out string, major, minor int) bool {
+	f := strings.Fields(out)
+	if len(f) < 3 {
+		return true
+	}
+	parts := strings.SplitN(f[2], ".", 3)
+	if len(parts) < 2 {
+		return true
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return ma > major || ma == major && mi >= minor
+}

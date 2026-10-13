@@ -28,6 +28,24 @@ type UserConfig struct {
 	// It is the `extra` map of claude.Profiles.
 	Profiles map[string]string       `toml:"profiles,omitempty"`
 	Repos    map[string]RepoDefaults `toml:"repos,omitempty"`
+	// Notify is the live view's bell and desktop notification (#170). It is
+	// global, not per repo: how a person is told belongs to them, not the repo.
+	Notify *NotifyConfig `toml:"notify,omitempty"`
+}
+
+// NotifyConfig holds the [notify] settings. Each is on when absent.
+type NotifyConfig struct {
+	Attention *bool `toml:"attention,omitempty"` // the Run needs you (a Gate)
+	RunEnd    *bool `toml:"run_end,omitempty"`   // the Run ended, any outcome
+	Bell      *bool `toml:"bell,omitempty"`      // ring the bell with either
+}
+
+// NotifyConfig returns the [notify] settings, or nil when there are none.
+func (c *UserConfig) NotifyConfig() *NotifyConfig {
+	if c == nil {
+		return nil
+	}
+	return c.Notify
 }
 
 // RepoDefaults are one repository's personal defaults, keyed in the file by

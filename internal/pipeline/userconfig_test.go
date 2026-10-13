@@ -324,3 +324,20 @@ func TestUserConfigPath(t *testing.T) {
 		t.Error("nil getenv")
 	}
 }
+
+func TestLoadUserConfigNotify(t *testing.T) {
+	c, probs := LoadUserConfig([]byte("schema = 1\n[notify]\nattention = false\nbell = false\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	n := c.NotifyConfig()
+	if n == nil || n.Attention == nil || *n.Attention || n.Bell == nil || *n.Bell || n.RunEnd != nil {
+		t.Fatalf("notify = %+v", n)
+	}
+	if (*UserConfig)(nil).NotifyConfig() != nil {
+		t.Fatal("a nil config has settings")
+	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\n[notify]\nsound = true\n")); len(probs) == 0 {
+		t.Fatal("an unknown notify key was accepted")
+	}
+}

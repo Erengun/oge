@@ -48,3 +48,22 @@ func TestHeldOutFeedback(t *testing.T) {
 		}
 	}
 }
+
+// A follow-up Run is briefed with the Task, then each follow-up message in
+// order, labelled as the human's (#185); QA gets the same thread.
+func TestBriefingWithFollowUps(t *testing.T) {
+	tk := task.Task{Text: "fix Add\n", FollowUps: []string{"add Sub too", "and Mul"}}
+	for _, b := range []string{Implementer(tk, nil), Verifier(tk, nil, []string{"**/*_test.go"})} {
+		i, j, k := strings.Index(b, "fix Add"), strings.Index(b, "Human follow-up 1 of 2"), strings.Index(b, "Human follow-up 2 of 2")
+		if i != 0 || j < i || k < j || !strings.Contains(b[j:k], "add Sub too") || !strings.Contains(b[k:], "and Mul") {
+			t.Errorf("Briefing doesn't hold the thread in order:\n%s", b)
+		}
+	}
+	withCriteria := task.Parse("fix Add").FollowUp("add Sub too\n\n## Acceptance criteria\n- Sub subtracts\n")
+	if b := Verifier(withCriteria, nil, nil); !strings.Contains(b, "(Its acceptance criteria are AC-1, numbered on from the Task's.)") {
+		t.Errorf("the follow-up's criteria aren't named:\n%s", b)
+	}
+	if b := Implementer(task.Task{Text: "fix Add"}, nil); strings.Contains(b, "follow-up") {
+		t.Errorf("a first Run's Briefing mentions follow-ups:\n%s", b)
+	}
+}

@@ -49,6 +49,7 @@ const (
 const (
 	RecRunStarted        = "RunStarted"
 	RecSnapshotTaken     = "SnapshotTaken"
+	RecFollowUpRebased   = "FollowUpRebased"
 	RecOracleVersion     = "OracleVersion"
 	RecPreflightObserved = "PreflightObserved"
 	RecAttemptStarting   = "AttemptStarting"
@@ -87,6 +88,53 @@ type Params struct {
 	// Gates is where a Gate waits for a human. Nil means unattended: a
 	// mandatory Gate parks the Run (ADR-0008).
 	Gates gate.Port
+	// Follows, when set, makes this a follow-up Run (#185): a new Run on a
+	// fresh Snapshot whose implementer starts from the previous Run's
+	// Candidate. Task.FollowUps carries the human's messages.
+	Follows *FollowUp
+}
+
+// FollowUp is the Run a follow-up continues.
+type FollowUp struct {
+	Run       string // its id
+	Dir       string // its private directory, which holds its Run repository
+	Candidate string // its final Candidate
+	Snapshot  string // its Snapshot, the Candidate's merge base on a rebase
+}
+
+// addFollows notes in RunStarted's data which Run a follow-up continues,
+// and the human's messages.
+func addFollows(begun map[string]any, p Params) {
+	if fu := p.Follows; fu != nil {
+		begun["follows"] = fu.Run
+		begun["follow_ups"] = p.Task.FollowUps
+	}
+}
+
+// followUpStart is where a follow-up's implementer starts (#185): the
+// previous Run's Candidate, copied from its Run repository, or, when the
+// repository changed since that Run's Snapshot, the Candidate's change
+// merged onto snap three ways (rebased). refusal says why the follow-up
+// can't go on (a merge that conflicts, a git too old to merge): it is
+// refused before any agent starts.
+func followUpStart(repo *workspace.RunRepo, fu *FollowUp, snap string) (start string, rebased bool, refusal string, err error) {
+	from := filepath.Join(fu.Dir, "repo.git")
+	if err := repo.Import(from, fu.Snapshot, "refs/oge/follows-snapshot"); err != nil {
+		return "", false, "", fmt.Errorf("taking Run %s's Snapshot: %w", fu.Run, err)
+	}
+	if err := repo.Import(from, fu.Candidate, "refs/oge/follows"); err != nil {
+		return "", false, "", fmt.Errorf("taking Run %s's Candidate: %w", fu.Run, err)
+	}
+	start, rebased, conflict, err := repo.Rebase(fu.Snapshot, snap, fu.Candidate)
+	switch {
+	case errors.Is(err, workspace.ErrGitTooOld):
+		return "", false, fmt.Sprintf("continuing Run %s needs git 2.40 or newer to rebase onto your changed repository; /new for a fresh task", fu.Run), nil
+	case err != nil:
+		return "", false, "", err
+	case conflict:
+		return "", false, fmt.Sprintf("your repository changed since Run %s in a way that conflicts with its result; /new for a fresh task", fu.Run), nil
+	}
+	return start, rebased, "", nil
 }
 
 // EventKind names a progress event.
@@ -317,10 +365,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := l.Append(RecRunStarted, map[string]any{
+	begun := map[string]any{
 		"run": res.ID, "oge_version": p.Version, "created": res.Started.UTC(), "source": p.Repo,
 		"task": taskBlob, "frozen": frozenBlob, "graph_hash": f.Hash, "mode": f.Mode,
-	}); err != nil {
+	}
+	addFollows(begun, p)
+	if err := l.Append(RecRunStarted, begun); err != nil {
 		return nil, err
 	}
 
@@ -344,6 +394,42 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	p.Observe(Event{Kind: EvStarted, Result: res})
+	start := snap
+	if fu := p.Follows; fu != nil {
+		// The implementer starts from the previous Run's Candidate, as a
+		// send-back starts from the one it sends back, rebased onto this
+		// Snapshot when the repository changed since that Run's. Only the
+		// Candidate comes across: held-out tests live in the other Run's
+		// Oracle and never enter a Candidate (ADR-0009). Scope, Tamper and
+		// the additive rules still compare with this Run's Snapshot.
+		var rebased bool
+		var refusal string
+		start, rebased, refusal, err = followUpStart(repo, fu, snap)
+		if err != nil {
+			return nil, err
+		}
+		if refusal != "" {
+			return end(Refused, refusal)
+		}
+		if rebased {
+			if err := l.Append(RecFollowUpRebased, map[string]any{"follows": fu.Run, "candidate": fu.Candidate,
+				"base": fu.Snapshot, "onto": snap, "start": start}); err != nil {
+				return nil, err
+			}
+		}
+		if err := os.RemoveAll(ws); err != nil {
+			return nil, err
+		}
+		if err := repo.Checkout(start, ws); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(ws, ledger.WorkspaceMarker), nil, 0o600); err != nil {
+			return nil, err
+		}
+		if err := repo.InitWorkspaceGit(ws); err != nil {
+			return nil, err
+		}
+	}
 
 	// The config Öge resolved must be the Snapshot's.
 	got, inSnap, err := repo.Show(snap, pipeline.ConfigPath)
@@ -361,6 +447,20 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	res.Oracle = m.Version
 	if err := l.Append(RecOracleVersion, map[string]any{"version": m.Version, "manifest": mBlob, "tests": len(m.Tests)}); err != nil {
 		return nil, err
+	}
+	if fu := p.Follows; fu != nil {
+		// The follow-up's implementer is held to this Run's Snapshot,
+		// Oracle and config. Should the inherited change break them (the
+		// user protected a path it edits, say), the scope check would
+		// revert it as this Attempt's Tamper: refuse instead, before any
+		// agent starts. The thread stays.
+		path, err := inheritedOutOfScope(repo, ws, snap, implementerScope(m, f))
+		if err != nil {
+			return nil, err
+		}
+		if path != "" {
+			return end(Refused, fmt.Sprintf("your repository changed since Run %s; its result now touches protected %s; /new for a fresh task", fu.Run, path))
+		}
 	}
 
 	runner := &oracle.Runner{Blobs: blobs, PassEnv: f.Project.PassEnv, Getenv: p.Getenv, SeedTemplate: p.CacheSeedTemplate}
@@ -455,7 +555,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
 			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, runDir: res.Dir} // its seed once joined
 	}
-	next := attemptSpec{n: 1, cause: "first", start: snap, ws: ws}
+	next := attemptSpec{n: 1, cause: "first", start: start, ws: ws}
 	var a *Attempt
 	// resume is where an Ambiguous-file review sends the walk: "verify" or
 	// "check", from the resolved Candidate, with no implementer Attempt.
