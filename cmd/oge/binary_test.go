@@ -140,7 +140,7 @@ func TestBinaryDryRunValidExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, stderr: %s", code, errOut)
 	}
-	for _, want := range []string{"Task       fix the login bug", "implement ─▶ verify (after) ─▶ Check", "(installed)"} {
+	for _, want := range []string{"Task       fix the login bug", "implement -> verify (after) -> Check", "(installed)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out)
 		}

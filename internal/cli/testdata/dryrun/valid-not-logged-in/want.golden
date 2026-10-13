@@ -9,7 +9,7 @@ Criteria   AC-1  After 5 failed logins for one account within 15 minutes, furthe
 Mode       Fast: implementer, then Öge's Check. No independent verifier and no held-out tests
 Config     .oge/oge.toml from the Snapshot, schema 1
 Pipeline   default (frozen, compiled graph d4b2b7e9629e)
-           implement ─▶ Check
+           implement -> Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Own-test-failure · Ambiguous-file
   implement  claude         network off   (not logged in)   (cli)
   Check      go test -json ./...   go-test-json · timeout 5m · network off (not enforced)   (project)
