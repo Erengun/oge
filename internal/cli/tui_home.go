@@ -375,8 +375,11 @@ type home struct {
 	scroll    []string
 	exportDir string
 	tmux      bool
-	keys      *keyPanel // the ? panel, when open (#155)
-	quit      bool
+	// shown is the rows of the last frame View handed the renderer: the
+	// frame on screen when the next print is made (#188).
+	shown int
+	keys  *keyPanel // the ? panel, when open (#155)
+	quit  bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -418,21 +421,22 @@ func (h *home) clock() time.Time {
 type lastRun struct {
 	id      string // the Run's id, for /label
 	apply   func() string
-	branch  func(name string) string // "" is the default name
-	diff    func() tea.Cmd           // printed, or paged with $PAGER
+	branch  func(name string) string                // "" is the default name
+	diff    func(emit func(string) tea.Cmd) tea.Cmd // printed, or paged with $PAGER
 	receipt func() string
 }
 
 // act runs one of the Run's actions by its key; arg is a branch's name.
-func (l *lastRun) act(key, arg string) tea.Cmd {
-	out := func(s string) tea.Cmd { return tea.Println(strings.TrimSuffix(s, "\n")) }
+// emit puts text above the program.
+func (l *lastRun) act(key, arg string, emit func(string) tea.Cmd) tea.Cmd {
+	out := func(s string) tea.Cmd { return emit(strings.TrimSuffix(s, "\n")) }
 	switch key {
 	case "a":
 		return out(l.apply())
 	case "b":
 		return out(l.branch(arg))
 	case "d":
-		return l.diff()
+		return l.diff(emit)
 	case "r":
 		return out(l.receipt())
 	}
@@ -962,7 +966,7 @@ func (h *home) act(key, arg string) tea.Cmd {
 	if key == "d" && h.last != nil && h.openDiff(h.last.id) {
 		return nil // the viewer; the pager is its fallback
 	}
-	return h.last.act(key, arg)
+	return h.last.act(key, arg, h.fit)
 }
 
 // onEnded prints the Run's summary above the program (its stages are
@@ -1005,6 +1009,12 @@ func (h *home) themeNotice() string {
 }
 
 func (h *home) View() tea.View {
+	v := h.view()
+	h.shown = rows(v.Content)
+	return v
+}
+
+func (h *home) view() tea.View {
 	if h.run != nil {
 		return h.queueView()
 	}
@@ -1579,15 +1589,15 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		},
 		receipt: receiptText,
 	}
-	s.diff = func() tea.Cmd {
+	s.diff = func(emit func(string) tea.Cmd) tea.Cmd {
 		patch, err := delivery.Diff(r)
 		switch {
 		case err != nil:
-			return tea.Println("oge: " + clean(err.Error()))
+			return emit("oge: " + clean(err.Error()))
 		case len(patch) == 0:
-			return tea.Println(fmt.Sprintf("Candidate %s changes nothing since the Snapshot.", delivery.Short(r.Candidate)))
+			return emit(fmt.Sprintf("Candidate %s changes nothing since the Snapshot.", delivery.Short(r.Candidate)))
 		case env.Page == nil:
-			return tea.Println(strings.TrimSuffix(diffText(env, r, patch), "\n"))
+			return emit(strings.TrimSuffix(diffText(env, r, patch), "\n"))
 		}
 		// The pager has the terminal (released), and its Ctrl+C (hold).
 		return tea.Exec(editorCmd{hold: hold, run: func() error { return env.Page(diffText(env, r, patch)) }}, func(err error) tea.Msg {

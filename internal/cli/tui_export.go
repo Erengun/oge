@@ -38,7 +38,25 @@ const maxOSC52 = 74000
 // println prints text above the program and keeps it for /export.
 func (h *home) println(text string) tea.Cmd {
 	h.logScroll(text)
-	return printFitting(text, h.width, h.height, strings.Count(h.View().Content, "\n")+1)
+	return h.fit(text)
+}
+
+// fit prints text above the program in pieces that fit above the frame.
+func (h *home) fit(text string) tea.Cmd {
+	return printFitting(text, h.width, h.height, h.frameRows())
+}
+
+// frameRows is how tall a frame the print may land above: the taller of
+// the frame on screen and the one this update draws next. The renderer
+// moves up past the frame it last drew, which a stop or a reopened
+// composer has already replaced in the model (#188).
+func (h *home) frameRows() int {
+	return max(h.shown, rows(h.view().Content))
+}
+
+// rows is how many rows a frame's text takes.
+func rows(frame string) int {
+	return strings.Count(frame, "\n") + 1
 }
 
 // printFitting prints text above a frame of frame rows on a terminal of

@@ -531,7 +531,7 @@ func TestHomeDeliveryNeedsAnExplicitAct(t *testing.T) {
 	h.now = func() time.Time { return at }
 	diffs := 0
 	h.last = &lastRun{apply: func() string { applied++; return "applied" },
-		diff: func() tea.Cmd { diffs++; return nil }}
+		diff: func(func(string) tea.Cmd) tea.Cmd { diffs++; return nil }}
 	key := func(k string) {
 		if k == "down" {
 			h.Update(tea.KeyPressMsg{Code: tea.KeyDown})
