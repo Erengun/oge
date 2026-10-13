@@ -441,8 +441,14 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 	}
 	s.expect("ÖGE RECEIPT") // the second Run's, after the keys
 	s.ended()
-	s.type_("/diff\r")
+	s.type_("/diff\r") // the viewer: the file list, then the file's diff
+	s.expect("1 files")
+	s.type_("\r")
 	s.expect("diff --git")
+	s.type_("\x1b")
+	s.expect("1 files")
+	s.type_("\x1b") // closed
+	s.composer()
 	s.actions()
 	s.type_("a")
 	s.expect("Applied Candidate")

@@ -1,0 +1,11 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Run 20261013T101010-abcdef · Accepted · Candidate abc against the Snapshot def
+ > add.go     +1 −1  modified
+   CLAUDE.md  +2 −0  held back
+   old.txt    +0 −1  deleted
+ 3 files · ↑↓ move · ⏎ open · esc close
+ Standard · implement claude:sonnet · verify codex
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
