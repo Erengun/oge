@@ -9,6 +9,7 @@
    ctrl+c               clear the draft (↑ restores), then leave
    ctrl+l               redraw
    tab                  open setup
+   alt+m                open setup at the implement model
    / · @ · ?            commands · files · this panel (on an empty box)
    ← → · ctrl+b ctrl+f  move
    home · end · ctrl+a  line start · end
@@ -20,5 +21,4 @@
    ctrl+_ · ctrl+z      undo
  History
    ↑ ↓ · ctrl+p ctrl+n  earlier · later tasks (↑ on the first line)
-   ctrl+r               search history (again: older)
- ↑ ↓ scroll (1-20 of 44) · esc or ? close
+ ↑ ↓ scroll (1-20 of 45) · esc or ? close
