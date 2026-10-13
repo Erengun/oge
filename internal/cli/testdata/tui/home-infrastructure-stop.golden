@@ -26,4 +26,3 @@ Nothing was written to your repository.
  Standard · implement fake · verify fake
  Checks: go test -json ./...
  [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
-

@@ -241,10 +241,12 @@ func (s *homeSession) expect(text string) {
 // the composer can catch the two halfway.
 func (s *homeSession) settledScreen() string {
 	s.t.Helper()
+	// Trailing blank rows depend on where the cursor rested when the
+	// screen was read, not on what was drawn: they're not compared.
 	render := func() string {
 		v := vt{height: 24}
 		v.write([]byte(s.out.String()))
-		return v.String()
+		return strings.TrimRight(v.String(), "\n") + "\n"
 	}
 	last, since := render(), time.Now()
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {

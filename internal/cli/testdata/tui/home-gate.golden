@@ -32,4 +32,3 @@ Nothing was written to your repository.
  Checks: go test -json ./...
  [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
  continuing Run X (/new for a fresh task)
-
