@@ -114,17 +114,27 @@ func addFollows(begun map[string]any, p Params) {
 // followUpStart is where a follow-up's implementer starts (#185): the
 // previous Run's Candidate, copied from its Run repository, or, when the
 // repository changed since that Run's Snapshot, the Candidate's change
-// merged onto snap three ways (rebased). conflict reports a merge that
-// doesn't go through: the follow-up is refused before any agent starts.
-func followUpStart(repo *workspace.RunRepo, fu *FollowUp, snap string) (start string, rebased, conflict bool, err error) {
+// merged onto snap three ways (rebased). refusal says why the follow-up
+// can't go on (a merge that conflicts, a git too old to merge): it is
+// refused before any agent starts.
+func followUpStart(repo *workspace.RunRepo, fu *FollowUp, snap string) (start string, rebased bool, refusal string, err error) {
 	from := filepath.Join(fu.Dir, "repo.git")
 	if err := repo.Import(from, fu.Snapshot, "refs/oge/follows-snapshot"); err != nil {
-		return "", false, false, fmt.Errorf("taking Run %s's Snapshot: %w", fu.Run, err)
+		return "", false, "", fmt.Errorf("taking Run %s's Snapshot: %w", fu.Run, err)
 	}
 	if err := repo.Import(from, fu.Candidate, "refs/oge/follows"); err != nil {
-		return "", false, false, fmt.Errorf("taking Run %s's Candidate: %w", fu.Run, err)
+		return "", false, "", fmt.Errorf("taking Run %s's Candidate: %w", fu.Run, err)
 	}
-	return repo.Rebase(fu.Snapshot, snap, fu.Candidate)
+	start, rebased, conflict, err := repo.Rebase(fu.Snapshot, snap, fu.Candidate)
+	switch {
+	case errors.Is(err, workspace.ErrGitTooOld):
+		return "", false, fmt.Sprintf("continuing Run %s needs git 2.40 or newer to rebase onto your changed repository; /new for a fresh task", fu.Run), nil
+	case err != nil:
+		return "", false, "", err
+	case conflict:
+		return "", false, fmt.Sprintf("your repository changed since Run %s in a way that conflicts with its result; /new for a fresh task", fu.Run), nil
+	}
+	return start, rebased, "", nil
 }
 
 // EventKind names a progress event.
@@ -392,13 +402,14 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// Candidate comes across: held-out tests live in the other Run's
 		// Oracle and never enter a Candidate (ADR-0009). Scope, Tamper and
 		// the additive rules still compare with this Run's Snapshot.
-		var rebased, conflict bool
-		start, rebased, conflict, err = followUpStart(repo, fu, snap)
+		var rebased bool
+		var refusal string
+		start, rebased, refusal, err = followUpStart(repo, fu, snap)
 		if err != nil {
 			return nil, err
 		}
-		if conflict {
-			return end(Refused, fmt.Sprintf("your repository changed since Run %s in a way that conflicts with its result; /new for a fresh task", fu.Run))
+		if refusal != "" {
+			return end(Refused, refusal)
 		}
 		if rebased {
 			if err := l.Append(RecFollowUpRebased, map[string]any{"follows": fu.Run, "candidate": fu.Candidate,

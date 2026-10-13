@@ -317,6 +317,22 @@ type thread struct {
 	from run.FollowUp
 }
 
+// nextThread is what the next message continues once a Run ends (#185):
+// the Run's Candidate, unless it was applied, a human rejected it at a
+// Gate, or the session never prompts (TUI sessions only). A Cancelled or
+// Infrastructure-stopped Run with a Candidate is continued too. A refused
+// follow-up keeps the thread it was to continue (prev): once the user
+// undoes the change that conflicts, the next message continues it.
+func nextThread(prev *thread, cur task.Task, res *run.Result, f runFlags) *thread {
+	switch {
+	case res.Outcome == run.Refused:
+		return prev
+	case res.Candidate == "" || res.Dir == "" || res.Outcome == run.Rejected || f.unattended || f.apply:
+		return nil
+	}
+	return &thread{task: cur, from: run.FollowUp{Run: res.ID, Dir: res.Dir, Candidate: res.Candidate, Snapshot: res.Snapshot}}
+}
+
 // runEndedMsg is the Run's end, after its view has finished.
 type runEndedMsg ended
 
@@ -927,13 +943,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved, *ru
 		var text string
 		var l *lastRun
 		text, l, last = u.summary(env, used.flags, root, e.res, h.hold)
-		// The next message continues this Run's Candidate, unless it was
-		// applied, a human rejected it at a Gate, or the session never
-		// prompts (TUI sessions only, #185).
-		h.thread = nil
-		if res := e.res; res.Candidate != "" && res.Dir != "" && res.Outcome != run.Rejected && !used.flags.unattended && !used.flags.apply {
-			h.thread = &thread{task: cur, from: run.FollowUp{Run: res.ID, Dir: res.Dir, Candidate: res.Candidate, Snapshot: res.Snapshot}}
-		}
+		h.thread = nextThread(h.thread, cur, e.res, used.flags)
 		return text, l, false
 	}
 	if env.Edit != nil {

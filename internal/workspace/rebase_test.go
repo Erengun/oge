@@ -62,3 +62,14 @@ func TestRebaseCarriesACandidateToANewSnapshot(t *testing.T) {
 		t.Errorf("conflicting edit: %q moved=%v conflicted=%v err=%v", got, moved, conflicted, err)
 	}
 }
+
+func TestGitAtLeast(t *testing.T) {
+	for out, want := range map[string]bool{
+		"git version 2.50.1 (Apple Git-155)\n": true, "git version 2.40.0\n": true, "git version 2.39.5\n": false,
+		"git version 1.9.0\n": false, "git version 3.0.0\n": true, "git version 2.45.2.windows.1\n": true, "nonsense": true,
+	} {
+		if got := gitAtLeast(out, 2, 40); got != want {
+			t.Errorf("gitAtLeast(%q) = %v", out, got)
+		}
+	}
+}

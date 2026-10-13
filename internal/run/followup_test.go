@@ -86,7 +86,7 @@ func writeIn(t *testing.T, dir, path, s string) {
 
 // follow takes the second Run's Snapshot of the user's repository and
 // where its implementer starts.
-func (f *followFixture) follow(t *testing.T) (repo *workspace.RunRepo, snap, start string, rebased, conflict bool) {
+func (f *followFixture) follow(t *testing.T) (repo *workspace.RunRepo, snap, start string, rebased bool, refusal string) {
 	t.Helper()
 	repo, err := workspace.InitRunRepo(filepath.Join(t.TempDir(), "repo.git"))
 	if err != nil {
@@ -96,20 +96,20 @@ func (f *followFixture) follow(t *testing.T) (repo *workspace.RunRepo, snap, sta
 	if err != nil {
 		t.Fatal(err)
 	}
-	start, rebased, conflict, err = followUpStart(repo, &f.from, snap)
+	start, rebased, refusal, err = followUpStart(repo, &f.from, snap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repo, snap, start, rebased, conflict
+	return repo, snap, start, rebased, refusal
 }
 
 // An unchanged repository: the implementer starts from the first Candidate
 // itself.
 func TestFollowUpStartsFromTheCandidate(t *testing.T) {
 	f := newFollowFixture(t)
-	_, _, start, rebased, conflict := f.follow(t)
-	if start != f.from.Candidate || rebased || conflict {
-		t.Errorf("start %s rebased=%v conflict=%v, want the Candidate %s", start, rebased, conflict, f.from.Candidate)
+	_, _, start, rebased, refusal := f.follow(t)
+	if start != f.from.Candidate || rebased || refusal != "" {
+		t.Errorf("start %s rebased=%v refusal %q, want the Candidate %s", start, rebased, refusal, f.from.Candidate)
 	}
 }
 
@@ -121,9 +121,9 @@ func TestFollowUpRebasesOntoAChangedRepository(t *testing.T) {
 	edited := strings.Replace(additiveBase, `t.Fatal("Sub")`, `t.Fatal("Sub(3, 2) != 1")`, 1)
 	f.write(t, "add_test.go", edited)
 	f.write(t, "README", "user's\n")
-	repo, snap, start, rebased, conflict := f.follow(t)
-	if !rebased || conflict || start == f.from.Candidate {
-		t.Fatalf("start %s rebased=%v conflict=%v", start, rebased, conflict)
+	repo, snap, start, rebased, refusal := f.follow(t)
+	if !rebased || refusal != "" || start == f.from.Candidate {
+		t.Fatalf("start %s rebased=%v refusal %q", start, rebased, refusal)
 	}
 	if out, err := exec.Command("git", "--git-dir", repo.Dir, "rev-parse", start+"^").Output(); err != nil || strings.TrimSpace(string(out)) != snap {
 		t.Errorf("the start revision's parent is %s, not the Snapshot %s (%v)", out, snap, err)
@@ -148,8 +148,32 @@ func TestFollowUpRebasesOntoAChangedRepository(t *testing.T) {
 func TestFollowUpConflictIsRefused(t *testing.T) {
 	f := newFollowFixture(t)
 	f.write(t, "add.go", "package fx\n\nfunc Add(a, b int) int { return b + a }\n")
-	_, _, start, rebased, conflict := f.follow(t)
-	if !conflict || start != "" {
-		t.Errorf("start %q rebased=%v conflict=%v, want a conflict", start, rebased, conflict)
+	_, _, start, rebased, refusal := f.follow(t)
+	if refusal != "your repository changed since Run r1 in a way that conflicts with its result; /new for a fresh task" || start != "" || rebased {
+		t.Errorf("start %q rebased=%v refusal %q, want a conflict", start, rebased, refusal)
+	}
+}
+
+// A git without merge-tree --merge-base can't rebase: the follow-up is
+// refused, saying so; an unchanged repository needs no rebase and goes on.
+func TestFollowUpOnOldGitIsRefused(t *testing.T) {
+	f := newFollowFixture(t)
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	writeIn(t, bin, "git", "#!/bin/sh\nif [ \"$1\" = version ]; then echo 'git version 2.39.5'; exit 0; fi\nexec '"+real+"' \"$@\"\n")
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, _, start, _, refusal := f.follow(t); start != f.from.Candidate || refusal != "" {
+		t.Errorf("unchanged repository on old git: start %q refusal %q", start, refusal)
+	}
+	f.write(t, "README", "user's\n")
+	_, _, start, _, refusal := f.follow(t)
+	if refusal != "continuing Run r1 needs git 2.40 or newer to rebase onto your changed repository; /new for a fresh task" || start != "" {
+		t.Errorf("start %q refusal %q", start, refusal)
 	}
 }

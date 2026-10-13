@@ -11,6 +11,7 @@ import (
 
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/task"
 )
 
 // followScript fixes Add; briefed with a follow-up, it adds Sub to add.go
@@ -258,7 +259,8 @@ func TestBareOgeFollowUpRebasesOntoTheUsersChange(t *testing.T) {
 }
 
 // The user changed what the Candidate changed: the follow-up is refused
-// before any agent starts.
+// before any agent starts, and the thread stays: once the user undoes the
+// change, the next message continues the same Run.
 func TestBareOgeFollowUpRefusesAConflictingChange(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
@@ -271,13 +273,67 @@ func TestBareOgeFollowUpRefusesAConflictingChange(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "add.go"), []byte("package fx\n\nfunc Add(a, b int) int { return b + a }\n"))
 	s.type_("add Sub too\r")
 	s.expect("in a way that conflicts with its result; /new for a fresh task")
-	s.composer()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitRefused {
-		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
-	}
+	s.expect("(/new for a fresh task)\n")
 	if _, err := os.Stat(filepath.Join(filepath.Dir(f.repo), "out", "implementer-2.turn")); err == nil {
 		t.Error("an implementer started on the refused follow-up")
+	}
+	writeFile(t, filepath.Join(f.repo, "add.go"), []byte(fxBroken))
+	s.type_("add Sub too\r")
+	s.expect("Continues     Run ")
+	s.ended()
+	s.type_("\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	runs := followRuns(t, f)
+	if len(runs) != 3 {
+		t.Fatalf("%d Runs", len(runs))
+	}
+	var first string
+	for id, r := range runs {
+		if r.follows == "" {
+			first = id
+		}
+	}
+	for id, r := range runs {
+		if id != first && r.follows != first {
+			t.Errorf("Run %s follows %q, not %s", id, r.follows, first)
+		}
+		if id != first && r.candidate != "" && r.start != runs[first].candidate {
+			t.Errorf("the resent follow-up started from %s, not %s", r.start, runs[first].candidate)
+		}
+	}
+}
+
+// Which Runs the next message continues (#185): one with a Candidate that
+// was Cancelled or stopped by infrastructure too; not one a human rejected
+// or applied; and a refused follow-up keeps the thread it was to continue.
+func TestNextThread(t *testing.T) {
+	prev := &thread{from: run.FollowUp{Run: "r0"}}
+	ended := func(o run.Outcome, candidate string) *run.Result {
+		return &run.Result{ID: "r1", Dir: "d", Outcome: o, Candidate: candidate, Snapshot: "s"}
+	}
+	for _, c := range []struct {
+		res  *run.Result
+		f    runFlags
+		want string
+	}{
+		{ended(run.Accepted, "c"), runFlags{}, "r1"},
+		{ended(run.Cancelled, "c"), runFlags{}, "r1"},
+		{ended(run.InfrastructureStop, "c"), runFlags{}, "r1"},
+		{ended(run.Cancelled, ""), runFlags{}, ""},
+		{ended(run.Rejected, "c"), runFlags{}, ""},
+		{ended(run.Accepted, "c"), runFlags{apply: true}, ""},
+		{ended(run.Accepted, "c"), runFlags{unattended: true}, ""},
+		{ended(run.Refused, ""), runFlags{}, "r0"},
+	} {
+		got := ""
+		if th := nextThread(prev, task.Task{}, c.res, c.f); th != nil {
+			got = th.from.Run
+		}
+		if got != c.want {
+			t.Errorf("%s (candidate %q, %+v): continues %q, want %q", c.res.Outcome, c.res.Candidate, c.f, got, c.want)
+		}
 	}
 }
 

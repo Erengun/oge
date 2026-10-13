@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/erengun/oge/internal/ledger"
@@ -640,6 +641,9 @@ func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conf
 	if t := strings.Fields(string(trees)); len(t) == 2 && t[0] == t[1] {
 		return commit, false, false, nil
 	}
+	if v, err := exec.Command("git", "version").Output(); err == nil && !gitAtLeast(string(v), 2, 40) {
+		return "", false, false, ErrGitTooOld
+	}
 	// The merge runs in a scratch git dir that writes to this one's
 	// objects: this repository's info/attributes (ByteExactAttributes)
 	// would make every file both sides changed a binary conflict. As in
@@ -661,6 +665,9 @@ func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conf
 	if errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return "", true, true, nil
 	}
+	if errors.As(err, &exit) && exit.ExitCode() == 129 { // usage: an option it doesn't know
+		return "", false, false, ErrGitTooOld
+	}
 	if err != nil {
 		return "", false, false, fmt.Errorf("git merge-tree: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
@@ -670,4 +677,27 @@ func (r *RunRepo) Rebase(base, onto, commit string) (rebased string, moved, conf
 		return "", false, false, err
 	}
 	return strings.TrimSpace(string(c)), true, false, nil
+}
+
+// ErrGitTooOld is Rebase on a git without merge-tree --merge-base.
+var ErrGitTooOld = errors.New("rebasing needs git 2.40 or newer")
+
+// gitAtLeast reports whether `git version` output names major.minor or
+// later. Output it can't read counts as new enough: merge-tree says so if
+// it isn't.
+func gitAtLeast(out string, major, minor int) bool {
+	f := strings.Fields(out)
+	if len(f) < 3 {
+		return true
+	}
+	parts := strings.SplitN(f[2], ".", 3)
+	if len(parts) < 2 {
+		return true
+	}
+	ma, err1 := strconv.Atoi(parts[0])
+	mi, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return ma > major || ma == major && mi >= minor
 }
