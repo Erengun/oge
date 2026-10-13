@@ -241,7 +241,7 @@ func (g Graph) Hash(l Limits) string {
 }
 
 // Shape is the one-line picture of the main path, e.g.
-// "implement ─▶ verify (after) ─▶ Check".
+// "implement -> verify (after) -> Check".
 func (g Graph) Shape(verify string) string {
 	var parts []string
 	for _, n := range g.Nodes {
@@ -256,7 +256,7 @@ func (g Graph) Shape(verify string) string {
 			parts = append(parts, "[Result gate]")
 		}
 	}
-	return strings.Join(parts, " ─▶ ")
+	return strings.Join(parts, " -> ")
 }
 
 // MandatoryGates lists the mandatory Gates' names in graph order.

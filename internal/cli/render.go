@@ -57,7 +57,7 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 	if verbose {
 		p("           edges, in precedence order (the first that holds is taken):")
 		for _, e := range f.Graph.Edges {
-			line := fmt.Sprintf("             %-22s ─▶ %-22s on %s", e.From, e.To, e.On)
+			line := fmt.Sprintf("             %-22s -> %-22s on %s", e.From, e.To, e.On)
 			if e.Bound != "" {
 				line += " · bound " + e.Bound
 			}

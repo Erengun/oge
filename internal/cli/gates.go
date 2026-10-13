@@ -246,7 +246,7 @@ const inspectMax = 200
 // the terminal: at most max lines, each cleaned, and a binary file only
 // named. Candidate content never reaches the terminal raw.
 func inspectLines(req gate.Request, path string, max int) []string {
-	head := "── " + shownPath(path)
+	head := "-- " + shownPath(path)
 	b, err := req.Inspect(path)
 	if err != nil {
 		return []string{head, "  can't show it: " + clean(err.Error())}
@@ -267,7 +267,7 @@ func inspectLines(req gate.Request, path string, max int) []string {
 		}
 		out = append(out, "  "+shownLine(l))
 	}
-	return append(out, "── end of "+shownPath(path))
+	return append(out, "-- end of "+shownPath(path))
 }
 
 // reason reads c's reason or note. ok is false when Ctrl-C returned to
