@@ -1,0 +1,16 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ /                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ > /help                            keys and commands
+   /setup                           open setup (same as tab)
+   /mode fast|standard              the mode of the next Runs (from setup)
+   /agent <stage> <agent[@profile]> bind a Stage's agent (from setup)
+   /model <stage> <model>           a Stage's model (from setup)
+   /effort <stage> <level>          a Stage's effort, Claude only (from setup)
+   /runs                            recent Runs in this repo
+   /receipt [run]                   the Receipt of a Run
+   /diff [run]                      a Run's Candidate against the Snapshot
+ tab complete · enter run a whole command · esc close
+ Standard · implement claude:sonnet · verify codex
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor

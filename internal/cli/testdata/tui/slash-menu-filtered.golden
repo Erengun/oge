@@ -1,0 +1,9 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ /re                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ > /receipt [run]                   the Receipt of a Run
+   /resume                          not built yet (#55)
+ tab complete · enter run a whole command · esc close
+ Standard · implement claude:sonnet · verify codex
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
