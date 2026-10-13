@@ -75,12 +75,13 @@ func TestPastePlaceholderUndoAndBackspace(t *testing.T) {
 }
 
 func TestHiddenDetectionUsesTheDeliveryClassifier(t *testing.T) {
-	s := "a\u200Bb\u202Ec\uFEFFd\u2060e"
-	// U+2060 is not in delivery's set, so it is not counted here either.
-	if n := hiddenCount(s); n != 3 {
+	// The same set as delivery's (#221): zero-width, bidi, BOM and the word
+	// joiner are hidden; U+2065 (unassigned) is not.
+	s := "a\u200Bb\u202Ec\uFEFFd\u2060e\u2065f"
+	if n := hiddenCount(s); n != 4 {
 		t.Fatalf("count %d", n)
 	}
-	if got := withoutHidden(s); got != "abcd\u2060e" {
+	if got := withoutHidden(s); got != "abcde\u2065f" {
 		t.Fatalf("cleaned %q", got)
 	}
 	if got := markHidden("x\u200B\ny"); got != "x<U+200B>\ny" {
