@@ -9,6 +9,7 @@ Composer
   tab                  open setup
   shift+tab            switch Standard / Fast (this session)
   alt+m                open setup at the implement model
+  !                    shell mode, one line (ctrl+c stops · \! is a Task)
   / · @ · ?            commands · files · this panel (on an empty box)
   ← → · ctrl+b ctrl+f  move
   home · end · ctrl+a  line start · end

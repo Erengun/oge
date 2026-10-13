@@ -78,3 +78,7 @@ vim_escape = "jj"
 ## Mouse
 
 The mouse works only while a list is open: scroll the wheel over the slash menu, the `/runs` picker or the `/diff` viewer to move the highlight, or the diff. Mouse reporting is off the rest of the time, on purpose. Öge prints the transcript into your terminal's own scrollback, and turning mouse reporting on would take over drag-to-select, copy, and the terminal's wheel scrollback for the whole session. So the composer and the transcript don't capture the mouse: select and copy text, and scroll back, the way your terminal does. Clicks aren't handled either: an inline frame has no known screen row to map a click to.
+
+## Shell mode
+
+A composer line that starts with `!` is a shell command, not a Task: `!git status` runs in your `$SHELL` (`cmd /C` on Windows) in the repo root, between Runs only, with no stdin. Its output (the last 2000 lines or 256 KB) and exit status print above the composer. Ctrl+C stops it (SIGINT to its process group, SIGKILL after a second) and does not quit Öge. The command never reaches an agent, a Briefing or the Ledger, and it goes to a shell history of its own, not the Task history. Shell mode takes one line: input with newlines is refused. To send a Task that starts with `!`, type `\!`.

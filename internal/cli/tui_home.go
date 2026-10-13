@@ -299,6 +299,12 @@ type home struct {
 	// brings it back, before any history entry.
 	cleared string
 	search  *histSearch
+	// shell runs a ! command (#160); root is its cwd; shellHist is the shell
+	// history, apart from hist; job is the command in flight.
+	shell     func(ctx context.Context, root, line string) shellResult
+	root      string
+	shellHist *history
+	job       *shellJob
 	// stash is Ctrl+S's one slot: a draft put aside for this session.
 	stash string
 	// hidden is the confirmation of a Task that held hidden characters.
@@ -559,7 +565,17 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, tea.Sequence(print, alert, tea.Batch(settle, cmd))
 	}
 	switch msg := msg.(type) {
+	case shellDoneMsg:
+		return h, h.shellDone(msg)
 	case ctxDoneMsg:
+		if h.job != nil {
+			// Stop the command's group before the program ends.
+			h.job.cancel()
+			select {
+			case <-h.job.finished:
+			case <-time.After(shellGrace + 500*time.Millisecond):
+			}
+		}
 		h.quit = true
 		return h, tea.Quit
 	case pageFailedMsg:
@@ -570,6 +586,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		h.actions, h.escArmed = false, false
 		switch {
+		case h.job != nil:
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
 		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.diff != nil, h.hidden != nil:
@@ -587,6 +604,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
 		switch {
+		case h.job != nil:
+			// A shell command runs: Ctrl+C stops it (never Öge); other keys are dropped.
+			if msg.String() == "ctrl+c" {
+				h.job.cancel()
+			}
+			return h, nil
 		case h.keys != nil:
 			h.keysKey(msg)
 			return h, nil
@@ -671,6 +694,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.comp.backslashNewline() {
 				h.endNavigation()
 				return h, nil
+			}
+			if esc, escaped := unescapeBang(h.comp.expanded()); escaped {
+				h.comp.set(esc) // a Task that starts with !
+			} else if line, ok := shellLine(esc); ok {
+				return h, h.shellSubmit(line)
 			}
 			text := task.StripComments(h.comp.expanded())
 			if task.IsEmpty(text) {
@@ -1024,11 +1052,17 @@ func (h *home) render() (string, int, int) {
 		top++
 	}
 	title := " " + h.title + " "
+	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
+		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
+	}
 	lines = append(lines, st.dim("╭─")+st.bold(title)+st.dim(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
 	for i, r := range rows {
 		body := r
 		if blank && i == 0 {
 			body = st.dim("Describe the task")
+			if h.job != nil {
+				body = st.dim("running… (ctrl+c to stop)")
+			}
 		}
 		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(body)), 0))
 		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
@@ -1104,7 +1138,16 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, h.atLines()...)
 	}
 	if h.panel == nil && h.keys == nil {
-		for _, l := range h.setup {
+		_, shell := shellLine(h.comp.expanded())
+		for i, l := range h.setup {
+			if i == len(h.setup)-1 && strings.HasPrefix(l, "[tab]") {
+				switch {
+				case h.job != nil:
+					l = "running… ctrl+c stop"
+				case shell:
+					l = "[enter] run shell  [ctrl+j] newline"
+				}
+			}
 			lines = append(lines, " "+st.dim(l))
 		}
 		if h.thread != nil {
@@ -1345,6 +1388,10 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 	}
 	h.getenv = env.Getenv
+	h.shell, h.root = runShell, root
+	if histDir != "" {
+		h.shellHist = loadHistory(shellHistoryFile(histDir, root))
+	}
 	h.reloadTheme = func() string { return h.st.reloadCustomTheme(env.Getenv) }
 	if n := h.themeNotice(); n != "" {
 		h.msg = append(h.msg, n)
