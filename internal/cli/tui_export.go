@@ -77,4 +77,3 @@ func osc52(text string, tmux bool) string {
 	}
 	return seq
 }
-
