@@ -412,7 +412,7 @@ func (r *renderer) observe(ev run.Event) {
 		}
 		if ev.Attempt.Role == "implementer" && ev.Agent.Kind == agent.Claim && ev.Agent.Tool == "" {
 			// The implementer's reply, whole, in both views (ADR-0022).
-			if t := clean(strings.TrimSpace(ev.Agent.Text)); t != "" {
+			if t := cleanLines(ev.Agent.Text); t != "" {
 				r.p("%s", t)
 			}
 			return

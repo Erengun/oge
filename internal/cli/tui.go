@@ -272,7 +272,7 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 			m.step, _ = activityStep(ev.Agent)
 		}
 		if ev.Attempt.Role == "implementer" && ev.Agent.Kind == agent.Claim && ev.Agent.Tool == "" {
-			m.reply = clean(strings.TrimSpace(ev.Agent.Text))
+			m.reply = cleanLines(ev.Agent.Text)
 		}
 		if ev.Agent.Kind == agent.Usage {
 			m.cost, m.tokens, m.ctx = ev.Agent.CostUSD, ev.Agent.Tokens, ev.Agent.Context
@@ -745,7 +745,10 @@ func (m *model) stageLines(i int) []string {
 // does), and it is kept whole.
 func (m *model) replyLines(i int) []string {
 	var out []string
-	for _, r := range m.stages[i].reply {
+	for j, r := range m.stages[i].reply {
+		if j > 0 {
+			out = append(out, "") // a blank line between messages
+		}
 		out = append(out, strings.Split(r, "\n")...)
 	}
 	if len(out) > 0 {
@@ -1099,4 +1102,14 @@ func elapsed(d time.Duration) string {
 	}
 	d = d.Round(time.Second)
 	return fmt.Sprintf("%dm%02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
+}
+
+// cleanLines is clean for text of several lines: each line is cleaned on
+// its own, since clean drops the newlines between them.
+func cleanLines(s string) string {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(s), "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = clean(l)
+	}
+	return strings.Join(lines, "\n")
 }

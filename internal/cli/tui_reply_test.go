@@ -36,6 +36,19 @@ func TestTUIReplyPrintsAboveTheImplementLine(t *testing.T) {
 	}
 }
 
+func TestTUIReplyJoinsMessagesAndKeepsLines(t *testing.T) {
+	h := newTUIHarness(t, false, 80)
+	h.m.scroll = true
+	h.working()
+	h.agent(agent.Event{Kind: agent.Claim, Text: "first line\nsecond line"})
+	h.agent(agent.Event{Kind: agent.Claim, Text: "next message"})
+	h.implemented("")
+	got := strings.Join(h.m.take(), "\n")
+	if !strings.Contains(got, "first line\nsecond line\n\nnext message\n") {
+		t.Errorf("lines or messages ran together:\n%q", got)
+	}
+}
+
 func TestTUIReplyKeepsALongReplyWhole(t *testing.T) {
 	h := newTUIHarness(t, false, 80)
 	h.m.scroll = true
