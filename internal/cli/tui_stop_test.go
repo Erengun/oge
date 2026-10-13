@@ -77,9 +77,7 @@ func TestBareOgeShowsAnInfrastructureStop(t *testing.T) {
 	// final frame once the Run has returned.
 	s.expect("ÖGE RECEIPT")
 	s.composer()
-	screen := vt{height: 24}
-	screen.write([]byte(s.out.String()))
-	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
 	s.type_("\x03")
 	s.wait()
 	for _, bad := range []string{"reviewing", "Nothing needs you"} {

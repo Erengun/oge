@@ -1,0 +1,20 @@
+Keys
+  enter run · ctrl+j newline · ctrl+e editor · tab setup · esc or ctrl+c clear, then leave
+  ↑ ↓ history · ctrl+r search history · ↓ on an empty box: the actions of the last Run
+Commands
+  /help                              keys and commands
+  /setup                             open setup (same as tab)
+  /mode fast|standard                the mode of the next Runs (from setup)
+  /agent <stage> <agent[@profile]>   bind a Stage's agent (from setup)
+  /model <stage> <model>             a Stage's model (from setup)
+  /effort <stage> <level>            a Stage's effort, Claude only (from setup)
+  /runs                              recent Runs in this repo
+  /receipt [run]                     the Receipt of a Run
+  /diff [run]                        a Run's Candidate against the Snapshot
+  /apply [run]                       apply a Run's Candidate to your tree
+  /branch [run] [name]               a Run's Candidate as a branch
+  /new                               start a fresh task
+  /clear                             start a fresh task
+  /notify on|off                     alerts for this session
+  /resume                            not built yet (#55)
+  /quit                              leave
