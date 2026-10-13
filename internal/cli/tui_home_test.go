@@ -299,19 +299,17 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	f := newRunFixture(t)
 	var s *homeSession
 	var edited []string
-	shown := make(chan int, 1) // how often the Task was on screen when the editor ran
 	f.edit = func(path string) error {
 		b, _ := os.ReadFile(path)
 		edited = append(edited, string(b))
-		shown <- strings.Count(s.out.String(), "fix Add")
-		return os.WriteFile(path, append([]byte("fix Add\n"), b...), 0o644)
+		return os.WriteFile(path, append([]byte("second task zq7\n"), b...), 0o644)
 	}
 	s = startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.composer()
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x05")                         // Ctrl+E on an empty box
-	s.out.waitForN(t, "fix Add", <-shown+1) // the box shows what the editor left
+	s.type_("\x05")             // Ctrl+E on an empty box
+	s.expect("second task zq7") // the box shows what the editor left
 	s.type_("\r")
 	s.ended()
 	s.type_("\x03")
@@ -581,9 +579,10 @@ func TestBareOgeStatusLineAndCtrlO(t *testing.T) {
 	s.expect("Fast mode · implement")
 	s.expect("Waiting for you")
 	s.type_("\x0f")
-	s.expect("ctrl+o to collapse · ctrl+c to cancel")
+	// The renderer rewrites only changed cells, so a short run of new text
+	// is the marker; the collapse is covered by TestTUIEscCollapsesAtAGate.
+	s.expect("ctrl+o to collapse")
 	s.type_("\x0f")
-	s.expect("\nctrl+c to cancel")
 	s.type_("t\r")
 	s.ended()
 	s.type_("\x03")
