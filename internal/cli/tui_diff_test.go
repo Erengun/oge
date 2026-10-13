@@ -153,3 +153,24 @@ func TestDiffViewerNeverShowsHeldOut(t *testing.T) {
 		}
 	}
 }
+
+// Git doesn't quote spaces: a file named "src/evil.sh b/README.md" is that
+// file, not README.md.
+func TestSplitPatchPathWithSpaceB(t *testing.T) {
+	name := "src/evil.sh b/README.md"
+	patch := "diff --git a/" + name + " b/" + name + "\nnew file mode 100644\n--- /dev/null\n+++ b/" + name + "\n@@ -0,0 +1 @@\n+x\n" +
+		"diff --git a/" + name + "2 b/" + name + "2\nnew file mode 100644\nBinary files /dev/null and b/" + name + "2 differ\n" +
+		"diff --git a/p q b/r s\nsimilarity index 100%\nrename from p q\nrename to r s\n"
+	fs := splitPatch(patch)
+	if len(fs) != 3 || fs[0].path != name || fs[1].path != name+"2" || fs[2].path != "r s" {
+		t.Fatalf("paths: %+v", fs)
+	}
+}
+
+func TestSplitPatchSubmodule(t *testing.T) {
+	patch := "# Öge: sub is a submodule (gitlink); oge apply and oge branch refuse it\ndiff --git a/sub b/sub\nnew file mode 160000\n--- /dev/null\n+++ b/sub\n@@ -0,0 +1 @@\n+Subproject commit abc\n"
+	fs := splitPatch(patch)
+	if len(fs) != 1 || fs[0].status != "submodule · not delivered" {
+		t.Fatalf("%+v", fs)
+	}
+}

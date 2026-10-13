@@ -4,6 +4,7 @@
  Run 20261013T101010-abcdef · Accepted · Candidate abc against the Snapshot def
  CLAUDE.md  +2 −0 · held back
  # Öge: CLAUDE.md is an agent-config change, held back: oge apply and oge branc
+ h leave it out unless --with-agent-config
  diff --git a/CLAUDE.md b/CLAUDE.md
  new file mode 100644
  index 0000000..3333333

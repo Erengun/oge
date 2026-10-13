@@ -451,6 +451,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		h.width, h.height = ws.Width, ws.Height
+		if h.diff != nil {
+			h.diff.resize(ws.Width)
+		}
 	}
 	if h.run != nil {
 		if e, ok := msg.(runEndedMsg); ok {

@@ -31,7 +31,7 @@ func Diff(r *Run) ([]byte, error) {
 		out.WriteString(marks[c.Path])
 		if gitlink(c) {
 			// Shown, and marked: apply and branch refuse it.
-			fmt.Fprintf(&out, "# Öge: %s is a submodule (gitlink); oge apply and oge branch refuse it\n", c.Path)
+			fmt.Fprintf(&out, "# Öge: %s is a submodule (gitlink); oge apply and oge branch refuse it\n", Shown(c.Path))
 			patch, err := repo.PathDiff(r.Snapshot, r.Candidate, c.Path, true)
 			if err != nil {
 				return nil, err

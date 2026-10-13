@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/workspace"
 )
@@ -32,7 +33,7 @@ func splitPatch(patch string) []diffFile {
 	var files []diffFile
 	var cur *diffFile
 	var pending []string
-	inHunk, held := false, false
+	inHunk, held, sub := false, false, false
 	flush := func() {
 		if cur != nil {
 			cur.text = strings.TrimSuffix(cur.text, "\n")
@@ -47,18 +48,18 @@ func splitPatch(patch string) []diffFile {
 			flush()
 			pending = append(pending, l)
 			held = true
+			sub = sub || strings.Contains(body, " is a submodule (gitlink)")
 			continue
 		case strings.HasPrefix(body, "diff --git "):
 			flush()
-			path := body[len("diff --git "):]
-			if i := strings.LastIndex(path, " b/"); i >= 0 {
-				path = path[i+3:]
-			}
-			cur = &diffFile{path: path, status: "modified", text: strings.Join(pending, "")}
-			if held {
+			cur = &diffFile{path: gitHeaderPath(body[len("diff --git "):]), status: "modified", text: strings.Join(pending, "")}
+			switch {
+			case sub:
+				cur.status = "submodule · not delivered"
+			case held:
 				cur.status = "held back"
 			}
-			pending, inHunk, held = nil, false, false
+			pending, inHunk, held, sub = nil, false, false, false
 		case cur == nil:
 			continue
 		case strings.HasPrefix(body, "@@"):
@@ -66,6 +67,14 @@ func splitPatch(patch string) []diffFile {
 		case !inHunk:
 			if s := headerStatus(body); s != "" && cur.status == "modified" {
 				cur.status = s
+			}
+			switch {
+			case strings.HasPrefix(body, "rename to "):
+				cur.path = body[len("rename to "):]
+			case strings.HasPrefix(body, "+++ b/"):
+				cur.path = body[len("+++ b/"):]
+			case strings.HasPrefix(body, "--- a/") && !strings.Contains(cur.text, "\n+++ b/"):
+				cur.path = body[len("--- a/"):]
 			}
 		case strings.HasPrefix(body, "+"):
 			cur.add++
@@ -78,6 +87,21 @@ func splitPatch(patch string) []diffFile {
 	}
 	flush()
 	return files
+}
+
+// gitHeaderPath is the path of a "diff --git a/P b/P" line's rest. Git
+// does not quote spaces, so a name holding " b/" is ambiguous when split on
+// it; the two halves of an unrenamed file are equal, which is not. When no
+// split is certain (a rename), the whole rest is shown, and the later
+// header lines (+++, rename to) give the path where they can.
+func gitHeaderPath(rest string) string {
+	if n := len(rest); n%2 == 1 {
+		a, b := rest[:n/2], rest[n/2+1:]
+		if strings.HasPrefix(a, "a/") && strings.HasPrefix(b, "b/") && a[2:] == b[2:] && rest[n/2] == ' ' {
+			return a[2:]
+		}
+	}
+	return rest
 }
 
 func headerStatus(l string) string {
@@ -166,6 +190,11 @@ func newDiffViewer(head string, files []diffFile, st styles, width, height int) 
 		vp: viewport.New(viewport.WithWidth(width-2), viewport.WithHeight(rows))}
 }
 
+// resize follows the terminal.
+func (d *diffViewer) resize(width int) {
+	d.vp.SetWidth(max(width, 20) - 2)
+}
+
 // open shows the selected file's diff.
 func (d *diffViewer) open() {
 	f := d.files[d.sel]
@@ -183,7 +212,12 @@ func (d *diffViewer) open() {
 		}
 		b = append(b, l)
 	}
-	d.vp.SetHeight(min(d.rows, len(b)))
+	d.vp.SoftWrap = true
+	shown := 0 // the lines once wrapped
+	for _, l := range b {
+		shown += max(1, (lipgloss.Width(l)+d.vp.Width()-1)/d.vp.Width())
+	}
+	d.vp.SetHeight(min(d.rows, shown))
 	d.vp.SetContentLines(b)
 	d.vp.GotoTop()
 	d.viewing = true
