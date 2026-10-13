@@ -39,6 +39,7 @@ type actionBinding struct {
 	keys      []string // as tea.KeyPressMsg.String() spells them
 }
 
+// actionTable is the shipped bindings, read-only.
 var actionTable = []actionBinding{
 	{ctxComposer, actSubmit, []string{"enter"}},
 	{ctxComposer, actNewline, []string{"ctrl+j", "shift+enter", "alt+enter"}},
@@ -53,9 +54,36 @@ var actionTable = []actionBinding{
 	{ctxRun, actCancelQueue, []string{"ctrl+x"}},
 }
 
+// keyMap is one session's bindings: the defaults with the keybindings file
+// on top (#163). It is immutable: a reload builds a new one and the holder
+// (home, model) swaps the pointer, so nothing is shared or mutated across
+// sessions. A nil *keyMap is the defaults.
+type keyMap struct{ binds []actionBinding }
+
+// defaultKeyMap is the shipped table; actionTable is never written to.
+var defaultKeyMap = &keyMap{binds: actionTable}
+
+func (k *keyMap) table() []actionBinding {
+	if k == nil {
+		return actionTable
+	}
+	return k.binds
+}
+
+// with is a new map with the given actions rebound.
+func (k *keyMap) with(over map[keyOverride][]string) *keyMap {
+	binds := slices.Clone(k.table())
+	for i, a := range binds {
+		if keys, ok := over[keyOverride{a.ctx, a.name}]; ok {
+			binds[i].keys = slices.Clone(keys)
+		}
+	}
+	return &keyMap{binds: binds}
+}
+
 // actionFor is the action key means in ctx, or "" when it means none.
-func actionFor(ctx, key string) string {
-	for _, a := range actionTable {
+func (k *keyMap) actionFor(ctx, key string) string {
+	for _, a := range k.table() {
 		if a.ctx == ctx && slices.Contains(a.keys, key) {
 			return a.name
 		}
@@ -66,30 +94,19 @@ func actionFor(ctx, key string) string {
 // resolve is the switch tag for a handler: the action name when key is bound
 // in ctx, else the key itself, so one switch holds both the actions and the
 // keys the table doesn't cover. (No key is spelled like an action name.)
-func resolve(ctx, key string) string {
-	if a := actionFor(ctx, key); a != "" {
+func (k *keyMap) resolve(ctx, key string) string {
+	if a := k.actionFor(ctx, key); a != "" {
 		return a
 	}
 	return key
 }
 
 // actionKeys are the keys bound to the action in ctx (nil if there is none).
-func actionKeys(ctx, name string) []string {
-	for _, a := range actionTable {
+func (k *keyMap) actionKeys(ctx, name string) []string {
+	for _, a := range k.table() {
 		if a.ctx == ctx && a.name == name {
 			return a.keys
 		}
 	}
 	return nil
-}
-
-// setActionKeys rebinds one action: the seam for user overrides (#163).
-func setActionKeys(ctx, name string, keys []string) bool {
-	for i, a := range actionTable {
-		if a.ctx == ctx && a.name == name {
-			actionTable[i].keys = keys
-			return true
-		}
-	}
-	return false
 }

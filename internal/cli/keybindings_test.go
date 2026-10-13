@@ -31,18 +31,17 @@ func keysEnv(t *testing.T, content string) func(string) string {
 	return env
 }
 
-// withKeys loads content as the keybindings file and restores the defaults
-// when the test ends.
-func withKeys(t *testing.T, content string) string {
+// withKeys loads content as the keybindings file.
+func withKeys(t *testing.T, content string) (*keyMap, string) {
 	t.Helper()
-	t.Cleanup(resetActionKeys)
-	return reloadKeybindings(keysEnv(t, content))
+	return loadKeybindings(keysEnv(t, content))
 }
 
 const validKeys = "[composer]\neditor = \"ctrl+g\"\nnewline = [\"ctrl+j\", \"alt+enter\"]\n[run]\nexpand = \"ctrl+t\"\n"
 
 func TestKeybindingsOverrideResolve(t *testing.T) {
-	if n := withKeys(t, validKeys); n != "" {
+	kb, n := withKeys(t, validKeys)
+	if n != "" {
 		t.Fatalf("notice %q for a good file", n)
 	}
 	for _, c := range []struct{ ctx, key, want string }{
@@ -54,30 +53,32 @@ func TestKeybindingsOverrideResolve(t *testing.T) {
 		{"run", "ctrl+o", "ctrl+o"},
 		{"composer", "ctrl+s", "stash"}, // not listed: default kept
 	} {
-		if got := resolve(c.ctx, c.key); got != c.want {
+		if got := kb.resolve(c.ctx, c.key); got != c.want {
 			t.Errorf("resolve(%s, %s) = %q, want %q", c.ctx, c.key, got, c.want)
 		}
 	}
 }
 
 func TestKeybindingsShowInHelpAndPanel(t *testing.T) {
-	withKeys(t, validKeys)
-	help := helpText()
+	kb, _ := withKeys(t, validKeys)
+	help := helpText(kb)
 	for _, want := range []string{"ctrl+g", `ctrl+j · \+enter`, "ctrl+t"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("/help lacks %q", want)
 		}
 	}
 	h := testHome(80)
+	h.setKeys(kb)
 	typeText(h, "?")
 	golden(t, "keys-panel-override", frame(h))
 }
 
 func TestKeybindingsMissingFileKeepsDefaults(t *testing.T) {
-	if n := withKeys(t, ""); n != "" {
+	kb, n := withKeys(t, "")
+	if n != "" {
 		t.Errorf("notice %q without a file", n)
 	}
-	if !slices.Equal(actionKeys("composer", "editor"), []string{"ctrl+e", "ctrl+g"}) {
+	if !slices.Equal(kb.actionKeys("composer", "editor"), []string{"ctrl+e", "ctrl+g"}) {
 		t.Error("defaults changed")
 	}
 }
@@ -103,16 +104,14 @@ func TestKeybindingsProblems(t *testing.T) {
 		{"not TOML", "[composer\n", "not valid TOML"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			env := keysEnv(t, c.file)
-			t.Cleanup(resetActionKeys)
-			n := reloadKeybindings(env)
+			kb, n := withKeys(t, c.file)
 			if !strings.Contains(n, keybindingsFile) || !strings.Contains(n, c.want) {
 				t.Errorf("notice %q lacks the file or %q", n, c.want)
 			}
 			if !strings.Contains(n, "default keys") {
 				t.Errorf("notice %q doesn't say the defaults are used", n)
 			}
-			if !slices.Equal(actionKeys("composer", "editor"), []string{"ctrl+e", "ctrl+g"}) {
+			if kb != defaultKeyMap {
 				t.Error("a bad file was partly applied")
 			}
 		})
@@ -121,18 +120,19 @@ func TestKeybindingsProblems(t *testing.T) {
 
 // The whole file is ignored when one entry is bad, not just the entry.
 func TestKeybindingsBadFileAppliesNothing(t *testing.T) {
-	withKeys(t, "[composer]\nredraw = \"ctrl+t\"\nstash = \"ctrl+c\"\n")
-	if got := resolve("composer", "ctrl+t"); got == "redraw" {
+	kb, _ := withKeys(t, "[composer]\nredraw = \"ctrl+t\"\nstash = \"ctrl+c\"\n")
+	if got := kb.resolve("composer", "ctrl+t"); got == "redraw" {
 		t.Error("ctrl+t became the redraw key despite the bad stash entry")
 	}
 }
 
 func TestKeybindingsDefaultsKeepTheirOwnKeys(t *testing.T) {
 	// ? and enter are locked for other actions but fine for their own.
-	if n := withKeys(t, "[composer]\nkeysPanel = [\"?\", \"f1\"]\nsubmit = [\"enter\", \"ctrl+q\"]\n"); n != "" {
+	kb, n := withKeys(t, "[composer]\nkeysPanel = [\"?\", \"f1\"]\nsubmit = [\"enter\", \"ctrl+q\"]\n")
+	if n != "" {
 		t.Errorf("notice %q", n)
 	}
-	if resolve("composer", "f1") != "keysPanel" || resolve("composer", "ctrl+q") != "submit" {
+	if kb.resolve("composer", "f1") != "keysPanel" || kb.resolve("composer", "ctrl+q") != "submit" {
 		t.Error("extra keys not bound")
 	}
 }
@@ -163,8 +163,8 @@ func TestDefaultKeysAreValidNames(t *testing.T) {
 
 // After a remap of other actions, the Gate still gets its keys.
 func TestKeybindingsLeaveGateKeysAlone(t *testing.T) {
-	withKeys(t, validKeys)
-	m := &model{gate: &gateState{}}
+	kb, _ := withKeys(t, validKeys)
+	m := &model{gate: &gateState{}, kb: kb}
 	press := func(k tea.KeyPressMsg) bool { return m.gateKey(k) }
 	if press(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}) {
 		t.Error("the remapped expand key no longer reaches the view")
@@ -185,13 +185,17 @@ func TestKeybindingsLeaveGateKeysAlone(t *testing.T) {
 
 func TestKeybindingsReloadWithTheComposer(t *testing.T) {
 	env := keysEnv(t, validKeys)
-	t.Cleanup(resetActionKeys)
 	h := &home{comp: newComposer(), resolve: func(*setupState) (*resolved, []string) { return nil, nil }}
-	h.reloadTheme = func() string { return reloadKeybindings(env) }
+	h.reloadTheme = func() string {
+		kb, n := loadKeybindings(env)
+		h.setKeys(kb)
+		return n
+	}
 	h.reopen()
-	if resolve("run", "ctrl+t") != "expand" {
+	if h.kb.resolve("run", "ctrl+t") != "expand" || h.comp.kb != h.kb {
 		t.Fatal("first open did not load the file")
 	}
+	first := h.kb
 	if err := os.WriteFile(keybindingsPath(env), []byte("[run]\nexpand = \"nope\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +203,18 @@ func TestKeybindingsReloadWithTheComposer(t *testing.T) {
 	if len(h.msg) != 1 || !strings.Contains(h.msg[0], "run.expand") {
 		t.Errorf("no notice for a bad file: %q", h.msg)
 	}
-	if resolve("run", "ctrl+o") != "expand" {
+	if h.kb.resolve("run", "ctrl+o") != "expand" {
 		t.Error("a bad file did not restore the defaults")
+	}
+	if first.resolve("run", "ctrl+t") != "expand" {
+		t.Error("the earlier keyMap was mutated")
+	}
+}
+
+// Two sessions never see each other's remaps.
+func TestKeybindingsArePerSession(t *testing.T) {
+	kb, _ := withKeys(t, validKeys)
+	if defaultKeyMap.resolve("run", "ctrl+o") != "expand" || kb.resolve("run", "ctrl+o") == "expand" {
+		t.Error("a remap leaked into the defaults")
 	}
 }

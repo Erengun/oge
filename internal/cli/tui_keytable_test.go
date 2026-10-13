@@ -114,7 +114,7 @@ func TestKeyTableCoversTheHandlers(t *testing.T) {
 		if !slices.Contains(keyGroups, b.group) {
 			t.Errorf("%q: unknown group %q", b.keys, b.group)
 		}
-		for _, k := range b.probes() {
+		for _, k := range b.probes(nil) {
 			inTable[k] = true
 			if !handled[k] {
 				t.Errorf("the table lists %q (%s) but no handler switches on it", k, b.keys)
@@ -176,12 +176,12 @@ func TestShortcutPanelGolden(t *testing.T) {
 
 // /help and the panel are the same table: every line of it is in both.
 func TestHelpAndPanelAgree(t *testing.T) {
-	help := helpText()
+	help := helpText(nil)
 	h := testHome(80)
 	h.height = 0 // unwindowed: the whole table
 	typeText(h, "?")
 	panel := frame(h)
-	for _, l := range keyLines() {
+	for _, l := range keyLines(nil) {
 		l = strings.TrimSpace(l)
 		if !strings.Contains(help, l) {
 			t.Errorf("/help lacks %q", l)

@@ -42,6 +42,7 @@ const maxComposerRows = 8
 // composer is a minimal multiline text box. It keeps the Task as lines of
 // runes, so the cursor is a (row, col) in them.
 type composer struct {
+	kb       *keyMap // the session's keys (nil: the defaults)
 	lines    [][]rune
 	row, col int
 	top      int // first visible row of the wrapped text
@@ -70,6 +71,22 @@ func (c *composer) inSel(i, n int) bool {
 }
 
 func newComposer() *composer { return &composer{lines: [][]rune{nil}} }
+
+// composer is a new, empty box on this session's keys.
+func (h *home) composer() *composer {
+	c := newComposer()
+	c.kb = h.kb
+	return c
+}
+
+// setKeys swaps in a reloaded keyMap whole; the boxes in use follow it.
+func (h *home) setKeys(kb *keyMap) {
+	h.kb = kb
+	h.comp.kb = kb
+	if h.next != nil {
+		h.next.comp.kb = kb
+	}
+}
 
 func (c *composer) text() string {
 	parts := make([]string, len(c.lines))
@@ -180,7 +197,7 @@ func (c *composer) key(k tea.KeyPressMsg) bool {
 	if c.editKey(k) {
 		return true
 	}
-	switch resolve(ctxComposer, k.String()) {
+	switch c.kb.resolve(ctxComposer, k.String()) {
 	case "backspace", "ctrl+h":
 		c.change("del", c.backspace)
 	case "delete", "ctrl+d":
@@ -280,6 +297,7 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 // home is the session program's root model: the composer, the Run's own
 // model once Enter starts it, then the composer again.
 type home struct {
+	kb *keyMap // this session's keys (nil: the defaults); swapped whole on reload
 	// settling holds the printing back after a Gate closed (#233): held
 	// is what finished meanwhile, already out of the frame, and heldEnd
 	// the Run's end that arrived meanwhile.
@@ -684,7 +702,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.vim && h.normal && h.normalKey(msg) {
 			return h, nil
 		}
-		switch resolve(ctxComposer, msg.String()) {
+		switch h.kb.resolve(ctxComposer, msg.String()) {
 		case actHistorySearch:
 			if h.hist.len() > 0 {
 				h.search = &histSearch{hit: -1}
@@ -903,7 +921,7 @@ func (h *home) recall(dir int) bool {
 // (it never submits) and Esc leaves the box as it was.
 func (h *home) searchKey(msg tea.KeyPressMsg) {
 	s := h.search
-	if actionFor(ctxComposer, msg.String()) == actHistorySearch { // again: older
+	if h.kb.actionFor(ctxComposer, msg.String()) == actHistorySearch { // again: older
 		if s.hit > 0 {
 			if i := h.hist.find(s.query, s.hit-1); i >= 0 {
 				s.hit = i
@@ -984,7 +1002,7 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 // Run would use read afresh (the files may have changed during the Run).
 func (h *home) reopen() {
 	h.run, h.done, h.actions = nil, nil, false
-	h.comp, h.queuedText = newComposer(), ""
+	h.comp, h.queuedText = h.composer(), ""
 	h.navigating = false
 	res, problem := h.resolve(h.sel)
 	h.msg, h.setup = problem, nil
@@ -1419,7 +1437,9 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.shellHist = loadHistory(shellHistoryFile(histDir, root))
 	}
 	h.reloadTheme = func() string {
-		theme, keys := h.st.reloadCustomTheme(env.Getenv), reloadKeybindings(env.Getenv)
+		theme := h.st.reloadCustomTheme(env.Getenv)
+		kb, keys := loadKeybindings(env.Getenv)
+		h.setKeys(kb)
 		return strings.Join(slices.DeleteFunc([]string{theme, keys}, func(s string) bool { return s == "" }), "; ")
 	}
 	if n := h.themeNotice(); n != "" {
@@ -1453,6 +1473,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		runIn, used, running = newInterrupts(runCancel), r, make(chan struct{})
 		in.forwardTo(runIn)
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
+		u.m.kb = h.kb
 		u.m.notify = u.notify
 		u.m.width, u.m.height = w, ht
 		u.m.scroll = true

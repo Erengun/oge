@@ -54,7 +54,7 @@ func (m *model) findKey(msg tea.KeyPressMsg) bool {
 	if f == nil || !f.typing {
 		return false
 	}
-	switch resolve(ctxRun, msg.String()) {
+	switch m.kb.resolve(ctxRun, msg.String()) {
 	case "esc":
 		m.find = nil
 	case "enter":

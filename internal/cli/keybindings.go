@@ -29,14 +29,8 @@ import (
 // keybindingsFile is the file's name in the config directory.
 const keybindingsFile = "keybindings.toml"
 
-// defaultActions is the table as shipped; reloads start from it.
-var defaultActions = func() []actionBinding {
-	d := slices.Clone(actionTable)
-	for i := range d {
-		d[i].keys = slices.Clone(d[i].keys)
-	}
-	return d
-}()
+// defaultActions is the table as shipped.
+var defaultActions = actionTable
 
 // keybindingsPath is where the file is, or "" without a config home.
 func keybindingsPath(getenv func(string) string) string {
@@ -260,42 +254,31 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// resetActionKeys puts the shipped keys back.
-func resetActionKeys() {
-	for _, a := range defaultActions {
-		setActionKeys(a.ctx, a.name, slices.Clone(a.keys))
-	}
-}
-
-// reloadKeybindings re-reads the file and applies it, and returns a one-line
+// loadKeybindings reads the file into a new keyMap, and returns a one-line
 // notice when the file is bad (the defaults are then used). A missing file
 // means the defaults. Called when the composer opens, never during a Run.
-func reloadKeybindings(getenv func(string) string) string {
-	resetActionKeys()
+func loadKeybindings(getenv func(string) string) (*keyMap, string) {
 	path := keybindingsPath(getenv)
 	if path == "" {
-		return ""
+		return defaultKeyMap, ""
 	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return ""
+		return defaultKeyMap, ""
 	}
 	if err != nil {
-		return fmt.Sprintf("oge: reading %s: %v; using the default keys", path, err)
+		return defaultKeyMap, fmt.Sprintf("oge: reading %s: %v; using the default keys", path, err)
 	}
 	over, probs := parseKeybindings(data)
 	if len(probs) > 0 {
-		return fmt.Sprintf("oge: %s: %s; using the default keys", path, probs[0])
+		return defaultKeyMap, fmt.Sprintf("oge: %s: %s; using the default keys", path, probs[0])
 	}
-	for id, keys := range over {
-		setActionKeys(id.ctx, id.name, keys)
-	}
-	return ""
+	return defaultKeyMap.with(over), ""
 }
 
 // expandLabel is the key that expands the run view, for the hints.
-func expandLabel() string {
-	if ks := actionKeys(ctxRun, actExpand); len(ks) > 0 {
+func (k *keyMap) expandLabel() string {
+	if ks := k.actionKeys(ctxRun, actExpand); len(ks) > 0 {
 		return ks[0]
 	}
 	return "ctrl+o"

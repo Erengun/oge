@@ -33,19 +33,19 @@ func (b keyBinding) ctxAct() (ctx, name string) {
 }
 
 // probes are the key names the handlers must switch on for this row.
-func (b keyBinding) probes() []string {
+func (b keyBinding) probes(kb *keyMap) []string {
 	if b.act == "" {
 		return b.probe
 	}
-	return actionKeys(b.ctxAct())
+	return kb.actionKeys(b.ctxAct())
 }
 
 // label is the key column: as written, or built from the action's keys.
-func (b keyBinding) label() string {
+func (b keyBinding) label(kb *keyMap) string {
 	if b.act == "" {
 		return b.keys
 	}
-	ks := b.probes()
+	ks := b.probes(kb)
 	switch _, name := b.ctxAct(); name {
 	case actNewline: // the first key, then the typed backslash form
 		return ks[0] + ` · \+enter`
@@ -119,17 +119,17 @@ var keyTable = []keyBinding{
 
 // keyLines is the table as plain lines: a heading per group, then its rows
 // with the keys aligned. /help and the panel both read it.
-func keyLines() []string {
+func keyLines(kb *keyMap) []string {
 	w := 0
 	for _, b := range keyTable {
-		w = max(w, ansi.StringWidth(b.label()))
+		w = max(w, ansi.StringWidth(b.label(kb)))
 	}
 	var out []string
 	for _, g := range keyGroups {
 		out = append(out, g)
 		for _, b := range keyTable {
 			if b.group == g {
-				out = append(out, fmt.Sprintf("  %-*s  %s", w, b.label(), b.desc))
+				out = append(out, fmt.Sprintf("  %-*s  %s", w, b.label(kb), b.desc))
 			}
 		}
 	}
@@ -151,7 +151,7 @@ func (h *home) openKeys() bool {
 // keysKey is a key while the panel is open: Esc, ? or Ctrl+C close it, the
 // arrows scroll it, and nothing else reaches the composer.
 func (h *home) keysKey(msg tea.KeyPressMsg) {
-	switch resolve(ctxComposer, msg.String()) {
+	switch h.kb.resolve(ctxComposer, msg.String()) {
 	case "esc", actKeysPanel, "ctrl+c":
 		h.keys = nil
 	case "up", "ctrl+p":
@@ -169,7 +169,7 @@ func (h *home) keysKey(msg tea.KeyPressMsg) {
 // is taller), the last being the footer.
 func (h *home) keysFrame(height int) []string {
 	st := h.st
-	all := keyLines()
+	all := keyLines(h.kb)
 	rows := max(height-1, 1)
 	if h.height <= 0 {
 		rows = len(all)

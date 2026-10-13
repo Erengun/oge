@@ -67,7 +67,7 @@ func (u *tui) askPlain(ctx context.Context, r gate.Request) (gate.Decision, erro
 // view's usual handling keeps (Ctrl-C at the choice, the expand key).
 func (m *model) gateKey(k tea.KeyPressMsg) (ok bool) {
 	g := m.gate
-	if actionFor(ctxRun, k.String()) == actExpand {
+	if m.kb.actionFor(ctxRun, k.String()) == actExpand {
 		return false
 	}
 	if k.String() == "esc" && m.expanded && g.choice == nil && g.inspect == nil && !g.recording {

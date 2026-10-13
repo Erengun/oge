@@ -319,6 +319,7 @@ type stage struct {
 // model is the TUI's state. It changes only in Update and is drawn only
 // by View, so tests drive it with messages and compare frames.
 type model struct {
+	kb     *keyMap // this session's keys (nil: the defaults)
 	title  string
 	head   string
 	frozen *pipeline.Frozen
@@ -458,7 +459,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.expanded && m.findKey(msg) {
 			return m, nil
 		}
-		switch resolve(ctxRun, msg.String()) {
+		switch m.kb.resolve(ctxRun, msg.String()) {
 		case actExpand:
 			m.expanded, m.off, m.find = !m.expanded, 0, nil
 		case "esc":
@@ -675,7 +676,7 @@ func (m *model) render() string {
 		add(m.statusLine())
 		hint := "ctrl+c to cancel"
 		if m.expanded {
-			hint = expandLabel() + " to collapse · " + hint
+			hint = m.kb.expandLabel() + " to collapse · " + hint
 		}
 		if m.cancelling {
 			hint = "cancelling… ctrl+c again to stop now"
@@ -793,12 +794,12 @@ func (m *model) activity(used int) []string {
 	}
 	switch {
 	case !m.expanded && hidden > 0:
-		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · %s to expand", hidden, expandLabel())))
+		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · %s to expand", hidden, m.kb.expandLabel())))
 	case m.expanded:
 		note := "    "
 		if m.gate != nil {
 			// A Gate takes the arrows; only ctrl+o and esc are the view's.
-			out = append(out, st.dim(note+expandLabel()+" to collapse"))
+			out = append(out, st.dim(note+m.kb.expandLabel()+" to collapse"))
 			break
 		}
 		if m.find != nil {
@@ -893,7 +894,7 @@ func (m *model) todoLines() []string {
 		out = append(out, line)
 	}
 	if hidden > 0 {
-		out = append(out, m.st.dim(fmt.Sprintf("    +%d more · %s to expand", hidden, expandLabel())))
+		out = append(out, m.st.dim(fmt.Sprintf("    +%d more · %s to expand", hidden, m.kb.expandLabel())))
 	}
 	return out
 }
