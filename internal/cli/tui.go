@@ -217,6 +217,9 @@ type (
 		// far (EvAgent usage); nil when it reported none.
 		cost   *float64
 		tokens *int
+		// ctx is how full the agent's context was (EvAgent usage): an
+		// estimate, display only.
+		ctx *agent.ContextUse
 	}
 	doneMsg struct {
 		at     time.Time
@@ -263,7 +266,7 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 			m.step, _ = activityStep(ev.Agent)
 		}
 		if ev.Agent.Kind == agent.Usage {
-			m.cost, m.tokens = ev.Agent.CostUSD, ev.Agent.Tokens
+			m.cost, m.tokens, m.ctx = ev.Agent.CostUSD, ev.Agent.Tokens, ev.Agent.Context
 		}
 	case run.EvNotice:
 		m.step = "note: " + clean(ev.Notice)
@@ -326,6 +329,7 @@ type model struct {
 	off        int // expanded: steps scrolled back from the newest
 	used       int // lines above the activity in the last frame
 	started    time.Time
+	ctx        *agent.ContextUse   // the latest context use an agent reported
 	usage      map[string]reported // what each stage's session reported, latest
 	cancelling bool
 	still      bool // no spinner ticks: tests draw only on events
@@ -494,6 +498,9 @@ func (m *model) apply(msg tea.Msg) bool {
 			}
 			if msg.cost != nil || msg.tokens != nil {
 				m.record(msg.stage, msg.cost, msg.tokens)
+			}
+			if msg.ctx != nil {
+				m.ctx = msg.ctx
 			}
 			if msg.todoSet {
 				m.todos = msg.todos
@@ -950,6 +957,10 @@ func (m *model) statusLine() string {
 	}
 	if haveTokens {
 		parts = append(parts, part{tokenText(tokens), 5})
+	}
+	if m.ctx != nil {
+		// An estimate: the last message's input against the reported window.
+		parts = append(parts, part{fmt.Sprintf("ctx ≈%d%%", m.ctx.Percent()), 5})
 	}
 	width := m.width
 	if width <= 0 {

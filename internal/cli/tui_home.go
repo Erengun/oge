@@ -286,6 +286,9 @@ type home struct {
 	// runs lists the repository's recent Runs for /runs (#145).
 	deliver func(cmd string, args []string) tea.Cmd
 	runs    func(n int) ([]*delivery.Run, string)
+	// label is /label and the picker's l: it names a Run beside its
+	// Ledger (#177).
+	label func(id, text string) (string, string)
 	// menu is the slash menu while it is open: it lists the commands that
 	// complete menuQuery. Esc closes it for the text it was closed on.
 	menu        *list.Model
@@ -345,6 +348,7 @@ func (h *home) clock() time.Time {
 // returns what to print, the delivery code's own lines, as oge apply, oge
 // branch, oge diff and oge receipt print them.
 type lastRun struct {
+	id      string // the Run's id, for /label
 	apply   func() string
 	branch  func(name string) string // "" is the default name
 	diff    func() tea.Cmd           // printed, or paged with $PAGER
@@ -1184,7 +1188,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.thread = nextThread(h.thread, cur, e.res, used.flags)
 		return text, l, false
 	}
-	h.deliver, h.runs = deliverer(env), recentRuns(env, root)
+	h.deliver, h.runs, h.label = deliverer(env), recentRuns(env, root), labeller(env, root)
 	h.listFiles = func() ([]string, error) { return workspace.TrackedFiles(root) }
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
@@ -1269,6 +1273,7 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		}
 	}
 	s := &lastRun{
+		id:    r.ID,
 		apply: deliver(func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) }),
 		branch: func(name string) string {
 			return deliver(func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })()

@@ -1203,3 +1203,45 @@ func TestTodoWriteFrameIsNormalised(t *testing.T) {
 		t.Error("an unreadable plan should be nil")
 	}
 }
+
+// usageOf is the Usage event a turn's result produced.
+func usageOf(t *testing.T, evs []agent.Event) agent.Event {
+	t.Helper()
+	for _, e := range evs {
+		if e.Kind == agent.Usage && e.CostUSD != nil {
+			return e
+		}
+	}
+	t.Fatalf("no result Usage event: %+v", evs)
+	return agent.Event{}
+}
+
+// The context is the last assistant message's input, cache read and cache
+// creation tokens against the window result reports (turns.ndjson: the last
+// message used 8+273+5770 of haiku's 200000).
+func TestUsageReportsContext(t *testing.T) {
+	use := usageOf(t, replay(t, firstTurn(t, "turns.ndjson")).turn("hi"))
+	if c := use.Context; c == nil || c.Used != 6051 || c.Window != 200000 || c.Percent() != 3 {
+		t.Errorf("Context = %+v, want 6051 of 200000", c)
+	}
+}
+
+// With no window reported nothing is estimated.
+func TestUsageWithoutWindowReportsNoContext(t *testing.T) {
+	frames := firstTurn(t, "turns.ndjson")
+	for i, l := range frames {
+		if strings.Contains(l, `"type": "result"`) {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(l), &m); err != nil {
+				t.Fatal(err)
+			}
+			delete(m["msg"].(map[string]any), "modelUsage")
+			b, _ := json.Marshal(m)
+			frames[i] = string(b)
+		}
+	}
+	use := usageOf(t, replay(t, frames).turn("hi"))
+	if use.Context != nil {
+		t.Errorf("Context = %+v from a result with no window", use.Context)
+	}
+}

@@ -93,6 +93,9 @@ func (r *Receipt) Lines() []Line {
 	if r.Task != "" {
 		add("Task", val(r.Task), Plain)
 	}
+	if r.Label != "" {
+		add("Label", val(r.Label)+" (yours; not Evidence)", Plain)
+	}
 	if r.Follows != "" {
 		text := "Run " + r.Follows
 		if r.Rebased {

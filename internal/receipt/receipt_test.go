@@ -485,3 +485,48 @@ func TestReceiptSaysAFollowUpWasRebased(t *testing.T) {
 		}
 	}
 }
+
+// A label shows in the header, as the human's own words; it is not
+// Evidence (#177).
+func TestReceiptLabelGolden(t *testing.T) {
+	r := receipttest.Named("accepted-delivered").Receipt()
+	r.Label = "the retry fix"
+	for ext, got := range map[string]string{
+		"txt": r.Text(receipt.Paint{}),
+		"tui": r.Text(receipt.Colors(true)),
+		"md":  r.Markdown(),
+	} {
+		golden(t, "labelled."+ext, got)
+	}
+}
+
+// Setting a label changes nothing in the Ledger or its head; Build reads it
+// from beside the Run.
+func TestBuildReadsLabelBesideTheLedger(t *testing.T) {
+	dir := t.TempDir()
+	if err := receipttest.Named("accepted-delivered").WriteRun(dir); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, ledger.LedgerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r0, err := receipt.Build(dir)
+	if err != nil || r0.Label != "" {
+		t.Fatalf("unlabelled: %q, %v", r0.Label, err)
+	}
+	if _, err := run.WriteLabel(dir, "keep this one"); err != nil {
+		t.Fatal(err)
+	}
+	r1, err := receipt.Build(dir)
+	if err != nil || r1.Label != "keep this one" {
+		t.Fatalf("labelled: %q, %v", r1.Label, err)
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, ledger.LedgerFile))
+	if string(before) != string(after) || r0.LedgerHead != r1.LedgerHead {
+		t.Error("labelling changed the Ledger")
+	}
+	if strings.Contains(string(after), "keep this one") {
+		t.Error("the label is in the Ledger")
+	}
+}

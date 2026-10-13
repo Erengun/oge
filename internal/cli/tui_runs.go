@@ -33,7 +33,7 @@ func runWhen(id string) string {
 type runItem struct{ r *delivery.Run }
 
 func (i runItem) FilterValue() string {
-	return i.r.ID + " " + outcomeWord(i.r) + " " + clean(i.r.Title)
+	return i.r.ID + " " + outcomeWord(i.r) + " " + clean(i.r.Title) + " " + clean(i.r.Label)
 }
 
 type runDelegate struct{ st styles }
@@ -43,7 +43,11 @@ func (runDelegate) Spacing() int                        { return 0 }
 func (runDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (d runDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	r := it.(runItem).r
-	line := fmt.Sprintf("%s  %-10s  %s  %s", r.ID, outcomeWord(r), runWhen(r.ID), clean(r.Title))
+	line := fmt.Sprintf("%s  %-10s  %s  ", r.ID, outcomeWord(r), runWhen(r.ID))
+	if r.Label != "" {
+		line += d.st.bold("["+clean(r.Label)+"]") + " "
+	}
+	line += clean(r.Title)
 	var tail []string
 	if r.Follows != "" {
 		tail = append(tail, "continues "+clean(r.Follows))
@@ -68,6 +72,11 @@ type runPicker struct {
 	run   string // the Run that confirmation is about
 	typed string
 	note  string
+	// labelling: the label of the Run labelRun is being edited (l);
+	// labelText is what the input holds.
+	labelling bool
+	labelRun  string
+	labelText string
 	// typing: the filter is being typed (after /); query is what it holds.
 	typing bool
 	query  string
@@ -99,6 +108,41 @@ func (h *home) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := h.picker
 	key := msg.String()
 	p.note = ""
+	if p.labelling {
+		switch key {
+		case "esc", "ctrl+c":
+			p.labelling = false
+		case "backspace":
+			if p.labelText != "" {
+				_, n := utf8.DecodeLastRuneInString(p.labelText)
+				p.labelText = p.labelText[:len(p.labelText)-n]
+			}
+		case "enter":
+			p.labelling = false
+			if h.label == nil {
+				return nil
+			}
+			label, problem := h.label(p.labelRun, p.labelText)
+			if problem != "" {
+				p.note = problem
+				return nil
+			}
+			for _, it := range p.l.Items() {
+				if ri := it.(runItem); ri.r.ID == p.labelRun {
+					ri.r.Label = label
+				}
+			}
+			p.note = "label saved (yours; not Evidence)"
+			if label == "" {
+				p.note = "label cleared"
+			}
+		default:
+			if msg.Text != "" {
+				p.labelText += msg.Text
+			}
+		}
+		return nil
+	}
 	if p.cmd != "" {
 		switch key {
 		case "esc", "ctrl+c":
@@ -179,6 +223,10 @@ func (h *home) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 		if r != nil {
 			p.cmd, p.run, p.typed = map[string]string{"a": "apply", "b": "branch"}[key], r.ID, ""
 		}
+	case "l":
+		if r != nil {
+			p.labelling, p.labelRun, p.labelText = true, r.ID, r.Label
+		}
 	case "r":
 		p.note = "resume: not built yet (#55)"
 	default:
@@ -211,6 +259,8 @@ func (p *runPicker) lines() []string {
 		out = append(out, " "+st.dim("no Run matches"))
 	}
 	switch {
+	case p.labelling:
+		out = append(out, " "+st.bold("label Run "+p.labelRun)+": "+clean(p.labelText)+st.dim(" ⏎ save · esc"))
 	case p.cmd != "":
 		what := "to your working tree"
 		if p.cmd == "branch" {
@@ -220,7 +270,7 @@ func (p *runPicker) lines() []string {
 	case p.typing:
 		out = append(out, " "+st.dim("filter: ")+clean(p.query)+st.dim("   enter keep · esc clear"))
 	default:
-		out = append(out, " "+st.dim("/ filter · enter receipt · d diff · a apply · b branch · r resume · esc"))
+		out = append(out, " "+st.dim("/ filter · ⏎ receipt · d diff · a apply · b branch · l label · r resume · esc"))
 	}
 	if p.note != "" {
 		out = append(out, " "+st.bad(p.note))

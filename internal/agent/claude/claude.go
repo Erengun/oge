@@ -156,6 +156,8 @@ type session struct {
 	apiError  string // the last structured API error this turn
 	dead      error  // the Session can take no more turns
 	closeOnce sync.Once
+	ctxUsed   int           // the last top-level assistant message's input tokens, under mu
+	model     string        // system/init's model id, under mu
 	friction  frictionMeter // the turn's policy friction, under mu
 }
 
@@ -466,6 +468,10 @@ type frame struct {
 		In  int `json:"input_tokens"`
 		Out int `json:"output_tokens"`
 	} `json:"usage"`
+	// ModelUsage is per model; the context window is reported only here.
+	ModelUsage map[string]struct {
+		ContextWindow int `json:"contextWindow"`
+	} `json:"modelUsage"`
 	// rate_limit_event
 	RateLimit *struct {
 		Status string `json:"status"`
@@ -693,6 +699,7 @@ func (s *session) init(line []byte) error {
 	}
 	s.mu.Lock()
 	hooks := s.hooksRan
+	s.model = in.Model
 	s.mu.Unlock()
 	warnings, fatal := s.env.check(in, hooks)
 	res := residueOf(in)
@@ -745,13 +752,21 @@ func (s *session) assistant(f frame) error {
 		return nil // a subagent's message; the implementer has no Task tool
 	}
 	var m struct {
-		ID      string    `json:"id"`
-		Content []content `json:"content"`
+		ID       string    `json:"id"`
+		Content  []content `json:"content"`
+		RawUsage *struct {
+			In     int `json:"input_tokens"`
+			Read   int `json:"cache_read_input_tokens"`
+			Create int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(f.Message, &m); err != nil {
 		return errors.New("an assistant message can't be decoded")
 	}
 	s.mu.Lock()
+	if u := m.RawUsage; u != nil {
+		s.ctxUsed = u.In + u.Read + u.Create
+	}
 	s.friction.message(m.ID)
 	s.mu.Unlock()
 	for _, c := range m.Content {
@@ -804,11 +819,31 @@ var (
 	verifierExits    = []string{"extended", "no_additions", "conflicts_with_oracle"}
 )
 
+// contextWindow is the window result reports for the session's model, or
+// for its only model; 0 when it reports none (never guessed).
+func contextWindow(f frame, model string) int {
+	if u, ok := f.ModelUsage[model]; ok {
+		return u.ContextWindow
+	}
+	if len(f.ModelUsage) == 1 {
+		for _, u := range f.ModelUsage {
+			return u.ContextWindow
+		}
+	}
+	return 0
+}
+
 func (s *session) result(f frame) {
 	use := agent.Event{Kind: agent.Usage, Text: fmt.Sprintf("%d model turns", f.NumTurns), CostUSD: f.CostUSD}
 	if u := f.TokenUsage; u != nil && u.In+u.Out > 0 {
 		n := u.In + u.Out
 		use.Tokens = &n
+	}
+	s.mu.Lock()
+	used, model := s.ctxUsed, s.model
+	s.mu.Unlock()
+	if w := contextWindow(f, model); w > 0 && used > 0 {
+		use.Context = &agent.ContextUse{Used: used, Window: w}
 	}
 	s.emit(use)
 	s.mu.Lock()

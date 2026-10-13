@@ -192,3 +192,95 @@ func TestRunPickerEndToEnd(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }
+
+func labelHome(t *testing.T) (*home, *[]string) {
+	t.Helper()
+	runs := pickerRuns()
+	runs[0].Label = "the retry fix"
+	runs[2].Label = "old \x1b[31mlogging try"
+	h := testHome(80)
+	h.runs = func(int) ([]*delivery.Run, string) { return runs, "" }
+	var calls []string
+	h.label = func(id, text string) (string, string) {
+		calls = append(calls, id+"="+text)
+		return strings.TrimSpace(text), ""
+	}
+	submit(h, "/runs")
+	if h.picker == nil {
+		t.Fatal("/runs didn't open the picker")
+	}
+	return h, &calls
+}
+
+func TestRunPickerLabelsGolden(t *testing.T) {
+	h, _ := labelHome(t)
+	golden(t, "runs-picker-labels", frame(h))
+	key(h, "l")
+	golden(t, "runs-picker-label-edit", frame(h))
+}
+
+func TestRunPickerLabelEdit(t *testing.T) {
+	h, calls := labelHome(t)
+	h.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	key(h, "l")
+	key(h, "keep")
+	h.Update(enter())
+	if !reflect.DeepEqual(*calls, []string{"20261013T090000-123456=keep"}) {
+		t.Fatalf("calls %v", *calls)
+	}
+	if !strings.Contains(frame(h), "[keep]") {
+		t.Errorf("row doesn't show the label:\n%s", frame(h))
+	}
+	// Esc cancels; an empty text clears.
+	key(h, "l")
+	key(h, "x")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.picker == nil || h.picker.labelling || len(*calls) != 1 {
+		t.Fatalf("esc: %v", *calls)
+	}
+	key(h, "l")
+	for range "keep" {
+		h.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	h.Update(enter())
+	if len(*calls) != 2 || strings.Contains(frame(h), "[keep]") {
+		t.Errorf("clear: %v\n%s", *calls, frame(h))
+	}
+}
+
+func TestLabelCommand(t *testing.T) {
+	h := testHome(80)
+	var calls []string
+	h.label = func(id, text string) (string, string) {
+		calls = append(calls, id+"="+text)
+		return text, ""
+	}
+	if _, problem := h.labelCmd([]string{"hi"}); !strings.Contains(problem, "no Run in this session") {
+		t.Errorf("no Run yet: %q", problem)
+	}
+	h.last = &lastRun{id: "20261013T101010-abcdef"}
+	if _, problem := h.labelCmd([]string{"the", "retry", "fix"}); problem != "" {
+		t.Fatal(problem)
+	}
+	if _, problem := h.labelCmd([]string{"20261012T080000-aaaaaa", "older", "one"}); problem != "" {
+		t.Fatal(problem)
+	}
+	if _, problem := h.labelCmd([]string{"20261012T080000"}); problem != "" {
+		t.Fatal(problem)
+	}
+	want := []string{"20261013T101010-abcdef=the retry fix", "20261012T080000-aaaaaa=older one", "20261012T080000="}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("calls %v, want %v", calls, want)
+	}
+	submit(h, "/label tidy")
+	if calls[len(calls)-1] != "20261013T101010-abcdef=tidy" {
+		t.Errorf("through the composer: %v", calls)
+	}
+}
+
+func TestLabelEscapedInRunLine(t *testing.T) {
+	r := &delivery.Run{ID: "20261013T101010-abcdef", Title: "t", Label: "a\x1b[31mb"}
+	if got := runLine(r); strings.Contains(got, "\x1b") || !strings.Contains(got, "[") {
+		t.Errorf("runLine %q", got)
+	}
+}

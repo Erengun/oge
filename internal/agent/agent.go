@@ -115,9 +115,28 @@ type Event struct {
 	// far, on a Usage event; nil when it reported none. Never estimated.
 	CostUSD *float64 `json:",omitempty"`
 	Tokens  *int     `json:",omitempty"`
+	// Context is how full the agent's context was after its last message,
+	// on a Usage event, when the agent reported both numbers: display
+	// only, never written to the stream or Ledger.
+	Context *ContextUse `json:"-"`
 	// Todos is the agent's plan after a todo update (a Claim with Tool
 	// "TodoWrite"): display only, never written to the stream or Ledger.
 	Todos []Todo `json:"-"`
+}
+
+// ContextUse is the context an agent's last message used (input, cache read
+// and cache creation tokens) against the window the agent reported for its
+// model. Both are reported, never guessed.
+type ContextUse struct {
+	Used, Window int
+}
+
+// Percent is Used as a share of Window, 0 to 100.
+func (c ContextUse) Percent() int {
+	if c.Window <= 0 {
+		return 0
+	}
+	return min(max(c.Used*100/c.Window, 0), 100)
 }
 
 // Todo is one item of an agent's plan; Text is redacted but not yet cleaned
