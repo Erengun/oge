@@ -34,7 +34,13 @@ type UserConfig struct {
 	// Theme is the live view's palette preset (#174), one of KnownThemes;
 	// "" is auto. Global: how the terminal looks is the person's, not the repo's.
 	Theme string `toml:"theme,omitempty"`
+	// Vim turns on vim's INSERT and NORMAL modes in the composer (#156).
+	// Global: how a person edits is theirs. Off when absent.
+	Vim bool `toml:"vim,omitempty"`
 }
+
+// VimMode reports whether the composer's vim mode is on.
+func (c *UserConfig) VimMode() bool { return c != nil && c.Vim }
 
 // KnownThemes are the palette presets of the live view. Status is never
 // shown by colour alone, so every one keeps the same glyphs and words.

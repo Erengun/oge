@@ -14,7 +14,7 @@ import (
 // case labels. Keys that are typed, not bound (/, @, ?), have no probe.
 
 // keyGroups are the panel's sections, in order.
-var keyGroups = []string{"Composer", "History", "Menus & pickers", "Run", "Delivery", "Setup"}
+var keyGroups = []string{"Composer", "History", "Menus & pickers", "Run", "Delivery", "Setup", "Vim (when enabled)"}
 
 // keyBinding is one row: what the human reads, the key names (as
 // tea.KeyPressMsg.String() spells them) the handlers switch on, and what it does.
@@ -59,7 +59,9 @@ var keyTable = []keyBinding{
 
 	{"Run", "ctrl+o", []string{"ctrl+o"}, "expand or collapse the progress"},
 	{"Run", "↑ ↓ · pgup pgdown", []string{"pgup", "pgdown"}, "scroll it, expanded"},
-	{"Run", "esc", nil, "collapse"},
+	{"Run", "/ · n N", []string{"/", "n", "N"}, "expanded: search · next · previous match (enter jumps)"},
+	{"Run", "{ · }", []string{"{", "}"}, "expanded: previous · next Attempt"},
+	{"Run", "esc", nil, "close the search, then collapse"},
 	{"Run", "ctrl+c", nil, "cancel the Run (twice: force Öge to stop)"},
 
 	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run"},
@@ -69,6 +71,11 @@ var keyTable = []keyBinding{
 	{"Setup", "↑ ↓ · enter", nil, "move · change the row"},
 	{"Setup", "s · w", []string{"s", "w"}, "save as default · write the project Checks"},
 	{"Setup", "d · x", []string{"x"}, "remove the row"},
+
+	{"Vim (when enabled)", "esc · i a I A o O", []string{"i", "a", "I", "A", "o", "O"}, "NORMAL · INSERT (enter runs in both)"},
+	{"Vim (when enabled)", "h j k l", []string{"h", "j", "k", "l"}, "left · down · up · right (NORMAL)"},
+	{"Vim (when enabled)", "w e b", []string{"w", "e", "b"}, "next word · word end · previous (NORMAL)"},
+	{"Vim (when enabled)", "0 ^ $", []string{"0", "^", "$"}, "line start · first char · end (NORMAL)"},
 }
 
 // keyLines is the table as plain lines: a heading per group, then its rows

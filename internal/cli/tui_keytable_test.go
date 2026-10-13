@@ -19,6 +19,7 @@ func handlerKeys(t *testing.T) map[string]bool {
 	handlers := [][3]string{
 		{"tui_home.go", "composer", "key"},
 		{"tui_edit.go", "composer", "editKey"},
+		{"tui_vim.go", "home", "normalKey"},
 		{"tui_home.go", "home", "update"},
 		{"tui_home.go", "home", "searchKey"},
 		{"tui_home.go", "home", "actionKey"},
