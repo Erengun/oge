@@ -35,7 +35,16 @@ type queued struct {
 // the Run, as today.
 func (h *home) queueKey(msg tea.Msg) bool {
 	r := h.run
-	if r.gate != nil || r.finished {
+	if r.gate != nil {
+		// Keys typed into the queue must not answer a Gate that opened under
+		// them (a stray "quit⏎" or "t⏎"): they are dropped for actionsArm.
+		// Ctrl+C is never dropped.
+		if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+c" {
+			return false
+		}
+		return !h.gateArm.IsZero() && h.clock().Sub(h.gateArm) < actionsArm
+	}
+	if r.finished {
 		return false
 	}
 	switch msg := msg.(type) {

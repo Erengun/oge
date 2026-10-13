@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,8 @@ func TestQueueGateOwnsItsKeys(t *testing.T) {
 	h, _ := queueHome(t)
 	typeInto(h, "later")
 	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	now := time.Unix(0, 0)
+	h.now = func() time.Time { return now }
 	reply := make(chan gate.Decision, 1)
 	r := boundExhaustionRequest()
 	h.Update(batchMsg{gateMsg{req: r, reply: reply}})
@@ -91,7 +94,16 @@ func TestQueueGateOwnsItsKeys(t *testing.T) {
 	if strings.Contains(h.View().Content, "later") {
 		t.Error("the queue shows over a Gate")
 	}
+	// Keys typed across the opening are dropped; after the window they reach the Gate.
+	typeInto(h, "q")
+	if h.run.gate.input != "" {
+		t.Fatal("a key within the arm window reached the Gate")
+	}
+	now = now.Add(2 * actionsArm)
 	typeInto(h, "xyz")
+	if h.run.gate.input != "xyz" {
+		t.Fatalf("a key after the window did not reach the Gate: %q", h.run.gate.input)
+	}
 	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if h.next == nil || h.next.comp.text() != "later" || !h.next.kept {
 		t.Fatalf("a Gate key reached the queue: %+v", h.next)
@@ -170,5 +182,27 @@ func TestQueueIsNotRunByTheRunsKeys(t *testing.T) {
 	typeInto(h, "n")
 	if h.next != nil {
 		t.Fatal("expanded view keys went to the queue")
+	}
+}
+
+// A queued `!` command is not run by an Enter that was already on its way
+// when the Run ended.
+func TestQueuedShellCommandNeedsAFreshEnter(t *testing.T) {
+	h, _ := queueHome(t)
+	now := time.Unix(0, 0)
+	h.now = func() time.Time { return now }
+	ran := 0
+	h.shell = func(context.Context, string, string) shellResult { ran++; return shellResult{} }
+	typeInto(h, "!make deploy")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	h.Update(runEndedMsg{})
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if ran != 0 || h.job != nil {
+		t.Fatal("a typed-ahead Enter ran the queued shell command")
+	}
+	now = now.Add(2 * actionsArm)
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if h.job == nil && ran == 0 {
+		t.Fatal("a fresh Enter did not run it")
 	}
 }
