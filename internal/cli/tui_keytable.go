@@ -58,7 +58,9 @@ var keyTable = []keyBinding{
 
 	{"Run", "ctrl+o", []string{"ctrl+o"}, "expand or collapse the progress"},
 	{"Run", "↑ ↓ · pgup pgdown", []string{"pgup", "pgdown"}, "scroll it, expanded"},
-	{"Run", "esc", nil, "collapse"},
+	{"Run", "/ · n N", []string{"/", "n", "N"}, "expanded: search · next · previous match (enter jumps)"},
+	{"Run", "{ · }", []string{"{", "}"}, "expanded: previous · next Attempt"},
+	{"Run", "esc", nil, "close the search, then collapse"},
 	{"Run", "ctrl+c", nil, "cancel the Run (twice: force Öge to stop)"},
 
 	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run"},

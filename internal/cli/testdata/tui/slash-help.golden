@@ -31,7 +31,9 @@ Menus & pickers
 Run
   ctrl+o               expand or collapse the progress
   ↑ ↓ · pgup pgdown    scroll it, expanded
-  esc                  collapse
+  / · n N              expanded: search · next · previous match (enter jumps)
+  { · }                expanded: previous · next Attempt
+  esc                  close the search, then collapse
   ctrl+c               cancel the Run (twice: force Öge to stop)
 Delivery
   ↓ on an empty box    the actions of the last Run

@@ -322,6 +322,8 @@ type model struct {
 	stages []stage
 	cur    int
 	steps  []string
+	marks  []int      // steps indices where a later Attempt begins
+	find   *finder    // the open search in the expanded view (#167)
 	more   int        // steps dropped beyond keptSteps
 	todos  []todoItem // the agent's latest plan, display only
 
@@ -450,11 +452,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.gate != nil && m.gateKey(msg) {
 			return m, nil
 		}
+		if m.expanded && m.findKey(msg) {
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+o":
-			m.expanded, m.off = !m.expanded, 0
+			m.expanded, m.off, m.find = !m.expanded, 0, nil
 		case "esc":
+			if m.expanded && m.find != nil {
+				m.find = nil // search closes first, then the view
+				break
+			}
 			m.expanded, m.off = false, 0
+		case "/", "n", "N", "{", "}":
+			if m.expanded {
+				m.searchKey(msg.String())
+			}
 		case "up", "down", "pgup", "pgdown":
 			if m.expanded {
 				m.scrollBy(msg.String())
@@ -513,6 +526,12 @@ func (m *model) apply(msg tea.Msg) bool {
 				if len(m.steps) > keptSteps {
 					m.steps = m.steps[1:]
 					m.more++
+					for i := range m.marks {
+						m.marks[i]--
+					}
+					for len(m.marks) > 0 && m.marks[0] <= 0 {
+						m.marks = m.marks[1:]
+					}
 				}
 			}
 		}
@@ -567,7 +586,7 @@ func (m *model) begin(i int, at time.Time) {
 	}
 	m.stages[i].state, m.stages[i].start = running, at
 	m.cur = i
-	m.steps, m.more, m.off = nil, 0, 0
+	m.steps, m.marks, m.more, m.off = nil, nil, 0, 0
 }
 
 // finish ends the stage the message names with its line. Unless it failed,
@@ -597,9 +616,12 @@ func (m *model) finish(msg progressMsg) {
 	m.cur = i
 	if msg.fail {
 		s.state = failed
+		if msg.kind == run.EvAttempt && len(m.steps) > 0 {
+			m.marks = append(m.marks, len(m.steps)) // the next Attempt starts here
+		}
 		return
 	}
-	m.steps, m.more = nil, 0
+	m.steps, m.marks, m.more = nil, nil, 0
 	m.cur = len(m.stages)
 	for j := range m.stages {
 		if m.stages[j].state == pending {
@@ -753,10 +775,16 @@ func (m *model) activity(used int) []string {
 		steps = steps[len(steps)-limit:]
 	}
 	var out []string
+	cur := m.stepOf()
+	first := len(m.steps) - later - len(steps)
 	for i, s := range steps {
 		prefix := "    "
 		if i == 0 {
 			prefix = "  ⎿ "
+		}
+		if m.expanded && cur >= 0 && first+i == cur {
+			out = append(out, st.bold(prefix+s))
+			continue
 		}
 		out = append(out, st.dim(prefix+s))
 	}
@@ -770,13 +798,17 @@ func (m *model) activity(used int) []string {
 			out = append(out, st.dim(note+"ctrl+o to collapse"))
 			break
 		}
+		if m.find != nil {
+			out = append(out, st.dim("    "+m.findLine()))
+			break
+		}
 		if hidden > 0 {
 			note += fmt.Sprintf("+%d earlier · ", hidden)
 		}
 		if later > 0 {
 			note += fmt.Sprintf("+%d later · ", later)
 		}
-		out = append(out, st.dim(note+"↑/↓ PgUp/PgDn scroll · esc to collapse"))
+		out = append(out, st.dim(note+"↑/↓ PgUp/PgDn scroll · / search · esc to collapse"))
 	}
 	return out
 }
@@ -890,6 +922,10 @@ func (m *model) scrollBy(key string) {
 	case "pgdown":
 		m.off -= page
 	}
+	m.clampOff()
+}
+
+func (m *model) clampOff() {
 	m.off = max(min(m.off, max(len(m.steps)-m.window(m.used), 0)), 0)
 }
 
