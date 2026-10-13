@@ -64,7 +64,7 @@ var keyTable = []keyBinding{
 	{"Run", "/ · n N", []string{"/", "n", "N"}, "expanded: search · next · previous match (enter jumps)"},
 	{"Run", "{ · }", []string{"{", "}"}, "expanded: previous · next Attempt"},
 	{"Run", "esc", nil, "close the search, then collapse"},
-	{"Run", "type · enter", nil, "next Task, queued under the Run (never sent to it; enter keeps it)"},
+	{"Run", "type · enter", nil, "the next Task; enter queues it, never sent to the Run"},
 	{"Run", "ctrl+x", []string{"ctrl+x"}, "cancel the queued Task"},
 	{"Run", "ctrl+c", nil, "clear the queued Task, else cancel the Run"},
 
