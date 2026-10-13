@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -207,5 +208,48 @@ func TestTUIAttentionLine(t *testing.T) {
 	got := h.m.render()
 	if !strings.Contains(got, "\nATTENTION NEEDED: Decide what happens to the Candidate.\n    send back") || strings.Contains(got, "Nothing needs you") || !strings.Contains(got, " · Waiting for you\n") {
 		t.Errorf("at a Gate:\n%s", got)
+	}
+}
+
+// The resolved Gate frame is still on the terminal when the next print
+// lands, and the print scrolls it into the transcript (#233). So whichever
+// way a Gate closes, nothing is printed until a frame without it is drawn.
+func TestHomePrintsOnlyAfterAClosedGateSettles(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		close func(h *tuiHarness, home *home, r gate.Request)
+	}{
+		{"answered", func(h *tuiHarness, home *home, r gate.Request) {
+			ev := run.Event{Kind: run.EvDecided, Gate: &r, Decision: &gate.Decision{}}
+			home.Update(batchMsg{progressOf(ev, h.f, h.clock)})
+		}},
+		{"ctrl+c", func(h *tuiHarness, home *home, r gate.Request) {
+			home.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTUIHarness(t, false, 70)
+			h.m.scroll = true
+			r := boundExhaustionAt(h)
+			h.openGate(r)
+			home := testHome(70)
+			home.run = h.m
+			tc.close(h, home, r)
+			if h.m.gate != nil || !home.settling {
+				t.Fatalf("gate open %v, settling %v", h.m.gate != nil, home.settling)
+			}
+			// Progress arrives while the frame settles: it waits.
+			home.Update(batchMsg{progressOf(run.Event{Kind: run.EvStarted, Result: h.res}, h.f, h.clock)})
+			if !home.settling {
+				t.Fatal("the batch ended the settling")
+			}
+			_, cmd := home.Update(gateSettledMsg{})
+			if home.settling || cmd == nil {
+				t.Fatalf("settling %v, cmd %v: nothing was held for the settle", home.settling, cmd != nil)
+			}
+			if got := fmt.Sprintf("%T", cmd()); !strings.HasSuffix(got, "printLineMessage") {
+				t.Errorf("after the settle: %s, want the held lines printed", got)
+			}
+		})
 	}
 }
