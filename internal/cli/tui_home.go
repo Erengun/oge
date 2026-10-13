@@ -240,7 +240,8 @@ type home struct {
 	edit func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
 
 	width, height int
-	run           *model // nil while composing
+	run           *model    // nil while composing
+	notify        *notifier // the session's alerts; nil when silent (#170)
 	quit          bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
@@ -338,6 +339,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		was := h.run.finished
 		_, cmd := h.run.Update(msg)
+		alert := h.run.flushAlerts()
 		// Only progress finishes stages. What finished is printed before the
 		// next progress is waited for, so the transcript keeps its order.
 		var print tea.Cmd
@@ -350,12 +352,12 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The view has finished; its tea.Quit is for oge "task". The
 			// session goes on once the Run itself has returned.
 			if h.done == nil {
-				return h, print
+				return h, tea.Sequence(print, alert)
 			}
 			done := h.done
-			return h, tea.Sequence(print, func() tea.Msg { return runEndedMsg(<-done) })
+			return h, tea.Sequence(print, alert, func() tea.Msg { return runEndedMsg(<-done) })
 		}
-		return h, tea.Sequence(print, cmd)
+		return h, tea.Sequence(print, alert, cmd)
 	}
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
@@ -485,6 +487,8 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 	}
 	key, known := slashKeys[word]
 	switch {
+	case word == "/notify" && h.notify != nil:
+		h.msg = []string{h.notify.notifyCommand(arg)}
 	case word == "/new" && arg == "":
 		h.last = nil
 	case !known || (arg != "" && word != "/branch"):
@@ -837,7 +841,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel}
+	h := &home{comp: newComposer(), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify}
 	if res != nil {
 		h.setup = setupLines(res.frozen)
 		sel.init(res)
@@ -865,6 +869,7 @@ func (u *tui) home(env Env, root string, startFor func(task.Task, *resolved) sta
 		runIn, used, running = newInterrupts(runCancel), r, make(chan struct{})
 		in.forwardTo(runIn)
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
+		u.m.notify = u.notify
 		u.m.width, u.m.height = w, ht
 		u.m.scroll = true
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn

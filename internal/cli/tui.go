@@ -42,6 +42,8 @@ type tui struct {
 	kill func()
 	// programStarted, when set, is told each time a program starts (tests).
 	programStarted func()
+	// notify is how this view tells the human, nil when it stays silent.
+	notify *notifier
 }
 
 const (
@@ -325,6 +327,8 @@ type model struct {
 	queue         *queue
 	interrupt     func()
 	gate          *gateState // an open Gate, waiting for the human
+	notify        *notifier  // nil: no bell or desktop notification (#170)
+	alerts        []string   // queued, to leave through flushAlerts
 
 	// scroll: finished items are printed above the program (take) and leave
 	// the frame, which keeps only what still changes (the home, #190).
@@ -380,6 +384,18 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(m.waitCmd(), tick())
 }
 
+// withAlerts puts the queued alerts before next. The home (scroll) sends
+// them itself, in order with what it prints.
+func (m *model) withAlerts(next tea.Cmd) tea.Cmd {
+	if m.scroll {
+		return next
+	}
+	if a := m.flushAlerts(); a != nil {
+		return tea.Sequence(a, next)
+	}
+	return next
+}
+
 func (m *model) waitCmd() tea.Cmd {
 	if m.queue == nil {
 		return nil
@@ -396,10 +412,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case batchMsg:
 		for _, one := range msg {
 			if m.apply(one) {
-				return m, tea.Quit
+				return m, m.withAlerts(tea.Quit)
 			}
 		}
-		return m, m.waitCmd()
+		return m, m.withAlerts(m.waitCmd())
 	case tickMsg:
 		if m.finished {
 			return m, nil
@@ -476,8 +492,10 @@ func (m *model) apply(msg tea.Msg) bool {
 		}
 	case gateMsg:
 		m.gate = &gateState{req: msg.req, reply: msg.reply}
+		m.needsYou()
 	case doneMsg:
 		m.gate = nil
+		m.runEnded(msg.res, msg.failed)
 		if m.cur < len(m.stages) && m.stages[m.cur].state == running {
 			s := &m.stages[m.cur]
 			s.state, s.end = failed, msg.at
