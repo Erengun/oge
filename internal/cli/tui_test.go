@@ -530,6 +530,49 @@ func TestTUIStatusLine(t *testing.T) {
 	}
 }
 
+// Context use shows as an estimate, and only when the agent reported it.
+func TestTUIStatusLineContext(t *testing.T) {
+	h := newTUIHarness(t, false, 100)
+	h.working()
+	h.agent(agent.Event{Kind: agent.Usage, Text: "1 model turns"})
+	if got := h.m.render(); strings.Contains(got, "ctx") {
+		t.Errorf("context shown without a report:\n%s", got)
+	}
+	cost, tokens := 0.4217, 12345
+	h.agent(agent.Event{Kind: agent.Usage, CostUSD: &cost, Tokens: &tokens, Context: &agent.ContextUse{Used: 126000, Window: 200000}})
+	got := h.m.render()
+	golden(t, "status-ctx", got)
+	if !strings.Contains(got, "$0.42 · 12.3k tok · ctx ≈63%") {
+		t.Errorf("status line lacks the context estimate:\n%s", got)
+	}
+}
+
+// Narrow, ctx goes before the attention, after the more telling parts.
+func TestTUIStatusLineContextNarrow(t *testing.T) {
+	h := newTUIHarness(t, false, 100)
+	h.working()
+	h.agent(agent.Event{Kind: agent.Usage, Context: &agent.ContextUse{Used: 1, Window: 2}})
+	line := func() string {
+		for _, l := range strings.Split(h.m.render(), "\n") {
+			if strings.Contains(l, "Nothing needs you") {
+				return l
+			}
+		}
+		return ""
+	}
+	if !strings.Contains(line(), "ctx ≈50%") {
+		t.Fatalf("wide line lacks ctx: %q", line())
+	}
+	h.m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	l := line()
+	if !strings.Contains(l, "Nothing needs you.") {
+		t.Errorf("narrow line lost the attention: %q", l)
+	}
+	if strings.Contains(l, "mode") && strings.Contains(l, "ctx") {
+		t.Errorf("ctx outlived the mode: %q", l)
+	}
+}
+
 // Narrow, the line drops its least telling parts; what needs the human stays.
 func TestTUIStatusLineNarrow(t *testing.T) {
 	h := newTUIHarness(t, false, 50)
