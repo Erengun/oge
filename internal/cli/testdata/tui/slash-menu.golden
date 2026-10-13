@@ -10,7 +10,7 @@
    /runs                            recent Runs in this repo
    /receipt [run]                   the Receipt of a Run
    /diff [run]                      a Run's Candidate against the Snapshot
- +10 more · ↓
+ +11 more · ↓
  tab complete · enter run a whole command · esc close
  Standard · implement claude:sonnet · verify codex
  Checks: go test -json ./...

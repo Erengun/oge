@@ -62,5 +62,6 @@ Commands
   /new                               start a fresh task
   /clear                             start a fresh task
   /notify on|off                     alerts for this session
+  /terminal                          hints for this terminal (Shift+Enter, Alt keys, tmux)
   /resume                            not built yet (#55)
   /quit                              leave

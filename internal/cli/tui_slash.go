@@ -53,6 +53,7 @@ func slashCommands() []slashCmd {
 		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/clear", usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/notify", usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
+		{name: "/terminal", usage: "/terminal", desc: "hints for this terminal (Shift+Enter, Alt keys, tmux)", run: (*home).terminalCmd},
 		{name: "/resume", usage: "/resume", desc: "not built yet (#55)", run: func(*home, []string) (tea.Cmd, string) {
 			return nil, "/resume: not built yet (#55)"
 		}},
