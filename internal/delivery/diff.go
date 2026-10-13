@@ -107,7 +107,10 @@ func bidi(r rune) bool {
 }
 
 // invisible reports the zero-width characters and line separators that
-// hide text or break lines unseen: U+200B–U+200D, U+2028, U+2029, U+FEFF.
+// hide text or break lines unseen: U+200B–U+200D, U+2028, U+2029, U+FEFF,
+// the soft hyphen U+00AD, the word joiner and invisible operators
+// U+2060–U+2064, and the tag characters U+E0000–U+E007F (#109).
 func invisible(r rune) bool {
-	return (r >= 0x200b && r <= 0x200d) || r == 0x2028 || r == 0x2029 || r == 0xfeff
+	return (r >= 0x200b && r <= 0x200d) || r == 0x2028 || r == 0x2029 || r == 0xfeff ||
+		r == 0x00ad || (r >= 0x2060 && r <= 0x2064) || (r >= 0xe0000 && r <= 0xe007f)
 }
