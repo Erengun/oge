@@ -701,3 +701,21 @@ func gitAtLeast(out string, major, minor int) bool {
 	}
 	return ma > major || ma == major && mi >= minor
 }
+
+// TrackedFiles lists the files git tracks in root (the index, never ignored
+// or untracked files), sorted. It is read-only, for the composer's @file
+// picker (#146).
+func TrackedFiles(root string) ([]string, error) {
+	out, err := git(root, "ls-files", "-z", "--cached")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}

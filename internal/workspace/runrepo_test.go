@@ -273,3 +273,18 @@ func TestShowAllMatchesShow(t *testing.T) {
 		}
 	}
 }
+
+func TestTrackedFilesListsOnlyTrackedFiles(t *testing.T) {
+	repo := newRepo(t)
+	write(t, filepath.Join(repo, "sub", "c.go"), "package c\n")
+	gitT(t, repo, "add", "sub/c.go")
+	write(t, filepath.Join(repo, "ignored.txt"), "secret\n")
+	write(t, filepath.Join(repo, "untracked.txt"), "new\n")
+	got, err := TrackedFiles(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := ".gitignore a.txt sub/c.go"; strings.Join(got, " ") != want {
+		t.Errorf("tracked files %v, want %s", got, want)
+	}
+}
