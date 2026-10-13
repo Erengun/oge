@@ -189,9 +189,9 @@ func TestSetupPicksAProfileRunsAndSaves(t *testing.T) {
 	s := startHomeSessionWith(t, f, withClaude, "--fast")
 	s.composer()
 	s.type_("\t")
-	s.expect("Setup")   // the header stays on a 24-row screen (#212)
-	s.type_("\x1b[B\r") // implement profile
-	s.expect("claude@z")
+	s.expectScreen("Setup") // the header stays on a 24-row screen (#212)
+	s.type_("\x1b[B\r")     // implement profile
+	s.expectScreen("claude@z")
 	s.type_("\x1b[B\r") // claude@z
 	s.type_("\t")
 	s.expect("Save as default for this repo?")
@@ -448,9 +448,9 @@ func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
 	s.type_("fix Add\r")
 	s.expect("claude isn't logged in. Logged in: claude@z. Pick one with Tab,")
 	s.type_("\t")
-	s.expect("Setup")   // the header stays on a 24-row screen (#212)
-	s.type_("\x1b[B\r") // implement profile
-	s.expect("claude@z")
+	s.expectScreen("Setup") // the header stays on a 24-row screen (#212)
+	s.type_("\x1b[B\r")     // implement profile
+	s.expectScreen("claude@z")
 	s.type_("\x1b[B\r") // claude@z
 	s.type_("\t")
 	s.type_("n")
