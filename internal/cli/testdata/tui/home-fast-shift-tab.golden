@@ -1,0 +1,8 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ Describe the task                                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ mode Fast (from setup)
+ Fast · implement claude:sonnet · verify codex
+ ! trust-weakening: mode = fast (from setup)
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor

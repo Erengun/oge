@@ -274,6 +274,26 @@ func (h *home) modeCmd(args []string) (tea.Cmd, string) {
 	return nil, ""
 }
 
+// cycleMode is Shift+Tab: Fast becomes Standard and anything else Fast. The
+// setup bar then shows the mode, with Fast marked trust-weakening.
+// A toggle key never offers the save: /setup is where the human saves.
+func (h *home) cycleMode() string {
+	if p := h.setupReady(); p != "" {
+		return p
+	}
+	saving, asked := h.saving, h.sel.asked
+	m := pipeline.Fast
+	if h.sel.mode == pipeline.Fast {
+		m = pipeline.Standard
+	}
+	h.setupEdit("mode "+string(m), func(s *setupState) {
+		s.mode, s.tMode = m, true
+		s.touch()
+	})
+	h.saving, h.sel.asked = saving, asked
+	return ""
+}
+
 func (h *home) agentCmd(args []string) (tea.Cmd, string) {
 	st, problem := h.stageCmd("/agent", args)
 	if problem != "" {

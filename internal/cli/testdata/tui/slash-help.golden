@@ -7,6 +7,7 @@ Composer
   ctrl+c               clear the draft (↑ restores), then leave
   ctrl+l               redraw
   tab                  open setup
+  shift+tab            switch Standard / Fast (this session)
   alt+m                open setup at the implement model
   / · @ · ?            commands · files · this panel (on an empty box)
   ← → · ctrl+b ctrl+f  move

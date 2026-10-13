@@ -700,6 +700,15 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p := h.openSetup(); p != "" {
 				h.msg = []string{p}
 			}
+		case "shift+tab":
+			// Standard <-> Fast through the setup state, as /mode does; Blind
+			// is not in the cycle. A menu owns its keys; a Run never gets here.
+			if h.menu == nil && h.at.list == nil {
+				h.vimState.cancel() // a pending operator or count ends here
+				if p := h.cycleMode(); p != "" {
+					h.msg = []string{p}
+				}
+			}
 		case "alt+m":
 			// Alt+M: setup with the implement model box open; the draft
 			// stays. During a Run the keys go to the Run, so no mid-Run change.
