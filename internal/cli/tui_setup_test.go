@@ -189,8 +189,8 @@ func TestSetupPicksAProfileRunsAndSaves(t *testing.T) {
 	s := startHomeSessionWith(t, f, withClaude, "--fast")
 	s.composer()
 	s.type_("\t")
-	s.expect("no reads of") // the panel's last line: on a 24-row screen the header scrolls off
-	s.type_("\x1b[B\r")     // implement profile
+	s.expect("Setup")   // the header stays on a 24-row screen (#212)
+	s.type_("\x1b[B\r") // implement profile
 	s.expect("claude@z")
 	s.type_("\x1b[B\r") // claude@z
 	s.type_("\t")
@@ -448,8 +448,8 @@ func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
 	s.type_("fix Add\r")
 	s.expect("claude isn't logged in. Logged in: claude@z. Pick one with Tab,")
 	s.type_("\t")
-	s.expect("no reads of") // the panel's last line: on a 24-row screen the header scrolls off
-	s.type_("\x1b[B\r")     // implement profile
+	s.expect("Setup")   // the header stays on a 24-row screen (#212)
+	s.type_("\x1b[B\r") // implement profile
 	s.expect("claude@z")
 	s.type_("\x1b[B\r") // claude@z
 	s.type_("\t")
@@ -465,6 +465,7 @@ func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
 func TestSetupPanelShowsAgentLaunchProfile(t *testing.T) {
 	h, _ := setupHome(t)
 	press(h, tab())
+	h.height = 60 // tall enough to show the read-only launch section whole
 	got := frame(h)
 	info, err := claude.LaunchInfoFor("implementer", "")
 	if err != nil {
@@ -491,6 +492,8 @@ func TestSetupEffortPickerChangesTheLaunchProfile(t *testing.T) {
 	if before == got || !strings.Contains(got, "implement effort") || !strings.Contains(got, "high") {
 		t.Fatalf("effort not shown as high:\n%s", got)
 	}
+	h.height = 60 // tall enough to show the read-only launch section whole
+	got = frame(h)
 	info, err := claude.LaunchInfoFor("implementer", "high")
 	if err != nil {
 		t.Fatal(err)
@@ -558,5 +561,42 @@ func TestSetupThemeRowWithoutColour(t *testing.T) {
 	press(h, enter())
 	if h.panel.pick != nil || !strings.Contains(frame(h), "NO_COLOR is set") {
 		t.Errorf("NO_COLOR theme row:\n%s", frame(h))
+	}
+}
+
+// The panel is windowed to the terminal (#212): 80x24 with the cursor at the
+// top, middle and bottom of the panel.
+func TestSetupPanelWindowGoldens(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		at   func(n int) int
+	}{
+		{"top", func(int) int { return 0 }},
+		{"middle", func(n int) int { return n / 2 }},
+		{"bottom", func(n int) int { return n - 1 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := setupHome(t)
+			h.width, h.height = 80, 24
+			press(h, tab())
+			h.panel.cursor = c.at(len(h.panel.rows()))
+			f := frame(h)
+			if n := strings.Count(f, "\n"); n > 24 {
+				t.Errorf("frame is %d lines on a 24-row terminal", n)
+			}
+			if !strings.Contains(f, "Setup") || !strings.Contains(f, "> ") {
+				t.Errorf("header or focused row scrolled off:\n%s", f)
+			}
+			golden(t, "setup-panel-"+c.name, f)
+		})
+	}
+}
+
+func TestSetupPanelTooSmall(t *testing.T) {
+	h, _ := setupHome(t)
+	h.width, h.height = 80, 8
+	press(h, tab())
+	if f := frame(h); !strings.Contains(f, "terminal too small") {
+		t.Errorf("no too-small line:\n%s", f)
 	}
 }

@@ -373,6 +373,8 @@ type setupPanel struct {
 	save        bool             // [s] was pressed
 	saveProject bool             // [w] was pressed
 	width       int              // the terminal's, for wrapping
+	height      int              // lines the panel may use; 0 is no limit (#212)
+	termHeight  int              // the terminal's height; 0 if unknown
 	pick        *list.Model      // a picker is open for the cursor's row
 	input       *textinput.Model // the model box is open for the cursor's row
 }
@@ -714,7 +716,11 @@ func (p *setupPanel) paste(s string) {
 func (p *setupPanel) lines() []string {
 	st := p.st
 	rows := p.rows()
+	if p.termHeight > 0 && p.termHeight < minPanelHeight {
+		return []string{st.bold("Setup") + st.dim(fmt.Sprintf("   terminal too small: needs %d rows · [tab] done", minPanelHeight))}
+	}
 	out := []string{st.bold("Setup") + st.dim("   next Run · [enter] change · [s] save as default · [tab] done")}
+	focusLo, focusHi := 0, 0
 	for i, r := range rows {
 		if (r.kind == rowCheck || r.kind == rowAddCheck) && rows[i-1].kind != rowCheck {
 			out = append(out, p.checksHeader())
@@ -725,6 +731,7 @@ func (p *setupPanel) lines() []string {
 		}
 		out = append(out, " "+mark+label+" "+p.value(r))
 		if i == p.cursor {
+			focusLo = len(out) - 1
 			switch {
 			case p.pick != nil:
 				for _, l := range strings.Split(p.pick.View(), "\n") {
@@ -739,8 +746,10 @@ func (p *setupPanel) lines() []string {
 					out = append(out, "      > "+p.input.View()+st.dim("   [enter] set · [esc] cancel"))
 				}
 			}
+			focusHi = len(out) - 1
 		}
 	}
 	out = append(out, p.validation(rows)...)
-	return append(out, p.launchLines()...)
+	out = append(out, p.launchLines()...)
+	return windowLines(out, focusLo, focusHi, p.height, p.moreUp, p.moreDown)
 }

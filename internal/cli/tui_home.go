@@ -791,6 +791,10 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, " [y]es write it [n]o")
 	case h.panel != nil:
 		h.panel.width = width
+		h.panel.termHeight = h.height
+		if h.height > 0 { // window the panel to what the composer leaves (#212)
+			h.panel.height = max(h.height-len(lines), 4)
+		}
 		lines = append(lines, h.panel.lines()...)
 	}
 	if h.panel == nil {
