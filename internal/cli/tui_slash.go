@@ -48,6 +48,8 @@ func slashCommands() []slashCmd {
 		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
 		{name: "/branch", guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
 		{name: "/label", usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
+		{name: "/export", usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
+		{name: "/copy", usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
 		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/clear", usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/notify", usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
@@ -115,7 +117,7 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/help")
 	}
-	return tea.Println(helpText()), ""
+	return h.println(helpText()), ""
 }
 
 // helpText is /help: the keys (from the key table the ? panel shows too),
@@ -361,7 +363,7 @@ func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 		return nil, problem
 	}
 	if len(runs) == 0 {
-		return tea.Println("no Runs of this repository yet"), ""
+		return h.println("no Runs of this repository yet"), ""
 	}
 	if h.height >= pickerMinHeight {
 		h.picker = newRunPicker(runs, h.st, h.height)
@@ -371,7 +373,7 @@ func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 	for _, r := range runs {
 		lines = append(lines, runLine(r))
 	}
-	return tea.Println(strings.Join(lines, "\n")), ""
+	return h.println(strings.Join(lines, "\n")), ""
 }
 
 // deliverSlash is /receipt, /diff, /apply and /branch: with a Run id they

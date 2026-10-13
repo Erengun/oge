@@ -317,8 +317,14 @@ type home struct {
 	width, height int
 	run           *model    // nil while composing
 	notify        *notifier // the session's alerts; nil when silent (#170)
-	keys          *keyPanel // the ? panel, when open (#155)
-	quit          bool
+	// scroll is what was printed above the program, for /export (#168);
+	// exportDir is where it goes ("" is the working directory); tmux wraps
+	// /copy's OSC 52.
+	scroll    []string
+	exportDir string
+	tmux      bool
+	keys      *keyPanel // the ? panel, when open (#155)
+	quit      bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -454,7 +460,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var print tea.Cmd
 		if _, ok := msg.(batchMsg); ok {
 			if lines := h.run.take(); len(lines) > 0 {
-				print = tea.Println(strings.Join(lines, "\n"))
+				print = h.println(strings.Join(lines, "\n"))
 			}
 		}
 		if !was && h.run.finished {
@@ -672,7 +678,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	m, cmd := h.start(t, res, h.width, h.height)
 	h.run = m
 	if lines := m.take(); len(lines) > 0 { // the Task's echo
-		cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
+		cmd = tea.Sequence(h.println(strings.Join(lines, "\n")), cmd)
 	}
 	return h, cmd
 }
@@ -813,7 +819,7 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 	}
 	h.last = last
 	h.reopen()
-	return h, tea.Println(text)
+	return h, h.println(text)
 }
 
 // reopen opens the composer again after a Run: empty, with what the next
@@ -1219,7 +1225,10 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, vim: u.vim}
+	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim}
+	if histDir != "" {
+		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
+	}
 	h.getenv = env.Getenv
 	h.reloadTheme = func() string { return h.st.reloadCustomTheme(env.Getenv) }
 	if n := h.themeNotice(); n != "" {
