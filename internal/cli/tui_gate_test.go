@@ -213,23 +213,28 @@ func TestTUIAttentionLine(t *testing.T) {
 
 // The resolved Gate frame is still on the terminal when the next print
 // lands, and the print scrolls it into the transcript (#233). So whichever
-// way a Gate closes, nothing is printed until a frame without it is drawn.
+// way a Gate closes, what finished leaves the frame at once and is printed
+// only after a frame without it is drawn, with the frame unchanged.
 func TestHomePrintsOnlyAfterAClosedGateSettles(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
+		held  string // a line that must have left the frame while it settled
 		close func(h *tuiHarness, home *home, r gate.Request)
 	}{
-		{"answered", func(h *tuiHarness, home *home, r gate.Request) {
+		{"answered", "decision", func(h *tuiHarness, home *home, r gate.Request) {
 			ev := run.Event{Kind: run.EvDecided, Gate: &r, Decision: &gate.Decision{}}
 			home.Update(batchMsg{progressOf(ev, h.f, h.clock)})
 		}},
-		{"ctrl+c", func(h *tuiHarness, home *home, r gate.Request) {
+		{"ctrl+c", "check", func(h *tuiHarness, home *home, r gate.Request) {
 			home.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTUIHarness(t, false, 70)
 			h.m.scroll = true
+			h.working()
+			h.implemented("")
+			h.checked(false)
 			r := boundExhaustionAt(h)
 			h.openGate(r)
 			home := testHome(70)
@@ -243,7 +248,20 @@ func TestHomePrintsOnlyAfterAClosedGateSettles(t *testing.T) {
 			if !home.settling {
 				t.Fatal("the batch ended the settling")
 			}
+			// So does the Run's end, which finishes the Gate's outcome.
+			h.res.Outcome = run.Rejected
+			home.Update(batchMsg{doneMsg{at: h.clock, res: h.res}})
+			// What waits has already left the frame: the print that
+			// follows the settle must not change the frame, or a row of
+			// the old one can stay above it (#233).
+			if !strings.Contains(strings.Join(home.held, "\n"), tc.held) {
+				t.Fatalf("the Gate's outcome didn't leave the frame while it settled: %q", home.held)
+			}
+			before := h.m.render()
 			_, cmd := home.Update(gateSettledMsg{})
+			if after := h.m.render(); after != before {
+				t.Errorf("the print changed the frame:\n%s\n---\n%s", before, after)
+			}
 			if home.settling || cmd == nil {
 				t.Fatalf("settling %v, cmd %v: nothing was held for the settle", home.settling, cmd != nil)
 			}
