@@ -38,7 +38,48 @@ const maxOSC52 = 74000
 // println prints text above the program and keeps it for /export.
 func (h *home) println(text string) tea.Cmd {
 	h.logScroll(text)
-	return tea.Println(text)
+	return printFitting(text, h.width, h.height, strings.Count(h.View().Content, "\n")+1)
+}
+
+// printFitting prints text above a frame of frame rows on a terminal of
+// width by height cells, in pieces that each fit above the frame. Bubble
+// Tea's insertAbove moves the cursor up by the printed rows plus the
+// frame's, and the terminal stops the cursor at its top row: a longer print
+// lands over the frame and leaves its rows in the transcript (#233, #247).
+func printFitting(text string, width, height, frame int) tea.Cmd {
+	pieces := fitPieces(text, width, height, frame)
+	if len(pieces) == 1 {
+		return tea.Println(pieces[0])
+	}
+	cmds := make([]tea.Cmd, len(pieces))
+	for i, p := range pieces {
+		cmds[i] = tea.Println(p)
+	}
+	return tea.Sequence(cmds...)
+}
+
+// fitPieces splits text by lines into pieces of at most height-frame-1
+// terminal rows each, counting a line wider than width as the rows it
+// wraps to. An unknown height keeps it whole.
+func fitPieces(text string, width, height, frame int) []string {
+	if height <= 0 {
+		return []string{text}
+	}
+	room := max(height-frame-1, 1)
+	var pieces, piece []string
+	rows := 0
+	for _, line := range strings.Split(text, "\n") {
+		n := 1
+		if w := ansi.StringWidth(line); width > 0 && w > width {
+			n += w / width
+		}
+		if rows+n > room && len(piece) > 0 {
+			pieces = append(pieces, strings.Join(piece, "\n"))
+			piece, rows = nil, 0
+		}
+		piece, rows = append(piece, line), rows+n
+	}
+	return append(pieces, strings.Join(piece, "\n"))
 }
 
 // redacted is text with the escape sequences stripped and the known secret
