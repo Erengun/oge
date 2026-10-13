@@ -161,7 +161,7 @@ func TestHomeTitleAndSetupAreEscaped(t *testing.T) {
 }
 
 // homeNorm hides what differs between runs: ids, hashes and durations.
-var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|\d+(\.\d+)?m?s\b`)
+var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|(\d+m)?\d+(\.\d+)?m?s\b`)
 
 // homeSession runs Main on a pipe the test types into, with the fake agent.
 type homeSession struct {
@@ -267,10 +267,19 @@ func (s *homeSession) expectScreen(text string) {
 }
 
 // ended waits for the composer back after an Accepted Run: its hint line
-// names the actions.
+// names the actions. An Accepted Run that wasn't applied is continued by
+// the next message (#185), so the frame's last line, drawn after the hint,
+// names that Run.
 func (s *homeSession) ended() {
 	s.t.Helper()
 	s.expect("↓ actions")
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		out := s.out.String()
+		if strings.Contains(out[strings.LastIndex(out, "↓ actions"):], "(/new for a fresh task)") {
+			return
+		}
+	}
+	s.t.Fatalf("the composer after the Run was never drawn whole:\n%s", s.out.String())
 }
 
 // actions moves the focus to the action row (↓ on an empty composer) and

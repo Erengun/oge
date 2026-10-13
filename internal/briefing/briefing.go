@@ -20,7 +20,7 @@ const Assumptions = "Make reasonable, minimal and reversible assumptions where p
 // it. checks are the Run's Check commands.
 func Implementer(t task.Task, checks []string) string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(t.Text))
+	b.WriteString(taskText(t))
 	b.WriteString("\n\n---\nHow this Run works:\n")
 	fmt.Fprintf(&b, "- You are the implementer. The current directory is a disposable copy of the repository; work only inside it, and don't commit.\n")
 	if len(checks) > 0 {
@@ -44,7 +44,7 @@ func Implementer(t task.Task, checks []string) string {
 // commands and testGlobs the globs a new test file must match.
 func Verifier(t task.Task, checks, testGlobs []string) string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(t.Text))
+	b.WriteString(taskText(t))
 	b.WriteString("\n\n---\nHow this Run works:\n")
 	b.WriteString("- You are QA. The current directory is a disposable copy of the repository with a proposed change for this Task on top of it; `git diff` and `git status` show the change.\n")
 	b.WriteString("- Your job is to write new tests that check the Task, its acceptance criteria and the change, and catch what is wrong with it. A failing test is how you report a problem: don't fix the code.\n")
@@ -129,4 +129,23 @@ func sortIDs(ids []string) {
 		return n
 	}
 	sort.Slice(ids, func(i, j int) bool { return num(ids[i]) < num(ids[j]) })
+}
+
+// taskText is the Task, then each follow-up message, labelled as the
+// human's, in order: a follow-up Run is briefed with the whole thread.
+func taskText(t task.Task) string {
+	text := strings.TrimSpace(t.Text)
+	for i, n := range t.FollowUps {
+		text += fmt.Sprintf("\n\n---\nHuman follow-up %d of %d (it continues the Task above; the repository holds the work so far):\n%s", i+1, len(t.FollowUps), strings.TrimSpace(n))
+		var ids []string
+		for _, c := range t.Criteria {
+			if c.FollowUp == i+1 {
+				ids = append(ids, c.ID)
+			}
+		}
+		if len(ids) > 0 {
+			text += "\n(Its acceptance criteria are " + strings.Join(ids, ", ") + ", numbered on from the Task's.)"
+		}
+	}
+	return text
 }

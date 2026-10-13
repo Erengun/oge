@@ -118,7 +118,8 @@ func (m *model) flushAlerts() tea.Cmd {
 }
 
 // notifyCommand is /notify on|off in the home: it turns both alerts on or
-// off for the session. It returns the line to show.
+// off for the session. It returns the line to show. bell follows the two
+// alerts: with both off, /notify off silences everything.
 func (n *notifier) notifyCommand(arg string) string {
 	switch arg {
 	case "on", "off":
