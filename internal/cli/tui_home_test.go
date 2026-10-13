@@ -548,7 +548,6 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
-
 func TestSetupBarNamesAProfile(t *testing.T) {
 	f := homeFrozen()
 	f.Stages[0].Profile = "z"
