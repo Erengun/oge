@@ -626,3 +626,43 @@ func TestBareOgeStatusLineAndCtrlO(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }
+
+// Two Tasks, then ↑ recalls them newest first and Ctrl+R finds one by a
+// substring; Enter puts it in the box and a second Enter runs it. The
+// history is in the state dir, mode 0600, and holds only what was typed.
+func TestBareOgeHistoryRecallAndSearch(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	s := startHomeSession(t, f, "--fast", "--agent", "fake")
+	s.composer()
+	s.type_("fix Add\r")
+	s.ended()
+	s.type_("add tests zq7\r")
+	s.expect("ÖGE RECEIPT")
+	s.ended()
+	s.type_("\x1b[A") // ↑: the newest
+	s.expectScreen("add tests zq7")
+	s.type_("\x1b[A") // ↑: the one before
+	s.expectScreen("│ fix Add")
+	s.type_("\x1b[B\x1b[B") // ↓ back to the newest, then past it: empty
+	s.type_("\x12")         // Ctrl+R
+	s.expectScreen("(reverse-i-search)''")
+	s.type_("zq7")
+	s.expectScreen("(reverse-i-search)'zq7': add tests zq7")
+	s.type_("\r") // accepts into the box, doesn't submit
+	s.expectScreen("│ add tests zq7")
+	s.type_("\x03\x03")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	if n := len(runDirs(t, f)); n != 2 {
+		t.Errorf("%d Runs; accepting a search must not run a Task", n)
+	}
+	files, _ := filepath.Glob(filepath.Join(f.state, "private", "history", "*"))
+	if len(files) != 1 {
+		t.Fatalf("history files %v", files)
+	}
+	if got := strings.Join(loadHistory(files[0]).entries, "|"); got != "fix Add|add tests zq7" {
+		t.Errorf("history %q", got)
+	}
+}
