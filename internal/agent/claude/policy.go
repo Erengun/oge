@@ -43,6 +43,7 @@ const (
 	// ruleHumanAnswer is the human's answer to it.
 	ruleAutoAsk     = "auto_mode_ask"
 	ruleHumanAnswer = "human_answer"
+	ruleWithdrawn   = "ask_withdrawn" // claude cancelled the ask
 )
 
 const denyTail = " Interactive approval isn't available yet, so don't retry this another way. " +
@@ -60,11 +61,19 @@ type policy struct {
 	// them; created are the ones this Session created.
 	writeGlobs []string
 	created    map[string]bool
+	// chat is a Chat Session's policy under claude's auto mode (D2): it
+	// only hard-denies, and a human can answer what it leaves open.
+	chat bool
+	// readOK are the toolchain directories a Chat command may name.
+	readOK []string
 }
+
+// chatDenyTail ends a Chat's hard denial: the human can't lift it.
+const chatDenyTail = " This is outside what any Chat may do, so don't retry it another way: work inside the current directory."
 
 func newPolicy(spec agent.LaunchSpec, hash string) *policy {
 	p := &policy{checks: spec.CheckCommands, by: "launch_profile:" + hash, hash: hash, role: spec.Role,
-		writeGlobs: spec.WriteGlobs, created: map[string]bool{}}
+		writeGlobs: spec.WriteGlobs, created: map[string]bool{}, chat: spec.Permissions == agent.AutoPermissions}
 	if p.role == "" {
 		p.role = "implementer"
 	}
@@ -101,16 +110,20 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 	_ = json.Unmarshal(input, &in)
 	str := func(k string) string { s, _ := in[k].(string); return s }
 	d := agent.HostDecision{Family: agent.Approval, Tool: tool, Target: target(tool, in, p.ws), By: p.by}
+	tail := denyTail
+	if p.chat {
+		tail = chatDenyTail
+	}
 	answer := func(v verdict, outside, grey string) agent.HostDecision {
 		switch v {
 		case vOK:
 			d.Decision, d.Rule, d.Reason = "allow", rulePreAuthorised, "pre-authorised by Launch profile "+p.hash
 			return d
 		case vOutside:
-			d.Decision, d.Rule, d.Reason = "deny", ruleOutside, "Öge denied this: "+outside+"."+denyTail
+			d.Decision, d.Rule, d.Reason = "deny", ruleOutside, "Öge denied this: "+outside+"."+tail
 			return d
 		}
-		d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: "+grey+"."+denyTail
+		d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: "+grey+"."+tail
 		return d
 	}
 	switch tool {
@@ -138,7 +151,18 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 	case "Bash":
 		cmd := strings.TrimSpace(str("command"))
 		v := p.bash(cmd)
-		if v == vGrey {
+		if p.chat && v != vOK {
+			// Auto mode decides what Öge doesn't pre-authorise; Öge only
+			// hard-denies what leaves the Workspace and the toolchain, and
+			// anything touching a .git.
+			switch {
+			case p.escapes(cmd):
+				v = vOutside
+			case !strings.Contains(strings.ToLower(cmd), ".git"):
+				v = vGrey
+			}
+		}
+		if v == vGrey && !p.chat {
 			if h := p.hint(cmd); h != "" {
 				// TODO(#90-decision): a hint replaces denyTail, whose "don't
 				// retry this another way" it would contradict.
@@ -151,6 +175,11 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 	case "AskUserQuestion":
 		// A question is never answered on the human's behalf (ADR-0019).
 		d.Family = agent.Question
+		if p.chat {
+			// A human is there: the question goes to them as an Ask.
+			d.Decision, d.Rule = "deny", ruleNoInteractive
+			return d
+		}
 		d.Decision, d.Rule = "cancel", ruleQuestion
 		d.Reason = "No one can answer questions during this Run. Make a reasonable, minimal and reversible assumption, say what you assumed, and continue."
 		return d

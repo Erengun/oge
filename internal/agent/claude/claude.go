@@ -105,9 +105,12 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		pending: map[string]chan json.RawMessage{}, decided: map[string]agent.HostDecision{},
 		hash: prof.hash(),
 		env:  envelope{role: spec.Role, cwd: spec.Workspace, tools: prof.tools, mode: prof.mode},
-		auto: prof.mode == "auto",
+		auto: prof.mode == "auto", asks: map[string]*pendingAsk{},
 	}
 	s.policy = newPolicy(spec, s.hash)
+	if s.auto {
+		s.policy.readOK = toolchain(parentGetenv(parent))
+	}
 	if s.grace = a.CloseGrace; s.grace == 0 {
 		s.grace = closeGrace
 	}
@@ -143,6 +146,9 @@ type session struct {
 	// auto is a Chat Session in claude's auto mode: Öge's policy only
 	// hard-denies, and what the mode asks about goes to the host.
 	auto bool
+	// asks are the Asks waiting for the human, by control request id,
+	// under mu; a cancel or the turn settling withdraws them.
+	asks map[string]*pendingAsk
 
 	wmu   sync.Mutex // serialises writes to stdin
 	stdin io.WriteCloser
@@ -371,6 +377,11 @@ func (s *session) settle(ev agent.Event) {
 	was := s.inFlight
 	s.inFlight = false
 	friction := s.friction.take()
+	for id, a := range s.asks {
+		// An answer after the turn ended can't land in the next one.
+		a.done = true
+		delete(s.asks, id)
+	}
 	s.mu.Unlock()
 	if was {
 		ev.Kind = agent.TurnSettled
@@ -493,7 +504,7 @@ type frame struct {
 // ignored are message types and system subtypes Öge reads nothing from.
 var ignored = map[string]bool{
 	"user": true, "command_lifecycle": true, "stream_event": true, "keep_alive": true,
-	"tool_progress": true, "tool_use_summary": true, "prompt_suggestion": true, "control_cancel_request": true,
+	"tool_progress": true, "tool_use_summary": true, "prompt_suggestion": true,
 	"system/thinking_tokens": true, "system/status": true, "system/compact_boundary": true,
 	"system/informational": true, "system/notification": true, "system/files_persisted": true,
 	"system/session_state_changed": true, "system/permission_denied": true, "system/task_started": true,
@@ -532,6 +543,8 @@ func (s *session) frame(line []byte) error {
 		return s.controlResponse(f.Response)
 	case f.Type == "control_request":
 		return s.controlRequest(f.RequestID, f.Request)
+	case f.Type == "control_cancel_request":
+		s.withdraw(f.RequestID)
 	case kind == "system/init":
 		return s.init(line)
 	case kind == "system/hook_started" || kind == "system/hook_response":
@@ -709,26 +722,52 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		}
 		return s.answer(id, subtype, d, input)
 	}
+	pa := &pendingAsk{}
+	s.asks[id] = pa
 	s.mu.Unlock()
 	ask := d
 	ask.Decision, ask.Rule, ask.By, ask.Reason, ask.Hint = "ask", ruleAutoAsk, "agent_auto_mode", "", ""
-	var once sync.Once
 	reply := func(allow bool) error {
-		err := errors.New("the ask was already answered")
-		once.Do(func() {
-			got := ask
-			got.By, got.Rule, got.Decision = "human", ruleHumanAnswer, "deny"
-			got.Reason = "The user denied this."
-			if allow {
-				got.Decision, got.Reason = "allow", ""
-			}
-			s.emit(agent.Event{Kind: agent.HostRequest, Host: &got})
-			err = s.answer(id, subtype, got, input)
-		})
-		return err
+		s.mu.Lock()
+		if pa.done {
+			s.mu.Unlock()
+			return ErrAskClosed
+		}
+		pa.done = true
+		delete(s.asks, id)
+		s.mu.Unlock()
+		got := ask
+		got.By, got.Rule, got.Decision = "human", ruleHumanAnswer, "deny"
+		got.Reason = "The user denied this."
+		if allow {
+			got.Decision, got.Reason = "allow", ""
+		}
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &got})
+		return s.answer(id, subtype, got, input)
 	}
 	s.emit(agent.Event{Kind: agent.HostRequest, Host: &ask, Ask: agent.NewAsk(tool, ask.Target, reply)})
 	return nil
+}
+
+// pendingAsk is an Ask not yet answered or withdrawn.
+type pendingAsk struct{ done bool }
+
+// ErrAskClosed is a Reply to an Ask that was answered or withdrawn.
+var ErrAskClosed = errors.New("the ask was already answered or withdrawn")
+
+// withdraw closes an Ask claude cancelled, as it does on an interrupt.
+func (s *session) withdraw(id string) {
+	s.mu.Lock()
+	pa := s.asks[id]
+	if pa != nil {
+		pa.done = true
+		delete(s.asks, id)
+	}
+	s.mu.Unlock()
+	if pa != nil {
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &agent.HostDecision{Family: agent.Approval,
+			Decision: "cancel", By: "agent", Rule: ruleWithdrawn}})
+	}
 }
 
 // answer writes a decision in the form the request's subtype takes.

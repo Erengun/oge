@@ -253,6 +253,22 @@ func (p profile) settings(spec agent.LaunchSpec, parent []string) (string, error
 		fs["allowWrite"] = []string{spec.Cache}
 	}
 	reads := p.denyRead(spec, parent)
+	if p.mode == "auto" {
+		// A Chat's commands run under auto mode, not Öge's shapes, so the
+		// sandbox denies reading the whole home directory, other
+		// repositories included, and reopens only the Workspace, the
+		// cache and the toolchain (sandbox.filesystem.allowRead, claude
+		// 2.1.296). Credential paths stay denied inside what it reopens.
+		get := parentGetenv(parent)
+		if home := get("HOME"); filepath.IsAbs(home) {
+			reads = append(reads, withReal(home)...)
+			allow := withReal(spec.Workspace)
+			if spec.Cache != "" {
+				allow = append(allow, spec.Cache)
+			}
+			fs["allowRead"] = append(allow, toolchain(get)...)
+		}
+	}
 	if len(reads) > 0 {
 		fs["denyRead"] = reads
 	}

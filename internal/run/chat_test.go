@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,21 @@ func openChat(t *testing.T, sc multiturn.Scenario, idle time.Duration) *Chat {
 	if runtime.GOOS == "windows" {
 		t.Skip("Runs are refused on Windows (ADR-0017)")
 	}
+	scen := filepath.Join(t.TempDir(), "scenario.json")
+	if err := sc.Save(scen); err != nil {
+		t.Fatal(err)
+	}
+	ad := &claude.Adapter{Path: multiturn.BuildClaude(t), CloseGrace: time.Second,
+		Environ: func() []string { return append(os.Environ(), "OGE_FAKE_CLAUDE_SCENARIO="+scen) }}
+	return openChatWith(context.Background(), t, ad, idle)
+}
+
+// openChatWith opens a Chat on a one-file repository with ad.
+func openChatWith(ctx context.Context, t *testing.T, ad agent.Adapter, idle time.Duration) *Chat {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
 	f := &followFixture{user: t.TempDir()}
 	f.git(t, "init", "-q", "-b", "main")
 	f.write(t, "add.go", "package fx\n")
@@ -46,13 +62,7 @@ func openChat(t *testing.T, sc multiturn.Scenario, idle time.Duration) *Chat {
 	f.git(t, "commit", "-q", "-m", "init")
 	d := t.TempDir()
 	state := &ledger.StateRoot{Dir: d, Private: filepath.Join(d, "private"), Work: filepath.Join(d, "work")}
-	scen := filepath.Join(t.TempDir(), "scenario.json")
-	if err := sc.Save(scen); err != nil {
-		t.Fatal(err)
-	}
-	ad := &claude.Adapter{Path: multiturn.BuildClaude(t), CloseGrace: time.Second,
-		Environ: func() []string { return append(os.Environ(), "OGE_FAKE_CLAUDE_SCENARIO="+scen) }}
-	c, err := OpenChat(context.Background(), ChatParams{Repo: f.user, Frozen: chatFrozen("implementer"),
+	c, err := OpenChat(ctx, ChatParams{Repo: f.user, Frozen: chatFrozen("implementer"),
 		Agents: map[string]agent.Adapter{"claude": ad}, State: state, Getenv: chatOn, IdleTimeout: idle})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +118,8 @@ func settledOf(t *testing.T, evs []agent.Event) agent.Event {
 func said(evs []agent.Event) string {
 	var b []string
 	for _, ev := range evs {
-		if ev.Kind == agent.Claim && ev.Tool == "" {
+		// fakeclaude also says what Öge's hook answered: not a reply.
+		if ev.Kind == agent.Claim && ev.Tool == "" && !strings.HasPrefix(ev.Text, "hook ") {
 			b = append(b, ev.Text)
 		}
 	}
@@ -305,4 +316,77 @@ func TestChatRefusesVerifierReuse(t *testing.T) {
 func sha(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// stub is a Session whose process can die on cue.
+type stub struct {
+	events  chan agent.Event
+	sendErr error
+	once    sync.Once
+}
+
+type stubAdapter struct{ s *stub }
+
+func (a stubAdapter) Open(context.Context, agent.LaunchSpec) (agent.Session, error) { return a.s, nil }
+
+func newStub(sendErr error) *stub { return &stub{events: make(chan agent.Event, 8), sendErr: sendErr} }
+
+func (s *stub) Process() agent.Process     { return agent.Process{} }
+func (s *stub) Events() <-chan agent.Event { return s.events }
+func (s *stub) Interrupt() error           { return nil }
+func (s *stub) Close() error               { s.die(); return nil }
+func (s *stub) die()                       { s.once.Do(func() { close(s.events) }) }
+func (s *stub) Send(agent.Turn) error {
+	if s.sendErr != nil {
+		s.die() // the process dies as the message is written
+		return s.sendErr
+	}
+	s.events <- agent.Event{Kind: agent.TurnAccepted}
+	return nil
+}
+
+// A Send that fails as the process dies settles its turn as failed, and
+// the Chat takes no more turns.
+func TestChatSendFailsAsProcessDies(t *testing.T) {
+	c := openChatWith(context.Background(), t, stubAdapter{newStub(errors.New("broken pipe"))}, 0)
+	ch, err := c.Send(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("Send succeeded on a dead process")
+	}
+	if s := settledOf(t, drain(t, ch, nil)); !strings.HasPrefix(s.Failure, "send_failed") {
+		t.Errorf("settled %+v", s)
+	}
+	<-c.Done()
+	if _, err := c.Send(context.Background(), "again"); !errors.Is(err, ErrChatLost) {
+		t.Errorf("Send after the process died: %v", err)
+	}
+}
+
+// When the process dies mid-turn, the turn in flight and every queued one
+// settle as failed.
+func TestChatProcessDiesWithQueuedTurns(t *testing.T) {
+	st := newStub(nil)
+	c := openChatWith(context.Background(), t, stubAdapter{st}, 0)
+	first, second := send(t, c, "one"), send(t, c, "two")
+	st.die()
+	for _, ch := range []<-chan agent.Event{first, second} {
+		if s := settledOf(t, drain(t, ch, nil)); !strings.Contains(s.Failure, "chat_ended") {
+			t.Errorf("settled %+v", s)
+		}
+	}
+}
+
+// Cancelling the Chat's parent context closes it.
+func TestChatClosesWithItsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := openChatWith(ctx, t, stubAdapter{newStub(nil)}, 0)
+	cancel()
+	select {
+	case <-c.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Chat outlived its context")
+	}
+	if !errors.Is(c.Err(), ErrChatClosed) {
+		t.Errorf("Err() = %v", c.Err())
+	}
 }

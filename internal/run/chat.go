@@ -77,10 +77,11 @@ type Chat struct {
 	pumped  chan struct{} // closed when the Session's events end
 	stop    chan struct{} // closed by Close: events go undelivered
 	closing sync.Once
+	unctx   func() bool // stops the parent context closing the Chat
 
 	mu    sync.Mutex
 	turns int
-	cur   chan agent.Event // the turn in flight's events
+	cur   *turnOut // the turn in flight's events
 	queue []queuedTurn
 	err   error // why the Chat takes no more turns
 	timer *time.Timer
@@ -88,7 +89,47 @@ type Chat struct {
 
 type queuedTurn struct {
 	text string
-	out  chan agent.Event
+	out  *turnOut
+}
+
+// turnOut is one turn's event channel. Only its methods send on it or
+// close it, so a late event can't reach a closed channel.
+type turnOut struct {
+	mu     sync.Mutex
+	ch     chan agent.Event
+	closed bool
+}
+
+func newTurnOut() *turnOut { return &turnOut{ch: make(chan agent.Event, 64)} }
+
+// send delivers ev unless the turn has ended or stop is closed.
+func (t *turnOut) send(ev agent.Event, stop <-chan struct{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	select {
+	case t.ch <- ev:
+	case <-stop:
+	}
+}
+
+// end closes the channel, after last if it fits without blocking.
+func (t *turnOut) end(last *agent.Event) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	if last != nil {
+		select {
+		case t.ch <- *last:
+		default:
+		}
+	}
+	t.closed = true
+	close(t.ch)
 }
 
 // reuse is D1: a Session may take a second turn only as the implementer.
@@ -202,9 +243,13 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 		c.sess.Close()
 		return nil, err
 	}
-	go c.pump()
 	c.mu.Lock()
 	c.timer = time.AfterFunc(c.idle, c.idleOut)
+	c.mu.Unlock()
+	go c.pump()
+	// The Chat lives no longer than its parent context.
+	c.mu.Lock()
+	c.unctx = context.AfterFunc(ctx, func() { c.Close() })
 	c.mu.Unlock()
 	return c, nil
 }
@@ -218,7 +263,7 @@ func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make(chan agent.Event, 64)
+	out := newTurnOut()
 	c.mu.Lock()
 	if c.err != nil {
 		err := c.err
@@ -228,14 +273,14 @@ func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error
 	if c.cur != nil {
 		c.queue = append(c.queue, queuedTurn{text, out})
 		c.mu.Unlock()
-		return out, nil
+		return out.ch, nil
 	}
 	err := c.start(text, out)
-	return out, err
+	return out.ch, err
 }
 
 // start begins a turn with c.mu held, and releases it.
-func (c *Chat) start(text string, out chan agent.Event) error {
+func (c *Chat) start(text string, out *turnOut) error {
 	c.turns++
 	n := c.turns
 	c.cur = out
@@ -257,8 +302,8 @@ func (c *Chat) start(text string, out chan agent.Event) error {
 		err = c.sess.Send(agent.Turn{Text: sent})
 	}
 	if err != nil {
-		out <- agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()}
-		c.settled()
+		out.end(&agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()})
+		c.settled(out)
 	}
 	return err
 }
@@ -292,13 +337,9 @@ func (c *Chat) pump() {
 		if out == nil {
 			continue
 		}
-		select {
-		case out <- ev:
-		case <-c.stop:
-			continue // Close: the Session's last events go undelivered
-		}
+		out.send(ev, c.stop)
 		if ev.Kind == agent.TurnSettled {
-			c.settled()
+			c.settled(out)
 		}
 	}
 	c.mu.Lock()
@@ -309,14 +350,16 @@ func (c *Chat) pump() {
 	c.mu.Unlock()
 }
 
-// settled ends the turn in flight and starts the next queued one, or
-// starts the idle clock.
-func (c *Chat) settled() {
+// settled ends turn t and starts the next queued one, or starts the
+// idle clock.
+func (c *Chat) settled(t *turnOut) {
+	t.end(nil)
 	c.mu.Lock()
-	if c.cur != nil {
-		close(c.cur)
-		c.cur = nil
+	if c.cur != t {
+		c.mu.Unlock()
+		return // already dropped
 	}
+	c.cur = nil
 	if c.err != nil {
 		c.drop()
 		c.mu.Unlock()
@@ -332,14 +375,16 @@ func (c *Chat) settled() {
 	c.mu.Unlock()
 }
 
-// drop ends the turn in flight and every queued one, with c.mu held.
+// drop settles the turn in flight and every queued one as failed, with
+// c.mu held and c.err set.
 func (c *Chat) drop() {
+	last := &agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()}
 	if c.cur != nil {
-		close(c.cur)
+		c.cur.end(last)
 		c.cur = nil
 	}
 	for _, q := range c.queue {
-		close(q.out)
+		q.out.end(last)
 	}
 	c.queue = nil
 }
@@ -387,7 +432,11 @@ func (c *Chat) Close() error {
 			c.err = ErrChatClosed
 		}
 		c.timer.Stop()
+		unctx := c.unctx
 		c.mu.Unlock()
+		if unctx != nil {
+			unctx()
+		}
 		close(c.stop)
 		_ = c.sess.Close()
 		<-c.pumped
