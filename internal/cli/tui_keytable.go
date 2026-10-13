@@ -54,6 +54,8 @@ var keyTable = []keyBinding{
 	{"Menus & pickers", "enter · d", nil, "in the Run picker: receipt · diff of a Run"},
 	{"Menus & pickers", "a · b", nil, "in the Run picker: apply · branch (confirm by typing)"},
 
+	{"Menus & pickers", "l", []string{"l"}, "in the Run picker: label the Run"},
+
 	{"Run", "ctrl+o", []string{"ctrl+o"}, "expand or collapse the progress"},
 	{"Run", "↑ ↓ · pgup pgdown", []string{"pgup", "pgdown"}, "scroll it, expanded"},
 	{"Run", "esc", nil, "collapse"},

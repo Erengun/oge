@@ -1,13 +1,13 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Menus & pickers
    ↑ ↓                  move in the slash menu or the @ picker
    tab · enter          complete a command · insert a path
    esc                  close it
    / · esc              in the Run picker: filter · clear it
    enter · d            in the Run picker: receipt · diff of a Run
    a · b                in the Run picker: apply · branch (confirm by typing)
+   l                    in the Run picker: label the Run
  Run
    ctrl+o               expand or collapse the progress
    ↑ ↓ · pgup pgdown    scroll it, expanded
@@ -21,4 +21,4 @@
    ↑ ↓ · enter          move · change the row
    s · w                save as default · write the project Checks
    d · x                remove the row
- ↑ ↓ scroll (22-41 of 41) · esc or ? close
+ ↑ ↓ scroll (23-42 of 42) · esc or ? close

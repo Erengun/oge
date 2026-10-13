@@ -27,6 +27,7 @@ Menus & pickers
   / · esc              in the Run picker: filter · clear it
   enter · d            in the Run picker: receipt · diff of a Run
   a · b                in the Run picker: apply · branch (confirm by typing)
+  l                    in the Run picker: label the Run
 Run
   ctrl+o               expand or collapse the progress
   ↑ ↓ · pgup pgdown    scroll it, expanded
