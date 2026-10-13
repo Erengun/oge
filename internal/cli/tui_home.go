@@ -279,9 +279,11 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 // home is the session program's root model: the composer, the Run's own
 // model once Enter starts it, then the composer again.
 type home struct {
-	// settling holds the printing back after a Gate closed (#233); heldEnd
-	// is the Run's end that arrived meanwhile.
+	// settling holds the printing back after a Gate closed (#233): held
+	// is what finished meanwhile, already out of the frame, and heldEnd
+	// the Run's end that arrived meanwhile.
 	settling bool
+	held     []string
 	heldEnd  *runEndedMsg
 	// getenv reads the environment for /terminal; nil reads nothing.
 	getenv func(string) string
@@ -469,13 +471,17 @@ func gateSettle() tea.Cmd {
 }
 
 // settled prints what waited for the Gate's frame to go, then the Run's
-// summary if it ended meanwhile.
+// summary if it ended meanwhile. What it prints left the frame when it was
+// held, so the frame on screen doesn't change with the print: a print that
+// shrinks the frame in the same update can leave a row of the old frame
+// above it (#233).
 func (h *home) settled() (tea.Model, tea.Cmd) {
 	h.settling = false
 	var print tea.Cmd
-	if lines := h.run.take(); len(lines) > 0 {
+	if lines := append(h.held, h.run.take()...); len(lines) > 0 {
 		print = h.println(strings.Join(lines, "\n"))
 	}
+	h.held = nil
 	if e := h.heldEnd; e != nil {
 		h.heldEnd = nil
 		m, cmd := h.onEnded(ended(*e))
@@ -541,8 +547,13 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Only progress finishes stages. What finished is printed before the
 		// next progress is waited for, so the transcript keeps its order.
+		// While settling it leaves the frame now and is printed once the
+		// frame has been drawn without it.
 		var print tea.Cmd
-		if _, ok := msg.(batchMsg); ok && !h.settling {
+		switch _, batch := msg.(batchMsg); {
+		case h.settling:
+			h.held = append(h.held, h.run.take()...)
+		case batch:
 			if lines := h.run.take(); len(lines) > 0 {
 				print = h.println(strings.Join(lines, "\n"))
 			}
