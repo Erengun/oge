@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -458,4 +459,22 @@ func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
+}
+
+func TestSetupPanelShowsAgentLaunchProfile(t *testing.T) {
+	h, _ := setupHome(t)
+	press(h, tab())
+	got := frame(h)
+	info, err := claude.LaunchInfoFor("implementer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Launch profile v%d %s", info.Version, info.Hash)
+	if !strings.Contains(got, want) {
+		t.Errorf("the panel lacks %q:\n%s", want, got)
+	}
+	if strings.Contains(got, ".ssh") || strings.Contains(got, ".aws") {
+		t.Errorf("the panel names credential paths:\n%s", got)
+	}
+	golden(t, "setup-agent-launch", got)
 }

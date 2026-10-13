@@ -19,3 +19,14 @@ Checks   next Run · [enter] edit · [d/x] remove · [w] save to .oge/oge.toml
    test glob 1        **/*_test.go
    + test glob        
    ✓ these Checks can run the protected tests
+
+ Agent launched with   read-only · ADR-0004
+   implement  claude · profile claude · Launch profile v5 e53a5b7e3b0a
+      MCP servers: none from your config (--strict-mcp-config)
+      settings, hooks: none loaded from your user or project config
+      plugins: only the 4 pinned builtins (part of the pinned binary)
+      memory: auto-memory off, nothing persisted to your Claude config
+      tools: Read, Edit, Write, Bash, Glob, Grep
+      network: off in the sandbox; web tools denied
+      no reads of: Öge state, other profiles, 17 credential locations
+   verify     codex   no Launch profile is described for this agent
