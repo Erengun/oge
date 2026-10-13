@@ -102,8 +102,8 @@ EOF
 		// Under -race the comparison can win the race against the exit; the
 		// Example then fails normally. Either way it is never attested passing.
 		honest := strings.Contains(out, "fx.ExampleAdd started but never finished") ||
-			strings.Contains(out, "fx.ExampleAdd failed")
-		if !neverAccepted(code, out) || !honest || strings.Contains(out, "fx.ExampleAdd passed") {
+			strings.Contains(out, "failing (fx.ExampleAdd)")
+		if !neverAccepted(code, out) || !honest || !strings.Contains(out, "0 of 1 Oracle tests attested passing") {
 			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 		}
 	})
