@@ -37,7 +37,9 @@ Run
   / · n N              expanded: search · next · previous match (enter jumps)
   { · }                expanded: previous · next Attempt
   esc                  close the search, then collapse
-  ctrl+c               cancel the Run (twice: force Öge to stop)
+  type · enter         the next Task; enter queues it, never sent to the Run
+  ctrl+x               cancel the queued Task
+  ctrl+c               clear the queued Task, else cancel the Run
 Delivery
   ↓ on an empty box    the actions of the last Run
   a · b · d · r        apply · branch · diff · receipt (each ↓ allows one)

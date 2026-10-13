@@ -285,6 +285,11 @@ type home struct {
 	settling bool
 	held     []string
 	heldEnd  *runEndedMsg
+	// next is the Task typed during a Run (tui_queue.go); queuedText is what
+	// moved into the composer when the Run ended, while it is untouched.
+	next       *queued
+	queuedText string
+	gateArm    time.Time // when a Gate opened while a next Task was being typed
 	// getenv reads the environment for /terminal; nil reads nothing.
 	getenv func(string) string
 	comp   *composer
@@ -539,10 +544,16 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return h.onEnded(ended(e))
 		}
+		if h.queueKey(msg) {
+			return h, nil
+		}
 		was := h.run.finished
 		gated := h.run.gate != nil
 		_, cmd := h.run.Update(msg)
 		alert := h.run.flushAlerts()
+		if !gated && h.run.gate != nil && h.next != nil && !h.next.comp.empty() {
+			h.gateArm = h.clock() // a Gate opened under the human's typing: see queueKey
+		}
 		// The open Gate frame is still what the terminal shows when it
 		// closes (by its answer, Ctrl+C, or the Run's end): a print now
 		// would scroll it into the transcript (#233). Nothing is printed
@@ -706,6 +717,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.endNavigation()
 				return h, nil
 			}
+			if a := strings.TrimSpace(task.StripComments(h.comp.expanded())); h.armText != "" && a == h.armText && h.clock().Sub(h.armAt) < actionsArm {
+				return h, nil // typed ahead of the completion: no path (shell, slash, Task) takes it
+			}
 			if esc, escaped := unescapeBang(h.comp.expanded()); escaped {
 				h.comp.set(esc) // a Task that starts with !
 			} else if line, ok := shellLine(esc); ok {
@@ -714,9 +728,6 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := task.StripComments(h.comp.expanded())
 			if task.IsEmpty(text) {
 				return h, nil
-			}
-			if h.armText != "" && strings.TrimSpace(text) == h.armText && h.clock().Sub(h.armAt) < actionsArm {
-				return h, nil // typed ahead of the completion
 			}
 			if cmd, ok := h.slash(strings.TrimSpace(text)); ok {
 				return h, cmd
@@ -775,7 +786,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return h, nil
 			}
-			if h.last != nil && h.comp.empty() {
+			if h.last != nil && h.composerFree() {
 				h.actions, h.actionsAt = true, h.clock()
 				return h, nil
 			}
@@ -792,7 +803,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // submit starts the Run (or the follow-up) for text, which is final: slash
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
-	h.cleared = ""
+	h.cleared, h.queuedText = "", ""
 	if h.ctx != nil && h.ctx.Err() != nil {
 		h.quit = true
 		return h, tea.Quit
@@ -930,7 +941,7 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.actions = false
 		return h, nil
 	case "a", "b", "d", "r":
-		if h.clock().Sub(h.actionsAt) < actionsArm || !h.comp.empty() || h.last == nil {
+		if h.clock().Sub(h.actionsAt) < actionsArm || !h.composerFree() || h.last == nil {
 			return h, nil // typed ahead, before the row could be seen
 		}
 		h.actions = false
@@ -962,6 +973,7 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 	}
 	h.last = last
 	h.reopen()
+	h.takeQueue()
 	return h, h.println(text)
 }
 
@@ -969,7 +981,7 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 // Run would use read afresh (the files may have changed during the Run).
 func (h *home) reopen() {
 	h.run, h.done, h.actions = nil, nil, false
-	h.comp = newComposer()
+	h.comp, h.queuedText = newComposer(), ""
 	h.navigating = false
 	res, problem := h.resolve(h.sel)
 	h.msg, h.setup = problem, nil
@@ -992,7 +1004,7 @@ func (h *home) themeNotice() string {
 
 func (h *home) View() tea.View {
 	if h.run != nil {
-		return h.run.View()
+		return h.queueView()
 	}
 	if h.quit {
 		return tea.NewView("")

@@ -1,0 +1,12 @@
+fix Add
+Standard mode
+
+⠋ preflight  0.0s
+· implement  claude
+· QA         Fresh Codex · reviewing
+· check      go test -json ./...
+
+Standard mode · preflight · implement claude:sonnet · 0.0s · Nothing needs you.
+ctrl+c to cancel
+queued › add tests
+  ctrl+x to cancel · starts after this Run, when you press Enter

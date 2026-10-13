@@ -69,6 +69,8 @@ The file is strict: an unknown key or a bad colour is named in a one-line notice
 
 `vim_escape = "jj"` is a second global key: in INSERT, the two characters typed within 300 ms act as Esc, and the first one is taken back out of the text. It needs `vim = true`, takes exactly two printable characters, and is off when absent.
 
+**Queued Task.** While a Run is in progress and no Gate is open, typing fills a plain-text `next ›` box under the Run (no vim modes); Enter keeps it and Ctrl+X cancels it. Nothing is sent to the Run, Esc still goes to the Run, and the first Ctrl+C clears the box before it cancels the Run. When the Run ends the text moves into the composer and waits for Enter.
+
 ```toml
 schema = 1
 vim = true
