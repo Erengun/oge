@@ -252,6 +252,7 @@ type home struct {
 	// menu is the slash menu while it is open: it lists the commands that
 	// complete menuQuery. Esc closes it for the text it was closed on.
 	menu        *list.Model
+	picker      *runPicker // /runs: the Run picker while it is open (#176)
 	menuQuery   string
 	menuOff     bool
 	menuOffText string
@@ -422,7 +423,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving, h.review != nil, h.search != nil:
+		case h.saving, h.review != nil, h.search != nil, h.picker != nil:
 		default:
 			h.comp.insert(msg.Content)
 			h.endNavigation()
@@ -437,6 +438,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
 		switch {
+		case h.picker != nil:
+			return h, h.pickerKey(msg)
 		case h.actions:
 			return h.actionKey(msg)
 		case h.review != nil:
@@ -773,6 +776,8 @@ func (h *home) render() (string, int, int) {
 	case h.panel != nil:
 		h.panel.width = width
 		lines = append(lines, h.panel.lines()...)
+	case h.picker != nil:
+		lines = append(lines, h.picker.lines()...)
 	}
 	if h.menu != nil {
 		lines = append(lines, h.menuLines()...)

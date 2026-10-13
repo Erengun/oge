@@ -233,9 +233,10 @@ func TestSlashRunsAndDeliveryOfANamedRun(t *testing.T) {
 		return nil
 	}
 	submit(h, "/runs")
-	if !h.comp.empty() || len(h.msg) != 0 {
+	if !h.comp.empty() || len(h.msg) != 0 || h.picker == nil {
 		t.Fatalf("/runs: %q %q", h.comp.text(), h.msg)
 	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	// With a Run id, the CLI's code is used, with or without a last Run.
 	for _, in := range []string{"/receipt 20261013", "/diff 20261013", "/apply 20261013", "/branch 20261013T1010 mine", "/branch mine 20261013T1010", "/receipt"} {
 		submit(h, in)
@@ -309,6 +310,8 @@ func TestBareOgeSlashCommandsEndToEnd(t *testing.T) {
 	s.type_("/runs\r")
 	s.expectScreen(fresh + "  Accepted")
 	s.expectScreen(rejected + "  Rejected")
+	s.type_("\x1b") // the picker closes
+	time.Sleep(300 * time.Millisecond)
 
 	s.type_("/receipt " + rejected + "\r")
 	s.expectScreen("Not accepted: 1 test still failing")

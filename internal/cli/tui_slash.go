@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -348,8 +347,9 @@ func (h *home) effortCmd(args []string) (tea.Cmd, string) {
 	return nil, ""
 }
 
-// runsCmd prints the repository's recent Runs: id, outcome, when (UTC, as
-// the id says) and the Task's first line.
+// runsCmd opens the Run picker (#176) over the repository's recent Runs; on
+// a terminal too short for it, it prints them: id, outcome, when (UTC, as the
+// id says) and the Task's first line.
 func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/runs")
@@ -364,13 +364,13 @@ func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 	if len(runs) == 0 {
 		return tea.Println("no Runs of this repository yet"), ""
 	}
+	if h.height >= pickerMinHeight {
+		h.picker = newRunPicker(runs, h.st, h.height)
+		return nil, ""
+	}
 	lines := make([]string, 0, len(runs))
 	for _, r := range runs {
-		when := r.ID
-		if t, err := time.Parse("20060102T150405", strings.SplitN(r.ID, "-", 2)[0]); err == nil {
-			when = t.Format("2006-01-02 15:04") + "Z"
-		}
-		lines = append(lines, fmt.Sprintf("%s  %-10s  %s  %s", r.ID, outcomeWord(r), when, clean(r.Title)))
+		lines = append(lines, fmt.Sprintf("%s  %-10s  %s  %s", r.ID, outcomeWord(r), runWhen(r.ID), clean(r.Title)))
 	}
 	return tea.Println(strings.Join(lines, "\n")), ""
 }
