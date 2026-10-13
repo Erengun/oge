@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -52,7 +53,9 @@ func TestHistoryPerRepoKey(t *testing.T) {
 	if err := os.Symlink(a, link); err == nil && historyPath(dir, a) != historyPath(dir, link) {
 		t.Error("a symlink to the repo has its own history")
 	}
-	if p := historyPath(dir, a); filepath.Dir(p) != dir || strings.Contains(p, filepath.Base(a)) {
+	// Opaque: a hash of the canonical root, never the root's own name (a
+	// substring check against a temp dir's "002" can match the hash).
+	if p := historyPath(dir, a); filepath.Dir(p) != dir || !regexp.MustCompile(`^[0-9a-f]{32}\.jsonl$`).MatchString(filepath.Base(p)) {
 		t.Errorf("%s should be one opaque file in the state dir", p)
 	}
 }
