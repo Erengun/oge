@@ -86,7 +86,7 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 		}, "empty", "empty"},
 		{"hidden-char prompt", func(*testing.T) *home {
 			h := testHome(80)
-			typeText(h, "fix​ Add")
+			typeText(h, "fix\u200b Add")
 			h.Update(enter())
 			return h
 		}, "task", "task"},
