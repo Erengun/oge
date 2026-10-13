@@ -92,14 +92,17 @@ func TestRunPickerApplyNeedsTheWord(t *testing.T) {
 	if len(*calls) != 0 {
 		t.Fatal("a delivered on a bare key")
 	}
-	h.Update(enter()) // nothing typed
+	h.Update(enter()) // nothing typed: cancelled, the picker stays
+	if len(*calls) != 0 || h.picker == nil || h.picker.cmd != "" {
+		t.Fatalf("an empty word didn't cancel: %v", *calls)
+	}
+	key(h, "a")
 	key(h, "app")
-	h.Update(enter())
-	if len(*calls) != 0 || h.picker == nil {
+	h.Update(enter()) // a wrong word cancels too
+	if len(*calls) != 0 || h.picker == nil || h.picker.cmd != "" {
 		t.Fatalf("applied without the word: %v", *calls)
 	}
-	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	h.Update(enter())
+	h.Update(enter()) // Enter on the row is the Receipt
 	if len(*calls) != 1 || (*calls)[0] != "receipt 20261013T101010-abcdef" {
 		t.Fatalf("after cancel: %v", *calls)
 	}

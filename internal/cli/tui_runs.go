@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -104,11 +105,14 @@ func (h *home) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 			p.cmd, p.typed = "", ""
 		case "backspace":
 			if p.typed != "" {
-				p.typed = p.typed[:len(p.typed)-1]
+				_, n := utf8.DecodeLastRuneInString(p.typed)
+				p.typed = p.typed[:len(p.typed)-n]
 			}
 		case "enter":
 			if p.typed != p.cmd {
-				p.note = "type " + p.cmd + " to confirm, esc to cancel"
+				// A wrong word cancels: confirmation is an explicit act.
+				p.note = p.cmd + " cancelled: type " + p.cmd + " exactly to confirm"
+				p.cmd, p.typed = "", ""
 				return nil
 			}
 			cmd, id := p.cmd, p.run
@@ -140,7 +144,8 @@ func (h *home) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 			p.l = l
 		case "backspace":
 			if p.query != "" {
-				p.query = p.query[:len(p.query)-1]
+				_, n := utf8.DecodeLastRuneInString(p.query)
+				p.query = p.query[:len(p.query)-n]
 				p.refilter()
 			}
 		default:
