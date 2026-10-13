@@ -252,6 +252,7 @@ type home struct {
 	comp   *composer
 	// vim is the composer's vim mode (#156); normal is its NORMAL state.
 	vim, normal bool
+	vimState    // the pending operator, count and last change (tui_vim_ops.go)
 	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
 	// first ↑. search is Ctrl+R's search while it is open.
 	hist       *history
@@ -532,6 +533,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if h.vim && !h.normal && h.insRec != nil {
+			h.insRec = append(h.insRec, msg)
+		}
 		if h.vim && h.normal && h.normalKey(msg) {
 			return h, nil
 		}
@@ -551,6 +555,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.vim && !h.normal {
 				h.enterNormal()
 			}
+			h.vimState.cancel()
 		case "ctrl+c":
 			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
 			// box, leaves (as Claude Code's prompt does).

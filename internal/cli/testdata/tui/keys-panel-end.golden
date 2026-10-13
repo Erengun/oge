@@ -1,10 +1,6 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Run
-   ctrl+o               expand or collapse the progress
-   ↑ ↓ · pgup pgdown    scroll it, expanded
-   / · n N              expanded: search · next · previous match (enter jumps)
    { · }                expanded: previous · next Attempt
    esc                  close the search, then collapse
    ctrl+c               cancel the Run (twice: force Öge to stop)
@@ -21,4 +17,8 @@
    h j k l              left · down · up · right (NORMAL)
    w e b                next word · word end · previous (NORMAL)
    0 ^ $                line start · first char · end (NORMAL)
- ↑ ↓ scroll (31-50 of 50) · esc or ? close
+   d c y                operator + motion or iw i" i( · dd cc yy lines
+   x · D                delete the character · to the line end (NORMAL)
+   p · P                put after · before (the kill ring)
+   u · .                undo · repeat the last change
+ ↑ ↓ scroll (35-54 of 54) · esc or ? close
