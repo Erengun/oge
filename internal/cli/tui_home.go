@@ -815,6 +815,9 @@ func (h *home) act(key, arg string) tea.Cmd {
 	if key == "a" {
 		h.thread = nil
 	}
+	if key == "d" && h.last != nil && h.openDiff(h.last.id) {
+		return nil // the viewer; the pager is its fallback
+	}
 	return h.last.act(key, arg)
 }
 

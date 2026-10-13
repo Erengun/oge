@@ -147,9 +147,6 @@ func diffLoader(env Env) func(id string) (head string, files []diffFile, ok bool
 // printed diff (flags, a short terminal, nothing to list).
 func (h *home) diffCmd(args []string) (tea.Cmd, string) {
 	printed := deliverSlash("d", "diff")
-	if h.diffOf == nil || h.height < pickerMinHeight {
-		return printed(h, args)
-	}
 	id := ""
 	switch {
 	case len(args) > 1:
@@ -162,12 +159,28 @@ func (h *home) diffCmd(args []string) (tea.Cmd, string) {
 	case h.last != nil:
 		id = h.last.id
 	}
-	head, files, ok := h.diffOf(id)
-	if !ok {
+	if !h.openDiff(id) {
 		return printed(h, args)
 	}
-	h.diff = newDiffViewer(head, files, h.st, h.width, h.height)
 	return nil, ""
+}
+
+// diffMinHeight is the shortest terminal the viewer opens in; below it the
+// diff is printed or paged as before.
+var diffMinHeight = pickerMinHeight
+
+// openDiff opens the viewer on a Run (the repository's latest for ""), and
+// says whether it could; when it can't, the caller prints or pages.
+func (h *home) openDiff(id string) bool {
+	if h.diffOf == nil || h.height < diffMinHeight {
+		return false
+	}
+	head, files, ok := h.diffOf(id)
+	if !ok {
+		return false
+	}
+	h.diff = newDiffViewer(head, files, h.st, h.width, h.height)
+	return true
 }
 
 type diffViewer struct {
