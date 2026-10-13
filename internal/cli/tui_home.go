@@ -474,7 +474,7 @@ func (h *home) settled() (tea.Model, tea.Cmd) {
 	h.settling = false
 	var print tea.Cmd
 	if lines := h.run.take(); len(lines) > 0 {
-		print = tea.Println(strings.Join(lines, "\n"))
+		print = h.println(strings.Join(lines, "\n"))
 	}
 	if e := h.heldEnd; e != nil {
 		h.heldEnd = nil
