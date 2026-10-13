@@ -763,10 +763,39 @@ func (s *session) assistant(f frame) error {
 		case "tool_use":
 			var in map[string]any
 			_ = json.Unmarshal(c.Input, &in)
-			s.emit(agent.Event{Kind: agent.Claim, Tool: clip(c.Name), Target: target(c.Name, in, s.policy.ws)})
+			ev := agent.Event{Kind: agent.Claim, Tool: clip(c.Name), Target: target(c.Name, in, s.policy.ws)}
+			if c.Name == "TodoWrite" {
+				ev.Todos = todos(c.Input)
+			}
+			s.emit(ev)
 		}
 	}
 	return nil
+}
+
+// todos is the plan a TodoWrite call carries, redacted; nil when it
+// carries none (or can't be read).
+func todos(input json.RawMessage) []agent.Todo {
+	var in struct {
+		Todos []struct {
+			Content    string `json:"content"`
+			Status     string `json:"status"`
+			ActiveForm string `json:"activeForm"`
+		} `json:"todos"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return nil
+	}
+	var out []agent.Todo
+	for _, t := range in.Todos {
+		status := t.Status
+		if status != "in_progress" && status != "completed" {
+			status = "pending"
+		}
+		r := func(s string) string { return string(redact.Redact([]byte(strings.TrimSpace(s)))) }
+		out = append(out, agent.Todo{Text: r(t.Content), Status: status, Active: r(t.ActiveForm)})
+	}
+	return out
 }
 
 // Exits each role may declare (ADR-0007, ADR-0008).
