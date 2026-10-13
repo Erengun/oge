@@ -51,9 +51,9 @@ func (h *home) labelCmd(args []string) (tea.Cmd, string) {
 		return nil, problem
 	}
 	if label == "" {
-		return tea.Println("label cleared on Run " + clean(id)), ""
+		return h.fit("label cleared on Run " + clean(id)), ""
 	}
-	return tea.Println("labelled Run " + clean(id) + ": " + clean(label)), ""
+	return h.fit("labelled Run " + clean(id) + ": " + clean(label)), ""
 }
 
 // runLine is a Run as /runs lists it: id, outcome, when, the Task's first

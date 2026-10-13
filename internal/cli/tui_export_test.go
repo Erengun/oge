@@ -177,3 +177,21 @@ func TestFitPieces(t *testing.T) {
 		t.Errorf("no room: %d pieces, want one line each", len(p))
 	}
 }
+
+// A print is sized against the taller of the frame on screen and the next
+// one: at a stop the model already draws the short frame while the tall
+// running one is still on screen (#188).
+func TestFrameRowsIsTheTallerFrame(t *testing.T) {
+	h := testHome(80)
+	next := rows(h.View().Content)
+	if got := h.frameRows(); got != next {
+		t.Fatalf("frameRows %d, want the composer's %d", got, next)
+	}
+	h.shown = 23 // a tall Run frame still on screen
+	if got := h.frameRows(); got != 23 {
+		t.Errorf("frameRows %d under a 23-row frame, want 23", got)
+	}
+	if h.shown != 23 {
+		t.Errorf("frameRows changed what is on screen to %d", h.shown)
+	}
+}

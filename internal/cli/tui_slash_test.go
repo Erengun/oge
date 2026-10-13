@@ -228,9 +228,9 @@ func TestSlashRunsAndDeliveryOfANamedRun(t *testing.T) {
 		return []*delivery.Run{{ID: "20261013T101010-abcdef", Title: "fix Add", Outcome: run.Accepted}}, ""
 	}
 	var calls []string
-	h.deliver = func(cmd string, args []string) tea.Cmd {
+	h.deliver = func(cmd string, args []string) string {
 		calls = append(calls, cmd+" "+strings.Join(args, ","))
-		return nil
+		return ""
 	}
 	submit(h, "/runs")
 	if !h.comp.empty() || len(h.msg) != 0 || h.picker == nil {
@@ -254,7 +254,7 @@ func TestSlashRunsAndDeliveryOfANamedRun(t *testing.T) {
 
 func TestSlashApplyOfTheThreadsRunEndsTheThread(t *testing.T) {
 	h := testHome(80)
-	h.deliver = func(string, []string) tea.Cmd { return nil }
+	h.deliver = func(string, []string) string { return "" }
 	h.thread = &thread{}
 	h.thread.from.Run = "20261013T101010-abcdef"
 	submit(h, "/apply 20261013T1010")
