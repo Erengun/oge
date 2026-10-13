@@ -27,4 +27,5 @@ Nothing was written to your repository.
  Fast · implement fake · no verifier
  Checks: go test -json ./...
  [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+ continuing Run X (/new for a fresh task)
 

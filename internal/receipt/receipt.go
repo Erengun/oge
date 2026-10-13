@@ -47,10 +47,15 @@ const (
 
 // Receipt is the model every rendering reads. Its JSON form is schema 1.
 type Receipt struct {
-	Schema  int    `json:"schema"`
-	Run     string `json:"run"`
-	Mode    string `json:"mode"`
-	Task    string `json:"task"`
+	Schema int    `json:"schema"`
+	Run    string `json:"run"`
+	Mode   string `json:"mode"`
+	Task   string `json:"task"`
+	// Follows is the Run this follow-up continues (#185).
+	Follows string `json:"follows,omitempty"`
+	// Rebased: the repository changed since that Run, and its Candidate
+	// was merged onto the current one before this Run's implementer began.
+	Rebased bool   `json:"rebased,omitempty"`
 	Outcome string `json:"outcome"`
 	// Headline is the outcome as the Receipt's first line says it.
 	// Headline, Why, Found and NotCovered mark the values in them (val),
@@ -449,12 +454,14 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 	for _, rec := range recs {
 		lastAt = rec.At
 		switch rec.Type {
+		case run.RecFollowUpRebased:
+			r.Rebased = true
 		case run.RecRunStarted:
-			var d struct{ Run, Task, Frozen, Mode string }
+			var d struct{ Run, Task, Frozen, Mode, Follows string }
 			if !get(rec.Data, &d) {
 				continue
 			}
-			r.Run, r.Mode, started = d.Run, d.Mode, rec.At
+			r.Run, r.Mode, r.Follows, started = d.Run, d.Mode, clean(d.Follows), rec.At
 			if b, err := src.Blob(d.Task); err == nil {
 				r.Task = clean(task.Parse(string(b)).Title)
 			}

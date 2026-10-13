@@ -13,12 +13,30 @@ type Task struct {
 	Title    string
 	Text     string
 	Criteria []Criterion
+	// FollowUps are the human's follow-up messages in a session, in order,
+	// after the Task they continue (#185).
+	FollowUps []string
 }
 
 // Criterion is one Acceptance criterion with its stable id (AC-1, AC-2, …).
 type Criterion struct {
 	ID   string
 	Text string
+	// FollowUp is the follow-up message it came from, counted from 1; 0
+	// for the Task's own.
+	FollowUp int
+}
+
+// FollowUp is t continued by a follow-up message (#185): the message is
+// added to FollowUps, and the message's own acceptance criteria, parsed as
+// a Task's are, to t's Criteria, numbered on from them.
+func (t Task) FollowUp(text string) Task {
+	t.FollowUps = append(append([]string(nil), t.FollowUps...), text)
+	t.Criteria = append([]Criterion(nil), t.Criteria...)
+	for _, c := range Parse(text).Criteria {
+		t.Criteria = append(t.Criteria, Criterion{ID: "AC-" + strconv.Itoa(len(t.Criteria)+1), Text: c.Text, FollowUp: len(t.FollowUps)})
+	}
+	return t
 }
 
 // EditorTemplate is what $EDITOR opens when no Task was given. Everything in
