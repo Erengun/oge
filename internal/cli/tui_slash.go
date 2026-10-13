@@ -30,6 +30,7 @@ var slashPrefix = regexp.MustCompile(`^/[a-z-]*$`)
 // (the text stays in the box).
 type slashCmd struct {
 	name, usage, desc string
+	guard             bool // delivers: a completion is armed before Enter runs it
 	args              bool // takes arguments it needs: Enter on the bare name completes it
 	run               func(h *home, args []string) (tea.Cmd, string)
 }
@@ -45,8 +46,8 @@ func slashCommands() []slashCmd {
 		{name: "/runs", usage: "/runs", desc: "recent Runs in this repo", run: (*home).runsCmd},
 		{name: "/receipt", usage: "/receipt [run]", desc: "the Receipt of a Run", run: deliverSlash("r", "receipt")},
 		{name: "/diff", usage: "/diff [run]", desc: "a Run's Candidate against the Snapshot", run: deliverSlash("d", "diff")},
-		{name: "/apply", usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
-		{name: "/branch", usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
+		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
+		{name: "/branch", guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
 		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/clear", usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/notify", usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
@@ -513,13 +514,19 @@ func (h *home) menuKey(msg tea.KeyPressMsg) (handled bool) {
 	text := h.comp.text()
 	complete := func() {
 		h.comp.set(sel.cmd.name)
-		if sel.cmd.args {
+		if sel.cmd.args || sel.cmd.guard {
 			h.comp.insert(" ")
+		}
+		if sel.cmd.guard {
+			h.armText, h.armAt = sel.cmd.name, h.clock()
 		}
 		h.navigating = false
 	}
 	switch msg.String() {
 	case "up", "down", "ctrl+p", "ctrl+n":
+		if h.navigating && (msg.String() == "up" || msg.String() == "down") {
+			return false // history's, while it is being walked
+		}
 		l, _ := h.menu.Update(msg)
 		h.menu = &l
 	case "tab":
@@ -544,6 +551,9 @@ func (h *home) menuLines() []string {
 		if strings.TrimSpace(l) != "" {
 			out = append(out, strings.TrimRight(l, " "))
 		}
+	}
+	if n := len(h.menu.Items()) - len(out); n > 0 {
+		out = append(out, " "+h.st.dim(fmt.Sprintf("+%d more · ↓", n)))
 	}
 	return append(out, " "+h.st.dim("tab complete · enter run a whole command · esc close"))
 }

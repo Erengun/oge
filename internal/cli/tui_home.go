@@ -255,6 +255,10 @@ type home struct {
 	menuQuery   string
 	menuOff     bool
 	menuOffText string
+	// armText and armAt: a delivery command the menu completed runs only on
+	// an Enter that comes actionsArm later, so a double tap never delivers.
+	armText string
+	armAt   time.Time
 
 	width, height int
 	run           *model    // nil while composing
@@ -357,13 +361,14 @@ type editedMsg struct {
 type ctxDoneMsg struct{}
 
 func (h *home) Init() tea.Cmd {
+	ask := askBackground(h.st)
 	if h.ctx == nil {
-		return nil
+		return ask
 	}
-	return func() tea.Msg {
+	return tea.Batch(ask, func() tea.Msg {
 		<-h.ctx.Done()
 		return ctxDoneMsg{}
-	}
+	})
 }
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -373,6 +378,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if bg, ok := msg.(tea.BackgroundColorMsg); ok {
+		h.st.setDark(bg.IsDark())
+	}
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		h.width, h.height = ws.Width, ws.Height
 	}
@@ -484,6 +492,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := task.StripComments(h.comp.text())
 			if task.IsEmpty(text) {
 				return h, nil
+			}
+			if h.armText != "" && strings.TrimSpace(text) == h.armText && h.clock().Sub(h.armAt) < actionsArm {
+				return h, nil // typed ahead of the completion
 			}
 			if cmd, ok := h.slash(strings.TrimSpace(text)); ok {
 				return h, cmd

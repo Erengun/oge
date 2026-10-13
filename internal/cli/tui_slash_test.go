@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/erengun/oge/internal/delivery"
@@ -75,6 +76,8 @@ func TestSlashMenuGolden(t *testing.T) {
 func TestSlashMenuKeys(t *testing.T) {
 	applied := 0
 	h := testHome(80)
+	at := time.Unix(0, 0)
+	h.now = func() time.Time { return at }
 	h.last = &lastRun{apply: func() string { applied++; return "applied" }}
 	typeText(h, "/ap")
 	if h.menu == nil {
@@ -82,13 +85,14 @@ func TestSlashMenuKeys(t *testing.T) {
 	}
 	// Enter on a highlight completes; it never applies.
 	h.Update(enter())
-	if h.comp.text() != "/apply" || applied != 0 {
+	if h.comp.text() != "/apply " || applied != 0 {
 		t.Fatalf("Enter on the highlight: text %q, applied %d", h.comp.text(), applied)
 	}
-	h.Update(tab()) // Tab on a whole command does nothing more
-	if applied != 0 {
-		t.Fatal("Tab applied")
+	h.Update(enter()) // a double tap: typed ahead of the completion
+	if applied != 0 || h.comp.text() != "/apply " {
+		t.Fatalf("an immediate Enter: applied %d, text %q", applied, h.comp.text())
 	}
+	at = at.Add(actionsArm)
 	h.Update(enter()) // the whole command, explicitly
 	if applied != 1 || !h.comp.empty() || h.menu != nil {
 		t.Fatalf("Enter on /apply: applied %d, text %q", applied, h.comp.text())
@@ -319,5 +323,23 @@ func TestBareOgeSlashCommandsEndToEnd(t *testing.T) {
 	}
 	if d := deliveries(t, filepath.Join(f.state, "private", "runs", rejected)); len(d) != 0 {
 		t.Errorf("deliveries %v", d)
+	}
+}
+
+func TestSlashMenuYieldsToHistoryAndHintsAtMore(t *testing.T) {
+	h := testHome(80)
+	h.hist = &history{entries: []string{"older", "/diff"}}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.comp.text() != "/diff" || h.menu == nil {
+		t.Fatalf("recall: %q", h.comp.text())
+	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.comp.text() != "older" {
+		t.Fatalf("↑ went to the menu: %q", h.comp.text())
+	}
+	h = testHome(80)
+	typeText(h, "/")
+	if !strings.Contains(frame(h), "more · ↓") {
+		t.Errorf("no hint of the commands below:\n%s", frame(h))
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/ledger"
@@ -188,8 +189,8 @@ func TestSetupPicksAProfileRunsAndSaves(t *testing.T) {
 	s := startHomeSessionWith(t, f, withClaude, "--fast")
 	s.composer()
 	s.type_("\t")
-	s.expect("[s] save as default")
-	s.type_("\x1b[B\r") // implement profile
+	s.expect("no reads of") // the panel's last line: on a 24-row screen the header scrolls off
+	s.type_("\x1b[B\r")     // implement profile
 	s.expect("claude@z")
 	s.type_("\x1b[B\r") // claude@z
 	s.type_("\t")
@@ -447,8 +448,8 @@ func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
 	s.type_("fix Add\r")
 	s.expect("claude isn't logged in. Logged in: claude@z. Pick one with Tab,")
 	s.type_("\t")
-	s.expect("[s] save as default")
-	s.type_("\x1b[B\r") // implement profile
+	s.expect("no reads of") // the panel's last line: on a 24-row screen the header scrolls off
+	s.type_("\x1b[B\r")     // implement profile
 	s.expect("claude@z")
 	s.type_("\x1b[B\r") // claude@z
 	s.type_("\t")
@@ -505,4 +506,57 @@ func TestSetupEffortPickerChangesTheLaunchProfile(t *testing.T) {
 		t.Errorf("the next Run is not sent the effort: %+v", f.o)
 	}
 	golden(t, "setup-effort", got)
+}
+
+func TestSetupThemeRowGolden(t *testing.T) {
+	h, _ := setupHome(t)
+	h.st = newStyles(true)
+	h.st.setTheme("auto")
+	press(h, tab())
+	cursorTo(h, rowTheme)
+	h.panel.st = h.st
+	golden(t, "setup-theme-row", ansi.Strip(frame(h)))
+	press(h, enter())
+	got := ansi.Strip(frame(h))
+	for _, n := range pipeline.KnownThemes {
+		if !strings.Contains(got, n) {
+			t.Errorf("picker lacks %s:\n%s", n, got)
+		}
+	}
+	golden(t, "setup-theme-picker", got)
+}
+
+func TestSetupThemeAppliesAtOnceAndIsSaved(t *testing.T) {
+	h, dir := setupHome(t)
+	h.st = newStyles(true)
+	h.st.setTheme("auto")
+	press(h, tab())
+	cursorTo(h, rowTheme)
+	h.panel.st = h.st
+	before := h.st.ok("x")
+	press(h, enter(), down(), enter()) // auto -> dark
+	if h.st.themeName() != "dark" || h.st.ok("x") == before {
+		t.Fatalf("theme = %q, ok paints %q", h.st.themeName(), h.st.ok("x"))
+	}
+	if !h.sel.tTheme || h.sel.theme != "dark" {
+		t.Fatalf("not recorded: %+v", h.sel)
+	}
+	press(h, tab(), tea.KeyPressMsg{Code: 'y', Text: "y"})
+	data, err := os.ReadFile(filepath.Join(dir, ".config", "oge", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `theme = "dark"`) {
+		t.Errorf("not saved:\n%s", data)
+	}
+}
+
+func TestSetupThemeRowWithoutColour(t *testing.T) {
+	h, _ := setupHome(t) // newStyles(false): NO_COLOR
+	press(h, tab())
+	cursorTo(h, rowTheme)
+	press(h, enter())
+	if h.panel.pick != nil || !strings.Contains(frame(h), "NO_COLOR is set") {
+		t.Errorf("NO_COLOR theme row:\n%s", frame(h))
+	}
 }
