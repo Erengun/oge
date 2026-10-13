@@ -141,8 +141,9 @@ func TestBareOgeSetupEditsAGlobSavesItAndRuns(t *testing.T) {
 	s.composer()
 	s.type_("\t")
 	s.expectScreen("Checks   next Run")
-	// Down to "test glob 1" (Fast mode, fake agent: eight rows down; past the last row ↓ scrolls).
-	s.type_(strings.Repeat("\x1b[B", 8) + "\r")
+	// Down to the glob row, whatever the rows above it.
+	s.cursorTo("test glob 1")
+	s.type_("\r")
 	s.expectScreen("> **/*_test.go")
 	s.type_("\x15*_test.go\r")
 	s.expectScreen("test glob 1        *_test.go")
@@ -177,7 +178,10 @@ func TestBareOgeFirstRunChecksSectionIsTheProposal(t *testing.T) {
 	s.composer()
 	s.expectScreen("no .oge/oge.toml yet")
 	s.type_("\t")
-	s.expectScreen("go test -json ./...")
+	s.cursorTo("check 1") // the Checks section is below the window until the cursor gets there
+	if !strings.Contains(s.settledScreen(), "go test -json ./...") {
+		t.Fatalf("the proposal's Check isn't shown:\n%s", s.settledScreen())
+	}
 	s.type_("w")
 	s.expect("Save these Checks to .oge/oge.toml?")
 	s.expect("+ run     = \"go test -json ./...\"")
@@ -229,7 +233,8 @@ func TestBareOgeUnsavedNarrowedGlobIsTrustWeakening(t *testing.T) {
 	s.composer()
 	s.type_("\t")
 	s.expectScreen("Checks   next Run")
-	s.type_(strings.Repeat("\x1b[B", 8) + "\r")
+	s.cursorTo("test glob 1")
+	s.type_("\r")
 	s.expectScreen("> **/*_test.go")
 	s.type_("\x15*_test.go\r")
 	s.expectScreen("test glob 1        *_test.go")
@@ -288,8 +293,12 @@ func TestBareOgeUnknownToolchainOpensEmptyChecks(t *testing.T) {
 	s := startHomeSession(t, f, "--fast", "--agent", "fake")
 	s.expectScreen("no Check command")
 	s.type_("\t")
-	s.expectScreen("Checks   no .oge/oge.toml yet")
-	s.expectScreen("✗ refused: no Check command")
+	s.cursorTo("+ test glob") // the last row, so the section's end is in view
+	for _, w := range []string{"Checks   no .oge/oge.toml yet", "✗ refused: no Check command"} {
+		if !strings.Contains(s.settledScreen(), w) {
+			t.Fatalf("%q not shown:\n%s", w, s.settledScreen())
+		}
+	}
 	s.type_("\x03\x03") // closes the panel, then leaves the empty box
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())

@@ -266,6 +266,20 @@ func (s *homeSession) expectScreen(text string) {
 	s.t.Fatalf("%q never showed on the screen after the last keys:\n%s", text, screen(s.out.String()))
 }
 
+// cursorTo presses ↓ until the setup panel's cursor is on the row whose label
+// starts with label, so a test names the row instead of counting keys, and
+// scrolls the panel to it (#212).
+func (s *homeSession) cursorTo(label string) {
+	s.t.Helper()
+	for i := 0; i < 60; i++ {
+		if strings.Contains(s.settledScreen(), "> "+label) {
+			return
+		}
+		s.type_("\x1b[B")
+	}
+	s.t.Fatalf("the cursor never reached %q:\n%s", label, s.settledScreen())
+}
+
 // ended waits for the composer back after an Accepted Run: its hint line
 // names the actions. An Accepted Run that wasn't applied is continued by
 // the next message (#185), so the frame's last line, drawn after the hint,
