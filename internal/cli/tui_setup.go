@@ -681,5 +681,6 @@ func (p *setupPanel) lines() []string {
 			}
 		}
 	}
-	return append(out, p.validation(rows)...)
+	out = append(out, p.validation(rows)...)
+	return append(out, p.launchLines()...)
 }

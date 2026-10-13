@@ -8,7 +8,7 @@ Criteria   none
 Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check
 Config     .oge/oge.toml from the Snapshot, schema 1
 Pipeline   default (frozen, compiled graph dd873be2ee41)
-           verify (before) ─▶ implement ─▶ Check ─▶ [Result gate]
+           verify (before) -> implement -> Check -> [Result gate]
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     claude:opus    network off   fresh Session every Attempt   (inherits implement)
   implement  claude:opus    network on   (project)

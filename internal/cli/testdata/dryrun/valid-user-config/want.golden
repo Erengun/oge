@@ -9,7 +9,7 @@ Criteria   AC-1  After 5 failed logins for one account within 15 minutes, furthe
 Mode       Blind: a verifier writes held-out tests from the Task alone, then the implementer, then Öge's Check   (user)
 Config     .oge/oge.toml from the Snapshot, schema 1
 Pipeline   default (frozen, compiled graph cb4c8843108a)
-           verify (before) ─▶ implement ─▶ Check
+           verify (before) -> implement -> Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
   verify     claude@work     network off   fresh Session every Attempt   (user)
   implement  claude@z:sonnet network off   (user)

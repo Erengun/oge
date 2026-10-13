@@ -414,13 +414,14 @@ printf 'x\n' > "$(printf 'evil\342\200\256gpj.sh')"
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	t.Logf("stdout:\n%s", out)
+	assertScreenReaderSafe(t, out)
 	for _, want := range []string{
 		"  1  big.txt", "  4  \"evil\\u202egpj.sh\"",
-		"── blob.bin", "binary, 8 bytes: not shown",
+		"-- blob.bin", "binary, 8 bytes: not shown",
 		"name the file to inspect: i 1 to i 4",
-		"── docs/debug.md · 3 lines", "  # notes", "]0;pwned[31mred[0m", "  ok = 1 <U+202E> // admin", "── end of docs/debug.md",
-		"── big.txt", "can't show it: 1100000 bytes, too large to show here",
-		"── \"evil\\u202egpj.sh\" · 1 line",
+		"-- docs/debug.md · 3 lines", "  # notes", "]0;pwned[31mred[0m", "  ok = 1 <U+202E> // admin", "-- end of docs/debug.md",
+		"-- big.txt", "can't show it: 1100000 bytes, too large to show here",
+		"-- \"evil\\u202egpj.sh\" · 1 line",
 		"Result        ✗ Not accepted",
 		"4 new files no output glob covers, never promoted or dropped: ",
 	} {
