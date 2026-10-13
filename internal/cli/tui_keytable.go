@@ -33,6 +33,7 @@ var keyTable = []keyBinding{
 	{"Composer", "ctrl+c", []string{"ctrl+c"}, "clear the draft (↑ restores), then leave"},
 	{"Composer", "ctrl+l", []string{"ctrl+l"}, "redraw"},
 	{"Composer", "tab", []string{"tab"}, "open setup"},
+	{"Composer", "alt+m", []string{"alt+m"}, "open setup at the implement model"},
 	{"Composer", "/ · @ · ?", []string{"?"}, "commands · files · this panel (on an empty box)"},
 	{"Composer", "← → · ctrl+b ctrl+f", []string{"left", "right", "ctrl+b", "ctrl+f"}, "move"},
 	{"Composer", "home · end · ctrl+a", []string{"home", "end", "ctrl+a"}, "line start · end"},
