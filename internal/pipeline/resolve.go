@@ -686,9 +686,20 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 			if stages[i].Model == "" {
 				stages[i].Model = impl.Model
 			}
+			if stages[i].Effort == "" {
+				stages[i].Effort = impl.Effort
+			}
 		}
 	}
-	return nil
+	// Effort is Claude's alone: refuse it rather than show or record a
+	// level no launch applies (#179).
+	var probs []Problem
+	for _, s := range stages {
+		if s.Effort != "" && s.Agent != "claude" {
+			probs = append(probs, Problem{"stages." + s.Name + ".effort", "effort is supported for claude only"})
+		}
+	}
+	return probs
 }
 
 func resolveLimits(c LimitsConfig) Limits {

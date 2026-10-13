@@ -341,3 +341,27 @@ func TestLoadUserConfigNotify(t *testing.T) {
 		t.Fatal("an unknown notify key was accepted")
 	}
 }
+
+func TestEffortIsClaudeOnlyAndInherited(t *testing.T) {
+	stages := func(agent, effort string) []Stage {
+		return []Stage{
+			{Name: "implement", Role: "implementer", Agent: agent, Effort: effort},
+			{Name: "verify", Role: "verifier"},
+		}
+	}
+	got := stages("claude", "high")
+	if probs := defaultBindings(got, nil); len(probs) != 0 || got[1].Effort != "high" || got[1].Source != FromInherited {
+		t.Errorf("verifier = %+v, problems %v", got[1], probs)
+	}
+	got = stages("claude", "high")
+	got[1].Agent, got[1].Effort = "claude", "low"
+	if probs := defaultBindings(got, nil); len(probs) != 0 || got[1].Effort != "low" {
+		t.Errorf("own effort lost: %+v %v", got[1], probs)
+	}
+	for _, agent := range []string{"codex", "fake"} {
+		probs := defaultBindings(stages(agent, "high"), nil)
+		if len(probs) == 0 || !strings.Contains(probs[0].Msg, "claude only") {
+			t.Errorf("%s: effort accepted: %v", agent, probs)
+		}
+	}
+}
