@@ -19,6 +19,7 @@ import (
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
+	"github.com/erengun/oge/internal/workspace"
 	"github.com/rivo/uniseg"
 )
 
@@ -255,6 +256,9 @@ type home struct {
 	menuQuery   string
 	menuOff     bool
 	menuOffText string
+	// at is the @file picker (#146); listFiles reads the tracked files.
+	at        atState
+	listFiles func() ([]string, error)
 	// armText and armAt: a delivery command the menu completed runs only on
 	// an Enter that comes actionsArm later, so a double tap never delivers.
 	armText string
@@ -374,6 +378,7 @@ func (h *home) Init() tea.Cmd {
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
 	h.syncMenu()
+	h.syncAt()
 	return m, cmd
 }
 
@@ -467,6 +472,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.menu != nil && h.menuKey(msg) {
 			return h, nil
 		}
+		if h.at.list != nil && h.atKey(msg) {
+			return h, nil
+		}
 		switch msg.String() {
 		case "ctrl+r":
 			if h.hist.len() > 0 {
@@ -511,7 +519,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.setup = setupLines(res.frozen)
 			h.sel.syncFrom(res)
-			h.hist.add(text) // what the human typed, never the agent's output
+			h.at.files, h.at.filesReady = nil, false // listed again for the next composer
+			h.hist.add(text)                         // what the human typed, never the agent's output
 			h.navigating = false
 			t := task.Parse(text)
 			if h.thread != nil {
@@ -776,6 +785,9 @@ func (h *home) render() (string, int, int) {
 	}
 	if h.menu != nil {
 		lines = append(lines, h.menuLines()...)
+	}
+	if h.at.list != nil {
+		lines = append(lines, h.atLines()...)
 	}
 	if h.panel == nil {
 		for _, l := range h.setup {
@@ -1069,6 +1081,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		return text, l, false
 	}
 	h.deliver, h.runs = deliverer(env), recentRuns(env, root)
+	h.listFiles = func() ([]string, error) { return workspace.TrackedFiles(root) }
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
