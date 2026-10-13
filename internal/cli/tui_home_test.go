@@ -224,6 +224,28 @@ func (s *homeSession) expect(text string) {
 	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
 }
 
+// settledScreen is the screen on an 80x24 terminal once it has stopped
+// changing. A line printed above the live area lands before the renderer
+// repaints the area below it, so a snapshot taken on the first sign of
+// the composer can catch the two halfway.
+func (s *homeSession) settledScreen() string {
+	s.t.Helper()
+	render := func() string {
+		v := vt{height: 24}
+		v.write([]byte(s.out.String()))
+		return v.String()
+	}
+	last, since := render(), time.Now()
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if cur := render(); cur != last {
+			last, since = cur, time.Now()
+		} else if time.Since(since) >= 300*time.Millisecond {
+			return last
+		}
+	}
+	return last
+}
+
 // expectScreen waits until text shows on the rendered screen more often
 // than it did when the last keys were typed. The renderer rewrites only the
 // cells that changed, so a hint that differs from the previous frame by a
@@ -291,9 +313,7 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	s.ended()
 	// The whole scrollback now, on an 80x24 terminal (the pipe reports no
 	// size): the transcript of the Run, and the composer back, empty.
-	screen := vt{height: 24}
-	screen.write([]byte(s.out.String()))
-	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -429,9 +449,7 @@ func TestBareOgeGateInTheTranscript(t *testing.T) {
 	s.expect("Result gate")
 	s.type_("t\r")
 	s.ended()
-	screen := vt{height: 24}
-	screen.write([]byte(s.out.String()))
-	got := homeNorm.ReplaceAllString(screen.String(), "X")
+	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
