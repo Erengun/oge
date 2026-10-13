@@ -21,6 +21,7 @@ type initFrame struct {
 	MCPServers []struct {
 		Name string `json:"name"`
 	} `json:"mcp_servers"`
+	Model          string          `json:"model"`
 	PermissionMode string          `json:"permissionMode"`
 	APIKeySource   string          `json:"apiKeySource"`
 	Version        string          `json:"claude_code_version"`
