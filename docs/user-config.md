@@ -54,3 +54,10 @@ theme = "daltonized"
 ```
 
 The setup panel has a `theme` row; picking one repaints the open view at once, and [s] saves it here with the other choices. `NO_COLOR` still wins: no colour at all, and the row says so. A theme only changes colour: every status keeps its glyph and its word (`✓`, `✗`, `+`, `-`), so none is shown by colour alone.
+
+**Vim mode.** `vim = true` is a global key (not per repo) that gives the composer vim's INSERT and NORMAL modes. It is off by default. Esc leaves INSERT for NORMAL (menus and pickers close on Esc first; in NORMAL on an empty box it does nothing), and `i a I A o O` go back to INSERT. In NORMAL: `h j k l`, `w e b` (words are by grapheme, as in the Emacs word keys), `0 ^ $`. Enter runs the task in both modes. The mode shows under the box as `-- INSERT --` or `-- NORMAL --`. Operators, edits, visual mode and the setup-panel row are not there yet; set the key in the file.
+
+```toml
+schema = 1
+vim = true
+```

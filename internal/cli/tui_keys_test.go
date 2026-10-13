@@ -51,6 +51,7 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 		add(h.panel != nil && h.panel.input != nil, "input")
 		add(h.picker != nil, "picker")
 		add(h.picker != nil && h.picker.cmd != "", "confirm")
+		add(h.vim && h.normal, "normal")
 		add(h.quit, "QUIT")
 		if h.comp.empty() {
 			s = append(s, "empty")
@@ -70,6 +71,24 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 			typeText(h, "fix Add")
 			return h
 		}, "task", "empty"},
+		{"composer vim INSERT", func(*testing.T) *home { return vimHome("fix Add") }, "normal+task", "empty"},
+		{"composer vim NORMAL, empty", func(*testing.T) *home {
+			h := vimHome("")
+			h.Update(escKey())
+			return h
+		}, "normal+empty", "normal+QUIT+empty"},
+		{"composer vim NORMAL, with a Task", func(*testing.T) *home {
+			h := vimHome("fix Add")
+			h.Update(escKey())
+			return h
+		}, "normal+task", "normal+empty"},
+		{"vim slash menu", func(*testing.T) *home { return vimHome("/ru") }, "task", "empty"},
+		{"vim shortcut panel", func(*testing.T) *home {
+			h := vimHome("")
+			h.Update(escKey())
+			typeText(h, "?")
+			return h
+		}, "normal+empty", "normal+empty"},
 		{"slash menu", func(*testing.T) *home {
 			h := testHome(80)
 			typeText(h, "/ru")
@@ -133,7 +152,7 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 			want string
 		}{{"esc", tea.KeyPressMsg{Code: tea.KeyEscape}, c.esc}, {"ctrl+c", ctrlKey('c'), c.ctrl}} {
 			h := c.build(t)
-			if state(h) == k.want && c.name != "composer empty" && c.name != "composer with a Task" {
+			if state(h) == k.want && !strings.HasPrefix(c.name, "composer") {
 				t.Fatalf("%s: nothing is open to close", c.name)
 			}
 			h.Update(k.msg)

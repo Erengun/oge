@@ -41,6 +41,11 @@ Setup
   ↑ ↓ · enter          move · change the row
   s · w                save as default · write the project Checks
   d · x                remove the row
+Vim (when enabled)
+  esc · i a I A o O    NORMAL · INSERT (enter runs in both)
+  h j k l              left · down · up · right (NORMAL)
+  w e b                next word · word end · previous (NORMAL)
+  0 ^ $                line start · first char · end (NORMAL)
 Commands
   /help                              keys and commands
   /setup                             open setup (same as tab)

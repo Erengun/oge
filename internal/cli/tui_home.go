@@ -248,6 +248,8 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 // model once Enter starts it, then the composer again.
 type home struct {
 	comp *composer
+	// vim is the composer's vim mode (#156); normal is its NORMAL state.
+	vim, normal bool
 	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
 	// first ↑. search is Ctrl+R's search while it is open.
 	hist       *history
@@ -524,6 +526,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if h.vim && h.normal && h.normalKey(msg) {
+			return h, nil
+		}
 		switch msg.String() {
 		case "ctrl+r":
 			if h.hist.len() > 0 {
@@ -535,7 +540,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			// Esc never quits, and never wipes a Task: it closes overlays
-			// (above) and otherwise does nothing.
+			// (above) and otherwise does nothing. With vim on, it leaves
+			// INSERT for NORMAL.
+			if h.vim && !h.normal {
+				h.enterNormal()
+			}
 		case "ctrl+c":
 			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
 			// box, leaves (as Claude Code's prompt does).
@@ -842,6 +851,13 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
 	}
 	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
+	if h.vim {
+		mode := "-- INSERT --"
+		if h.normal {
+			mode = "-- NORMAL --"
+		}
+		lines = append(lines, " "+st.dim(mode))
+	}
 	for _, l := range h.msg {
 		lines = append(lines, " "+st.bad(l))
 	}
@@ -1134,7 +1150,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify}
+	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, vim: u.vim}
 	if res != nil {
 		h.setup = setupLines(res.frozen)
 		sel.init(res)
