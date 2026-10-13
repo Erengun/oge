@@ -422,7 +422,7 @@ func TestRunUnattendedParksAtBoundExhaustion(t *testing.T) {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 	for _, want := range []string{
-		`[implement #1 fake] "making the test pass"`,
+		"\nmaking the test pass\n",
 		"check      go test -json ./... · 1 ran · 1 failed: TestAdd · fail (exit 1)",
 		"[verdict] FAIL",
 		"send back  1 of 1 · ",

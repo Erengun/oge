@@ -2,6 +2,8 @@
 Run X · Fast mode · HEAD X (main) + 1 untracked
 
 ✓ preflight  ok · X
+fixing Add in add.go
+
 ✓ implement  fake · Exit done · Candidate X · 1 file changed · X
 ✓ check      go test -json ./... · 1 ran · 0 failed · pass · X
 
