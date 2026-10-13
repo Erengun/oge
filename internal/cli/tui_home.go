@@ -45,10 +45,11 @@ type composer struct {
 	row, col int
 	top      int // first visible row of the wrapped text
 
-	kills   string // the kill ring's one entry (tui_edit.go)
-	killing bool   // the last edit was a kill
-	undo    []snap // what undo brings back, newest last
-	lastOp  string // the last edit's kind, to join typing into one undo step
+	kills   string   // the kill ring's one entry (tui_edit.go)
+	killing bool     // the last edit was a kill
+	undo    []snap   // what undo brings back, newest last
+	lastOp  string   // the last edit's kind, to join typing into one undo step
+	pastes  []string // the text behind each large-paste placeholder (tui_paste.go)
 }
 
 func newComposer() *composer { return &composer{lines: [][]rune{nil}} }
@@ -79,6 +80,7 @@ func (c *composer) insert(s string) {
 	s = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\t", "    ").Replace(s)
 	for _, r := range s {
 		switch {
+		case isPasteRune(r): // only a placeholder of ours may be one
 		case r == '\n':
 			c.newline()
 		case r < 0x20 || (r >= 0x7f && r < 0xa0) || r == 0xfffd:
@@ -204,6 +206,10 @@ func (c *composer) layout(width int) (rows []string, curRow, curCol int) {
 		for rest != "" {
 			cl, tail, cw, _ := uniseg.FirstGraphemeClusterInString(rest, -1)
 			k := len([]rune(cl))
+			if r := []rune(cl); len(r) == 1 && isPasteRune(r[0]) {
+				cl = c.pasteLabel(r[0])
+				cw = uniseg.StringWidth(cl)
+			}
 			if w+cw > width && w > 0 {
 				all = append(all, row.String())
 				row.Reset()
@@ -251,9 +257,11 @@ type home struct {
 	search     *histSearch
 	// stash is Ctrl+S's one slot: a draft put aside for this session.
 	stash string
-	title string   // the box's title: repo and branch
-	setup []string // the setup bar, as lines
-	st    styles
+	// hidden is the confirmation of a Task that held hidden characters.
+	hidden *hiddenPrompt
+	title  string   // the box's title: repo and branch
+	setup  []string // the setup bar, as lines
+	st     styles
 	// start begins the Run for a Task in this program: it returns the Run's
 	// model and its first command.
 	start func(task.Task, *resolved, int, int) (*model, tea.Cmd)
@@ -453,9 +461,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving, h.review != nil, h.search != nil, h.picker != nil:
+		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.hidden != nil:
 		default:
-			h.comp.change("paste", func() { h.comp.insert(msg.Content) })
+			h.comp.change("paste", func() { h.comp.insertPaste(msg.Content) })
 			h.endNavigation()
 		}
 	case editedMsg:
@@ -468,6 +476,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
 		switch {
+		case h.hidden != nil:
+			return h.hiddenKey(msg)
 		case h.picker != nil:
 			return h, h.pickerKey(msg)
 		case h.actions:
@@ -529,7 +539,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.endNavigation()
 				return h, nil
 			}
-			text := task.StripComments(h.comp.text())
+			text := task.StripComments(h.comp.expanded())
 			if task.IsEmpty(text) {
 				return h, nil
 			}
@@ -539,40 +549,20 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd, ok := h.slash(strings.TrimSpace(text)); ok {
 				return h, cmd
 			}
-			if h.ctx != nil && h.ctx.Err() != nil {
-				h.quit = true
-				return h, tea.Quit
-			}
-			res, problem := h.resolve(h.sel)
-			if problem != nil {
-				// The Run can't start: say why, and keep the Task.
-				h.msg, h.setup = problem, nil
+			if n := hiddenCount(text); n > 0 {
+				// Hidden characters can carry instructions the human can't
+				// see: say so, and submit only the cleaned text (#153).
+				h.hidden = &hiddenPrompt{text: text, n: n}
 				return h, nil
 			}
-			h.setup = setupLines(res.frozen)
-			h.sel.syncFrom(res)
-			h.at.files, h.at.filesReady = nil, false // listed again for the next composer
-			h.hist.add(text)                         // what the human typed, never the agent's output
-			h.comp.clearUndo()
-			h.navigating = false
-			t := task.Parse(text)
-			if h.thread != nil {
-				// A follow-up: the whole thread, this message last.
-				t = h.thread.task.FollowUp(text)
-			}
-			m, cmd := h.start(t, res, h.width, h.height)
-			h.run = m
-			if lines := m.take(); len(lines) > 0 { // the Task's echo
-				cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
-			}
-			return h, cmd
+			return h.submit(text)
 		case "ctrl+s":
 			h.stashDraft()
 		case "ctrl+l":
 			return h, tea.ClearScreen
 		case "ctrl+e", "ctrl+g":
 			if h.edit != nil {
-				return h, h.edit(h.comp.text())
+				return h, h.edit(h.comp.expanded())
 			}
 		case "tab":
 			if p := h.openSetup(); p != "" {
@@ -602,12 +592,44 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return h, nil
 }
 
+// submit starts the Run (or the follow-up) for text, which is final: slash
+// commands and hidden characters are dealt with already.
+func (h *home) submit(text string) (tea.Model, tea.Cmd) {
+	if h.ctx != nil && h.ctx.Err() != nil {
+		h.quit = true
+		return h, tea.Quit
+	}
+	res, problem := h.resolve(h.sel)
+	if problem != nil {
+		// The Run can't start: say why, and keep the Task.
+		h.msg, h.setup = problem, nil
+		return h, nil
+	}
+	h.setup = setupLines(res.frozen)
+	h.sel.syncFrom(res)
+	h.at.files, h.at.filesReady = nil, false // listed again for the next composer
+	h.hist.add(text)                         // what the human typed, never the agent's output
+	h.comp.clearUndo()
+	h.navigating = false
+	t := task.Parse(text)
+	if h.thread != nil {
+		// A follow-up: the whole thread, this message last.
+		t = h.thread.task.FollowUp(text)
+	}
+	m, cmd := h.start(t, res, h.width, h.height)
+	h.run = m
+	if lines := m.take(); len(lines) > 0 { // the Task's echo
+		cmd = tea.Sequence(tea.Println(strings.Join(lines, "\n")), cmd)
+	}
+	return h, cmd
+}
+
 // stashDraft is Ctrl+S: it puts the draft aside and clears the box; on an
 // empty box it brings the stash back. With both a draft and a stash it
 // swaps them, so neither is lost.
 func (h *home) stashDraft() {
 	h.navigating = false
-	draft := h.comp.text()
+	draft := h.comp.expanded()
 	if draft == "" && h.stash == "" {
 		return
 	}
@@ -637,7 +659,7 @@ func (h *home) recall(dir int) bool {
 			return false
 		}
 		if !h.navigating {
-			h.draft, h.nav, h.navigating = h.comp.text(), n, true
+			h.draft, h.nav, h.navigating = h.comp.expanded(), n, true
 		}
 		if h.nav == 0 {
 			return true
@@ -816,6 +838,8 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, " "+st.dim("stashed · ctrl+s restores it on an empty box"))
 	}
 	switch {
+	case h.hidden != nil:
+		lines = append(lines, h.hidden.lines(st)...)
 	case h.saving:
 		lines = append(lines, " "+st.bold("Save as default for this repo?")+" [y]es [n]o"+st.dim("   (your user config only)"))
 	case h.review != nil:
