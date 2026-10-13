@@ -1,0 +1,9 @@
+Terminal
+  TERM=tmux-256color  TERM_PROGRAM=iTerm.app  COLORTERM=truecolor  multiplexer: tmux
+Hints (Öge changes none of these for you)
+  Shift+Enter  can't be detected: if it submits, use Ctrl+J or \ then Enter for a new line
+  Alt+B/F/D/M  iTerm2: Settings > Profiles > Keys > Left Option key: Esc+
+  tmux         desktop alerts: set -g allow-passthrough on
+  tmux         modified keys (Shift+Enter, Alt+arrows): set -g extended-keys on
+  /copy        OSC 52 needs: set -g set-clipboard on
+  colour       truecolor: pick a theme in /setup
