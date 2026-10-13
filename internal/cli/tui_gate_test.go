@@ -198,14 +198,14 @@ func TestTUICtrlCAtTheChoiceCancelsAndClosesTheGate(t *testing.T) {
 func TestTUIAttentionLine(t *testing.T) {
 	h := newTUIHarness(t, false, 100)
 	h.working()
-	if got := h.m.render(); !strings.Contains(got, "\nNothing needs you.\n") || strings.Contains(got, "ATTENTION") {
+	if got := h.m.render(); !strings.Contains(got, " · Nothing needs you.\n") || strings.Contains(got, "ATTENTION") {
 		t.Errorf("happy path:\n%s", got)
 	}
 	h.implemented("")
 	h.checked(false)
 	h.openGate(boundExhaustionAt(h))
 	got := h.m.render()
-	if !strings.Contains(got, "\nATTENTION NEEDED: Decide what happens to the Candidate.\n    send back") || strings.Contains(got, "Nothing needs you") {
+	if !strings.Contains(got, "\nATTENTION NEEDED: Decide what happens to the Candidate.\n    send back") || strings.Contains(got, "Nothing needs you") || !strings.Contains(got, " · Waiting for you\n") {
 		t.Errorf("at a Gate:\n%s", got)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
@@ -207,6 +208,10 @@ type (
 		timed bool
 		step  string // EvAgent: one line of activity
 		next  string // EvResolved: where the walk goes
+		// cost and tokens are what the agent reported for its session so
+		// far (EvAgent usage); nil when it reported none.
+		cost   *float64
+		tokens *int
 	}
 	doneMsg struct {
 		at     time.Time
@@ -244,6 +249,9 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		// bookkeeping stays in -v (ADR-0019).
 		if ev.Attempt.Role != "verifier" || qaStep(ev.Agent) {
 			m.step, _ = activityStep(ev.Agent)
+		}
+		if ev.Agent.Kind == agent.Usage {
+			m.cost, m.tokens = ev.Agent.CostUSD, ev.Agent.Tokens
 		}
 	case run.EvNotice:
 		m.step = "note: " + clean(ev.Notice)
@@ -302,6 +310,10 @@ type model struct {
 	more   int // steps dropped beyond keptSteps
 
 	expanded   bool
+	off        int // expanded: steps scrolled back from the newest
+	used       int // lines above the activity in the last frame
+	started    time.Time
+	usage      map[string]reported // what each stage's session reported, latest
 	cancelling bool
 	still      bool // no spinner ticks: tests draw only on events
 	finished   bool
@@ -324,7 +336,7 @@ type model struct {
 }
 
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
-	m := &model{title: clean(t.Title), frozen: f, st: st, now: now}
+	m := &model{title: clean(t.Title), frozen: f, st: st, now: now, started: now()}
 	m.head = fmt.Sprintf("%s mode", f.Mode)
 	pre := stage{name: "preflight"}
 	if f.Setup.Run != "" {
@@ -404,7 +416,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "ctrl+o":
-			m.expanded = !m.expanded
+			m.expanded, m.off = !m.expanded, 0
+		case "esc":
+			m.expanded, m.off = false, 0
+		case "up", "down", "pgup", "pgdown":
+			if m.expanded {
+				m.scrollBy(msg.String())
+			}
 		case "ctrl+c":
 			// The first Ctrl-C cancels the Run, which then ends and shows
 			// its summary; the view quits only after that. A second one
@@ -442,8 +460,14 @@ func (m *model) apply(msg tea.Msg) bool {
 					m.begin(i, msg.at)
 				}
 			}
+			if msg.cost != nil || msg.tokens != nil {
+				m.record(msg.stage, msg.cost, msg.tokens)
+			}
 			if msg.step != "" {
 				m.steps = append(m.steps, msg.step)
+				if m.off > 0 {
+					m.off++ // a scrolled view stays on the same steps
+				}
 				if len(m.steps) > keptSteps {
 					m.steps = m.steps[1:]
 					m.more++
@@ -499,7 +523,7 @@ func (m *model) begin(i int, at time.Time) {
 	}
 	m.stages[i].state, m.stages[i].start = running, at
 	m.cur = i
-	m.steps, m.more = nil, 0
+	m.steps, m.more, m.off = nil, 0, 0
 }
 
 // finish ends the stage the message names with its line. Unless it failed,
@@ -578,10 +602,11 @@ func (m *model) render() string {
 	lines = append(lines, m.gateLines()...)
 	if !m.finished {
 		add("")
-		if m.gate == nil {
-			add(gate.Attention(nil))
-		}
+		add(m.statusLine())
 		hint := "ctrl+c to cancel"
+		if m.expanded {
+			hint = "ctrl+o to collapse · " + hint
+		}
 		if m.cancelling {
 			hint = "cancelling… ctrl+c again to stop now"
 		}
@@ -671,16 +696,13 @@ func (m *model) activity(used int) []string {
 		return nil
 	}
 	st := m.st
-	limit := recentSteps
+	m.used = used
+	limit := m.window(used)
+	hidden, later := m.more, 0
 	if m.expanded {
-		limit = len(steps)
-		if m.height > 0 {
-			// Leave room for the stages below, the hint and the footer.
-			room := m.height - used - (len(m.stages) - m.cur) - 4
-			limit = max(min(limit, room), recentSteps)
-		}
+		later = min(m.off, max(len(steps)-limit, 0))
+		steps = steps[:len(steps)-later]
 	}
-	hidden := m.more
 	if len(steps) > limit {
 		hidden += len(steps) - limit
 		steps = steps[len(steps)-limit:]
@@ -694,14 +716,179 @@ func (m *model) activity(used int) []string {
 		out = append(out, st.dim(prefix+s))
 	}
 	switch {
-	case hidden > 0 && !m.expanded:
+	case !m.expanded && hidden > 0:
 		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · ctrl+o to expand", hidden)))
-	case hidden > 0:
-		out = append(out, st.dim(fmt.Sprintf("    +%d earlier · ctrl+o to collapse", hidden)))
 	case m.expanded:
-		out = append(out, st.dim("    ctrl+o to collapse"))
+		note := "    "
+		if m.gate != nil {
+			// A Gate takes the arrows; only ctrl+o and esc are the view's.
+			out = append(out, st.dim(note+"ctrl+o to collapse"))
+			break
+		}
+		if hidden > 0 {
+			note += fmt.Sprintf("+%d earlier · ", hidden)
+		}
+		if later > 0 {
+			note += fmt.Sprintf("+%d later · ", later)
+		}
+		out = append(out, st.dim(note+"↑/↓ PgUp/PgDn scroll · esc to collapse"))
 	}
 	return out
+}
+
+// window is how many steps show: a few collapsed, what fits expanded.
+func (m *model) window(used int) int {
+	if !m.expanded {
+		return recentSteps
+	}
+	limit := len(m.steps)
+	if m.height > 0 {
+		// Leave room for the stages below, the hint and the footer.
+		room := m.height - used - (len(m.stages) - m.cur) - 5
+		limit = max(min(limit, room), recentSteps)
+	}
+	return limit
+}
+
+// scrollBy moves the expanded view back (up) or forward (down) in steps.
+func (m *model) scrollBy(key string) {
+	page := max(m.window(m.used)-1, 1)
+	switch key {
+	case "up":
+		m.off++
+	case "down":
+		m.off--
+	case "pgup":
+		m.off += page
+	case "pgdown":
+		m.off -= page
+	}
+	m.off = max(min(m.off, max(len(m.steps)-m.window(m.used), 0)), 0)
+}
+
+// reported is what an agent's session reported; a nil field was not reported.
+type reported struct {
+	cost   *float64
+	tokens *int
+}
+
+// record keeps the latest figures a stage's session reported. They are
+// cumulative per session, so the latest replaces the earlier.
+func (m *model) record(stage string, cost *float64, tokens *int) {
+	if m.usage == nil {
+		m.usage = map[string]reported{}
+	}
+	m.usage[stage] = reported{cost, tokens}
+}
+
+// statusLine is one line under the activity: mode, the stage in front,
+// the agents, elapsed, what the agents reported spending, and whether the
+// Run needs the human. On a narrow terminal the least telling parts go
+// first; the attention never does.
+func (m *model) statusLine() string {
+	attention := gate.Attention(nil)
+	if m.gate != nil {
+		attention = "Waiting for you"
+	}
+	label := ""
+	if m.cur < len(m.stages) {
+		label = stageLabel(m.stages[m.cur].name, m.frozen)
+	}
+	type part struct {
+		text string
+		drop int // lower goes first when the line is too wide; 0 stays
+	}
+	parts := []part{{string(m.frozen.Mode) + " mode", 3}, {label, 6}}
+	for _, s := range m.frozen.Stages {
+		word, drop := "implement", 2
+		if s.Role == "verifier" {
+			word, drop = "verify", 1
+			if m.frozen.Mode == pipeline.Fast {
+				continue
+			}
+		}
+		who := s.Binding()
+		if s.Model != "" {
+			who += ":" + s.Model
+		}
+		parts = append(parts, part{word + " " + clean(who), drop})
+	}
+	parts = append(parts, part{elapsed(m.now().Sub(m.started)), 7})
+	var cost float64
+	var tokens int
+	var haveCost, haveTokens bool
+	for _, u := range m.usage {
+		if u.cost != nil {
+			cost, haveCost = cost+*u.cost, true
+		}
+		if u.tokens != nil {
+			tokens, haveTokens = tokens+*u.tokens, true
+		}
+	}
+	if haveCost {
+		parts = append(parts, part{fmt.Sprintf("$%.2f", cost), 4})
+	}
+	if haveTokens {
+		parts = append(parts, part{tokenText(tokens), 5})
+	}
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	// The attention is reserved first; the rest fills what is left, the
+	// least telling parts going first, and is cut before the attention is.
+	if w := ansi.StringWidth(attention); w > width-1 {
+		attention = shortAttention(m.gate != nil, width)
+	}
+	room := width - 1 - ansi.StringWidth(attention) - 3
+	join := func() string {
+		var texts []string
+		for _, p := range parts {
+			if p.text != "" {
+				texts = append(texts, p.text)
+			}
+		}
+		return strings.Join(texts, " · ")
+	}
+	for ansi.StringWidth(join()) > room {
+		best := -1
+		for i, p := range parts {
+			if p.text != "" && (best < 0 || p.drop < parts[best].drop) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break
+		}
+		parts[best].text = ""
+	}
+	if pre := join(); pre != "" && room > 0 {
+		return m.st.dim(pre + " · " + attention)
+	}
+	return m.st.dim(attention)
+}
+
+// shortAttention is the attention in at most w columns, never claiming
+// "Nothing needs you" for a Run that is waiting.
+func shortAttention(waiting bool, w int) string {
+	forms := []string{"Nothing needs you.", "Nothing needs you", "All clear", "Clear", "OK", "·"}
+	if waiting {
+		forms = []string{"Waiting for you", "Waiting", "Wait", "!"}
+	}
+	for _, f := range forms {
+		if ansi.StringWidth(f) <= w {
+			return f
+		}
+	}
+	return forms[len(forms)-1]
+}
+
+// tokenText is 950 tok, then 12.3k tok.
+func tokenText(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d tok", n)
+	}
+	return fmt.Sprintf("%.1fk tok", float64(n)/1000)
 }
 
 // elapsed is 0.4s, 12.3s, then 1m05s.
