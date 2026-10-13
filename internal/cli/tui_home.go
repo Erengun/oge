@@ -250,6 +250,8 @@ type home struct {
 	// getenv reads the environment for /terminal; nil reads nothing.
 	getenv func(string) string
 	comp   *composer
+	// vim is the composer's vim mode (#156); normal is its NORMAL state.
+	vim, normal bool
 	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
 	// first ↑. search is Ctrl+R's search while it is open.
 	hist       *history
@@ -476,6 +478,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pageFailedMsg:
 		h.msg = []string{"oge: showing the diff: " + clean(msg.err.Error())}
 		return h, nil
+	case tea.MouseWheelMsg:
+		return h, h.wheel(msg)
 	case tea.PasteMsg:
 		h.actions = false
 		switch {
@@ -536,6 +540,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if h.vim && h.normal && h.normalKey(msg) {
+			return h, nil
+		}
 		switch msg.String() {
 		case "ctrl+r":
 			if h.hist.len() > 0 {
@@ -547,7 +554,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "esc":
 			// Esc never quits, and never wipes a Task: it closes overlays
-			// (above) and otherwise does nothing.
+			// (above) and otherwise does nothing. With vim on, it leaves
+			// INSERT for NORMAL.
+			if h.vim && !h.normal {
+				h.enterNormal()
+			}
 		case "ctrl+c":
 			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
 			// box, leaves (as Claude Code's prompt does).
@@ -841,7 +852,39 @@ func (h *home) View() tea.View {
 	c := tea.NewCursor(x, y)
 	c.Blink = false
 	v.Cursor = c
+	if h.wantsMouse() {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
+}
+
+// wantsMouse is true only while the slash menu or the Run picker is open.
+// Mouse reporting takes the wheel and selection from the terminal, so it
+// is never on while the transcript or the composer is what is on screen.
+func (h *home) wantsMouse() bool {
+	return h.menu != nil || h.picker != nil
+}
+
+// wheel turns a wheel tick over an open list into Up or Down. Clicks are
+// not handled: an inline frame has no known screen row to map them to.
+func (h *home) wheel(msg tea.MouseWheelMsg) tea.Cmd {
+	var code rune
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		code = tea.KeyUp
+	case tea.MouseWheelDown:
+		code = tea.KeyDown
+	default:
+		return nil
+	}
+	k := tea.KeyPressMsg{Code: code}
+	switch {
+	case h.picker != nil:
+		return h.pickerKey(k)
+	case h.menu != nil:
+		h.menuKey(k)
+	}
+	return nil
 }
 
 // render is the composer frame, and where the cursor is in it.
@@ -876,6 +919,13 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
 	}
 	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
+	if h.vim {
+		mode := "-- INSERT --"
+		if h.normal {
+			mode = "-- NORMAL --"
+		}
+		lines = append(lines, " "+st.dim(mode))
+	}
 	for _, l := range h.msg {
 		lines = append(lines, " "+st.bad(l))
 	}
@@ -1168,7 +1218,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != ""}
+	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 	}

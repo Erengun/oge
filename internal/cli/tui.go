@@ -28,6 +28,7 @@ type tui struct {
 	stderr io.Writer
 	plain  *renderer // prints the summary once the live view has gone
 	m      *model
+	vim    bool // the composer's vim mode (user config, #156)
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}

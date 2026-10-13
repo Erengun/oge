@@ -64,3 +64,14 @@ ok = 10
 ```
 
 The file is strict: an unknown key or a bad colour is named in a one-line notice in the home (with the file), and the view uses the base preset alone; it never stops oge. The file is re-read when the composer opens after a Run, and on Ctrl+L, never in the middle of a Run. `NO_COLOR` still wins, and the file changes colours only: every status keeps its glyph and its word.
+
+**Vim mode.** `vim = true` is a global key (not per repo) that gives the composer vim's INSERT and NORMAL modes. It is off by default. Esc leaves INSERT for NORMAL (menus and pickers close on Esc first; in NORMAL on an empty box it does nothing), and `i a I A o O` go back to INSERT. In NORMAL: `h j k l`, `w e b` (words are by grapheme, as in the Emacs word keys), `0 ^ $`. Enter runs the task in both modes. The mode shows under the box as `-- INSERT --` or `-- NORMAL --`. Operators, edits, visual mode and the setup-panel row are not there yet; set the key in the file.
+
+```toml
+schema = 1
+vim = true
+```
+
+## Mouse
+
+The mouse works only while a list is open: scroll the wheel over the slash menu or the `/runs` picker to move the highlight. Mouse reporting is off the rest of the time, on purpose. Öge prints the transcript into your terminal's own scrollback, and turning mouse reporting on would take over drag-to-select, copy, and the terminal's wheel scrollback for the whole session. So the composer and the transcript don't capture the mouse: select and copy text, and scroll back, the way your terminal does. Clicks aren't handled either: an inline frame has no known screen row to map a click to.

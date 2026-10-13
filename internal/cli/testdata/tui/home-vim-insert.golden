@@ -1,0 +1,7 @@
+╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
+│ fix Add                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ -- INSERT --
+ Standard · implement claude:sonnet · verify codex
+ Checks: go test -json ./...
+ [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
