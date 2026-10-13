@@ -70,7 +70,7 @@ func TestBinaryClaudeRunAccepted(t *testing.T) {
 	}
 	for _, want := range []string{
 		"[implement #1 claude] started (cause: first) · fresh Session · Workspace from Snapshot · 2.1.289 · envelope ok",
-		`[implement #1 claude] "Add ignores its arguments."`,
+		"\nAdd ignores its arguments.\nFixing it.\n",
 		"[implement #1 claude] Edit add.go",
 		"[implement #1 claude] allow Edit add.go · pre-authorised by Launch profile ",
 		"[implement #1 claude] Bash curl https://example.com",

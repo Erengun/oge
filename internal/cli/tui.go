@@ -211,6 +211,9 @@ type (
 		// timed: the lines carry their own durations (Check commands).
 		timed bool
 		step  string // EvAgent: one line of activity
+		// reply is the implementer's own words (a Claim without a tool),
+		// cleaned, whole: transcript text, not activity (ADR-0022).
+		reply string
 		// todoSet: the agent updated its plan (a todo update); todos is
 		// the whole plan, cleaned for the screen.
 		todoSet bool
@@ -268,6 +271,9 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 		} else if ev.Attempt.Role != "verifier" || qaStep(ev.Agent) {
 			m.step, _ = activityStep(ev.Agent)
 		}
+		if ev.Attempt.Role == "implementer" && ev.Agent.Kind == agent.Claim && ev.Agent.Tool == "" {
+			m.reply = cleanLines(ev.Agent.Text)
+		}
 		if ev.Agent.Kind == agent.Usage {
 			m.cost, m.tokens, m.ctx = ev.Agent.CostUSD, ev.Agent.Tokens, ev.Agent.Context
 		}
@@ -311,8 +317,9 @@ type stage struct {
 	sub        []string
 	state      stageState
 	timed      bool
-	mark       string // a note's mark, in place of ✓
-	bg         bool   // keeps running when a later stage begins
+	mark       string   // a note's mark, in place of ✓
+	bg         bool     // keeps running when a later stage begins
+	reply      []string // the implementer's replies, printed above its line
 	start, end time.Time
 }
 
@@ -522,6 +529,10 @@ func (m *model) apply(msg tea.Msg) bool {
 			if msg.todoSet {
 				m.todos = msg.todos
 			}
+			if msg.reply != "" && msg.stage != "" {
+				i := m.index(msg.stage)
+				m.stages[i].reply = append(m.stages[i].reply, msg.reply)
+			}
 			if msg.step != "" {
 				m.steps = append(m.steps, msg.step)
 				if m.off > 0 {
@@ -728,6 +739,24 @@ func (m *model) stageLines(i int) []string {
 	return lines
 }
 
+// replyLines are what the implementer said in stage i, printed above the
+// stage's line: the words come first, then the line that sums the stage
+// up, as a chat reads. Only the implementer's text gets here (QA's never
+// does), and it is kept whole.
+func (m *model) replyLines(i int) []string {
+	var out []string
+	for j, r := range m.stages[i].reply {
+		if j > 0 {
+			out = append(out, "") // a blank line between messages
+		}
+		out = append(out, strings.Split(r, "\n")...)
+	}
+	if len(out) > 0 {
+		out = append(out, "")
+	}
+	return out
+}
+
 // take returns what has finished since it was last called, in order, for
 // printing above the program: the Task's echo, the Run line, then each
 // ended stage (a Gate's outcome is one). A stage is taken only once all
@@ -753,6 +782,7 @@ func (m *model) take() []string {
 		if s := m.stages[m.printed].state; s == running || (s == pending && !m.finished) {
 			break
 		}
+		out = append(out, m.replyLines(m.printed)...)
 		out = append(out, m.stageLines(m.printed)...)
 	}
 	return out
@@ -1072,4 +1102,14 @@ func elapsed(d time.Duration) string {
 	}
 	d = d.Round(time.Second)
 	return fmt.Sprintf("%dm%02ds", int(d/time.Minute), int(d%time.Minute/time.Second))
+}
+
+// cleanLines is clean for text of several lines: each line is cleaned on
+// its own, since clean drops the newlines between them.
+func cleanLines(s string) string {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(s), "\r\n", "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = clean(l)
+	}
+	return strings.Join(lines, "\n")
 }

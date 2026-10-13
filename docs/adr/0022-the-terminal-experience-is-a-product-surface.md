@@ -48,3 +48,7 @@ This sits beside "Trust must earn its overhead" (#66) and the speed and interrup
 ## What would reverse this
 
 - Users and the evaluation consistently prefer plain output over the TUI. Then make plain the default, and keep the TUI opt-in.
+
+## Amendment (2026-10-13)
+
+The implementer's text streams into the transcript: its replies print whole (cleaned of control sequences) above its stage line, in the TUI and in plain mode. Tool activity stays dim and transient. QA's text never streams, and neither does any other non-implementer role's. See `docs/ux/chat-first.md`, slice 1.
