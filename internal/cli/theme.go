@@ -140,3 +140,7 @@ var themeNotes = map[string]string{
 	"daltonized": "blue and orange, no red against green",
 	"ansi":       "the terminal's own 16 colours",
 }
+
+// selected paints the VISUAL selection in reverse video: an attribute, not a
+// colour, so every theme and NO_COLOR show it.
+func (s styles) selected(t string) string { return lipgloss.NewStyle().Reverse(true).Render(t) }

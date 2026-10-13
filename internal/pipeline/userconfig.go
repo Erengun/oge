@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 )
@@ -37,10 +38,21 @@ type UserConfig struct {
 	// Vim turns on vim's INSERT and NORMAL modes in the composer (#156).
 	// Global: how a person edits is theirs. Off when absent.
 	Vim bool `toml:"vim,omitempty"`
+	// VimEscape is a two-character sequence typed in INSERT that acts as Esc,
+	// such as "jj" (#158). Global like Vim; empty is off.
+	VimEscape string `toml:"vim_escape,omitempty"`
 }
 
 // VimMode reports whether the composer's vim mode is on.
 func (c *UserConfig) VimMode() bool { return c != nil && c.Vim }
+
+// VimEscapeKeys is the configured INSERT escape sequence, "" when there is none.
+func (c *UserConfig) VimEscapeKeys() string {
+	if c == nil {
+		return ""
+	}
+	return c.VimEscape
+}
 
 // KnownThemes are the palette presets of the live view. Status is never
 // shown by colour alone, so every one keeps the same glyphs and words.
@@ -149,6 +161,9 @@ func (c *UserConfig) validate() []Problem {
 	add := func(key, msg string) { probs = append(probs, Problem{key, msg}) }
 	if c.Theme != "" && !oneOf(c.Theme, KnownThemes...) {
 		add("theme", "must be one of "+strings.Join(KnownThemes, ", "))
+	}
+	if r := []rune(c.VimEscape); c.VimEscape != "" && (len(r) != 2 || strings.ContainsFunc(c.VimEscape, func(r rune) bool { return !unicode.IsPrint(r) || unicode.IsSpace(r) })) {
+		add("vim_escape", "must be two printable characters, such as \"jj\"")
 	}
 	for _, name := range sortedKeys(c.Profiles) {
 		key := "profiles." + name

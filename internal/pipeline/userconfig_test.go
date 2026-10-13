@@ -403,3 +403,19 @@ func TestSaveUserDefaultsKeepsAndSetsTheme(t *testing.T) {
 		t.Fatalf("saved %s: %v", data, probs)
 	}
 }
+
+func TestVimEscapeKey(t *testing.T) {
+	c, probs := LoadUserConfig([]byte("schema = 1\nvim_escape = \"jj\"\n"))
+	if len(probs) > 0 || c.VimEscapeKeys() != "jj" {
+		t.Fatalf("vim_escape = jj: %v, %q", probs, c.VimEscapeKeys())
+	}
+	for _, bad := range []string{"j", "jjj", "j ", "\\u0007j"} {
+		if _, probs := LoadUserConfig([]byte("schema = 1\nvim_escape = \"" + bad + "\"\n")); len(probs) == 0 {
+			t.Errorf("vim_escape %q should be refused", bad)
+		}
+	}
+	var none *UserConfig
+	if none.VimEscapeKeys() != "" {
+		t.Error("a nil config has no escape sequence")
+	}
+}

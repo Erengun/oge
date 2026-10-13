@@ -65,11 +65,14 @@ ok = 10
 
 The file is strict: an unknown key or a bad colour is named in a one-line notice in the home (with the file), and the view uses the base preset alone; it never stops oge. The file is re-read when the composer opens after a Run, and on Ctrl+L, never in the middle of a Run. `NO_COLOR` still wins, and the file changes colours only: every status keeps its glyph and its word.
 
-**Vim mode.** `vim = true` is a global key (not per repo) that gives the composer vim's INSERT and NORMAL modes. It is off by default. Esc leaves INSERT for NORMAL (menus and pickers close on Esc first; in NORMAL on an empty box it does nothing), and `i a I A o O` go back to INSERT. In NORMAL: `h j k l`, `w e b` (words are by grapheme, as in the Emacs word keys), `0 ^ $`; counts work on them (`3w`). Edits: `x D`, the operators `d c y` with a motion (`w e b $ 0 ^ h l j k`) or a text object (`iw`, `i"`, `i(`), `dd cc yy` for whole lines, `p P` to put, `u` to undo, and `.` to repeat the last change (typed text included). `cw` acts like `ce`, as in vim. The register is the Ctrl+K and Ctrl+Y kill ring. Enter runs the task in both modes. The mode shows under the box as `-- INSERT --` or `-- NORMAL --`. Visual mode and the setup-panel row are not there yet; set the key in the file.
+**Vim mode.** `vim = true` is a global key (not per repo) that gives the composer vim's INSERT and NORMAL modes. It is off by default. Esc leaves INSERT for NORMAL (menus and pickers close on Esc first; in NORMAL on an empty box it does nothing), and `i a I A o O` go back to INSERT. In NORMAL: `h j k l`, `w e b` (words are by grapheme, as in the Emacs word keys), `0 ^ $`; counts work on them (`3w`). Edits: `x D`, the operators `d c y` with a motion (`w e b $ 0 ^ h l j k`) or a text object (`iw`, `i"`, `i(`), `dd cc yy` for whole lines, `p P` to put, `u` to undo, and `.` to repeat the last change (typed text included). `cw` acts like `ce`, as in vim. The register is the Ctrl+K and Ctrl+Y kill ring. Enter runs the task in both modes. `v` and `V` start VISUAL and VISUAL LINE: motions (with counts) extend the selection, shown in reverse video; `d` or `x`, `c`, `y` act on it and leave, `p` replaces it with the register (and the register gets what it replaced), and Esc or the same key again leaves. A visual command is not what `.` repeats. In NORMAL, `k` on the first line and `j` on the last walk the prompt history, as ↑ and ↓ do. The mode shows under the box as `-- INSERT --`, `-- NORMAL --`, `-- VISUAL --` or `-- VISUAL LINE --`. The setup-panel row is not there yet; set the keys in the file.
+
+`vim_escape = "jj"` is a second global key: in INSERT, the two characters typed within 300 ms act as Esc, and the first one is taken back out of the text. It needs `vim = true`, takes exactly two printable characters, and is off when absent.
 
 ```toml
 schema = 1
 vim = true
+vim_escape = "jj"
 ```
 
 ## Mouse
