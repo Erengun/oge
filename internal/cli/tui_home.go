@@ -254,7 +254,10 @@ type home struct {
 	nav        int // the entry shown; meaningful only while navigating
 	navigating bool
 	draft      string
-	search     *histSearch
+	// cleared is the Task Ctrl+C last cleared: ↑ on the then-empty box
+	// brings it back, before any history entry.
+	cleared string
+	search  *histSearch
 	// stash is Ctrl+S's one slot: a draft put aside for this session.
 	stash string
 	// hidden is the confirmation of a Task that held hidden characters.
@@ -522,18 +525,19 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !h.recall(-1) {
 				h.comp.key(msg)
 			}
-		case "esc", "ctrl+c":
-			// On an empty box both leave. With a Task in the box Esc does
-			// nothing, so it never wipes one; Ctrl+C clears it first (as
-			// Claude Code's prompt does).
+		case "esc":
+			// Esc never quits, and never wipes a Task: it closes overlays
+			// (above) and otherwise does nothing.
+		case "ctrl+c":
+			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
+			// box, leaves (as Claude Code's prompt does).
 			if h.comp.empty() {
 				h.quit = true
 				return h, tea.Quit
 			}
-			if msg.String() == "ctrl+c" {
-				h.comp.set("")
-				h.navigating = false
-			}
+			h.cleared = h.comp.expanded()
+			h.comp.set("")
+			h.navigating = false
 		case "enter":
 			if h.comp.backslashNewline() {
 				h.endNavigation()
@@ -595,6 +599,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // submit starts the Run (or the follow-up) for text, which is final: slash
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
+	h.cleared = ""
 	if h.ctx != nil && h.ctx.Err() != nil {
 		h.quit = true
 		return h, tea.Quit
@@ -655,6 +660,11 @@ func (h *home) endNavigation() {
 func (h *home) recall(dir int) bool {
 	n := h.hist.len()
 	if dir < 0 {
+		if h.cleared != "" && h.comp.empty() && !h.navigating {
+			h.comp.set(h.cleared)
+			h.cleared = ""
+			return true
+		}
 		if n == 0 || h.comp.row != 0 {
 			return false
 		}

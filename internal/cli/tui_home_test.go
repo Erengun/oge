@@ -113,8 +113,8 @@ func TestComposerKeys(t *testing.T) {
 		t.Fatal("Esc must not wipe a Task")
 	}
 	h.Update(ctrlKey('c'))
-	if _, cmd := h.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); !h.quit || cmd == nil {
-		t.Fatal("Esc on an empty composer should quit")
+	if _, cmd := h.Update(tea.KeyPressMsg{Code: tea.KeyEscape}); h.quit || cmd != nil {
+		t.Fatal("Esc must never quit")
 	}
 	h = testHome(70)
 	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
