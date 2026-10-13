@@ -116,16 +116,11 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 	return tea.Println(helpText()), ""
 }
 
-// helpText is /help: the keys, then the commands from the table.
+// helpText is /help: the keys (from the key table the ? panel shows too),
+// then the commands from the command table.
 func helpText() string {
-	lines := []string{
-		"Keys",
-		"  enter run · ctrl+j or \\+enter newline · ctrl+e or ctrl+g editor · ctrl+s stash draft · ctrl+l redraw · tab setup · ctrl+c clear (↑ restores), then leave",
-		"  ↑ ↓ history · ctrl+r search history · ↓ on an empty box: the actions of the last Run",
-		"  ctrl+k kill to line end · ctrl+u to line start · ctrl+w word back · alt+d word forward · ctrl+y yank",
-		"  alt+b alt+f move by word · ctrl+_ or ctrl+z undo",
-		"Commands",
-	}
+	lines := append([]string{"Keys"}, keyLines()...)
+	lines = append(lines, "Commands")
 	for _, c := range slashCommands() {
 		lines = append(lines, fmt.Sprintf("  %-34s %s", c.usage, c.desc))
 	}

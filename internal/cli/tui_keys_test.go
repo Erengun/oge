@@ -21,6 +21,7 @@ import (
 //	composer, with a Task   nothing (never wipes)      clears it; ↑ brings it back
 //	slash menu              closes the menu            clears the Task (menu goes)
 //	@ picker                closes the picker          clears the Task (picker goes)
+//	shortcut panel (?)      closes it                  closes it
 //	history search          leaves the search          leaves the search
 //	hidden-char prompt      leaves the box as it was   same
 //	setup panel             closes the panel           closes the panel
@@ -44,6 +45,7 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 		add(h.at.list != nil, "at")
 		add(h.search != nil, "search")
 		add(h.hidden != nil, "hidden")
+		add(h.keys != nil, "keys")
 		add(h.panel != nil, "panel")
 		add(h.panel != nil && h.panel.pick != nil, "pick")
 		add(h.panel != nil && h.panel.input != nil, "input")
@@ -78,6 +80,11 @@ func TestEscAndCtrlCPerScreen(t *testing.T) {
 			typeText(h, "fix @a")
 			return h
 		}, "task", "empty"},
+		{"shortcut panel", func(*testing.T) *home {
+			h := testHome(80)
+			typeText(h, "?")
+			return h
+		}, "empty", "empty"},
 		{"history search", func(*testing.T) *home {
 			h := testHome(80)
 			h.hist = &history{entries: []string{"older"}}

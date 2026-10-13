@@ -1,8 +1,45 @@
 Keys
-  enter run · ctrl+j or \+enter newline · ctrl+e or ctrl+g editor · ctrl+s stash draft · ctrl+l redraw · tab setup · ctrl+c clear (↑ restores), then leave
-  ↑ ↓ history · ctrl+r search history · ↓ on an empty box: the actions of the last Run
-  ctrl+k kill to line end · ctrl+u to line start · ctrl+w word back · alt+d word forward · ctrl+y yank
-  alt+b alt+f move by word · ctrl+_ or ctrl+z undo
+Composer
+  enter                run the task
+  ctrl+j · \+enter     newline
+  ctrl+e · ctrl+g      write the task in $EDITOR
+  ctrl+s               stash the draft (again on an empty box restores)
+  ctrl+c               clear the draft (↑ restores), then leave
+  ctrl+l               redraw
+  tab                  open setup
+  / · @ · ?            commands · files · this panel (on an empty box)
+  ← → · ctrl+b ctrl+f  move
+  home · end · ctrl+a  line start · end
+  alt+b alt+f          move by word
+  backspace · delete   delete back · forward
+  ctrl+k · ctrl+u      kill to line end · start
+  ctrl+w · alt+d       kill word back · forward
+  ctrl+y               yank what was killed
+  ctrl+_ · ctrl+z      undo
+History
+  ↑ ↓ · ctrl+p ctrl+n  earlier · later tasks (↑ on the first line)
+  ctrl+r               search history (again: older)
+  enter · esc          in a search: use the match · cancel
+Menus & pickers
+  ↑ ↓                  move in the slash menu or the @ picker
+  tab · enter          complete a command · insert a path
+  esc                  close it
+  / · esc              in the Run picker: filter · clear it
+  enter · d            in the Run picker: receipt · diff of a Run
+  a · b                in the Run picker: apply · branch (confirm by typing)
+Run
+  ctrl+o               expand or collapse the progress
+  ↑ ↓ · pgup pgdown    scroll it, expanded
+  esc                  collapse
+  ctrl+c               cancel the Run (twice: force Öge to stop)
+Delivery
+  ↓ on an empty box    the actions of the last Run
+  a · b · d · r        apply · branch · diff · receipt (each ↓ allows one)
+Setup
+  tab · esc            close setup
+  ↑ ↓ · enter          move · change the row
+  s · w                save as default · write the project Checks
+  d · x                remove the row
 Commands
   /help                              keys and commands
   /setup                             open setup (same as tab)
