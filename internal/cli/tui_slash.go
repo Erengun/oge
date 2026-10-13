@@ -47,6 +47,7 @@ func slashCommands() []slashCmd {
 		{name: "/diff", usage: "/diff [run]", desc: "a Run's Candidate against the Snapshot", run: deliverSlash("d", "diff")},
 		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
 		{name: "/branch", guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
+		{name: "/label", usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
 		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/clear", usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
 		{name: "/notify", usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
@@ -372,7 +373,7 @@ func (h *home) runsCmd(args []string) (tea.Cmd, string) {
 	}
 	lines := make([]string, 0, len(runs))
 	for _, r := range runs {
-		lines = append(lines, fmt.Sprintf("%s  %-10s  %s  %s", r.ID, outcomeWord(r), runWhen(r.ID), clean(r.Title)))
+		lines = append(lines, runLine(r))
 	}
 	return tea.Println(strings.Join(lines, "\n")), ""
 }

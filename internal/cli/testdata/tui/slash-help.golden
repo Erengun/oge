@@ -15,6 +15,7 @@ Commands
   /diff [run]                        a Run's Candidate against the Snapshot
   /apply [run]                       apply a Run's Candidate to your tree
   /branch [run] [name]               a Run's Candidate as a branch
+  /label [run] <text>                name a Run (yours; not Evidence); no text clears
   /new                               start a fresh task
   /clear                             start a fresh task
   /notify on|off                     alerts for this session

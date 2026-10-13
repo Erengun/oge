@@ -62,6 +62,9 @@ type Run struct {
 	// Candidate was carried over onto a changed repository.
 	Follows string
 	Rebased bool
+	// Label is the human's own name for the Run, kept beside it and never
+	// in the Ledger (run.LabelFile).
+	Label string
 }
 
 func (r *Run) repo() *workspace.RunRepo {
@@ -82,7 +85,7 @@ func Load(dir string) (*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the Run's Ledger: %w", err)
 	}
-	r := &Run{Dir: dir, ID: filepath.Base(dir)}
+	r := &Run{Dir: dir, ID: filepath.Base(dir), Label: run.ReadLabel(dir)}
 	var verdict struct {
 		Check     int
 		Verdict   string
