@@ -92,7 +92,12 @@ func TestKeybindingsProblems(t *testing.T) {
 		{"locked ctrl+c", "[composer]\neditor = \"ctrl+c\"\n", "ctrl+c"},
 		{"locked esc", "[run]\nexpand = \"esc\"\n", "esc"},
 		{"locked enter", "[composer]\nstash = \"enter\"\n", "locked"},
-		{"typed text", "[run]\ncancelQueue = \"y\"\n", "typed text"},
+		{"typed text", "[run]\ncancelQueue = \"y\"\n", "types text"},
+		{"shift+space", "[run]\nexpand = \"shift+space\"\n", "types text"},
+		{"space", "[composer]\nstash = \"space\"\n", "locked"},
+		{"shift+letter", "[composer]\nstash = \"shift+a\"\n", "types text"},
+		{"uppercase", "[composer]\neditor = \"ctrl+G\"\n", "write it as ctrl+g"},
+		{"alias", "[composer]\neditor = \"escape\"\n", "write it as esc"},
 		{"out of table", "[composer]\nstash = \"tab\"\n", "composer.stash"},
 		{"emacs key", "[run]\nexpand = \"ctrl+k\"\n", "run.expand"},
 		{"duplicate in a context", "[composer]\nstash = \"ctrl+r\"\n", "also bound to composer.historySearch"},
@@ -143,7 +148,7 @@ func TestKeyNames(t *testing.T) {
 			t.Errorf("%q should be valid", ok)
 		}
 	}
-	for _, bad := range []string{"", "ctrl+", "Ctrl+g", "ctrl+gg", "f0", "f64", "fx", "alt+ctrl+g", "ctrl+ctrl+g", "return", "ctrl-g"} {
+	for _, bad := range []string{"", "ctrl+", "Ctrl+g", "ctrl+G", "alt+X", "ctrl+gg", "f0", "f64", "fx", "alt+ctrl+g", "ctrl+ctrl+g", "return", "ctrl-g"} {
 		if validKeyName(bad) {
 			t.Errorf("%q should be invalid", bad)
 		}
@@ -216,5 +221,41 @@ func TestKeybindingsArePerSession(t *testing.T) {
 	kb, _ := withKeys(t, validKeys)
 	if defaultKeyMap.resolve("run", "ctrl+o") != "expand" || kb.resolve("run", "ctrl+o") == "expand" {
 		t.Error("a remap leaked into the defaults")
+	}
+}
+
+func TestKeybindingsFileMustBeSmallAndRegular(t *testing.T) {
+	env := keysEnv(t, "")
+	p := keybindingsPath(env)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	big := "[composer]\n# " + strings.Repeat("x", maxConfigFile) + "\n"
+	if err := os.WriteFile(p, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, n := loadKeybindings(env); !strings.Contains(n, "larger than") {
+		t.Errorf("notice %q for an oversized file", n)
+	}
+	// A directory is not a regular file either, on every platform.
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, n := loadKeybindings(env); !strings.Contains(n, "not a regular file") {
+		t.Errorf("notice %q for a directory", n)
+	}
+}
+
+// With submit moved off Enter, the queue box follows the submit keys.
+func TestQueueBoxFollowsSubmitKeys(t *testing.T) {
+	kb, n := withKeys(t, "[composer]\nsubmit = \"ctrl+q\"\n")
+	if n != "" {
+		t.Fatal(n)
+	}
+	if kb.actionFor("composer", "ctrl+q") != "submit" || kb.actionFor("composer", "enter") == "submit" {
+		t.Error("submit not remapped")
 	}
 }

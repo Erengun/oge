@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -31,6 +32,35 @@ const keybindingsFile = "keybindings.toml"
 
 // defaultActions is the table as shipped.
 var defaultActions = actionTable
+
+// maxConfigFile caps a small config file (keybindings.toml, theme.toml).
+const maxConfigFile = 64 << 10
+
+// readSmallFile reads a config file that must be a regular file under
+// maxConfigFile: a FIFO would block and /dev/zero never ends. A missing file
+// is os.ErrNotExist.
+func readSmallFile(path string) ([]byte, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxConfigFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxConfigFile {
+		return nil, fmt.Errorf("larger than %d KiB", maxConfigFile>>10)
+	}
+	return data, nil
+}
 
 // keybindingsPath is where the file is, or "" without a config home.
 func keybindingsPath(getenv func(string) string) string {
@@ -79,6 +109,10 @@ func validKeyName(s string) bool {
 	for _, m := range keyMods { // in order, each at most once
 		rest = strings.TrimPrefix(rest, m)
 	}
+	// Bubble Tea spells a modified letter in lower case ("ctrl+g").
+	if rest != s && len(rest) == 1 && rest[0] >= 'A' && rest[0] <= 'Z' {
+		return false
+	}
 	switch {
 	case rest == "":
 		return false
@@ -92,11 +126,20 @@ func validKeyName(s string) bool {
 	return len(r) == 1 && r[0] > ' ' && r[0] != 0x7f
 }
 
-// bareText is a key that types a character: a Gate or the composer takes it
-// as text, so it can't be an action's key.
-func bareText(s string) bool {
-	r := []rune(s)
-	return len(r) == 1 && r[0] > ' '
+// typesText is a key that can carry text: a plain character, space, or those
+// with only shift (Shift+Space and Shift+letter arrive with their text on
+// terminals that report it). Only ctrl, alt, meta, super, hyper, named and
+// function keys are safe to bind. s is a valid name.
+func typesText(s string) bool {
+	rest := s
+	for _, m := range keyMods {
+		rest = strings.TrimPrefix(rest, m)
+	}
+	if rest != "space" && len([]rune(rest)) != 1 {
+		return false
+	}
+	mods := strings.TrimSuffix(s, rest)
+	return mods == "" || mods == "shift+"
 }
 
 // lockReason is why name can't be bound to the action, or "".
@@ -107,11 +150,25 @@ func lockReason(ctx, action, name string) string {
 	if why, ok := lockedKeys[name]; ok {
 		return name + " " + why + " (locked, ADR-0015)"
 	}
-	if bareText(name) {
-		return name + " is typed text, not a shortcut"
+	if typesText(name) {
+		return name + " types text, so it can't be a shortcut (use ctrl+, alt+ or a function key)"
 	}
 	if slices.Contains(ownedKeys, name) {
 		return name + " is used for editing and navigation, which are not remappable"
+	}
+	return ""
+}
+
+var keyAliases = map[string]string{"escape": "esc", "return": "enter", "pageup": "pgup", "pagedown": "pgdown", "del": "delete", "ins": "insert"}
+
+// canonicalHint suggests the spelling Bubble Tea uses, when there is one.
+func canonicalHint(k string) string {
+	lower := strings.ToLower(k)
+	for from, to := range keyAliases {
+		lower = strings.ReplaceAll(lower, from, to)
+	}
+	if lower != k && validKeyName(lower) {
+		return "; write it as " + lower
 	}
 	return ""
 }
@@ -156,7 +213,7 @@ func parseKeybindings(data []byte) (map[keyOverride][]string, []pipeline.Problem
 			if msg == "" {
 				for _, k := range keys {
 					if !validKeyName(k) {
-						msg = fmt.Sprintf("%q is not a key name (like ctrl+g, alt+enter, shift+tab, f2)", k)
+						msg = fmt.Sprintf("%q is not a key name (like ctrl+g, alt+enter, shift+tab, f2)%s", k, canonicalHint(k))
 					} else if why := lockReason(ctx, name, k); why != "" {
 						msg = why
 					}
@@ -262,7 +319,7 @@ func loadKeybindings(getenv func(string) string) (*keyMap, string) {
 	if path == "" {
 		return defaultKeyMap, ""
 	}
-	data, err := os.ReadFile(path)
+	data, err := readSmallFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return defaultKeyMap, ""
 	}

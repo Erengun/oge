@@ -63,6 +63,8 @@ func (h *home) queueKey(msg tea.Msg) bool {
 		}
 		if h.kb.actionFor(ctxComposer, key) == actSubmit {
 			key = "enter" // the queue box's Enter is the submit key
+		} else if key == "enter" {
+			key = "" // submit was remapped away from Enter: it is a plain key here
 		}
 		switch h.kb.resolve(ctxRun, key) {
 		case "ctrl+c":

@@ -141,7 +141,7 @@ func (s styles) reloadCustomTheme(getenv func(string) string) string {
 	if path == "" {
 		return ""
 	}
-	data, err := os.ReadFile(path)
+	data, err := readSmallFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
