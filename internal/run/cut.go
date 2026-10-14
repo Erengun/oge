@@ -89,9 +89,15 @@ type cutEntry struct {
 	follows   string // the last cut's Run
 	delivered int    // the Task's first turn, less one
 	hashes    []map[string]any
-	tamper    []json.RawMessage // the Task's turns' TamperEvent records, verbatim
-	prep      chatPrep
-	dir       string // the Chat's directory: the control's blobs are there
+	// The Receipt's disclosures (D6, D7): the Task refers to agent text
+	// QA never sees; HeldOutViewed records in the Task's turns; the
+	// chain's verify and send-back cycles, this cut's Check included.
+	refers           bool
+	heldOutViewed    int
+	verifies, sendBk int
+	tamper           []json.RawMessage // the Task's turns' TamperEvent records, verbatim
+	prep             chatPrep
+	dir              string // the Chat's directory: the control's blobs are there
 	// The control's consults before this cut, so its record is this
 	// cut's own; recorded once it is written.
 	waits    int
@@ -218,19 +224,31 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	// so are its Tamper events: one an earlier cut carried, or a late one
 	// on a turn already cut, still gates this one.
 	// TODO(#261): delivery moves e.delivered.
-	if e.tamper, err = c.tamperRecords(e.delivered+1, to); err != nil {
+	if e.tamper, err = c.chatRecords(RecTamperEvent, e.delivered+1, to); err != nil {
 		return nil, err
 	}
+	// A view while the Task's turns were sent could reach them (D6).
+	viewed, err := c.chatRecords(RecHeldOutViewed, e.delivered, to)
+	if err != nil {
+		return nil, err
+	}
+	e.heldOutViewed = len(viewed)
 	c.mu.Lock()
 	var msgs []string
 	for i, m := range c.msgs[e.delivered:to] {
 		n := e.delivered + i + 1
-		if c.unsent[n] {
-			continue // it never reached the agent
+		if c.unsent[n] || c.oge[n] {
+			continue // it never reached the agent, or it is Öge's (D7)
 		}
 		msgs = append(msgs, m)
 		e.hashes = append(e.hashes, map[string]any{"turn": n, "sha256": sha256Hex(m)})
+		// TODO(#262-decision): the Task refers to agent text when one of
+		// its turns follows an earlier turn, whose reply the Task can't
+		// hold: a structural test, never a reading of the words. It
+		// over-discloses, and the Task is never filled in (ADR-0016).
+		e.refers = e.refers || n > 1
 	}
+	e.verifies, e.sendBk = c.verifies+1, c.feedbacks
 	c.mu.Unlock()
 	// Closing the Chat, or its context ending, cancels the cut.
 	ctx, cancel := context.WithCancel(ctx)
@@ -251,8 +269,16 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	}
 	// A Run that reached its Verdict before it was superseded completed.
 	verdict := res.Check != nil && (res.Outcome == Accepted || res.Outcome == Failed || res.Outcome == Parked)
-	if errors.Is(context.Cause(ctx), ErrSuperseded) && !verdict {
-		return res, ErrSuperseded // its turns are the newer cut's
+	if errors.Is(context.Cause(ctx), ErrSuperseded) {
+		res.Feedback = "" // the newer cut covers its turns: no feedback (D5)
+		if !verdict {
+			return res, ErrSuperseded // its turns are the newer cut's
+		}
+	}
+	if verdict {
+		c.mu.Lock()
+		c.verifies++
+		c.mu.Unlock()
 	}
 	if res.Outcome == Refused && c.prep.setup != nil && !c.prep.setup.Pass {
 		c.refused = res
@@ -317,9 +343,9 @@ func (c *Chat) sameOracle(f *pipeline.Frozen) (string, error) {
 	return "", nil
 }
 
-// tamperRecords are the Chat log's TamperEvent records of turns from to
-// to, verbatim: a cut never hides one.
-func (c *Chat) tamperRecords(from, to int) ([]json.RawMessage, error) {
+// chatRecords are the Chat log's records of typ on turns from to to,
+// verbatim: a cut never hides a TamperEvent.
+func (c *Chat) chatRecords(typ string, from, to int) ([]json.RawMessage, error) {
 	c.logMu.Lock()
 	recs, err := ledger.Replay(c.Dir)
 	c.logMu.Unlock()
@@ -328,7 +354,7 @@ func (c *Chat) tamperRecords(from, to int) ([]json.RawMessage, error) {
 	}
 	var out []json.RawMessage
 	for _, r := range recs {
-		if r.Type != RecTamperEvent {
+		if r.Type != typ {
 			continue
 		}
 		var d struct{ Turn int }
@@ -353,6 +379,8 @@ func (e *cutEntry) addTo(begun map[string]any) {
 	begun["chat"], begun["chat_repo"], begun["chat_dir"] = e.chat, e.chatRepo, e.dir
 	begun["turns"] = map[string]int{"from": e.from, "to": e.to}
 	begun["base"], begun["task_turns"] = e.base, e.hashes
+	begun["refers_to_agent_text"], begun["held_out_viewed"] = e.refers, e.heldOutViewed
+	begun["cycles"] = map[string]int{"verify": e.verifies, "send_back": e.sendBk}
 	if e.follows != "" {
 		begun["follows"] = e.follows
 	}

@@ -122,12 +122,19 @@ type chatTurn struct {
 	// quits.
 	stopped bool
 	queued  []string // messages typed and sent during the turn
+	// oge: the turn is Öge's feedback turn (D5).
+	oge bool
+	// feedback is a failing cut's feedback turn, held until this turn
+	// ends: sent then, unless this turn cuts anew or was interrupted.
+	feedback string
+	fbFrozen *pipeline.Frozen
 }
 
 // chatVerify is a cut verifying in the background.
 type chatVerify struct {
 	seq     int
 	changed int
+	frozen  *pipeline.Frozen
 	cancel  context.CancelFunc
 	stopped bool // Ctrl+C cancelled it
 }
@@ -203,6 +210,14 @@ func nextEvent(ch <-chan agent.Event) tea.Cmd {
 func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case chatSentMsg:
+		if msg.err != nil && h.turn.oge {
+			// The composer holds the human's draft, never the feedback.
+			line := h.ogeLine("✗ sending the feedback turn: " + clean(msg.err.Error()))
+			if errors.Is(msg.err, run.ErrFeedbackBudget) {
+				line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
+			}
+			return h.nextTurn(h.println(line))
+		}
 		if msg.err != nil {
 			text := h.turn.text
 			h.endTurn()
@@ -350,6 +365,13 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 // the background: the cut supersedes one still verifying, and covers its
 // turns.
 func (h *home) turnEnded() (tea.Model, tea.Cmd) {
+	if fb := h.turn.feedback; fb != "" && h.turn.changed == 0 && !h.turn.stopped {
+		// The feedback turn waited for this one, which cut nothing newer:
+		// it goes first, before the messages queued meanwhile.
+		f := h.turn.fbFrozen
+		queued := h.endTurn()
+		return h, h.feedbackSubmit(fb, f, queued)
+	}
 	if h.turn.changed == 0 || h.turn.stopped {
 		// An interrupted turn's changes wait for the next turn's cut.
 		return h.nextTurn(nil)
@@ -368,7 +390,7 @@ func (h *home) startCut() tea.Cmd {
 		h.turn.changed = max(h.turn.changed, v.changed)
 	}
 	h.cuts++
-	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, cancel: cancel}
+	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, frozen: h.turn.frozen, cancel: cancel}
 	hc, f, seq := h.chat, h.turn.frozen, h.cuts
 	c := hc.get()
 	return func() tea.Msg {
@@ -456,7 +478,35 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	// The action row acts on h.last: never on a cut the human hasn't
 	// seen yet.
 	h.actions = false
+	if verdict && res.Feedback != "" {
+		if h.turn != nil {
+			// Nothing enters a running turn: it waits, and a newer cut of
+			// that turn drops it (D5).
+			h.turn.feedback, h.turn.fbFrozen = res.Feedback, v.frozen
+			return h.println(line)
+		}
+		return tea.Sequence(h.println(line), h.feedbackSubmit(res.Feedback, v.frozen, nil))
+	}
 	return h.println(line)
+}
+
+// feedbackSubmit sends a failing cut's feedback turn into the Chat's
+// Session (D5), shown dim by its first line, the failing count and
+// criterion ids. The composer keeps the human's draft; its changes cut
+// as any turn's do.
+func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) tea.Cmd {
+	c := h.chat.get()
+	if c == nil {
+		return nil
+	}
+	h.turn = &chatTurn{frozen: f, queued: queued, oge: true}
+	ctx := h.ctx
+	send := func() tea.Msg {
+		ch, err := c.SendFeedback(ctx, text)
+		return chatSentMsg{events: ch, err: err}
+	}
+	first, _, _ := strings.Cut(text, "\n")
+	return tea.Sequence(h.println(h.st.dim("Öge → agent: "+clean(first))), send)
 }
 
 // chatKey takes a key during a turn. Esc interrupts the turn; so does

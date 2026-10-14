@@ -45,6 +45,19 @@ const (
 	NotEnded = "Not ended"
 )
 
+// ChatCut is what a Chat's cut discloses (docs/ux/chat-first.md, D6 and
+// D7): the Task's user turns, whether it refers to agent text QA never
+// sees (never filled in, ADR-0016), held-out views during its turns, and
+// the chain's verify and send-back cycles.
+type ChatCut struct {
+	ID                string `json:"id"`
+	TaskTurns         int    `json:"task_turns"`
+	RefersToAgentText bool   `json:"refers_to_agent_text"`
+	HeldOutViewed     int    `json:"held_out_viewed"`
+	VerifyCycles      int    `json:"verify_cycles"`
+	SendBackCycles    int    `json:"send_back_cycles"`
+}
+
 // Receipt is the model every rendering reads. Its JSON form is schema 1.
 type Receipt struct {
 	Schema int    `json:"schema"`
@@ -53,6 +66,8 @@ type Receipt struct {
 	Task   string `json:"task"`
 	// Follows is the Run this follow-up continues (#185).
 	Follows string `json:"follows,omitempty"`
+	// Chat is a Chat cut's disclosures (D6, D7); nil for a one-shot Run.
+	Chat *ChatCut `json:"chat,omitempty"`
 	// Label is the human's own name for the Run, read from beside it: not
 	// Ledger data and not Evidence.
 	Label string `json:"label,omitempty"`
@@ -465,11 +480,24 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 		case run.RecFollowUpRebased:
 			r.Rebased = true
 		case run.RecRunStarted:
-			var d struct{ Run, Task, Frozen, Mode, Follows string }
+			var d struct {
+				Run, Task, Frozen, Mode, Follows, Chat string
+				TaskTurns                              []json.RawMessage `json:"task_turns"`
+				RefersToAgentText                      bool              `json:"refers_to_agent_text"`
+				HeldOutViewed                          int               `json:"held_out_viewed"`
+				Cycles                                 struct {
+					Verify   int `json:"verify"`
+					SendBack int `json:"send_back"`
+				} `json:"cycles"`
+			}
 			if !get(rec.Data, &d) {
 				continue
 			}
 			r.Run, r.Mode, r.Follows, started = d.Run, d.Mode, clean(d.Follows), rec.At
+			if d.Chat != "" {
+				r.Chat = &ChatCut{ID: clean(d.Chat), TaskTurns: len(d.TaskTurns), RefersToAgentText: d.RefersToAgentText,
+					HeldOutViewed: d.HeldOutViewed, VerifyCycles: d.Cycles.Verify, SendBackCycles: d.Cycles.SendBack}
+			}
 			if b, err := src.Blob(d.Task); err == nil {
 				r.Task = clean(task.Parse(string(b)).Title)
 			}

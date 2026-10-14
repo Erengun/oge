@@ -259,10 +259,14 @@ func TestCutLateTamperOnACutTurn(t *testing.T) {
 	}
 }
 
-// A cut whose Check fails is never sent back (#262 does that in the
-// Session): it ends Failed with its Verdict, and the next cut follows it.
-func TestCutFailingCheckFails(t *testing.T) {
-	c := openCut(t, "", multiturn.Turn{Reply: "oops", Writes: []multiturn.File{{Path: "add.go", Content: strings.Replace(cutAdd, "a + b", "a - b", 1)}}})
+// A cut whose Check fails ends Failed with its Verdict and a feedback
+// turn, never a fresh implementer (D5). Sent, the feedback turn is Öge's
+// in the Chat log and never the Task's (D7), and its changes cut as
+// usual: the next cut follows, counting the chain's cycles.
+func TestCutFailingCheckSendsFeedback(t *testing.T) {
+	c := openCut(t, "",
+		multiturn.Turn{Reply: "oops", Writes: []multiturn.File{{Path: "add.go", Content: strings.Replace(cutAdd, "a + b", "a - b", 1)}}},
+		multiturn.Turn{Reply: "fixed", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\n// Add sums.\n"}}})
 	drain(t, send(t, c, "break it"), nil)
 	res := cut(t, c)
 	if res.Outcome != Failed {
@@ -274,8 +278,69 @@ func TestCutFailingCheckFails(t *testing.T) {
 	if a := runRecords(t, res.Dir, RecAttemptStarting); len(a) != 0 {
 		t.Errorf("an implementer Attempt started: %v", a)
 	}
-	if _, err := c.Cut(t.Context(), CutParams{}); !errors.Is(err, ErrNothingToCut) {
-		t.Errorf("after a failed cut: %v", err)
+	if !strings.HasPrefix(res.Feedback, "Öge's Check failed on your last change") {
+		t.Fatalf("feedback %q", res.Feedback)
+	}
+	ch, err := c.SendFeedback(t.Context(), res.Feedback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	second := cut(t, c)
+	if second.Outcome != Accepted {
+		t.Fatalf("second cut %s %v", second.Outcome, second.Why)
+	}
+	started := runRecords(t, second.Dir, RecRunStarted)[0]
+	if hashes, _ := started["task_turns"].([]any); len(hashes) != 1 || hashes[0].(map[string]any)["sha256"] != sha("break it") {
+		t.Errorf("task_turns %v: a feedback turn is never the Task's", started["task_turns"])
+	}
+	if !reflect.DeepEqual(started["cycles"], map[string]any{"verify": float64(2), "send_back": float64(1)}) || started["refers_to_agent_text"] != false {
+		t.Errorf("RunStarted disclosures %v %v", started["cycles"], started["refers_to_agent_text"])
+	}
+	turns := runRecords(t, c.Dir, RecTurnStarted)
+	if len(turns) != 2 || turns[0]["by"] != nil || turns[1]["by"] != "oge" {
+		t.Errorf("TurnStarted %v", turns)
+	}
+}
+
+// The chain of cuts gets FeedbackBudget feedback turns; the user's own
+// turn starts a new chain.
+func TestFeedbackBudget(t *testing.T) {
+	var turns []multiturn.Turn
+	for range FeedbackBudget + 2 {
+		turns = append(turns, multiturn.Turn{Reply: "ok"})
+	}
+	c := openCut(t, "", turns...)
+	drain(t, send(t, c, "yo"), nil)
+	for i := range FeedbackBudget {
+		ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+		if err != nil {
+			t.Fatalf("feedback %d: %v", i+1, err)
+		}
+		drain(t, ch, nil)
+	}
+	if _, err := c.SendFeedback(t.Context(), "Öge's Check failed"); !errors.Is(err, ErrFeedbackBudget) {
+		t.Fatalf("feedback %d: %v, want ErrFeedbackBudget", FeedbackBudget+1, err)
+	}
+	drain(t, send(t, c, "try again"), nil)
+	if _, err := c.SendFeedback(t.Context(), "Öge's Check failed"); err != nil {
+		t.Errorf("after the user's turn: %v", err)
+	}
+}
+
+// A Task of more than one turn refers to agent text QA never sees, and a
+// held-out view in its turns is disclosed (D6, D7).
+func TestCutDisclosures(t *testing.T) {
+	c := openCut(t, "", multiturn.Turn{Reply: "which file?"},
+		multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\n// Add sums.\n"}}})
+	drain(t, send(t, c, "document Add"), nil)
+	if err := c.HeldOutViewed("held-out tests"); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, send(t, c, "add.go"), nil)
+	started := runRecords(t, cut(t, c).Dir, RecRunStarted)[0]
+	if started["refers_to_agent_text"] != true || started["held_out_viewed"] != float64(1) {
+		t.Errorf("RunStarted disclosures %v %v", started["refers_to_agent_text"], started["held_out_viewed"])
 	}
 }
 

@@ -61,6 +61,10 @@ status: accepted; modes (Fast/Standard/Blind) and speed/interruption gate criter
 - Delivery (`diff`, `apply`, `branch`) stays IN, so the exact verified Candidate is shown to be consumable.
 - #32 owns Öge's own testing strategy (fake agents, recorded transcripts, drift CI, cross-build, no paid quota in CI) and builds `eval/` alongside the Claude slices.
 
+## Amendment (2026-10-14, [#262](https://github.com/Erengun/oge/issues/262))
+
+In bare `oge`'s Chat, a cut's Task is the user's turns since the last delivery, verbatim and hashed ([docs/ux/chat-first.md](../ux/chat-first.md), D7). A user turn may refer to the agent's earlier replies, and QA never sees those: agent text is never summarized into QA's Briefing, so the judged party never writes its own exam. The Receipt discloses it (`Task from N turns; refers to agent text`) and Öge never fills it in. The test is structural: a Task turn after the Chat's first follows an agent reply the Task can't hold. It over-discloses rather than read the words. Öge's own feedback turns (D5) are never part of a Task.
+
 ## What would reverse this
 
 - The evaluation shows Task criteria are too thin to brief a `before` verifier: unmapped-test or withheld-file-needed rates are high. Then the planner returns ahead of other post-MVP work.
