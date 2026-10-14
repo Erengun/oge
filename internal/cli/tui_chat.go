@@ -126,8 +126,10 @@ type chatTurn struct {
 	// quits.
 	stopped bool
 	queued  []string // messages typed and sent during the turn
-	// oge: the turn is Öge's feedback turn (D5).
-	oge bool
+	// oge: the turn is Öge's, a feedback turn (D5) or, with advice, an
+	// advice turn (docs/ux/advisor.md).
+	oge    bool
+	advice bool
 	// feedback is a failing cut's feedback turn, held until this turn
 	// ends: sent then, unless this turn cuts anew or was interrupted.
 	feedback string
@@ -232,6 +234,8 @@ func agentLines(text string) string {
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
 	h.comp = h.composer()
+	edited := h.adviceEdit
+	h.adviceEdit = ""
 	hc, ctx := h.chat, h.ctx
 	send := func() tea.Msg {
 		hc.mu.Lock()
@@ -245,6 +249,10 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		}
 		c := hc.c
 		hc.mu.Unlock()
+		if edited != "" {
+			ch, err := c.SendEdited(ctx, edited, text) // the user's turn, from an advisor's text
+			return chatSentMsg{events: ch, err: err}
+		}
 		ch, err := c.Send(ctx, text)
 		return chatSentMsg{events: ch, err: err}
 	}
@@ -267,6 +275,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && h.turn.oge {
 			// The composer holds the human's draft, never the feedback.
 			line := h.ogeLine("✗ sending the feedback turn: " + clean(msg.err.Error()))
+			if h.turn.advice {
+				line = h.ogeLine("✗ sending the advice: " + clean(msg.err.Error()))
+			}
 			if errors.Is(msg.err, run.ErrFeedbackBudget) {
 				line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
 			}
@@ -287,7 +298,7 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.turn.events = msg.events
 		if h.turn.oge {
 			// Shown once it is sent: a spent budget prints no such line.
-			return h, tea.Sequence(h.println(h.st.dim("Öge → agent: "+clean(h.turn.text))), nextEvent(msg.events))
+			return h, tea.Sequence(h.println(h.ogeAdviceLine(h.turn.text)), nextEvent(msg.events))
 		}
 		return h, nextEvent(msg.events)
 	case chatEvMsg:
@@ -858,6 +869,15 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return h, h.answer(a, agent.Answer{Allow: true, Answers: h.turn.answers})
 		}
+		if word, _, _, ok := parseSlash(full); ok && word == "/advise" {
+			// It runs alongside the turn: the point of asking now.
+			h.msg = nil
+			cmd, _ := h.slash(full)
+			if h.msg != nil {
+				h.comp.set(full) // the text stays in the box
+			}
+			return h, cmd
+		}
 		h.enqueue(full)
 		return h, nil
 	}
@@ -946,6 +966,9 @@ func (h *home) turnView() string {
 	default:
 		lines = append(lines, h.ogeLine(h.st.dim("working… · esc to interrupt")))
 	}
+	if s := h.adviseStatus(); s != "" {
+		lines = append(lines, s)
+	}
 	if a == nil || a.Questions != nil {
 		for _, q := range t.queued {
 			lines = append(lines, h.st.dim(ansi.Truncate(" queued › "+clean(strings.ReplaceAll(q, "\n", " ⏎ ")), width, "…")))
@@ -956,6 +979,9 @@ func (h *home) turnView() string {
 		}
 		box, _, _ := h.boxLines(width, blank)
 		lines = append(lines, box...)
+		for _, l := range h.msg {
+			lines = append(lines, " "+h.st.bad(l))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

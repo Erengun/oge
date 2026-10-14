@@ -246,7 +246,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	var msgs []string
 	for i, m := range c.msgs[e.delivered:to] {
 		n := e.delivered + i + 1
-		if c.oge[n] && !c.unsent[n] {
+		if c.oge[n] && !c.advised[n] && !c.unsent[n] {
 			e.sendBk++
 		}
 		if c.unsent[n] || c.oge[n] {

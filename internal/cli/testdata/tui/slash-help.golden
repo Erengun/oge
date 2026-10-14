@@ -65,6 +65,7 @@ Commands
   /agent <stage> <agent[@profile]>   bind a Stage's agent (from setup)
   /model <stage> <model>             a Stage's model (from setup)
   /effort <stage> <level>            a Stage's effort, Claude only (from setup)
+  /advise <question>                 ask a fresh advisor for a second opinion
   /runs                              recent Runs in this repo
   /receipt [run]                     the Receipt of a Run
   /diff [run]                        a Run's Candidate: files, then each diff

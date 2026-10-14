@@ -426,10 +426,17 @@ type home struct {
 	// runs each message as a one-shot Run (an agent without auto mode, or
 	// OGE_CHAT=0). turn is the turn in flight; verify is the newest cut
 	// verifying in the background, while turns go on.
-	chat   *homeChat
-	turn   *chatTurn
-	verify *chatVerify
-	cuts   int // the cuts started, each one's seq
+	chat *homeChat
+	// adv is the session's Consultation (/advise); adviceEdit is the
+	// Consultation whose advice the composer holds, edited: the next
+	// message is the user's turn, and its AdviceSent says where it came
+	// from.
+	adv        *adviseState
+	advSeq     int
+	adviceEdit string
+	turn       *chatTurn
+	verify     *chatVerify
+	cuts       int // the cuts started, each one's seq
 	// unchecked: a turn changed something no cut covers yet (it was
 	// interrupted); the next cut does.
 	unchecked bool
@@ -571,6 +578,9 @@ func (h *home) Init() tea.Cmd {
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
+	if flush := h.flushAdvice(); flush != nil {
+		cmd = tea.Sequence(cmd, flush) // after whatever this update prints
+	}
 	h.syncMenu()
 	h.syncAt()
 	h.dropRecordingInOverlay()
@@ -600,6 +610,13 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.println(strings.Join(lines, "\n"))
 	case chatClosedMsg:
 		h.resetting = false
+		return h, nil
+	case adviceMsg:
+		return h, h.adviceLanded(m)
+	case adviceTickMsg:
+		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
+			return h, adviceTick(m.seq)
+		}
 		return h, nil
 	}
 	if h.turn != nil {
@@ -752,6 +769,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if cmd, ok := h.adviceKey(msg); ok {
+			return h, cmd
+		}
 		if h.vim && !h.normal && !h.replay && h.escapeSeq(msg) {
 			return h, nil
 		}
@@ -796,6 +816,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.cleared = h.comp.expanded()
 			h.comp.set("")
+			h.adviceEdit = ""
 			h.navigating = false
 			h.visual = 0
 		case actSubmit:
@@ -1250,6 +1271,14 @@ func (h *home) render() (string, int, int) {
 		top++
 	case h.last != nil:
 		lines = append(lines, " "+st.dim("↓ actions · /apply /diff /receipt /branch · /new"))
+		top++
+	}
+	if s := h.adviseStatus(); s != "" {
+		lines = append(lines, s)
+		top++
+	}
+	if s := h.adviceKeys(); s != "" {
+		lines = append(lines, s)
 		top++
 	}
 	box, cr, cc := h.boxLines(width, st.dim("Describe the task"))

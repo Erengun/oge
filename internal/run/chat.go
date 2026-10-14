@@ -170,6 +170,9 @@ type Chat struct {
 	unsent map[int]bool // the turns whose message never reached the agent
 	// oge are the turns Öge sent (feedback turns, D5): never the Task's.
 	oge map[int]bool
+	// advised are the Öge turns that carried a Consultation's advice:
+	// not send-backs, and outside the feedback budget.
+	advised map[int]bool
 	// feedbacks are the feedback turns sent since the user's last turn:
 	// the chain's budget (D5).
 	feedbacks int
@@ -198,8 +201,24 @@ type Chat struct {
 type queuedTurn struct {
 	text string
 	out  *turnOut
-	oge  bool // a feedback turn
+	kind turnKind
+	// advice is the Consultation whose advice this turn carries or was
+	// edited from ("" for any other).
+	advice string
 }
+
+// turnKind is who a turn is from and what it is: the user's, Öge's
+// feedback turn (D5), or Öge's advice turn (docs/ux/advisor.md, D-A4).
+type turnKind int
+
+const (
+	turnUser turnKind = iota
+	turnFeedback
+	turnAdvice
+)
+
+// ogeTurn: Öge sent it, so it is never the Task's (D7).
+func (k turnKind) ogeTurn() bool { return k != turnUser }
 
 // turnOut is one turn's event channel. Only its methods send on it or
 // close it, so a late event can't reach a closed channel. Its record
@@ -308,7 +327,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
 		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
-		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate,
+		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, advised: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate,
 		advisor: p.Advisor}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
@@ -431,7 +450,29 @@ func (c *Chat) log(typ string, data any) error {
 // re-briefs (#185). The caller must drain the channel, and answers an Ask
 // (an event with Ask set) for the turn to go on.
 func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error) {
-	return c.send(ctx, text, false)
+	return c.send(ctx, text, turnUser, "")
+}
+
+// AdvicePrefix opens an advice turn, so the agent knows what the text is
+// and that it is unchecked.
+const AdvicePrefix = "An advisor suggests (a second opinion, not checked): "
+
+// SendAdvice sends a Consultation's advice verbatim as the third kind of
+// turn: Öge's, recorded as one (TurnStarted's by is "oge", with the
+// Consultation id, and an AdviceSent). It is outside the Task (D7) and
+// outside D5's feedback budget: it neither checks nor counts against
+// c.feedbacks, so it works when the budget is spent. It queues behind a
+// turn in flight, as every turn does.
+func (c *Chat) SendAdvice(ctx context.Context, consultation, text string) (<-chan agent.Event, error) {
+	return c.send(ctx, AdvicePrefix+text, turnAdvice, consultation)
+}
+
+// SendEdited sends text the user made of a Consultation's advice, edited
+// first. It is the user's turn (D-A4): it enters the Task and starts a
+// chain, as any of theirs does, and only its AdviceSent says where it
+// came from.
+func (c *Chat) SendEdited(ctx context.Context, consultation, text string) (<-chan agent.Event, error) {
+	return c.send(ctx, text, turnUser, consultation)
 }
 
 // ErrFeedbackBudget is why no feedback turn was sent: the chain of cuts
@@ -445,10 +486,10 @@ var ErrFeedbackBudget = errors.New("the chain's feedback turns are spent")
 // caller owns staleness: it drops a cut's feedback once a newer cut
 // exists or a turn since has changed something.
 func (c *Chat) SendFeedback(ctx context.Context, text string) (<-chan agent.Event, error) {
-	return c.send(ctx, text, true)
+	return c.send(ctx, text, turnFeedback, "")
 }
 
-func (c *Chat) send(ctx context.Context, text string, oge bool) (<-chan agent.Event, error) {
+func (c *Chat) send(ctx context.Context, text string, kind turnKind, advice string) (<-chan agent.Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -466,18 +507,21 @@ func (c *Chat) send(ctx context.Context, text string, oge bool) (<-chan agent.Ev
 		c.mu.Unlock()
 		return nil, err
 	}
-	if !oge {
+	switch {
+	case kind == turnUser:
 		c.feedbacks = 0 // the user's own turn starts a chain
-	} else if c.feedbacks >= FeedbackBudget {
+	case kind == turnFeedback && c.feedbacks >= FeedbackBudget:
 		c.mu.Unlock()
 		return nil, ErrFeedbackBudget
 	}
+	// An advice turn is outside the budget: the automatic case fires
+	// exactly when the guard above trips.
 	if c.cur != nil {
-		c.queue = append(c.queue, queuedTurn{text, out, oge})
+		c.queue = append(c.queue, queuedTurn{text, out, kind, advice})
 		c.mu.Unlock()
 		return out.ch, nil
 	}
-	err := c.start(text, out, oge)
+	err := c.start(text, out, kind, advice)
 	return out.ch, err
 }
 
@@ -537,13 +581,17 @@ func (c *Chat) reopen(ctx context.Context) error {
 
 // start begins a turn with c.mu held, and releases it. TurnStarted and
 // the turn's manifest are written ahead of the message.
-func (c *Chat) start(text string, out *turnOut, oge bool) error {
+func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string) error {
+	oge := kind.ogeTurn()
 	c.turns++
 	n := c.turns
 	out.n = n
 	c.msgs = append(c.msgs, text)
 	if oge {
 		c.oge[n] = true
+	}
+	if kind == turnAdvice {
+		c.advised[n] = true
 	}
 	msgs := c.userMsgs(n)
 	fresh := n == 1 || c.rebrief
@@ -571,11 +619,21 @@ func (c *Chat) start(text string, out *turnOut, oge bool) error {
 		if oge {
 			started["by"] = "oge"
 		}
+		if advice != "" {
+			started["consultation"] = advice
+		}
 		err = c.log(RecTurnStarted, started)
 	}
 	if err == nil {
 		// The manifest is written ahead of the turn (ADR-0009 as amended).
-		err = c.log(RecBriefingManifest, c.manifest(n, fresh, msgs, text, sent, oge))
+		err = c.log(RecBriefingManifest, c.manifest(n, fresh, msgs, text, sent, kind, advice))
+	}
+	if err == nil && advice != "" {
+		how, by := "edited", "user"
+		if kind == turnAdvice {
+			how, by = "verbatim", "oge"
+		}
+		err = c.log(RecAdviceSent, map[string]any{"chat": c.ID, "consultation": advice, "turn": n, "how": how, "by": by})
 	}
 	if err == nil {
 		err = sess.Send(agent.Turn{Text: sent})
@@ -594,7 +652,7 @@ func (c *Chat) start(text string, out *turnOut, oge bool) error {
 	} else {
 		c.sending = nil
 	}
-	if err == nil && oge {
+	if err == nil && kind == turnFeedback {
 		c.feedbacks++ // it reached the agent: only then does it count
 	}
 	c.mu.Unlock()
@@ -630,7 +688,7 @@ func sha256Hex(s string) string {
 // turn carries the chat Briefing (after a reopen, the re-brief with the
 // user's turns so far); every later one is the user's message verbatim,
 // in the same Session (D1, disclosed).
-func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, oge bool) map[string]any {
+func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kind turnKind, advice string) map[string]any {
 	if fresh {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: "implementer"}
 		t := task.Task{Text: msgs[0], FollowUps: msgs[1:]}
@@ -639,11 +697,20 @@ func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, oge
 		return m
 	}
 	source := "the user's message, verbatim"
-	if oge {
+	switch {
+	case kind == turnFeedback:
 		source = "Öge's feedback turn: the failing Check's count and criterion ids, through the held-out filter"
+	case kind == turnAdvice:
+		source = "Öge's advice turn: an advisor's text, verbatim (a Claim, not checked), outside the Task"
+	case advice != "":
+		source = "the user's message, verbatim: an advisor's text the user edited"
+	}
+	item := map[string]string{"item": "turn", "source": source, "sha256": sha256Hex(text)}
+	if advice != "" {
+		item["consultation"] = advice
 	}
 	return map[string]any{"chat": c.ID, "turn": n, "attempt": fmt.Sprintf("chat#%d", n), "role": "implementer",
-		"items":   []map[string]string{{"item": "turn", "source": source, "sha256": sha256Hex(text)}},
+		"items":   []map[string]string{item},
 		"session": "reused", "session_reused": true}
 }
 
@@ -1013,7 +1080,7 @@ func (c *Chat) settled(t *turnOut) {
 	if len(c.queue) > 0 {
 		q := c.queue[0]
 		c.queue = c.queue[1:]
-		_ = c.start(q.text, q.out, q.oge)
+		_ = c.start(q.text, q.out, q.kind, q.advice)
 		return
 	}
 	c.timer.Reset(c.idle)

@@ -218,3 +218,76 @@ func TestConsultRefusesAnotherAgent(t *testing.T) {
 		t.Error("a refused Consultation opened a Session or was recorded")
 	}
 }
+
+// An advice turn is Öge's, outside the Task and D5's feedback budget: it
+// works when the budget is spent, neither counts against it nor resets
+// it, carries its Consultation id, and leaves an AdviceSent.
+func TestSendAdviceIsOutsideTheTaskAndTheBudget(t *testing.T) {
+	var turns []multiturn.Turn
+	for range FeedbackBudget + 3 {
+		turns = append(turns, multiturn.Turn{Reply: "ok"})
+	}
+	c := openCut(t, "", turns...)
+	drain(t, send(t, c, "yo"), nil)
+	for range FeedbackBudget {
+		ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		drain(t, ch, nil)
+	}
+	ch, err := c.SendAdvice(t.Context(), "cons-1", "Inject a Clock.")
+	if err != nil {
+		t.Fatalf("SendAdvice with the budget spent: %v", err)
+	}
+	drain(t, ch, nil)
+	if _, err := c.SendFeedback(t.Context(), "Öge's Check failed"); !errors.Is(err, ErrFeedbackBudget) {
+		t.Errorf("an advice turn reset the budget: %v", err)
+	}
+	c.mu.Lock()
+	n := c.turns
+	adviceText := c.msgs[n-1]
+	isOge := c.oge[n]
+	feedbacks := c.feedbacks
+	c.mu.Unlock()
+	if !isOge || !strings.HasPrefix(adviceText, AdvicePrefix) || feedbacks != FeedbackBudget {
+		t.Errorf("oge=%v text=%q feedbacks=%d", isOge, adviceText, feedbacks)
+	}
+	for _, m := range c.userMsgs(n) {
+		if strings.Contains(m, "Inject a Clock") {
+			t.Errorf("the advice is in the Task: %q", m)
+		}
+	}
+	var started map[string]any
+	for _, r := range recordsOf(t, c, RecTurnStarted) {
+		if r["consultation"] == "cons-1" {
+			started = r
+		}
+	}
+	if started == nil || started["by"] != "oge" {
+		t.Errorf("TurnStarted %v", started)
+	}
+	sent := recordsOf(t, c, RecAdviceSent)
+	if len(sent) != 1 || sent[0]["consultation"] != "cons-1" || sent[0]["how"] != "verbatim" || sent[0]["by"] != "oge" || sent[0]["turn"] != float64(n) {
+		t.Errorf("AdviceSent %v", sent)
+	}
+	// What the user sends from the advice is theirs: in the Task, and a
+	// new chain.
+	ch, err = c.SendEdited(t.Context(), "cons-1", "Inject a Clock, in sched.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	c.mu.Lock()
+	edited := c.turns
+	c.mu.Unlock()
+	if m := c.userMsgs(edited); m[len(m)-1] != "Inject a Clock, in sched." {
+		t.Errorf("the edited advice isn't the user's turn: %q", m)
+	}
+	if sent := recordsOf(t, c, RecAdviceSent); len(sent) != 2 || sent[1]["how"] != "edited" || sent[1]["by"] != "user" {
+		t.Errorf("AdviceSent %v", sent)
+	}
+	if _, err := c.SendFeedback(t.Context(), "Öge's Check failed"); err != nil {
+		t.Errorf("after the user's edited turn: %v", err)
+	}
+}
