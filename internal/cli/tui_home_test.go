@@ -220,13 +220,64 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 	return s
 }
 
-// composer waits for the n-th composer frame.
-// composer waits for a composer drawn after the last keys were typed. A
-// composer redraws as it's used, so counting its frames isn't enough: an
-// earlier composer's redraws could satisfy the count.
+// composer waits for the idle composer after the last keys were typed.
+// Counting its frames isn't enough: an earlier composer's redraws could
+// satisfy the count. Nor is the raw output after the keys: a turn that
+// starts and ends between two frames leaves the view as it was, so the
+// renderer only inserts the printed lines above the composer and never
+// draws it again. So the settled screen is read too: its live area must be
+// the composer, not a turn's, and the screen must have changed since the
+// keys.
 func (s *homeSession) composer() {
 	s.t.Helper()
-	s.expect("[ctrl+e] editor")
+	const hint = "[ctrl+e] editor"
+	before := vtScreen(s.out.String()[:s.mark])
+	last, since := "", time.Now()
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		out := s.out.String()
+		if strings.Contains(out[s.mark:], hint) {
+			return
+		}
+		if cur := vtScreen(out); cur != last {
+			last, since = cur, time.Now()
+		} else if time.Since(since) >= 300*time.Millisecond && cur != before && idleComposer(cur, hint) {
+			return
+		}
+	}
+	s.t.Fatalf("%q never appeared after the last keys in:\n%s\nscreen:\n%s", hint, s.out.String(), last)
+}
+
+// vtScreen is out on an 80x24 terminal.
+func vtScreen(out string) string {
+	v := vt{height: 24} // inline printing needs the terminal's height
+	v.write([]byte(out))
+	return v.String()
+}
+
+// idleComposer reports whether the live area at the bottom of screen,
+// the box and the status line above it, is the composer with no turn
+// working or stopping. A turn's live area has no box.
+func idleComposer(screen, hint string) bool {
+	lines := strings.Split(screen, "\n")
+	box := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "╭─") {
+			box = i
+		}
+	}
+	if box < 0 {
+		return false
+	}
+	live := strings.Join(lines[max(box-1, 0):], "\n")
+	if !strings.Contains(live, hint) {
+		return false
+	}
+	for _, busy := range []string{"working…", "interrupting…", "cancelling verification…", "starting a new Chat…"} {
+		if strings.Contains(live, busy) {
+			return false
+		}
+	}
+	return true
 }
 
 // expect waits until text is written after the last keys were typed.
@@ -281,7 +332,10 @@ func (s *homeSession) expectScreen(text string) {
 			return
 		}
 	}
-	s.t.Fatalf("%q never showed on the screen after the last keys:\n%s", text, screen(s.out.String()))
+	// The raw tail too: when the screen disagrees with the renderer, its
+	// cursor moves are the evidence.
+	out := s.out.String()
+	s.t.Fatalf("%q never showed on the screen after the last keys:\n%s\nraw output after the keys:\n%q", text, screen(out), out[max(s.mark-4096, 0):])
 }
 
 // cursorTo presses ↓ until the setup panel's cursor is on the row whose label

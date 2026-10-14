@@ -696,8 +696,12 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 			f.interactive = tty
 			f.setenv("TERM", "xterm-256color")
 			// The Check interrupts this process, as Ctrl-C would, then
-			// would take far longer than the test.
-			slow := fmt.Sprintf("sh -c 'kill -%s %d; exec sleep 30'", c.sig, os.Getpid())
+			// would take far longer than the test. Only the Candidate's
+			// Check: the Snapshot control runs the same command while the
+			// agent works, and its interrupt would cancel the Run before
+			// the Check, or make the Check's the second, which stops Öge
+			// without waiting (exit 130).
+			slow := fmt.Sprintf(`sh -c 'grep -q "a + b" add.go || exit 1; kill -%s %d; exec sleep 30'`, c.sig, os.Getpid())
 			args := []string{"fix Add", "--fast", "--agent", "fake", "--check", slow}
 			if !tty {
 				args = append(args, "--unattended")
@@ -707,10 +711,15 @@ func TestRunCancelledDuringTheCheckHasNoVerdict(t *testing.T) {
 				t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 			}
 			types := recordTypes(t, f.onlyRun(t))
+			checked := false
 			for _, rec := range types {
 				if rec == run.RecVerdict {
 					t.Errorf("a cancelled Check wrote a Verdict: %v", types)
 				}
+				checked = checked || rec == run.RecCheckStarted
+			}
+			if !checked {
+				t.Errorf("the Run was cancelled before its Check: %v", types)
 			}
 		})
 	}
