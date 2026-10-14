@@ -9,6 +9,7 @@ import (
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
+	"github.com/erengun/oge/internal/agent/codex"
 	"github.com/erengun/oge/internal/cli"
 )
 
@@ -29,7 +30,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	env := cli.ProcessEnv(resolvedVersion())
 	env.Stdout, env.Stderr = stdout, stderr
-	env.Agents = map[string]agent.Adapter{claude.Name: claude.New()}
+	env.Agents = map[string]agent.Adapter{claude.Name: claude.New(), codex.Name: codex.New()}
 	for name, a := range testAgents {
 		env.Agents[name] = a
 	}
