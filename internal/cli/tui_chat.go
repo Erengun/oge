@@ -352,6 +352,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 func (h *home) turnEnded() (tea.Model, tea.Cmd) {
 	if h.turn.changed == 0 || h.turn.stopped {
 		// An interrupted turn's changes wait for the next turn's cut.
+		h.unchecked = h.unchecked || h.turn.changed > 0
 		return h.nextTurn(nil)
 	}
 	cut := h.startCut()
@@ -368,6 +369,7 @@ func (h *home) startCut() tea.Cmd {
 		h.turn.changed = max(h.turn.changed, v.changed)
 	}
 	h.cuts++
+	h.unchecked = false
 	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, cancel: cancel}
 	hc, f, seq := h.chat, h.turn.frozen, h.cuts
 	c := hc.get()
@@ -452,11 +454,67 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		var l string
 		l, h.last = h.chat.verdict(res, v.changed)
 		line = h.ogeLine(l)
+		if res.Outcome == run.Accepted || res.Outcome == run.Failed {
+			line += h.inlineDiff()
+		}
 	}
 	// The action row acts on h.last: never on a cut the human hasn't
 	// seen yet.
 	h.actions = false
 	return h.println(line)
+}
+
+// staleAsk is /apply or /branch while newer edits than the verified cut
+// are unchecked: a cut still verifying, or an interrupted turn's changes.
+type staleAsk struct {
+	key, arg string // the action's key, and a branch's name
+}
+
+func (s *staleAsk) verb() string {
+	if s.key == "b" {
+		return "branch"
+	}
+	return "apply"
+}
+
+// staleKey takes the stale-edit choice: a delivers the verified cut; w
+// (or Esc) waits, doing nothing, while the newest cut finishes.
+func (h *home) staleKey(k tea.KeyPressMsg) tea.Cmd {
+	s := h.stale
+	switch k.String() {
+	case "a":
+		h.stale = nil
+		if h.last == nil {
+			return nil // the verified cut is gone meanwhile (/new)
+		}
+		return h.actNow(s.key, s.arg)
+	case "w", "esc", "ctrl+c":
+		h.stale = nil
+		return h.println(h.ogeLine(h.st.dim("waiting: nothing delivered; the newest cut goes on")))
+	}
+	return nil
+}
+
+// inlineMax is the most diff lines the Chat shows under a Verdict.
+const inlineMax = 20
+
+// inlineDiff is h.last's diff under its Verdict line, dim and indented,
+// when it is inlineMax lines or fewer; "" otherwise. It is the agent's
+// content: cleaned, every line.
+func (h *home) inlineDiff() string {
+	if h.last == nil || h.last.patch == nil {
+		return ""
+	}
+	patch, err := h.last.patch()
+	text := strings.TrimRight(string(patch), "\n")
+	if err != nil || text == "" || strings.Count(text, "\n")+1 > inlineMax {
+		return ""
+	}
+	var b strings.Builder
+	for _, l := range strings.Split(cleanLines(text), "\n") {
+		b.WriteString("\n" + h.st.dim("    "+l))
+	}
+	return b.String()
 }
 
 // chatKey takes a key during a turn. Esc interrupts the turn; so does

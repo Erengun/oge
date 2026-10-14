@@ -305,6 +305,16 @@ func TestHomeChatVerifiesInTheBackground(t *testing.T) {
 	s.expect("verifying…")
 	s.composer()
 	s.type_("/apply\r")
+	s.expect("newer edits, unchecked: [a] apply verified  [w] wait")
+	s.type_("w")
+	s.expect("waiting: nothing delivered")
+	s.composer()
+	if _, err := os.Stat(filepath.Join(f.repo, "more.go")); err == nil {
+		t.Error("[w] applied something")
+	}
+	s.type_("/apply\r")
+	s.expect("newer edits, unchecked: [a] apply verified  [w] wait")
+	s.type_("a")
 	s.expect("a newer cut is still verifying")
 	s.expect("Applied")
 	s.composer()
@@ -388,4 +398,32 @@ func TestHomeChatQuitDuringVerify(t *testing.T) {
 	s.type_("\x03") // cancels the verification; the next quits at once
 	s.quitChat(f)
 	checkGone(t, pids)
+}
+
+// A Verdict shows its diff inline when it is 20 lines or fewer, dim and
+// indented; a longer one only behind /diff.
+func TestHomeChatInlineDiff(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	var long strings.Builder
+	long.WriteString(fixed)
+	for i := range 25 {
+		long.WriteString("// long line " + strconv.Itoa(i) + "\n")
+	}
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "fixed Add", Writes: []multiturn.File{{Path: "add.go", Content: fixed}}},
+		{Reply: "and long", Writes: []multiturn.File{{Path: "add.go", Content: long.String()}}},
+	}}, nil)
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.expect("    +func Add(a, b int) int { return a + b }")
+	s.composer()
+	s.type_("and long\r")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.composer()
+	if out := s.out.String(); strings.Contains(out, "long line 3") {
+		t.Errorf("a diff over 20 lines showed inline:\n%s", out)
+	}
+	s.quitChat(f)
 }

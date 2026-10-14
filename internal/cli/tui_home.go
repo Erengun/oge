@@ -430,6 +430,11 @@ type home struct {
 	turn   *chatTurn
 	verify *chatVerify
 	cuts   int // the cuts started, each one's seq
+	// unchecked: a turn changed something no cut covers yet (it was
+	// interrupted); the next cut does.
+	unchecked bool
+	// stale is the delivery waiting on its stale-edit choice.
+	stale *staleAsk
 	// resetting: /new is closing the old Chat.
 	resetting bool
 }
@@ -453,6 +458,9 @@ type lastRun struct {
 	branch  func(name string) string                // "" is the default name
 	diff    func(emit func(string) tea.Cmd) tea.Cmd // printed, or paged with $PAGER
 	receipt func() string
+	// patch is the Candidate's diff from the Snapshot, for the Chat's
+	// inline diff.
+	patch func() ([]byte, error)
 }
 
 // act runs one of the Run's actions by its key; arg is a branch's name.
@@ -576,6 +584,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if h.turn != nil {
 		return h.chatUpdate(msg)
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && h.stale != nil {
+		return h, h.staleKey(k)
 	}
 	if h.run != nil {
 		if _, ok := msg.(gateSettledMsg); ok {
@@ -1013,6 +1024,16 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // and says so when a newer one is.
 // TODO(#261): ask apply verified / wait.
 func (h *home) act(key, arg string) tea.Cmd {
+	if (key == "a" || key == "b") && h.last != nil && (h.verify != nil || h.unchecked) {
+		// Newer edits than the verified cut: delivering it is a choice.
+		h.stale = &staleAsk{key: key, arg: arg}
+		return nil
+	}
+	return h.actNow(key, arg)
+}
+
+// actNow is act once any stale-edit choice is made.
+func (h *home) actNow(key, arg string) tea.Cmd {
 	var notice tea.Cmd
 	if h.verify != nil && h.last != nil {
 		notice = h.println(h.ogeLine(h.st.dim("a newer cut is still verifying; this is the last verified one")))
@@ -1078,6 +1099,9 @@ func (h *home) View() tea.View {
 func (h *home) view() tea.View {
 	if h.turn != nil {
 		return tea.NewView(h.turnView())
+	}
+	if h.stale != nil {
+		return tea.NewView(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait")))
 	}
 	if h.run != nil {
 		return h.queueView()
@@ -1701,6 +1725,7 @@ func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText
 			return deliver(func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })()
 		},
 		receipt: receiptText,
+		patch:   func() ([]byte, error) { return delivery.Diff(r) },
 	}
 	s.diff = func(emit func(string) tea.Cmd) tea.Cmd {
 		patch, err := delivery.Diff(r)
