@@ -205,7 +205,7 @@ func TestHomeChatAdviseAlongsideATurn(t *testing.T) {
 	t.Parallel()
 	s, f := startAdvisedSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "working on it", Hold: true},
-	}}, adviceScript)
+	}}, "sleep 1\n"+adviceScript) // slow enough that the status line is drawn: a frame is not drawn per update
 	s.composer()
 	s.type_("long job\r")
 	s.expect("working on it")
@@ -214,7 +214,7 @@ func TestHomeChatAdviseAlongsideATurn(t *testing.T) {
 	if out := s.out.String(); strings.Contains(out, "queued › /advise") {
 		t.Errorf("/advise was queued:\n%s", out)
 	}
-	time.Sleep(1500 * time.Millisecond) // the advisor has long finished
+	time.Sleep(2500 * time.Millisecond) // the advisor has finished
 	if out := s.out.String(); strings.Contains(out, "a Claim, not checked") {
 		t.Errorf("the advice block printed into a streaming turn:\n%s", out)
 	}
