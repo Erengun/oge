@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -300,29 +301,43 @@ func TestCutRefusesAnotherOracle(t *testing.T) {
 }
 
 // Closing the Chat cancels a cut in flight: its Check stops, and neither
-// the cut nor Close hangs.
+// the cut nor Close hangs. The Check holds on the cut's tree (never on
+// the Snapshot, so the Snapshot control finishes) and marks that it has
+// started, so Close lands mid-Check.
 func TestCutClosedInFlight(t *testing.T) {
-	slow := "package fx\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestSlow(t *testing.T) { time.Sleep(time.Minute) }\n"
-	c := openCut(t, "", multiturn.Turn{Reply: "slow", Writes: []multiturn.File{{Path: "slow_test.go", Content: slow}}})
-	drain(t, send(t, c, "add a slow test"), nil)
-	closed := make(chan struct{})
-	observe := func(ev Event) {
-		if ev.Kind == EvAttempt {
-			go func() {
-				time.Sleep(500 * time.Millisecond)
-				c.Close()
-				close(closed)
-			}()
-		}
-	}
+	mark := filepath.Join(t.TempDir(), "checking")
+	f := cutFrozen(t, "")
+	f.Checks[0].Run = "if [ -f hold.go ]; then touch '" + mark + "'; while :; do sleep 0.1; done; fi"
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "held", Writes: []multiturn.File{{Path: "hold.go", Content: "package fx\n"}}}}}), 0, f,
+		map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	drain(t, send(t, c, "hold"), nil)
 	type out struct {
 		res *Result
 		err error
 	}
 	done := make(chan out, 1)
 	go func() {
-		res, err := c.Cut(t.Context(), CutParams{Observe: observe})
+		res, err := c.Cut(t.Context(), CutParams{})
 		done <- out{res, err}
+	}()
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(mark); err == nil {
+			break
+		}
+		select {
+		case o := <-done:
+			t.Fatalf("the cut ended before its Check held: %+v, %v; %s", o.res, o.err, mustJSON(runRecords(t, o.res.Dir, RecCheckEnded)))
+		default:
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("the Check never started")
+		}
+	}
+	closed := make(chan struct{})
+	go func() {
+		c.Close()
+		close(closed)
 	}()
 	select {
 	case o := <-done:
