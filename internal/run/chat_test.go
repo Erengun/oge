@@ -37,6 +37,12 @@ func chatOn(k string) string {
 // sc through the claude adapter.
 func openChat(t *testing.T, sc multiturn.Scenario, idle time.Duration) *Chat {
 	t.Helper()
+	return openChatIn(context.Background(), t, fakeClaude(t, sc), idle, chatFrozen("implementer"), map[string]string{"add.go": "package fx\n"})
+}
+
+// fakeClaude is the claude adapter with fakeclaude serving sc.
+func fakeClaude(t *testing.T, sc multiturn.Scenario) agent.Adapter {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("Runs are refused on Windows (ADR-0017)")
 	}
@@ -44,25 +50,35 @@ func openChat(t *testing.T, sc multiturn.Scenario, idle time.Duration) *Chat {
 	if err := sc.Save(scen); err != nil {
 		t.Fatal(err)
 	}
-	ad := &claude.Adapter{Path: multiturn.BuildClaude(t), CloseGrace: time.Second,
+	return &claude.Adapter{Path: multiturn.BuildClaude(t), CloseGrace: time.Second,
 		Environ: func() []string { return append(os.Environ(), "OGE_FAKE_CLAUDE_SCENARIO="+scen) }}
-	return openChatWith(context.Background(), t, ad, idle)
 }
 
 // openChatWith opens a Chat on a one-file repository with ad.
 func openChatWith(ctx context.Context, t *testing.T, ad agent.Adapter, idle time.Duration) *Chat {
+	t.Helper()
+	return openChatIn(ctx, t, ad, idle, chatFrozen("implementer"), map[string]string{"add.go": "package fx\n"})
+}
+
+// openChatIn opens a Chat with ad on a repository holding files, under f.
+func openChatIn(ctx context.Context, t *testing.T, ad agent.Adapter, idle time.Duration, fr *pipeline.Frozen, files map[string]string) *Chat {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("Runs are refused on Windows (ADR-0017)")
 	}
 	f := &followFixture{user: t.TempDir()}
 	f.git(t, "init", "-q", "-b", "main")
-	f.write(t, "add.go", "package fx\n")
+	for p, s := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(f.user, filepath.FromSlash(p))), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		f.write(t, p, s)
+	}
 	f.git(t, "add", "-A")
 	f.git(t, "commit", "-q", "-m", "init")
 	d := t.TempDir()
 	state := &ledger.StateRoot{Dir: d, Private: filepath.Join(d, "private"), Work: filepath.Join(d, "work")}
-	c, err := OpenChat(ctx, ChatParams{Repo: f.user, Frozen: chatFrozen("implementer"),
+	c, err := OpenChat(ctx, ChatParams{Repo: f.user, Frozen: fr,
 		Agents: map[string]agent.Adapter{"claude": ad}, State: state, Getenv: chatOn, IdleTimeout: idle})
 	if err != nil {
 		t.Fatal(err)
@@ -281,8 +297,14 @@ func TestChatIdleTimeout(t *testing.T) {
 	if !errors.Is(c.Err(), ErrChatIdle) {
 		t.Errorf("Err() = %v", c.Err())
 	}
-	if _, err := c.Send(context.Background(), "again"); !errors.Is(err, ErrChatIdle) {
-		t.Errorf("Send after the idle timeout: %v", err)
+	// The next message reopens a fresh Session, which serves its first
+	// scripted turn again.
+	evs := drain(t, send(t, c, "again"), nil)
+	if s := settledOf(t, evs); s.Failure != "" || said(evs) != "hi" {
+		t.Errorf("the turn after the idle timeout: %+v", evs)
+	}
+	if r := recordsOf(t, c, RecSessionReopened); len(r) != 1 || r[0]["reason"] != "idle" || r[0]["turn"] != float64(2) {
+		t.Errorf("SessionReopened %v", r)
 	}
 }
 
@@ -357,8 +379,8 @@ func TestChatSendFailsAsProcessDies(t *testing.T) {
 		t.Errorf("settled %+v", s)
 	}
 	<-c.Done()
-	if _, err := c.Send(context.Background(), "again"); !errors.Is(err, ErrChatLost) {
-		t.Errorf("Send after the process died: %v", err)
+	if !errors.Is(c.Err(), ErrChatLost) {
+		t.Errorf("Err() after the process died: %v", c.Err())
 	}
 }
 

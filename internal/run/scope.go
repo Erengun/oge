@@ -150,7 +150,7 @@ func enforceScope(l *ledger.Ledger, blobs *ledger.Blobs, repo *workspace.RunRepo
 	if err := l.Append(RecScopeReverted, done); err != nil {
 		return err
 	}
-	if err := recordTamper(l, a, s.Reverts, applyErr == nil, false); err != nil {
+	if err := recordTamper(l, a, s.Reverts, applyErr == nil, false, nil); err != nil {
 		return err
 	}
 	a.Reverted, a.links = s.Reverts, s.Links
@@ -196,7 +196,7 @@ func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap
 		}); err != nil {
 			return err
 		}
-		if err := recordTamper(l, a, late, true, true); err != nil {
+		if err := recordTamper(l, a, late, true, true, nil); err != nil {
 			return err
 		}
 		a.Reverted = append(a.Reverted, late...)
@@ -210,7 +210,8 @@ func commitCandidate(l *ledger.Ledger, repo *workspace.RunRepo, a *Attempt, snap
 }
 
 // recordTamper writes one TamperEvent per protected path among rs.
-func recordTamper(l *ledger.Ledger, a *Attempt, rs []workspace.Revert, reverted, late bool) error {
+// extra's fields are added to each record (a Chat's turn).
+func recordTamper(l *ledger.Ledger, a *Attempt, rs []workspace.Revert, reverted, late bool, extra map[string]any) error {
 	n := a.Tamper()
 	for _, r := range rs {
 		if !r.Tamper {
@@ -223,6 +224,9 @@ func recordTamper(l *ledger.Ledger, a *Attempt, rs []workspace.Revert, reverted,
 		}
 		if late {
 			rec["late"] = true // written after the comparison; kept out of the Candidate's commit
+		}
+		for k, v := range extra {
+			rec[k] = v
 		}
 		if err := l.Append(RecTamperEvent, rec); err != nil {
 			return err
