@@ -13,6 +13,7 @@ import (
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/receipt"
 	"github.com/erengun/oge/internal/run"
@@ -40,7 +41,7 @@ type homeChat struct {
 	open func(res *resolved) (*run.Chat, error)
 	// cut cuts the Chat's turns since the last cut into a Run, in the
 	// Pipeline f resolved for the turn (its Shift+Tab mode).
-	cut func(ctx context.Context, c *run.Chat, f *pipeline.Frozen) (*run.Result, error)
+	cut func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port) (*run.Result, error)
 	// verdict is the cut's Verdict line, and what can take its Run.
 	verdict func(res *run.Result, changed int) (string, *lastRun)
 	agents  map[string]agent.Adapter
@@ -130,6 +131,8 @@ type chatVerify struct {
 	changed int
 	cancel  context.CancelFunc
 	stopped bool // Ctrl+C cancelled it
+	// gate is the Gate its Run waits at, if any: shown only at delivery.
+	gate *chatGateMsg
 }
 
 type (
@@ -151,7 +154,37 @@ type (
 		res *run.Result
 		err error
 	}
+	// chatGateMsg is a Gate the cut seq's Run reached: the decision goes
+	// to reply, and next waits on the cut again.
+	chatGateMsg struct {
+		seq   int
+		req   gate.Request
+		reply chan<- gate.Decision
+		next  tea.Cmd
+	}
 )
+
+// cutGates is a cut's Gate port: a Gate waits, never shown mid-turn,
+// until /apply or /branch opens it (Gates at delivery). A newer cut, or
+// the Chat closing, cancels the wait.
+type cutGates struct {
+	reqs chan<- chatGateMsg
+}
+
+func (p cutGates) Decide(ctx context.Context, r gate.Request) (gate.Decision, error) {
+	reply := make(chan gate.Decision, 1)
+	select {
+	case p.reqs <- chatGateMsg{req: r, reply: reply}:
+	case <-ctx.Done():
+		return gate.Decision{}, ctx.Err()
+	}
+	select {
+	case d := <-reply:
+		return d, nil
+	case <-ctx.Done():
+		return gate.Decision{}, ctx.Err()
+	}
+}
 
 // ogeLine is one of Öge's own lines: at the margin, after the marker.
 func (h *home) ogeLine(text string) string {
@@ -373,10 +406,90 @@ func (h *home) startCut() tea.Cmd {
 	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, cancel: cancel}
 	hc, f, seq := h.chat, h.turn.frozen, h.cuts
 	c := hc.get()
-	return func() tea.Msg {
-		res, err := hc.cut(ctx, c, f)
-		return chatCutMsg{seq, res, err}
+	reqs, done := make(chan chatGateMsg), make(chan chatCutMsg, 1)
+	go func() {
+		res, err := hc.cut(ctx, c, f, cutGates{reqs})
+		done <- chatCutMsg{seq, res, err}
+	}()
+	var wait tea.Cmd
+	wait = func() tea.Msg {
+		select {
+		case m := <-done:
+			return m
+		case g := <-reqs:
+			g.seq, g.next = seq, wait
+			return g
+		}
 	}
+	return wait
+}
+
+// cutGated takes a Gate the cut's Run reached. At a delivery it opens
+// there and then; otherwise the cut is summed up as waiting for you, and
+// its Gate waits for /apply or /branch.
+func (h *home) cutGated(g chatGateMsg) tea.Cmd {
+	v := h.verify
+	if v == nil || v.seq != g.seq {
+		return g.next // superseded: its wait is cancelled
+	}
+	v.gate = &g
+	if h.cutGate != nil {
+		// The delivery's Gate decided: the next one opens in its place.
+		h.cutGate = &gateState{req: g.req, reply: g.reply}
+		return g.next
+	}
+	what := ""
+	if len(g.req.Files) > 0 {
+		what = " · " + plural(len(g.req.Files), "file")
+	}
+	h.actions = false
+	return tea.Batch(h.println(h.ogeLine("… Waiting for you: the "+clean(gateTitle(g.req.Name))+what+" · /apply")), g.next)
+}
+
+// openCutGate opens the newest cut's Gate for the delivery key (and a
+// branch's name): the delivery is made once its Run is Accepted.
+func (h *home) openCutGate(key, arg string) tea.Cmd {
+	g := h.verify.gate
+	h.cutGate = &gateState{req: g.req, reply: g.reply}
+	h.gateFor = &staleAsk{key: key, arg: arg}
+	return nil
+}
+
+// cutGateKey takes a key at the cut's Gate, as the live view's Gate does.
+// Esc or Ctrl+C at the choices closes it: the cut goes on waiting, for
+// the next /apply.
+func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
+	g := h.cutGate
+	if g.recording {
+		return nil
+	}
+	if g.inspect != nil {
+		switch k.String() {
+		case "esc", "enter", "q":
+			g.inspect = nil
+		}
+		return nil
+	}
+	switch k.String() {
+	case "ctrl+c", "esc":
+		if g.choice != nil {
+			g.choice, g.input, g.msg = nil, "", ""
+			return nil
+		}
+		h.cutGate, h.gateFor = nil, nil
+		return h.println(h.ogeLine(h.st.dim("not delivered; the Gate waits for /apply")))
+	case "backspace":
+		if r := []rune(g.input); len(r) > 0 {
+			g.input = string(r[:len(r)-1])
+		}
+	case "enter":
+		g.enter(h.height)
+	default:
+		if k.Text != "" {
+			g.input += clean(k.Text)
+		}
+	}
+	return nil
 }
 
 // endTurn opens the composer again, keeping what was typed during the
@@ -438,6 +551,9 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	h.verify = nil
 	v.cancel()
 	res := msg.res
+	h.cutGate = nil
+	deliver := h.gateFor
+	h.gateFor = nil
 	verdict := msg.err == nil && res != nil && res.Check != nil &&
 		(res.Outcome == run.Accepted || res.Outcome == run.Failed || res.Outcome == run.Parked)
 	var line string
@@ -461,6 +577,10 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	// The action row acts on h.last: never on a cut the human hasn't
 	// seen yet.
 	h.actions = false
+	if deliver != nil && h.last != nil && res != nil && res.Outcome == run.Accepted {
+		// Through its Gate: the delivery /apply or /branch asked for.
+		return tea.Sequence(h.println(line), h.actNow(deliver.key, deliver.arg))
+	}
 	return h.println(line)
 }
 

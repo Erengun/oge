@@ -435,6 +435,10 @@ type home struct {
 	unchecked bool
 	// stale is the delivery waiting on its stale-edit choice.
 	stale *staleAsk
+	// cutGate is the newest cut's Gate, open at /apply or /branch;
+	// gateFor is that delivery, made once the cut is Accepted.
+	cutGate *gateState
+	gateFor *staleAsk
 	// resetting: /new is closing the old Chat.
 	resetting bool
 }
@@ -582,6 +586,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
+	case chatGateMsg:
+		return h, h.cutGated(m)
 	case chatClosedMsg:
 		h.resetting = false
 		return h, nil
@@ -591,6 +597,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && h.stale != nil {
 		return h, h.staleKey(k)
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && h.cutGate != nil {
+		return h, h.cutGateKey(k)
 	}
 	if h.run != nil {
 		if _, ok := msg.(gateSettledMsg); ok {
@@ -1106,6 +1115,9 @@ func (h *home) view() tea.View {
 	}
 	if h.stale != nil {
 		return tea.NewView(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait")))
+	}
+	if h.cutGate != nil {
+		return tea.NewView(strings.Join(gateView(h.st, h.cutGate), "\n"))
 	}
 	if h.run != nil {
 		return h.queueView()

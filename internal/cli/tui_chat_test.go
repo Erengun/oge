@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
@@ -19,7 +20,7 @@ import (
 func TestChatCutUsesTheTurnsPipeline(t *testing.T) {
 	standard := &pipeline.Frozen{Mode: pipeline.Standard}
 	var got *pipeline.Frozen
-	h := &home{chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen) (*run.Result, error) {
+	h := &home{chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen, _ gate.Port) (*run.Result, error) {
 		got = f
 		return nil, run.ErrNothingToCut
 	}}, turn: &chatTurn{frozen: standard, changed: 1}}

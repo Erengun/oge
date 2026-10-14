@@ -446,3 +446,78 @@ func TestHomeChatInlineDiff(t *testing.T) {
 	}
 	s.quitChat(f)
 }
+
+// A protected write's Tamper Gate never shows mid-turn: the cut waits
+// for you, and /apply opens its Gate. Rejecting there applies nothing;
+// the next cut, still gated by that Tamper event, is acknowledged at
+// /apply and applied.
+func TestHomeChatTamperGateAtApply(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "tampered", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "add_test.go", Content: "package fx\n"}}},
+		{Reply: "again", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// again\n"}}},
+	}}, nil)
+	s.composer()
+	s.type_("weaken the test\r")
+	s.expect("reverted add_test.go")
+	s.expect("oge › … Waiting for you: the tamper Gate · /apply")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("acknowledge")
+	s.type_("reject the tests stay\r")
+	s.expect("oge › ✗ Rejected")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); strings.Contains(string(b), "a + b") {
+		t.Fatal("a rejected Tamper Gate applied the cut")
+	}
+	s.type_("once more\r")
+	s.expect("oge › … Waiting for you: the tamper Gate · /apply")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("acknowledge")
+	s.type_("acknowledge the revert is right\r")
+	s.expect("oge › ✓ Accepted")
+	s.expect("oge › ✓ Applied ")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "// again") {
+		t.Errorf("the acknowledged cut wasn't applied:\n%s", b)
+	}
+	s.quitChat(f)
+}
+
+// An Ambiguous file's Gate shows at /apply: promoting every file keeps
+// the Verdict and applies it; dropping one re-cuts without it, which is
+// checked again before it is applied.
+func TestHomeChatAmbiguousGateAtApply(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	for _, c := range []struct {
+		name, choice string
+		kept         bool
+	}{{"keep", "p", true}, {"drop", "d", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+				{Reply: "and notes", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "extra.go", Content: "package fx\n"}}},
+			}}, nil)
+			s.composer()
+			s.type_("fix Add\r")
+			s.expect("oge › … Waiting for you: the ")
+			s.composer()
+			s.type_("/apply\r")
+			s.expect("extra.go")
+			s.type_(c.choice + "\r")
+			s.expect("oge › ✓ Accepted")
+			s.expect("oge › ✓ Applied ")
+			s.composer()
+			if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "a + b") {
+				t.Errorf("the cut wasn't applied:\n%s", b)
+			}
+			if _, err := os.Stat(filepath.Join(f.repo, "extra.go")); (err == nil) != c.kept {
+				t.Errorf("extra.go applied: %v, want %v", err == nil, c.kept)
+			}
+			s.quitChat(f)
+		})
+	}
+}
