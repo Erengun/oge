@@ -26,8 +26,10 @@ import (
 // there: no stages, no Receipt, no action row. A turn with Promoted or
 // Ambiguous changes is cut into a Run at once (D4), verified in the
 // background while the composer stays live (D3), then summed up on one
-// Verdict line; a newer cut supersedes it. /apply, /diff and /receipt act
-// on the newest cut whose Verdict is in.
+// Verdict line, with its diff when that is small; a newer cut supersedes
+// it. /apply, /diff and /receipt act on the newest cut whose Verdict is
+// in (slice 9): with newer edits unchecked, /apply and /branch ask
+// first, and a cut's Gates wait for /apply or /branch, never a turn.
 //
 // The agent's words are always indented; Öge's own lines start at the
 // margin with the oge › marker, so a reply can't pass for a Verdict.
