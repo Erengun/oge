@@ -189,17 +189,23 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		}
 	case agent.TurnSettled:
 		h.turn.ask = nil
+		var tamper tea.Cmd
 		if sc := ev.Scope; sc != nil {
 			h.turn.changed = len(sc.Promoted) + len(sc.Ambiguous)
+			if len(sc.Tamper) > 0 {
+				// A protected path the turn wrote was put back (ADR-0009).
+				tamper = h.println(h.st.dim("  reverted " + clean(strings.Join(sc.Tamper, ", ")) + ": protected"))
+			}
 		}
 		switch {
 		case h.turn.stopped:
-			return h.println(h.st.dim("■ interrupted"))
+			return tea.Sequence(tamper, h.println(h.st.dim("■ interrupted")))
 		case ev.Stop != "":
-			return h.println("■ " + clean(ev.Stop))
+			return tea.Sequence(tamper, h.println("■ "+clean(ev.Stop)))
 		case ev.Failure != "":
-			return h.println("✗ " + clean(ev.Failure))
+			return tea.Sequence(tamper, h.println("✗ "+clean(ev.Failure)))
 		}
+		return tamper
 	}
 	return nil
 }
