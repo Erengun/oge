@@ -128,6 +128,10 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		d.Decision, d.Rule, d.Reason = "deny", ruleNoInteractive, "Öge denied this: "+grey+"."+tail
 		return d
 	}
+	if p.role == "advisor" && tool != "AskUserQuestion" && !oneOf(tool, advisorTools) {
+		// The advisor only reads, whatever claude offers it.
+		return answer(vOutside, tool+" isn't one of the advisor's tools: it only reads", "")
+	}
 	switch tool {
 	case "Read":
 		if str("file_path") == "" {

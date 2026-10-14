@@ -84,6 +84,8 @@ type ChatParams struct {
 	// CacheSeedTemplate is a build cache the Chat's seed starts from. Only
 	// tests set it; see Params.CacheSeedTemplate.
 	CacheSeedTemplate string
+	// Advisor is the user's [advisor] config: who Consult asks.
+	Advisor pipeline.AdvisorConfig
 }
 
 // Chat is an open Chat. Its methods are safe to call concurrently.
@@ -108,6 +110,7 @@ type Chat struct {
 	agents    map[string]agent.Adapter
 	getenv    func(string) string
 	seedTmpl  string
+	advisor   pipeline.AdvisorConfig
 	repo      *workspace.RunRepo
 	blobs     *ledger.Blobs
 	protected func(string) string // the implementer's protected set
@@ -169,6 +172,12 @@ type Chat struct {
 	// verdictCuts are the last turns of the cuts that reached a Verdict,
 	// for the Receipt's cycle count (D6).
 	verdictCuts []int
+	// verdict is the newest cut's Verdict; lastReply is the newest
+	// settled turn's reply, verbatim, and replyTurn its turn: what an
+	// Advisor's Briefing holds of them (advisor.go).
+	verdict   *chatVerdict
+	lastReply string
+	replyTurn int
 	// rebrief is set when the Session was reopened: its first turn gets
 	// the re-brief.
 	rebrief bool
@@ -295,7 +304,8 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
 		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
-		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate}
+		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate,
+		advisor: p.Advisor}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -689,6 +699,13 @@ func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
 		out.rec.Lock()
 		stream, reply, usage := append([]byte(nil), out.stream.Bytes()...), strings.Join(out.reply, "\n"), out.usage
 		out.rec.Unlock()
+		if ran {
+			c.mu.Lock()
+			if out.n >= c.replyTurn {
+				c.lastReply, c.replyTurn = reply, out.n
+			}
+			c.mu.Unlock()
+		}
 		blob, err := c.blobs.Put(redact.Redact(stream))
 		if err != nil {
 			return err

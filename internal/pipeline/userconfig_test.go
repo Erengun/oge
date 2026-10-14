@@ -388,6 +388,26 @@ func TestLoadUserConfigTheme(t *testing.T) {
 	}
 }
 
+// [advisor] takes an agent, a model and an effort (D-A1), each optional.
+func TestLoadUserConfigAdvisor(t *testing.T) {
+	c, probs := LoadUserConfig([]byte("schema = 1\n[advisor]\nagent = \"claude\"\nmodel = \"opus\"\neffort = \"max\"\n"))
+	if len(probs) > 0 || c.AdvisorConfig() != (AdvisorConfig{Agent: "claude", Model: "opus", Effort: "max"}) {
+		t.Errorf("advisor %+v, %v", c.AdvisorConfig(), probs)
+	}
+	if c, probs := LoadUserConfig([]byte("schema = 1\n")); len(probs) > 0 || c.AdvisorConfig() != (AdvisorConfig{}) {
+		t.Errorf("no [advisor] gave %+v, %v", c.AdvisorConfig(), probs)
+	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\n[advisor]\neffort = \"huge\"\n")); len(probs) != 1 || probs[0].Key != "advisor.effort" {
+		t.Errorf("a bad effort gave %v", probs)
+	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\n[advisor]\nmodel = \"sk-" + "abc\"\n")); len(probs) != 1 || probs[0].Key != "advisor.model" {
+		t.Errorf("a credential-like model gave %v", probs)
+	}
+	if (*UserConfig)(nil).AdvisorConfig() != (AdvisorConfig{}) {
+		t.Error("a nil config has an advisor")
+	}
+}
+
 func TestSaveUserDefaultsKeepsAndSetsTheme(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "oge", "config.toml")
 	root := t.TempDir()

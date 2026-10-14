@@ -271,11 +271,11 @@ A Role kind whose Stage tries to get a wrong Candidate past the Oracle, so as to
 _Avoid_: Red team, adversarial reviewer
 
 **Advisor**:
-A Role kind with no Stage that gives advice when consulted; the advice is always a Claim.
+A Role kind with no Stage that gives advice when consulted; the advice is always a Claim. Each Consultation opens a fresh, read-only Session in a disposable clone. It is event-driven: no Advisor stands by between Consultations.
 _Avoid_: Consultant, expert, oracle
 
 **Consultation**:
-One request for an Advisor's advice, made by pipeline policy, the user or an agent, with or without a pending Host request. It cannot create Evidence, choose an accepting edge or resolve a Gate.
+One request for an Advisor's advice, made by pipeline policy, the user or an agent, with or without a pending Host request. It is recorded in the Chat log. There are three triggers: the user asks, the feedback budget is spent, or the agent asks the human a question. It cannot create Evidence, choose an accepting edge or resolve a Gate.
 _Avoid_: Advisor request, second opinion
 
 **Handoff**:

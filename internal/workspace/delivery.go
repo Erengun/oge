@@ -58,6 +58,11 @@ func (r *RunRepo) Blob(oid string) ([]byte, error) {
 	return r.git("", "", nil, "cat-file", "blob", oid)
 }
 
+// Diff is the text patch from one commit to another.
+func (r *RunRepo) Diff(from, to string) ([]byte, error) {
+	return r.git("", "", nil, "diff-tree", "-p", "-r", "--text", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", from, to)
+}
+
 // PathDiff is the patch of one path between two commits, with git's
 // binary stanza unless text is set.
 func (r *RunRepo) PathDiff(from, to, path string, text bool) ([]byte, error) {

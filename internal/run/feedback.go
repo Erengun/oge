@@ -16,15 +16,22 @@ import (
 const FeedbackBudget = 3
 
 // feedbackTurn is the turn Öge sends a Chat's Session when a cut's Check
-// fails (D5): its first line the failing count and criterion ids, then
-// what failed, through the held-out filter a send-back uses (ADR-0009):
-// never a held-out test's name, file, source or output.
-func feedbackTurn(cr *oracle.Result, blobs *ledger.Blobs, m *oracle.Manifest, candidate func() []string) string {
+// fails (D5): verdictFailures, its first line the failing count and
+// criterion ids, then what failed, through the held-out filter a
+// send-back uses (ADR-0009): never a held-out test's name, file, source
+// or output.
+func feedbackTurn(failures string) string {
+	return failures + "Fix it and carry on with the task."
+}
+
+// verdictFailures is what a failing Check failed on, through the
+// held-out filter: a feedback turn's body, and what an Advisor is told of
+// the newest Verdict (docs/ux/advisor.md).
+func verdictFailures(cr *oracle.Result, blobs *ledger.Blobs, m *oracle.Manifest, candidate func() []string) string {
 	hf := newHeldOutFilter(m, cr, blobs, candidate)
 	var b strings.Builder
 	b.WriteString(feedbackSummary(cr, hf) + "\n")
 	b.WriteString(failureOutput(cr, blobs, hf))
-	b.WriteString("Fix it and carry on with the task.")
 	return b.String()
 }
 

@@ -41,6 +41,30 @@ type UserConfig struct {
 	// VimEscape is a two-character sequence typed in INSERT that acts as Esc,
 	// such as "jj" (#158). Global like Vim; empty is off.
 	VimEscape string `toml:"vim_escape,omitempty"`
+	// Advisor is who gives a Chat's second opinion (docs/ux/advisor.md,
+	// D-A1). Global: what a person pays for a second opinion is theirs.
+	Advisor *AdvisorConfig `toml:"advisor,omitempty"`
+}
+
+// AdvisorConfig is the [advisor] table. Each key falls back when empty:
+// the agent to the Chat's implementer's, the model to the agent's
+// strongest, the effort to DefaultAdvisorEffort (D-A1).
+type AdvisorConfig struct {
+	Agent  string `toml:"agent,omitempty"`
+	Model  string `toml:"model,omitempty"`
+	Effort string `toml:"effort,omitempty"`
+}
+
+// DefaultAdvisorEffort is the Advisor's effort when none is configured.
+const DefaultAdvisorEffort = "high"
+
+// AdvisorConfig returns the [advisor] settings, the zero value when there
+// are none.
+func (c *UserConfig) AdvisorConfig() AdvisorConfig {
+	if c == nil || c.Advisor == nil {
+		return AdvisorConfig{}
+	}
+	return *c.Advisor
 }
 
 // VimMode reports whether the composer's vim mode is on.
@@ -164,6 +188,19 @@ func (c *UserConfig) validate() []Problem {
 	}
 	if r := []rune(c.VimEscape); c.VimEscape != "" && (len(r) != 2 || strings.ContainsFunc(c.VimEscape, func(r rune) bool { return !unicode.IsPrint(r) || unicode.IsSpace(r) })) {
 		add("vim_escape", "must be two printable characters, such as \"jj\"")
+	}
+	if a := c.Advisor; a != nil {
+		if a.Agent != "" && strings.TrimSpace(a.Agent) == "" {
+			add("advisor.agent", "must not be blank")
+		}
+		if a.Effort != "" && !oneOf(a.Effort, KnownEfforts...) {
+			add("advisor.effort", "must be one of "+strings.Join(KnownEfforts, ", "))
+		}
+		for field, v := range map[string]string{"agent": a.Agent, "model": a.Model} {
+			if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {
+				add("advisor."+field, "looks like a credential; Öge never takes credentials in config (ADR-0006)")
+			}
+		}
 	}
 	for _, name := range sortedKeys(c.Profiles) {
 		key := "profiles." + name

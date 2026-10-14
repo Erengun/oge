@@ -90,7 +90,8 @@ func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 		agents: env.Agents,
 		open: func(res *resolved) (*run.Chat, error) {
 			return run.OpenChat(context.Background(), run.ChatParams{Repo: root, Frozen: res.frozen, Agents: env.Agents,
-				State: state, Getenv: env.Getenv, Config: res.cfgData, CacheSeedTemplate: env.CacheSeedTemplate})
+				State: state, Getenv: env.Getenv, Config: res.cfgData, CacheSeedTemplate: env.CacheSeedTemplate,
+				Advisor: userForNotify(env).AdvisorConfig()})
 		},
 		cut: func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port) (*run.Result, error) {
 			return c.Cut(ctx, run.CutParams{Frozen: f, Version: env.Version, Gates: gates})
@@ -333,8 +334,8 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	return u
 }
 
-// userForNotify reads the user config for the view's [notify] settings; a
-// file that doesn't load means the defaults (the Run's own load reports it).
+// userForNotify reads the user config for the view's [notify] settings,
+// and the Chat's [advisor]; a file that doesn't load means the defaults (the Run's own load reports it).
 func userForNotify(env Env) *pipeline.UserConfig {
 	quiet := env
 	quiet.Stderr = io.Discard

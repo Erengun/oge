@@ -75,6 +75,21 @@ func HasAutoMode(a Adapter) bool {
 	return ok && m.AutoMode()
 }
 
+// Strongest is an Adapter that names its agent's strongest model: what
+// an Advisor runs by default (docs/ux/advisor.md, D-A1).
+type Strongest interface {
+	Adapter
+	StrongestModel() string
+}
+
+// ReadOnly is an Adapter whose advisor Launch profile withholds every
+// tool that writes, so the Advisor's read-only is enforced, not only its
+// clone discarded (ADR-0018's rule: say which applies).
+type ReadOnly interface {
+	Adapter
+	AdvisorReadOnly() bool
+}
+
 // Session is one agent conversation. At most one turn is in flight;
 // Interrupt is non-terminal.
 type Session interface {

@@ -184,7 +184,7 @@ func TestFeedbackTurnWithholdsHeldOut(t *testing.T) {
 			{TestID: oracle.TestID{Package: "fx", Name: "TestZebraQuokka"}, Attested: "fail"}}}
 	m := &oracle.Manifest{Expected: []oracle.TestID{{Package: "fx", Name: "TestAdd"}, {Package: "fx", Name: "TestZebraQuokka"}},
 		HeldOut: []oracle.HeldOut{{Test: oracle.TestID{Package: "fx", Name: "TestZebraQuokka"}, File: "zq_test.go", Criteria: []string{"AC-2", "AC-1"}}}}
-	got := feedbackTurn(cr, blobs, m, nil)
+	got := feedbackTurn(verdictFailures(cr, blobs, m, nil))
 	first, _, _ := strings.Cut(got, "\n")
 	if first != "Öge's Check failed on your last change: 2 failing (criteria AC-1, AC-2)." {
 		t.Errorf("first line %q", first)

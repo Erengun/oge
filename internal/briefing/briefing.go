@@ -182,3 +182,50 @@ func taskText(t task.Task) string {
 	}
 	return text
 }
+
+// Advice is what an Advisor's Briefing holds (docs/ux/advisor.md), each
+// part built by Öge and manifested: empty parts are left out.
+type Advice struct {
+	Question string
+	// Task is the user's turns since the last delivery, verbatim (D7).
+	Task task.Task
+	// Turn is the newest settled turn, whose commit the Advisor's
+	// directory holds; 0 for the Snapshot.
+	Turn int
+	// Diff is that commit's patch against the Snapshot.
+	Diff string
+	// Verdict is the newest Check's result, through the held-out filter,
+	// and VerdictTurn the last turn it checked.
+	Verdict     string
+	VerdictTurn int
+	// Reply is the implementer's last reply, verbatim: agent text, a
+	// Claim (D-A2). ReplyTurn is its turn.
+	Reply     string
+	ReplyTurn int
+}
+
+// Advisor is an Advisor's Briefing: the question, then what Öge knows of
+// the Chat, then how a Consultation works. The implementer's reply is
+// labelled its own claim; the Advisor never sees the whole transcript.
+func Advisor(a Advice) string {
+	var b strings.Builder
+	b.WriteString("You are an advisor: a second opinion for a coding agent, the implementer, that is working on the user's task in a Chat. Answer the question below.\n\n")
+	b.WriteString("Question:\n" + strings.TrimSpace(a.Question) + "\n")
+	if strings.TrimSpace(a.Task.Text) != "" {
+		b.WriteString("\n---\nThe task, as the user wrote it:\n" + taskText(a.Task) + "\n")
+	}
+	if a.Diff != "" {
+		fmt.Fprintf(&b, "\n---\nThe implementer's changes so far, at turn %d, against the repository it started from:\n```diff\n%s\n```\n", a.Turn, strings.TrimRight(a.Diff, "\n"))
+	}
+	if a.Verdict != "" {
+		fmt.Fprintf(&b, "\n---\nÖge's newest Check, on the changes up to turn %d, as the implementer was told it:\n%s\n", a.VerdictTurn, strings.TrimSpace(a.Verdict))
+	}
+	if strings.TrimSpace(a.Reply) != "" {
+		fmt.Fprintf(&b, "\n---\nThe implementer's last reply (turn %d), verbatim. It is the agent's own claim, not checked:\n<<<\n%s\n>>>\n", a.ReplyTurn, strings.TrimSpace(a.Reply))
+	}
+	b.WriteString("\n---\nHow this works:\n")
+	fmt.Fprintf(&b, "- The current directory is a disposable copy of the repository at turn %d. Read and search it as you need; you can't change it, and nothing you write is kept.\n", a.Turn)
+	b.WriteString("- Answer in one reply: concrete and short, naming files and functions. Your advice is a second opinion: Öge's Checks decide whether the work is done, not you.\n")
+	b.WriteString("- No one can answer questions or approve requests during this Consultation.\n")
+	return b.String()
+}

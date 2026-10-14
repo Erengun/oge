@@ -1,6 +1,6 @@
 # The Advisor: a second opinion inside the Chat
 
-Status: design proposal for #282, not yet approved. The decisions D-A1…D-A6 need the user's call. Direction: #64 and `docs/positioning.md`. Placement: #29.
+Status: approved. The user took D-A1…D-A6 at the recommended options. Slice 1 is #287. Direction: #64 and `docs/positioning.md`. Placement: #29.
 
 ## Why
 

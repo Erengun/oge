@@ -56,6 +56,14 @@ const closeGrace = 5 * time.Second
 // AutoMode is true: claude's --permission-mode auto runs a Chat (D2).
 func (a *Adapter) AutoMode() bool { return true }
 
+// StrongestModel is the model an Advisor runs by default (D-A1): claude's
+// alias for its newest Opus.
+func (a *Adapter) StrongestModel() string { return "opus" }
+
+// AdvisorReadOnly is true: the advisor's Launch profile has only the
+// tools that read, and its policy denies every other (profile.go).
+func (a *Adapter) AdvisorReadOnly() bool { return true }
+
 // Open spawns claude and completes the initialize handshake, which spends
 // no quota. The envelope is checked when the first turn's system/init
 // arrives: claude reports it only after a user message.
