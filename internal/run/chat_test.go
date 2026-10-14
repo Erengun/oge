@@ -30,7 +30,7 @@ func chatOn(k string) string {
 	if k == ChatFlag {
 		return "1"
 	}
-	return ""
+	return os.Getenv(k) // a cut's Check finds go on PATH
 }
 
 // openChat opens a Chat on a one-file repository, with fakeclaude serving

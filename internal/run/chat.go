@@ -30,9 +30,9 @@ import (
 // Session, with one Send per turn. Nothing cuts, checks or records a Chat
 // Its Chat log, in its private directory, is a Ledger written ahead
 // (slice 5). After each turn the same scope check an implementer Attempt
-// gets reverts and records protected writes; nothing cuts yet (slice 6),
-// and nothing opens a Chat but tests until the home is wired to it (slice
-// 7).
+// gets reverts and records protected writes, and a turn with changes is
+// cut into a Run (slice 6, cut.go). Nothing opens a Chat but tests until
+// the home is wired to it (slice 7).
 
 // Chat log records (docs/ux/chat-first.md, "Ledger and Receipt"). A turn's
 // scope check writes ScopeObserved, ScopeReverted and TamperEvent, as an
@@ -74,6 +74,12 @@ type ChatParams struct {
 	Role string
 	// IdleTimeout is DefaultIdleTimeout when zero.
 	IdleTimeout time.Duration
+	// Config is the .oge/oge.toml Frozen was resolved from, or nil: every
+	// cut's.
+	Config []byte
+	// CacheSeedTemplate is a build cache the Chat's seed starts from. Only
+	// tests set it; see Params.CacheSeedTemplate.
+	CacheSeedTemplate string
 }
 
 // Chat is an open Chat. Its methods are safe to call concurrently.
@@ -90,6 +96,14 @@ type Chat struct {
 	deny      []string
 	checks    []string
 	frozen    *pipeline.Frozen
+	source    string // the user's repository
+	config    []byte
+	v0        string // Oracle v0's manifest blob
+	info      workspace.SnapshotInfo
+	state     *ledger.StateRoot
+	agents    map[string]agent.Adapter
+	getenv    func(string) string
+	seedTmpl  string
 	repo      *workspace.RunRepo
 	blobs     *ledger.Blobs
 	protected func(string) string // the implementer's protected set
@@ -110,13 +124,25 @@ type Chat struct {
 	// reverted each turn's reverts, for its Tamper event ids.
 	scopeMu  sync.Mutex
 	last     string
+	lastTurn int // the turn whose commit last is, 0 for the Snapshot
 	reverted map[int][]workspace.Revert
+
+	// The Preflight and the Snapshot control, started when the Chat opens
+	// (cut.go): prepared is closed once both have finished.
+	prepared   chan struct{}
+	prep       chatPrep
+	cancelPrep context.CancelFunc
+
+	cutMu   sync.Mutex // one cut at a time
+	lastCut *cutMark   // the last cut that reached a Run's walk
+	refused *Result    // the cut setup's failure refused
 
 	mu     sync.Mutex
 	sess   agent.Session
 	pumped chan struct{} // closed when the Session's events end
 	turns  int
-	msgs   []string // the user's turns, verbatim
+	msgs   []string     // the user's turns, verbatim
+	unsent map[int]bool // the turns whose message never reached the agent
 	// rebrief is set when the Session was reopened: its first turn gets
 	// the re-brief.
 	rebrief bool
@@ -241,7 +267,8 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	}
 
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
-		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{}}
+		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
+		source: p.Repo, config: p.Config, unsent: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -286,7 +313,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Snapshot, c.last = snap, snap
+	c.Snapshot, c.last, c.info = snap, snap, info
 	if err := repo.InitWorkspaceGit(c.Workspace); err != nil {
 		return nil, err
 	}
@@ -303,6 +330,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	if err := c.log(RecOracleVersion, map[string]any{"version": m.Version, "manifest": mBlob, "tests": len(m.Tests)}); err != nil {
 		return nil, err
 	}
+	c.v0 = mBlob
 	c.protected = implementerScope(m, p.Frozen)
 	if c.instr, err = repoInstructions(repo, snap); err != nil {
 		return nil, err
@@ -317,9 +345,9 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return nil, err
 	}
-	// Öge's private state and QA's directory, where held-out tests are
-	// written: the hard denies on top of the auto mode.
-	c.deny = []string{p.State.Private, filepath.Join(c.work, qaDir)}
+	// Öge's private state and QA's directories, where held-out tests are
+	// written, a cut's included: the hard denies on top of the auto mode.
+	c.deny = []string{p.State.Private, filepath.Join(c.work, qaDir), filepath.Join(c.work, cutsDir)}
 	c.spec = agent.LaunchSpec{
 		Role: role, Model: stage.Model, Effort: stage.Effort, Profile: stage.Profile, Workspace: c.Workspace,
 		Network: stage.Network, RunID: c.ID, RepoInstructions: c.instr, CheckCommands: checks,
@@ -335,6 +363,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 		c.sess.Close()
 		return nil, err
 	}
+	c.prepare(m, snap)
 	c.mu.Lock()
 	c.timer = time.AfterFunc(c.idle, c.idleOut)
 	c.mu.Unlock()
@@ -482,6 +511,7 @@ func (c *Chat) start(text string, out *turnOut) error {
 	// its Session ended, so the turn gets its scope check.
 	ran := false
 	if err != nil {
+		c.unsent[n] = true
 		last = &agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()}
 	} else if c.err != nil {
 		last = &agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()}
@@ -806,7 +836,7 @@ func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, 
 			ts.Tamper = append(ts.Tamper, r.Path)
 		}
 	}
-	c.last = commit
+	c.last, c.lastTurn = commit, n
 	return ts, map[string]any{"commit": commit, "promoted": ts.Promoted, "ambiguous": ts.Ambiguous, "excluded": ts.Excluded}, nil
 }
 
@@ -960,6 +990,12 @@ func (c *Chat) Close() error {
 		close(c.stop)
 		_ = sess.Close()
 		<-pumped
+		c.cancelPrep()
+		<-c.prepared
+		c.cutMu.Lock() // a cut in flight still uses the seed and the control
+		defer c.cutMu.Unlock()
+		c.prep.control.Stop()
+		c.prep.seed.Close()
 		c.logMu.Lock()
 		c.l.Close()
 		c.logMu.Unlock()
