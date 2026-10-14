@@ -43,6 +43,7 @@ const (
 	// ruleHumanAnswer is the human's answer to it.
 	ruleAutoAsk     = "auto_mode_ask"
 	ruleHumanAnswer = "human_answer"
+	ruleAskTooLong  = "ask_too_long"
 	ruleWithdrawn   = "ask_withdrawn" // claude cancelled the ask
 )
 
@@ -359,10 +360,61 @@ func under(path string, roots []string) bool {
 	return false
 }
 
+// askDetail is a tool call's whole target for an Ask: target's text with
+// every line of a command kept and nothing clipped, each line redacted
+// and without control characters.
+func askDetail(tool string, in map[string]any, ws []string) string {
+	str := func(k string) string { s, _ := in[k].(string); return s }
+	var t string
+	switch tool {
+	case "Bash":
+		t = shortenWorkspace(strings.TrimSpace(str("command")), ws)
+	case "AskUserQuestion":
+		return ""
+	default:
+		t = fullTarget(tool, in, ws)
+	}
+	lines := strings.Split(string(redact.Redact([]byte(t))), "\n")
+	for i, l := range lines {
+		lines[i] = noControl(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// questions are an AskUserQuestion's questions and their options' labels.
+func questions(in map[string]any) []agent.AskQuestion {
+	qs, _ := in["questions"].([]any)
+	var out []agent.AskQuestion
+	for _, q := range qs {
+		m, _ := q.(map[string]any)
+		text, _ := m["question"].(string)
+		qq := agent.AskQuestion{Text: noControl(string(redact.Redact([]byte(text))))}
+		opts, _ := m["options"].([]any)
+		for _, o := range opts {
+			om, _ := o.(map[string]any)
+			label, _ := om["label"].(string)
+			qq.Options = append(qq.Options, noControl(label))
+		}
+		out = append(out, qq)
+	}
+	return out
+}
+
 // target is a tool call's short, redacted target: a Workspace-relative
 // path, a pattern, or a command's first line. It never carries file
 // contents. ws is the Workspace, as given and with symlinks resolved.
 func target(tool string, in map[string]any, ws []string) string {
+	t := fullTarget(tool, in, ws)
+	if tool == "Bash" {
+		t, _, _ = strings.Cut(t, "\n")
+		t = shortenWorkspace(t, ws)
+	}
+	return shorten(noControl(string(redact.Redact([]byte(t)))), 80)
+}
+
+// fullTarget is target before it is redacted and clipped; a Bash
+// command is whole.
+func fullTarget(tool string, in map[string]any, ws []string) string {
 	str := func(k string) string { s, _ := in[k].(string); return s }
 	var t string
 	switch tool {
@@ -376,12 +428,11 @@ func target(tool string, in map[string]any, ws []string) string {
 			t += " in " + relPath(p, ws)
 		}
 	case "Bash":
-		t, _, _ = strings.Cut(strings.TrimSpace(str("command")), "\n")
-		t = shortenWorkspace(t, ws)
+		t = strings.TrimSpace(str("command"))
 	case "AskUserQuestion":
 		t = "a question"
 	}
-	return shorten(noControl(string(redact.Redact([]byte(t)))), 80)
+	return t
 }
 
 // noControl drops C0, DEL and C1 control characters, so no terminal

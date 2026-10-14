@@ -854,7 +854,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.navigating = false
 	h.visual = 0
 	if h.chat.fits(res) {
-		return h.chatSubmit(text, res)
+		return h.chatSubmit(text, res, nil)
 	}
 	t := task.Parse(text)
 	if h.thread != nil {

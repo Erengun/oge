@@ -203,11 +203,14 @@ type (
 	progressMsg struct {
 		at    time.Time
 		kind  run.EventKind
-		head  string   // EvStarted: the Run line
-		stage string   // the stage the event belongs to
-		text  string   // a finished stage's line, as plain mode prints it
-		sub   []string // further lines under it
-		fail  bool
+		head  string // EvStarted: the Run line
+		stage string // the stage the event belongs to
+		// unchanged: an implementer Attempt that ended done without
+		// changing anything; the Run ends Replied, so no stage follows.
+		unchanged bool
+		text      string   // a finished stage's line, as plain mode prints it
+		sub       []string // further lines under it
+		fail      bool
 		// timed: the lines carry their own durations (Check commands).
 		timed bool
 		step  string // EvAgent: one line of activity
@@ -280,6 +283,8 @@ func progressOf(ev run.Event, f *pipeline.Frozen, at time.Time) progressMsg {
 	case run.EvNotice:
 		m.step = "note: " + clean(ev.Notice)
 	case run.EvAttempt:
+		a := ev.Attempt
+		m.unchanged = a.Role == "implementer" && a.Cause != "send_back" && a.Exit == "done" && a.Failure == "" && a.Stop == "" && len(a.Changed) == 0
 		m.text = attemptText(ev.Attempt)
 		if s := scopeText(ev.Attempt); s != "" {
 			m.sub = []string{"scope " + s}
@@ -347,6 +352,7 @@ type model struct {
 	cancelling bool
 	still      bool // no spinner ticks: tests draw only on events
 	finished   bool
+	replied    bool // the Run ended Replied: what never ran isn't shown
 
 	width, height int
 	spin          int
@@ -556,6 +562,10 @@ func (m *model) apply(msg tea.Msg) bool {
 	case doneMsg:
 		m.gate = nil
 		m.runEnded(msg.res, msg.failed)
+		m.replied = msg.res != nil && msg.res.Outcome == run.Replied
+		if m.replied && m.cur < len(m.stages) && m.stages[m.cur].state == running {
+			m.stages[m.cur].state = pending // never ran: hidden, never ✗
+		}
 		if m.cur < len(m.stages) && m.stages[m.cur].state == running {
 			s := &m.stages[m.cur]
 			s.state, s.end = failed, msg.at
@@ -638,6 +648,11 @@ func (m *model) finish(msg progressMsg) {
 	}
 	m.steps, m.marks, m.more = nil, nil, 0
 	m.cur = len(m.stages)
+	if msg.unchanged && m.scroll {
+		// The home's turn ends Replied (#254): no Check or QA starts, so
+		// none spins. A one-shot Run goes on to its Check as before.
+		return
+	}
 	for j := range m.stages {
 		if m.stages[j].state == pending {
 			m.stages[j].state, m.stages[j].start = running, msg.at
@@ -715,6 +730,9 @@ func (m *model) stageLines(i int) []string {
 	st, s := m.st, m.stages[i]
 	name := fmt.Sprintf("%-10s", stageLabel(s.name, m.frozen))
 	if s.state == pending {
+		if m.replied {
+			return nil // a Replied Run's Check and QA never ran
+		}
 		text := s.text
 		if m.finished {
 			text = "not run"

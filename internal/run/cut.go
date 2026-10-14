@@ -32,6 +32,10 @@ const cutsDir = "cuts"
 // Promoted or Ambiguous: there is no Run, and no wait on Preflight.
 var ErrNothingToCut = errors.New("nothing to cut")
 
+// WhySetupChanged is a cut's Refused reason when its Pipeline changes the
+// Chat's Oracle, setup or Checks.
+const WhySetupChanged = "the Pipeline at the cut changes the Chat's Oracle, setup or Checks; only the mode can change in a Chat, so start a new one for that"
+
 // CutParams is what a cut freezes, the Pipeline in the Shift+Tab mode
 // current at the cut, and where its Run reports. The config is the
 // Chat's.
@@ -219,7 +223,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 // may change in a Chat, never the Oracle, the implementer's scope, setup
 // or the Checks its turns were briefed and held to.
 func (c *Chat) sameOracle(f *pipeline.Frozen) (string, error) {
-	const why = "the Pipeline at the cut changes the Chat's Oracle, setup or Checks; only the mode can change in a Chat, so start a new one for that"
+	const why = WhySetupChanged
 	if !reflect.DeepEqual(f.Project, c.frozen.Project) || !reflect.DeepEqual(f.Setup, c.frozen.Setup) || !reflect.DeepEqual(f.Checks, c.frozen.Checks) {
 		return why, nil
 	}

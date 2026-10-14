@@ -725,12 +725,29 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		}
 		return s.answer(id, subtype, d, input)
 	}
+	var in map[string]any
+	_ = json.Unmarshal(input, &in)
+	detail := askDetail(tool, in, s.policy.ws)
+	if strings.Count(detail, "\n")+1 > agent.AskMaxLines {
+		// The human can't consent to what the prompt can't show: denied
+		// without asking.
+		d.Decision, d.Rule = "deny", ruleAskTooLong
+		d.Reason = fmt.Sprintf("Öge denied this: it is too long to show the user for approval (more than %d lines). Run it as shorter commands.", agent.AskMaxLines)
+		if useID != "" {
+			s.decided[useID] = d
+		}
+		s.friction.decided(d)
+		sofar := s.friction.sofar()
+		s.mu.Unlock()
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
+		return s.answer(id, subtype, d, input)
+	}
 	pa := &pendingAsk{}
 	s.asks[id] = pa
 	s.mu.Unlock()
 	ask := d
 	ask.Decision, ask.Rule, ask.By, ask.Reason, ask.Hint = "ask", ruleAutoAsk, "agent_auto_mode", "", ""
-	reply := func(allow bool) error {
+	reply := func(ans agent.Answer) error {
 		s.mu.Lock()
 		if pa.done {
 			s.mu.Unlock()
@@ -742,14 +759,41 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		got := ask
 		got.By, got.Rule, got.Decision = "human", ruleHumanAnswer, "deny"
 		got.Reason = "The user denied this."
-		if allow {
+		if ans.Reason != "" {
+			got.Reason = ans.Reason
+		}
+		updated := input
+		if ans.Allow {
 			got.Decision, got.Reason = "allow", ""
+			if ans.Text != "" && tool == "AskUserQuestion" {
+				updated = withAnswer(in, ans.Text)
+			}
 		}
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &got})
-		return s.answer(id, subtype, got, input)
+		return s.answer(id, subtype, got, updated)
 	}
-	s.emit(agent.Event{Kind: agent.HostRequest, Host: &ask, Ask: agent.NewAsk(tool, ask.Target, reply)})
+	a := agent.NewAsk(tool, ask.Target, detail, reply)
+	if tool == "AskUserQuestion" {
+		a.Questions = questions(in)
+	}
+	s.emit(agent.Event{Kind: agent.HostRequest, Host: &ask, Ask: a})
 	return nil
+}
+
+// withAnswer is an AskUserQuestion's input with the human's text as the
+// answer to each of its questions, as claude takes it back.
+func withAnswer(in map[string]any, text string) json.RawMessage {
+	out := map[string]any{}
+	for k, v := range in {
+		out[k] = v
+	}
+	answers := map[string]any{}
+	for _, q := range questions(in) {
+		answers[q.Text] = text
+	}
+	out["answers"] = answers
+	b, _ := json.Marshal(out)
+	return b
 }
 
 // pendingAsk is an Ask not yet answered or withdrawn.

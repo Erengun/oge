@@ -139,6 +139,8 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/new")
 	}
 	h.last, h.thread = nil, nil
+	// A fresh task is a fresh Chat: the next message opens a new Session.
+	h.chat.reset()
 	return nil, ""
 }
 

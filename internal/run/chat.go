@@ -45,9 +45,11 @@ const (
 )
 
 // ChatFlag is the hidden escape hatch from the Chat: "0" refuses to open
-// one, and the bare oge home then runs each message as today's one-shot
-// pipeline. Slice 7 (#259) made the Chat the home's default; the flag stays
-// only because the home's fake-agent tests drive the old path.
+// one, and the bare oge home then runs each message as a one-shot Run, as
+// it does for an agent without an auto mode. Slice 7 (#259) made the Chat
+// the home's default for an agent with one (claude); it keeps the hatch
+// in case auto mode misbehaves live (#114). The fallback profile for an
+// agent without auto mode is deferred to the second agent (Codex, #60).
 const ChatFlag = "OGE_CHAT"
 
 // DefaultIdleTimeout is how long a Chat Session may sit with no turn in

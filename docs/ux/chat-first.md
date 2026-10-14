@@ -169,6 +169,7 @@ The first two ship value on today's `run.go`, before any new architecture. The C
    - Auto mode with Öge's hard denies, and the fallback profile.
    - The wiring and permissions ship together, so the trust layer is never visible on day one.
    - The flag is flipped here.
+   - Deferred (#259): the fallback profile ships with the second agent (Codex, #60). Until then an agent without auto mode runs each home message as a one-shot Run, and `OGE_CHAT=0` does the same for claude.
 8. **Background verification** (Opus).
    - The composer stays live during QA and the Check.
    - Superseded cuts are cancelled, Verdicts are cached, and a status line shows `verifying…`.

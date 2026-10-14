@@ -171,16 +171,44 @@ type TurnScope struct {
 // Ask is a permission prompt waiting for the host's answer.
 type Ask struct {
 	Tool, Target string
-	reply        func(allow bool) error
+	// Detail is the whole of what is asked about, as the human must see
+	// it to answer: every line of a command, never a clipped one. An
+	// adapter denies, without asking, what is too long to show
+	// (AskMaxLines).
+	Detail string
+	// Questions are an AskUserQuestion's questions, answered with text.
+	Questions []AskQuestion
+	reply     func(Answer) error
+}
+
+// AskMaxLines is the most lines an Ask's Detail may take: a longer one is
+// denied without asking, since consent to text the human can't see isn't
+// consent.
+const AskMaxLines = 8
+
+// AskQuestion is one question the agent asks the human, with its options.
+type AskQuestion struct {
+	Text    string
+	Options []string
+}
+
+// Answer is the host's answer to an Ask. Text answers a question; Reason
+// is why a denial was made, for the agent.
+type Answer struct {
+	Allow        bool
+	Text, Reason string
 }
 
 // NewAsk returns an Ask that reply answers; adapters build it.
-func NewAsk(tool, target string, reply func(allow bool) error) *Ask {
-	return &Ask{Tool: tool, Target: target, reply: reply}
+func NewAsk(tool, target, detail string, reply func(Answer) error) *Ask {
+	return &Ask{Tool: tool, Target: target, Detail: detail, reply: reply}
 }
 
-// Reply answers the ask; only the first answer counts.
-func (a *Ask) Reply(allow bool) error { return a.reply(allow) }
+// Reply answers the ask yes or no; only the first answer counts.
+func (a *Ask) Reply(allow bool) error { return a.reply(Answer{Allow: allow}) }
+
+// Answer answers the ask with ans; only the first answer counts.
+func (a *Ask) Answer(ans Answer) error { return a.reply(ans) }
 
 // ContextUse is the context an agent's last message used (input, cache read
 // and cache creation tokens) against the window the agent reported for its
