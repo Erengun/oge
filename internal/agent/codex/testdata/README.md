@@ -17,6 +17,7 @@ One JSON object per line: `{"t": seconds-since-process-start, "proc": label, "di
 | `kill_resume.jsonl` | `s2_…jsonl` lines 645–769 (procs C1, C2) | A turn cut off by killing the app-server mid-command (C1), then `thread/resume` of the same thread in a fresh process (C2). |
 | `held_approval.jsonl` | `s2_…jsonl` lines 770–875 (proc D) | A `fileChange` approval held unanswered for about 690 seconds, then declined. The turn still completes. |
 | `command_approval.jsonl` | `s2f_command_approval.jsonl` (proc F) | `item/commandExecution/requestApproval` with `availableDecisions` and `proposedExecpolicyAmendment`, answered `decline`. |
+| `implementer_thread_start.jsonl` | live, codex-cli 0.162.1, no turn (#60) | `thread/start` with Öge's `oge_implementer` profile and isolation recipe, and the envelope it reports. Recorded without a model turn. The scratch directory became `/home/user/scratch`, the home directory `/home/user`, and the user agent's OS and editor `Mac OS 15` and `terminal`. `remoteControl`, `account/updated` and `mcpServer/startupStatus/updated` frames were dropped. |
 
 `s2_…jsonl` is `s2_threads_approvals_steer_interrupt_kill_resume_hold.jsonl`. The other spike outputs (`s1_sandbox_profiles.txt`, `s1b_network.txt`, `s2e_env_policy.jsonl`, `s3_trust_entries.txt`) are findings, summarised in the research note, and stay at the source commit.
 

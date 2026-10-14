@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -82,16 +83,43 @@ func probeThen(t *testing.T, name string) []rec {
 	return nil
 }
 
-// asImplementer rewrites the recorded verifier envelope into the one an
-// implementer thread reports.
-func asImplementer(script []rec) {
+// recordedCache is the tool cache in implementer_thread_start.jsonl.
+const recordedCache = "/home/user/scratch/cache"
+
+// asImplementer gives the recorded verifier thread the envelope a live
+// implementer thread reported (implementer_thread_start.jsonl, 0.162.1).
+func asImplementer(t *testing.T, script []rec) {
+	t.Helper()
+	var live map[string]any
+	for _, r := range load(t, "implementer_thread_start.jsonl") {
+		if res, _ := r.Msg["result"].(map[string]any); res != nil && res["activePermissionProfile"] != nil {
+			live = res
+		}
+	}
 	for _, r := range script {
 		res, _ := r.Msg["result"].(map[string]any)
 		if res == nil || res["activePermissionProfile"] == nil {
 			continue
 		}
-		res["activePermissionProfile"] = map[string]any{"id": profileName, "extends": ":workspace"}
-		res["sandbox"].(map[string]any)["writableRoots"] = []any{}
+		res["activePermissionProfile"], res["sandbox"] = live["activePermissionProfile"], live["sandbox"]
+	}
+}
+
+func TestRecordedImplementerEnvelopePasses(t *testing.T) {
+	var e envelope
+	for _, r := range load(t, "implementer_thread_start.jsonl") {
+		if res, _ := r.Msg["result"].(map[string]any); res != nil && res["activePermissionProfile"] != nil {
+			b, _ := json.Marshal(res)
+			_ = json.Unmarshal(b, &e)
+		}
+	}
+	p := newProfile(agent.LaunchSpec{Role: "implementer", Workspace: "/home/user/scratch/ws", Cache: recordedCache, Network: "off"})
+	if err := p.check(e); err != nil {
+		t.Fatal(err)
+	}
+	p = newProfile(agent.LaunchSpec{Role: "implementer", Workspace: "/home/user/scratch/ws", Network: "off"})
+	if err := p.check(e); err == nil {
+		t.Error("a write root Öge didn't ask for passed")
 	}
 }
 
@@ -127,12 +155,15 @@ func (h *harness) open(script []rec, spec agent.LaunchSpec) (agent.Session, erro
 		Environ: func() []string {
 			return append(os.Environ(), "OGE_FAKECODEX_SCRIPT="+path, "OGE_FAKECODEX_LOG="+h.log)
 		},
-		SelfTest: func(context.Context, string, []string, *profile) error { h.tests++; return h.selfTest },
+		SelfTest: func(context.Context, string, []string, *profile, []string) error { h.tests++; return h.selfTest },
 	}
 	if spec.Role == "" {
 		spec.Role = "implementer"
 	}
 	spec.Workspace = h.ws
+	if spec.Cache == "" {
+		spec.Cache = recordedCache
+	}
 	return a.Open(context.Background(), spec)
 }
 
@@ -177,7 +208,7 @@ func untilSettled(t *testing.T, s agent.Session) []agent.Event {
 func TestCommandApprovalIsDeclinedOneShot(t *testing.T) {
 	h := &harness{t: t}
 	script := probeThen(t, "command_approval.jsonl")
-	asImplementer(script)
+	asImplementer(t, script)
 	s, err := h.open(script, agent.LaunchSpec{RepoInstructions: "snapshot rules"})
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +312,7 @@ func TestOldCodexIsRefused(t *testing.T) {
 func TestSelfTestFailureFailsClosed(t *testing.T) {
 	h := &harness{t: t, selfTest: errors.New("read private")}
 	script := probeThen(t, "command_approval.jsonl")
-	asImplementer(script)
+	asImplementer(t, script)
 	_, err := h.open(script, agent.LaunchSpec{})
 	if err == nil || !strings.Contains(err.Error(), "self-test") {
 		t.Fatalf("Open = %v", err)
@@ -291,18 +322,47 @@ func TestSelfTestFailureFailsClosed(t *testing.T) {
 	}
 }
 
-func TestDeathDuringTurnFailsIt(t *testing.T) {
-	h := &harness{t: t}
-	script := probeThen(t, "command_approval.jsonl")
-	asImplementer(script)
-	for i, r := range script {
-		if r.Msg["method"] == "turn/started" {
-			cut := append([]rec{}, script[:i+1]...)
-			cut = append(cut, rec{Dir: "s2c", Msg: map[string]any{"method": "thread/brandNew", "params": map[string]any{"secret": "x"}}}, rec{Dir: "exit"})
-			script = cut
-			break
+// lines are a recording's lines from and to (1-based, inclusive), with
+// their thread id made the one thread/start reported in base.
+func lines(t *testing.T, base []rec, name string, from, to int) []rec {
+	t.Helper()
+	var thread string
+	for _, r := range base {
+		if res, _ := r.Msg["result"].(map[string]any); res != nil && res["activePermissionProfile"] != nil {
+			thread = res["thread"].(map[string]any)["id"].(string)
 		}
 	}
+	recs := load(t, name)[from-1 : to]
+	old := recs[0].Msg["params"].(map[string]any)["threadId"].(string)
+	var out []rec
+	for _, r := range recs {
+		b, _ := json.Marshal(r)
+		var c rec
+		_ = json.Unmarshal(bytes.ReplaceAll(b, []byte(old), []byte(thread)), &c)
+		out = append(out, c)
+	}
+	return out
+}
+
+// upToThread is the probe and command_approval's implementer thread/start.
+func upToThread(t *testing.T) []rec {
+	script := probeThen(t, "command_approval.jsonl")
+	asImplementer(t, script)
+	for i, r := range script {
+		if r.Msg["method"] == "thread/start" {
+			return script[:i+2]
+		}
+	}
+	t.Fatal("no thread/start")
+	return nil
+}
+
+func TestDeathDuringTurnFailsIt(t *testing.T) {
+	h := &harness{t: t}
+	base := upToThread(t)
+	// kill_resume's first process was killed mid-command (lines 11-28).
+	script := append(base, lines(t, base, "kill_resume.jsonl", 11, 28)...)
+	script = append(script, rec{Dir: "s2c", Msg: map[string]any{"method": "thread/brandNew", "params": map[string]any{"secret": "x"}}}, rec{Dir: "exit"})
 	s, err := h.open(script, agent.LaunchSpec{})
 	if err != nil {
 		t.Fatal(err)
@@ -325,14 +385,41 @@ func TestDeathDuringTurnFailsIt(t *testing.T) {
 	}
 }
 
+func TestInterruptIsAcknowledgedByTurnCompleted(t *testing.T) {
+	h := &harness{t: t}
+	base := upToThread(t)
+	// steer_interrupt_resume lines 72-83: a turn, turn/interrupt, and
+	// turn/completed{interrupted}.
+	s, err := h.open(append(base, lines(t, base, "steer_interrupt_resume.jsonl", 72, 83)...), agent.LaunchSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Send(agent.Turn{Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	evs := untilSettled(t, s)
+	if last := evs[len(evs)-1]; last.Failure != "interrupted" {
+		t.Errorf("settled = %+v, want interrupted", last)
+	}
+	// The turn has ended: no second interrupt goes out.
+	if err := s.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := len(h.sent()["turn/interrupt"]); n != 1 {
+		t.Errorf("sent %d interrupts, want 1", n)
+	}
+}
+
 // bare is a session with no process, for frame-level tests.
 func bare(spec agent.LaunchSpec) (*session, *bytes.Buffer) {
 	var out bytes.Buffer
 	s := &session{stdin: nopCloser{&out}, events: make(chan agent.Event, 64), stop: make(chan struct{}), exited: make(chan struct{}),
 		pending: map[int]chan reply{}, items: map[string][]string{}, prof: newProfile(spec), ws: withReal(spec.Workspace), opened: true}
-	for _, d := range spec.DenyRead {
-		s.private = append(s.private, withReal(d)...)
-	}
 	return s, &out
 }
 
@@ -340,52 +427,133 @@ type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
 
-func TestFileChangeApprovalJoinsItsItem(t *testing.T) {
-	recs := load(t, "held_approval.jsonl")
-	var started, request []byte
-	for _, r := range recs {
-		b, _ := json.Marshal(r.Msg)
+func TestFileChangeApprovalsAreDeclined(t *testing.T) {
+	var started, request map[string]any
+	for _, r := range load(t, "held_approval.jsonl") {
 		switch r.Msg["method"] {
 		case "item/started":
 			if it := r.Msg["params"].(map[string]any)["item"].(map[string]any); it["type"] == "fileChange" {
-				started = b
+				started = r.Msg
 			}
 		case "item/fileChange/requestApproval":
-			request = b
+			request = r.Msg
 		}
 	}
-	// The recorded Workspace becomes a real path on this platform.
-	dir := filepath.Join(t.TempDir(), "ws")
-	quoted, _ := json.Marshal(dir)
-	started = bytes.ReplaceAll(started, []byte(ws), quoted[1:len(quoted)-1])
-	for _, c := range []struct {
-		name    string
-		spec    agent.LaunchSpec
-		started bool
-		want    string
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	work := filepath.Join(dir, "ws")
+	for _, d := range []string{home, work} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(work, "link")
+	symlinked := os.Symlink(home, link) == nil
+	thread := started["params"].(map[string]any)["threadId"].(string)
+	itemID := request["params"].(map[string]any)["itemId"].(string)
+	change := func(path string, kind map[string]any) map[string]any {
+		return map[string]any{"method": "item/started", "params": map[string]any{"threadId": thread,
+			"item": map[string]any{"type": "fileChange", "id": itemID, "changes": []any{map[string]any{"path": path, "kind": kind}}}}}
+	}
+	withGrant := func(root string) map[string]any {
+		b, _ := json.Marshal(request)
+		var r map[string]any
+		_ = json.Unmarshal(b, &r)
+		r["params"].(map[string]any)["grantRoot"] = root
+		return r
+	}
+	cases := []struct {
+		name             string
+		started, request map[string]any
 	}{
-		{"contained", agent.LaunchSpec{Workspace: dir}, true, "accept"},
-		{"private", agent.LaunchSpec{Workspace: dir, DenyRead: []string{filepath.Join(dir, "README.md")}}, true, "decline"},
-		{"outside", agent.LaunchSpec{Workspace: filepath.Join(t.TempDir(), "elsewhere")}, true, "decline"},
-		{"unknown item", agent.LaunchSpec{Workspace: dir}, false, "decline"},
-	} {
-		s, out := bare(c.spec)
-		s.thread = "01a1082c-8e7a-7500-862d-a89838d92417"
-		if c.started {
-			if err := s.frame(started); err != nil {
+		{"recorded, inside the Workspace", change(filepath.Join(work, "README.md"), map[string]any{"type": "update"}), request},
+		{"move_path out of the Workspace", change(filepath.Join(work, "a.txt"), map[string]any{"type": "update", "move_path": filepath.Join(home, ".zshrc")}), request},
+		{"grantRoot", change(filepath.Join(work, "a.txt"), map[string]any{"type": "add"}), withGrant(work)},
+		{"unknown item", nil, request},
+	}
+	if symlinked {
+		cases = append(cases, struct {
+			name             string
+			started, request map[string]any
+		}{"through a symlink", change(filepath.Join(link, ".zshrc"), map[string]any{"type": "update"}), request})
+	}
+	for _, c := range cases {
+		s, out := bare(agent.LaunchSpec{Workspace: work})
+		s.thread = thread
+		for _, m := range []map[string]any{c.started, c.request} {
+			if m == nil {
+				continue
+			}
+			b, _ := json.Marshal(m)
+			if err := s.frame(b); err != nil {
 				t.Fatal(err)
 			}
-		}
-		if err := s.frame(request); err != nil {
-			t.Fatal(err)
 		}
 		var ans struct {
 			Result struct{ Decision string } `json:"result"`
 		}
 		_ = json.Unmarshal(out.Bytes(), &ans)
-		if ans.Result.Decision != c.want {
-			t.Errorf("%s: answered %s, want %s", c.name, out.String(), c.want)
+		if ans.Result.Decision != "decline" {
+			t.Errorf("%s: answered %s, want decline", c.name, out.String())
 		}
+		var host *agent.HostDecision
+		for len(s.events) > 0 {
+			if ev := <-s.events; ev.Kind == agent.HostRequest {
+				host = ev.Host
+			}
+		}
+		if host == nil || host.Decision != "deny" || !strings.HasSuffix(host.Reason, noReasonToModel) {
+			t.Errorf("%s: host decision = %+v", c.name, host)
+		}
+	}
+}
+
+func TestSandboxSelfTestExitCodes(t *testing.T) {
+	ws := t.TempDir()
+	p := newProfile(agent.LaunchSpec{Workspace: ws})
+	secret := "sk-" + strings.Repeat("x", 24)
+	for _, c := range []struct {
+		code, out, sleep, want string
+	}{
+		{"0", "", "", ""},
+		{"3", "", "", "couldn't read the Workspace"},
+		{"4", "/private/dir", "", "let a command read /private/dir"},
+		{"5", ws + "/.git/HEAD", "", "let a command write"},
+		{"1", "boom " + secret, "", "codex sandbox failed"},
+		{"0", "", "5s", "didn't finish"},
+	} {
+		old := selfTestTimeout
+		if c.sleep != "" {
+			selfTestTimeout = 200 * time.Millisecond
+		}
+		env := append(os.Environ(), "OGE_FAKECODEX_SANDBOX_EXIT="+c.code, "OGE_FAKECODEX_SANDBOX_OUT="+c.out, "OGE_FAKECODEX_SANDBOX_SLEEP="+c.sleep)
+		err := sandboxSelfTest(context.Background(), fakePath, env, p, nil)
+		selfTestTimeout = old
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("exit %s: %v", c.code, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("exit %s: %v, want %q", c.code, err, c.want)
+		case err != nil && strings.Contains(err.Error(), secret):
+			t.Errorf("exit %s: the output wasn't redacted: %v", c.code, err)
+		}
+	}
+}
+
+func TestSelfTestCacheKeysOnProbedPaths(t *testing.T) {
+	ws := t.TempDir()
+	qa := filepath.Join(t.TempDir(), "qa")
+	p := newProfile(agent.LaunchSpec{Workspace: ws, DenyRead: []string{qa}})
+	before := p.probes()
+	if err := os.Mkdir(qa, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	after := p.probes()
+	if !slices.Contains(after, filepath.Clean(qa)) || slices.Contains(before, filepath.Clean(qa)) {
+		t.Fatalf("probes before %q, after %q", before, after)
+	}
+	if selfTestKey("codex", "0.160.1", p, before) == selfTestKey("codex", "0.160.1", p, after) {
+		t.Error("a newly existing denied path reuses the old self-test result")
 	}
 }
 

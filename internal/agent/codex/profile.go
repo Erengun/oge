@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,8 +15,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/proc"
 )
 
 // profileName is the inline permission profile every implementer thread
@@ -171,47 +174,98 @@ func (p *profile) check(e envelope) error {
 	return nil
 }
 
-// selfTestScript lists $1 (the Workspace, the control: the sandbox ran
-// and can read), then must fail to read every other argument.
+// selfTestScript reads $1 (the Workspace: the control, proving the
+// sandbox ran), must fail to append to $2 (the Workspace's .git, when
+// there is one; the append writes nothing) and must fail to read every
+// further argument.
 const selfTestScript = `ls "$1" >/dev/null 2>&1 || exit 3
-shift
+if [ -n "$2" ]; then ( : >> "$2" ) 2>/dev/null && { echo "$2"; exit 5; }; fi
+shift 2
 for p in "$@"; do
   if [ -d "$p" ]; then ls "$p" >/dev/null 2>&1 && { echo "$p"; exit 4; }
   else head -c1 "$p" >/dev/null 2>&1 && { echo "$p"; exit 4; }; fi
 done
 exit 0`
 
-// sandboxSelfTest proves, without a model, what thread/start can't show:
-// that the same inline profile denies reading Öge's private paths
-// (ADR-0018). It runs codex sandbox -P with the profile thread/start is
-// sent.
-func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile) error {
-	args := []string{"sandbox", "-c", "permissions." + profileName + "=" + toml(p.perm), "-P", profileName,
-		"-C", p.spec.Workspace, "--", "/bin/sh", "-c", selfTestScript, "oge-self-test", p.spec.Workspace}
-	for _, d := range p.spec.DenyRead {
-		if _, err := os.Stat(d); err == nil {
-			args = append(args, d)
+// selfTestTimeout bounds one self-test run.
+var selfTestTimeout = time.Minute
+
+// probes are the denied paths that exist now, which the self-test reads:
+// Öge's DenyRead paths, ~/.ssh and Codex's auth.json.
+func (p *profile) probes() []string {
+	var out []string
+	for path, access := range p.perm["filesystem"].(map[string]any) {
+		if access != "deny" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			out = append(out, path)
 		}
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Dir, cmd.Env = p.spec.Workspace, env
-	out, err := cmd.CombinedOutput()
+	sort.Strings(out)
+	return out
+}
+
+// gitProbe is the Workspace's .git entry an append would change: HEAD in
+// a .git directory, or a worktree's .git file; "" when there is none.
+func (p *profile) gitProbe() string {
+	git := filepath.Join(p.spec.Workspace, ".git")
+	fi, err := os.Stat(git)
+	switch {
+	case err != nil:
+		return ""
+	case fi.IsDir():
+		return filepath.Join(git, "HEAD")
+	}
+	return git
+}
+
+// sandboxSelfTest proves, without a model, what thread/start can't show:
+// that the same inline profile denies reading each probe and writing the
+// Workspace's .git (ADR-0018). It runs codex sandbox -P in its own
+// process group, bounded by selfTestTimeout.
+func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile, probes []string) error {
+	args := []string{"sandbox", "-c", "permissions." + profileName + "=" + toml(p.perm), "-P", profileName,
+		"-C", p.spec.Workspace, "--", "/bin/sh", "-c", selfTestScript, "oge-self-test", p.spec.Workspace, p.gitProbe()}
+	cmd := exec.Command(path, append(args, probes...)...)
+	var out bytes.Buffer
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = p.spec.Workspace, env, &out, &out
+	if err := proc.Start(cmd); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- proc.Wait(cmd) }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(selfTestTimeout):
+		proc.Kill(cmd)
+		<-done
+		return fmt.Errorf("codex sandbox didn't finish within %s", selfTestTimeout)
+	case <-ctx.Done():
+		proc.Kill(cmd)
+		<-done
+		return ctx.Err()
+	}
+	last := clip(redacted(strings.TrimSpace(lastLine(out.String()))))
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
 		return nil
-	case errors.As(err, &ee) && ee.ExitCode() == 4:
-		return fmt.Errorf("the sandbox let a command read %s", clip(strings.TrimSpace(lastLine(string(out)))))
 	case errors.As(err, &ee) && ee.ExitCode() == 3:
 		return errors.New("the sandbox couldn't read the Workspace")
+	case errors.As(err, &ee) && ee.ExitCode() == 4:
+		return fmt.Errorf("the sandbox let a command read %s", last)
+	case errors.As(err, &ee) && ee.ExitCode() == 5:
+		return fmt.Errorf("the sandbox let a command write %s", last)
 	}
-	return fmt.Errorf("codex sandbox failed (%v): %s", err, clip(redacted(lastLine(string(out)))))
+	return fmt.Errorf("codex sandbox failed (%v): %s", err, last)
 }
 
 // selfTestKey is what a self-test result may be reused for: the same
-// binary and version, platform and profile (ADR-0018).
-func selfTestKey(path, version string, p *profile) string {
-	b, _ := json.Marshal([]any{path, version, runtime.GOOS, runtime.GOARCH, p.perm, p.spec.Workspace, p.spec.DenyRead})
+// binary and version, platform, profile, and paths probed (ADR-0018).
+func selfTestKey(path, version string, p *profile, probes []string) string {
+	b, _ := json.Marshal([]any{path, version, runtime.GOOS, runtime.GOARCH, p.perm, p.spec.Workspace, p.gitProbe(), probes})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

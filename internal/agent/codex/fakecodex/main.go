@@ -2,7 +2,8 @@
 // adapter's contract tests. It replays the script in OGE_FAKECODEX_SCRIPT
 // (testdata's recording format): it waits for each recorded client
 // message, matching requests by method, answers under the client's own
-// id, and writes every client message to OGE_FAKECODEX_LOG.
+// id, and writes every client message to OGE_FAKECODEX_LOG. As
+// `codex sandbox` it stubs the self-test.
 package main
 
 import (
@@ -11,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 )
 
 type line struct {
@@ -19,6 +22,15 @@ type line struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "sandbox" {
+		// The self-test's stub: print, wait and exit as told.
+		fmt.Println(os.Getenv("OGE_FAKECODEX_SANDBOX_OUT"))
+		if d, err := time.ParseDuration(os.Getenv("OGE_FAKECODEX_SANDBOX_SLEEP")); err == nil {
+			time.Sleep(d)
+		}
+		code, _ := strconv.Atoi(os.Getenv("OGE_FAKECODEX_SANDBOX_EXIT"))
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 || os.Args[1] != "app-server" {
 		fmt.Fprintln(os.Stderr, "fakecodex: only app-server is faked")
 		os.Exit(2)

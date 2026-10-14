@@ -58,7 +58,7 @@ type Adapter struct {
 	// closeGrace.
 	CloseGrace time.Duration
 	// SelfTest proves the profile's denies; nil means sandboxSelfTest.
-	SelfTest func(ctx context.Context, path string, env []string, p *profile) error
+	SelfTest func(ctx context.Context, path string, env []string, p *profile, probes []string) error
 
 	mu     sync.Mutex
 	passed map[string]bool // self-test results that passed, by selfTestKey
@@ -114,9 +114,6 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		cmd: cmd, stdin: stdin, events: make(chan agent.Event, 256), stop: make(chan struct{}), exited: make(chan struct{}),
 		pending: map[int]chan reply{}, items: map[string][]string{}, prof: prof, hash: prof.hash(),
 		ws: withReal(spec.Workspace), timeout: a.Timeout, grace: a.CloseGrace,
-	}
-	for _, d := range spec.DenyRead {
-		s.private = append(s.private, withReal(d)...)
 	}
 	if s.timeout == 0 {
 		s.timeout = requestTimeout
@@ -183,12 +180,15 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	if test == nil {
 		test = sandboxSelfTest
 	}
-	key := selfTestKey(path, ver, s.prof)
+	// The key is the paths actually probed: one that appears later, such
+	// as QA's directory on a send-back, forces a new test.
+	probes := s.prof.probes()
+	key := selfTestKey(path, ver, s.prof, probes)
 	a.mu.Lock()
 	cached := a.passed[key]
 	a.mu.Unlock()
 	if !cached {
-		if err := test(ctx, path, env, s.prof); err != nil {
+		if err := test(ctx, path, env, s.prof, probes); err != nil {
 			return fmt.Errorf("codex's sandbox self-test failed, so Öge can't prove its private files are hidden: %w", err)
 		}
 		a.mu.Lock()
@@ -226,7 +226,6 @@ type session struct {
 	prof    *profile
 	hash    string
 	ws      []string // the Workspace, as given and with symlinks resolved
-	private []string
 	version string
 	auth    string
 
@@ -359,9 +358,6 @@ func (s *session) Send(t agent.Turn) error {
 		if older(LastTested, s.version) {
 			s.emit(agent.Event{Kind: agent.Warning, Text: "envelope: codex " + clip(s.version) + " is newer than " + LastTested + ", the last version Öge was tested with"})
 		}
-		// ADR-0018: the implementer keeps Codex's shell snapshot, which
-		// defeats the environment policy.
-		s.emit(agent.Event{Kind: agent.Warning, Text: "envelope: the implementer's shell commands can see the environment's credentials (a Codex limitation)"})
 	}
 	var r struct {
 		Turn struct {
@@ -673,15 +669,17 @@ func (s *session) notification(m message) {
 // Policy rules, as recorded on each HostDecision; the same names as the
 // claude adapter's.
 const (
-	rulePreAuthorised = "pre_authorised"
-	ruleOutside       = "outside_role"
 	ruleNoInteractive = "no_interactive_approval"
 	ruleUnchecked     = "envelope_not_passed"
 )
 
-// request answers a server request. Approvals are one-shot: only accept,
-// decline or cancel is ever sent, never a session-wide amendment
-// (ADR-0018). Any other request is refused.
+// noReasonToModel ends every decline's recorded reason.
+const noReasonToModel = " (Codex doesn't pass this reason to the model.)"
+
+// request answers a server request. Approvals are one-shot and, in C1,
+// always declined: codex asks only for what its sandbox refused, and Öge
+// never pre-authorises leaving the sandbox. No session-wide amendment is
+// ever sent (ADR-0018). Any other request is refused.
 func (s *session) request(m message) error {
 	var p struct {
 		ItemID string `json:"itemId"`
@@ -698,18 +696,18 @@ func (s *session) request(m message) error {
 		d.Rule, d.Reason = ruleNoInteractive, "Öge denied this: running a command outside Codex's sandbox isn't pre-authorised."
 	case "item/fileChange/requestApproval":
 		// The request names only the item; its paths came with
-		// item/started (ADR-0018).
+		// item/started (ADR-0018), and are shown, never trusted: codex
+		// asks only for a write its sandbox refused, so accepting would
+		// write outside the sandbox, and a grantRoot would keep that
+		// open for the rest of the thread.
 		s.mu.Lock()
-		paths, known := s.items[p.ItemID]
+		paths := s.items[p.ItemID]
 		s.mu.Unlock()
 		d.Tool = "Edit"
 		if len(paths) > 0 {
 			d.Target = s.target(paths[0])
 		}
-		d.Rule, d.Reason = ruleOutside, "Öge denied this: it writes outside the Workspace, under .git or into Öge's private files."
-		if known && len(paths) > 0 && s.contained(paths) {
-			d.Decision, d.Rule, d.Reason = "allow", rulePreAuthorised, "pre-authorised by Launch profile "+s.hash
-		}
+		d.Rule, d.Reason = ruleNoInteractive, "Öge denied this: writing outside Codex's sandbox isn't pre-authorised."
 	default:
 		s.emit(agent.Event{Kind: agent.Unknown, Text: "server_request/" + clip(m.Method)})
 		return s.write(map[string]any{"id": m.ID, "error": map[string]any{"code": -32601, "message": "Öge doesn't support " + m.Method}})
@@ -720,32 +718,10 @@ func (s *session) request(m message) error {
 	if !open {
 		d.Decision, d.Rule, d.Reason = "deny", ruleUnchecked, "Öge denied this: the agent's startup envelope hasn't passed."
 	}
+	// Codex takes no decline reason: the model never sees it (ADR-0018).
+	d.Reason += noReasonToModel
 	s.emit(agent.Event{Kind: agent.HostRequest, Host: &d})
-	decision := "decline"
-	if d.Decision == "allow" {
-		decision = "accept"
-	}
-	return s.write(map[string]any{"id": m.ID, "result": map[string]any{"decision": decision}})
-}
-
-// contained reports whether every path is inside the Workspace, outside
-// any .git and outside Öge's private paths.
-func (s *session) contained(paths []string) bool {
-	for _, p := range paths {
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(s.ws[0], p)
-		}
-		p = filepath.Clean(p)
-		if !under(p, s.ws) || under(p, s.private) {
-			return false
-		}
-		for _, part := range strings.Split(filepath.ToSlash(p), "/") {
-			if strings.EqualFold(part, ".git") {
-				return false
-			}
-		}
-	}
-	return true
+	return s.write(map[string]any{"id": m.ID, "result": map[string]any{"decision": "decline"}})
 }
 
 // target is a short, redacted target: a command's first line, or a path
@@ -759,15 +735,6 @@ func (s *session) target(t string) string {
 		}
 	}
 	return shorten(redacted(t), 120)
-}
-
-func under(path string, roots []string) bool {
-	for _, r := range roots {
-		if path == r || strings.HasPrefix(path, r+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
 }
 
 func withReal(dir string) []string {
