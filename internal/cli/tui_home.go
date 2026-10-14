@@ -461,6 +461,10 @@ type lastRun struct {
 	// patch is the Candidate's diff from the Snapshot, for the Chat's
 	// inline diff.
 	patch func() ([]byte, error)
+	// delivered, when set, is what apply or branch (how) shows, given
+	// what the command printed and its exit code: a Chat's cut marks its
+	// delivery there.
+	delivered func(how, out string, code int) string
 }
 
 // act runs one of the Run's actions by its key; arg is a branch's name.
@@ -1617,6 +1621,10 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			if err != nil {
 				return line + "\noge: reading the Run for delivery: " + clean(err.Error()), nil
 			}
+			c := hc.get()
+			l.delivered = func(how, out string, code int) string {
+				return h.chatDelivered(c, res, changed, how, out, code)
+			}
 			return line, l
 		}
 	}
@@ -1709,20 +1717,24 @@ func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText
 	}
 	// Once applied the Receipt lists the Delivery, so it says nothing about
 	// what was written itself.
-	deliver := func(do func(Env) int) func() string {
-		return func() string {
-			var b strings.Builder
-			q := env
-			q.Stdout, q.Stderr = &b, &b
-			do(q)
-			return b.String()
+	var s *lastRun
+	deliver := func(how string, do func(Env) int) string {
+		var b strings.Builder
+		q := env
+		q.Stdout, q.Stderr = &b, &b
+		code := do(q)
+		if s.delivered != nil {
+			return s.delivered(how, b.String(), code)
 		}
+		return b.String()
 	}
-	s := &lastRun{
-		id:    r.ID,
-		apply: deliver(func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) }),
+	s = &lastRun{
+		id: r.ID,
+		apply: func() string {
+			return deliver("apply", func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) })
+		},
 		branch: func(name string) string {
-			return deliver(func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })()
+			return deliver("branch", func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })
 		},
 		receipt: receiptText,
 		patch:   func() ([]byte, error) { return delivery.Diff(r) },

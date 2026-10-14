@@ -647,6 +647,65 @@ func (h *home) turnView() string {
 	return strings.Join(lines, "\n")
 }
 
+// chatDelivered is what /apply or /branch of the cut res shows: once it
+// is delivered the Chat marks it, so the next cut's Task starts after its
+// turns (D7), and an apply is summed up in three lines (the outcome, the
+// files, the checks) with the Receipt behind /receipt. A refusal shows
+// as the command printed it; the Chat goes on either way.
+func (h *home) chatDelivered(c *run.Chat, res *run.Result, changed int, how, out string, code int) string {
+	if code != ExitOK || c == nil {
+		return out
+	}
+	var note string
+	if err := c.Delivered(res.ID, how); err != nil {
+		note = "\n" + h.ogeLine("✗ marking the delivery: "+clean(err.Error()))
+	}
+	if how != "apply" {
+		return strings.TrimSuffix(out, "\n") + note
+	}
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	files := []string{}
+	if a := res.Attempt; a != nil {
+		files = a.Changed
+	}
+	shown := files
+	if len(shown) > 5 {
+		shown = shown[:5]
+	}
+	what := plural(max(len(files), changed), "file")
+	if len(shown) > 0 {
+		what += ": " + clean(strings.Join(shown, ", "))
+		if len(files) > len(shown) {
+			what += fmt.Sprintf(", +%d more", len(files)-len(shown))
+		}
+	}
+	sum := []string{
+		h.ogeLine("✓ Applied " + clean(res.ID) + " to your working tree · nothing committed or staged · /receipt"),
+		"  " + what,
+		"  checks: " + checkSummary(res),
+	}
+	// What a hold-back left out is never dropped from the summary.
+	sum = append(sum, lines[1:]...)
+	return strings.Join(sum, "\n") + note
+}
+
+// checkSummary is a cut's Check in a few words: how many tests passed.
+func checkSummary(res *run.Result) string {
+	check := "Check passed"
+	if c := res.Check; c != nil {
+		passed := 0
+		for _, t := range c.Tests {
+			if t.Attested == "pass" {
+				passed++
+			}
+		}
+		if passed > 0 {
+			check = fmt.Sprintf("%d passed", passed)
+		}
+	}
+	return check
+}
+
 // verdictLine sums a cut's Run up in one line.
 func verdictLine(res *run.Result, changed int) string {
 	if n := res.Attempt; n != nil && len(n.Changed) > 0 {
@@ -655,19 +714,7 @@ func verdictLine(res *run.Result, changed int) string {
 	what := plural(changed, "file")
 	switch res.Outcome {
 	case run.Accepted:
-		check := "Check passed"
-		if c := res.Check; c != nil {
-			passed := 0
-			for _, t := range c.Tests {
-				if t.Attested == "pass" {
-					passed++
-				}
-			}
-			if passed > 0 {
-				check = fmt.Sprintf("%d passed", passed)
-			}
-		}
-		return "✓ Accepted · " + what + " · " + check + " · /apply /diff"
+		return "✓ Accepted · " + what + " · " + checkSummary(res) + " · /apply /diff"
 	case run.Failed:
 		return "✗ Failed · " + what + " · the Check failed · /diff /receipt"
 	case run.Parked:

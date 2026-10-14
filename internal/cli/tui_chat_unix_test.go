@@ -83,6 +83,7 @@ func TestHomeChatRepliesRemembersAndCuts(t *testing.T) {
 		{Reply: "hello from the chat"},
 		{Reply: "still the same session", Tools: []multiturn.Tool{{Name: "Bash", Target: "ls"}}},
 		{Reply: "fixed Add", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"}}},
+		{Reply: "still here"},
 	}}, nil)
 	s.composer()
 	s.type_("yo\r")
@@ -101,11 +102,29 @@ func TestHomeChatRepliesRemembersAndCuts(t *testing.T) {
 	s.expect("oge › ✓ Accepted · 1 file · ")
 	s.composer()
 	s.type_("/apply\r")
-	s.expect("Applied")
+	s.expect("oge › ✓ Applied ")
+	s.expect("  1 file: add.go")
+	s.expect("  checks: ")
 	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "a + b") {
 		t.Errorf("/apply didn't deliver the cut:\n%s", b)
 	}
+	s.composer()
+	s.type_("anything else?\r") // the Chat goes on
+	s.expect("  still here")
+	s.mark = len(s.out.String()) // the composer back after the turn, not the one typed in
+	s.composer()
 	s.quitChat(f)
+	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
+	recs, _ := ledger.Replay(logs[0])
+	delivered := 0
+	for _, r := range recs {
+		if r.Type == run.RecDelivered {
+			delivered++
+		}
+	}
+	if delivered != 1 {
+		t.Errorf("%d Delivered records in the Chat log, want 1", delivered)
+	}
 }
 
 // An ask shows its whole command and takes y or n; a command too long to
