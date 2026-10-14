@@ -135,6 +135,10 @@ func homeUntil(t *testing.T, f *runFixture, script, typ string, args ...string) 
 	s.type_("yo\r")
 	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
 		if dirs := runDirs(t, f); len(dirs) == 1 {
+			// The Run dir exists a moment before its Ledger does.
+			if _, err := os.Stat(filepath.Join(dirs[0], "ledger.jsonl")); err != nil {
+				continue
+			}
 			if len(records(t, dirs[0], typ)) > 0 {
 				return dirs[0], s
 			}
