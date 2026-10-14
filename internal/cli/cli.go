@@ -23,7 +23,7 @@ import (
 
 // Exit codes used so far (ADR-0015).
 const (
-	ExitOK         = 0
+	ExitOK         = 0 // also Replied: no changes, nothing to deliver
 	ExitInternal   = 1
 	ExitRefused    = 2 // usage, config or Preflight refusal
 	ExitRejected   = 3

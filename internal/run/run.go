@@ -43,6 +43,10 @@ const (
 	InfrastructureStop Outcome = "Infrastructure stop"
 	// Parked is a status: the Run waits for a human decision.
 	Parked Outcome = "Parked"
+	// Replied means the implementer answered and changed nothing to verify:
+	// no Promoted or Ambiguous change against the revision the Run started
+	// from. There is no QA, Check or Verdict, and nothing to deliver.
+	Replied Outcome = "Replied"
 )
 
 // Ledger record types, in the order a Run writes them.
@@ -607,6 +611,24 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			// A Tamper event stays unacknowledged for the rest of the Run,
 			// whatever later Attempts do (ADR-0019 #2).
 			w.addTamper(a)
+			if w.attempts == 1 {
+				// A turn that changed nothing to verify ends here (#254):
+				// no QA, Check or Verdict, and no wait on Preflight (the
+				// deferred cleanup stops it). Compared against the Run's own
+				// start, so a follow-up that left the previous Candidate as
+				// it was has replied too. Excluded files never count.
+				promoted, withheld, err := repo.Classify(start, a.Candidate, w.promotedNew)
+				if err != nil {
+					return nil, err
+				}
+				ambiguous := false
+				for _, f := range withheld {
+					ambiguous = ambiguous || f.Class == workspace.ClassAmbiguous
+				}
+				if len(promoted) == 0 && !ambiguous {
+					return end(Replied)
+				}
+			}
 		}
 
 		// QA: a fresh verifier on the Promoted view of the Candidate adds

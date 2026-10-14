@@ -232,7 +232,7 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved) int
 // outcomeCode maps a Run's outcome to its exit code (ADR-0015).
 func outcomeCode(env Env, res *run.Result) int {
 	switch res.Outcome {
-	case run.Accepted:
+	case run.Accepted, run.Replied:
 		return ExitOK
 	case run.Rejected:
 		return ExitRejected

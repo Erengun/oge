@@ -477,7 +477,8 @@ type thread struct {
 // undoes the change that conflicts, the next message continues it.
 func nextThread(prev *thread, cur task.Task, res *run.Result, f runFlags) *thread {
 	switch {
-	case res.Outcome == run.Refused:
+	case res.Outcome == run.Refused, res.Outcome == run.Replied:
+		// A Replied Run changed nothing: it never becomes the thread's tip.
 		return prev
 	case res.Candidate == "" || res.Dir == "" || res.Outcome == run.Rejected || f.unattended || f.apply:
 		return nil
@@ -1579,6 +1580,9 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		return b.String()
 	}
 	buf.WriteString(receiptText())
+	if res.Outcome == run.Replied {
+		return buf.String(), nil, ExitOK
+	}
 	quiet := env
 	quiet.Stdout, quiet.Stderr = &buf, &buf
 	if res.Outcome != run.Accepted || f.apply || f.unattended {

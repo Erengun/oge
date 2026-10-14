@@ -19,7 +19,7 @@ status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--appl
 
   | Code | Meaning | Kind |
   |---|---|---|
-  | 0 | Accepted | outcome |
+  | 0 | Accepted, or Replied (no changes) | outcome |
   | 1 | internal Öge error | — |
   | 2 | usage, config or Preflight refusal | — |
   | 3 | Rejected | outcome |
@@ -30,7 +30,7 @@ status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--appl
   | 11 | Infrastructure stop | status |
   | 130 | Interrupted | status |
 
-  - **0 means Accepted and only Accepted.** Overridden is never success (ADR-0007, ADR-0008).
+  - **0 means Accepted and only Accepted, with one disclosed exception.** Overridden is never success (ADR-0007, ADR-0008). Amendment (#254): a Replied Run, where the agent answered and changed nothing to verify, exits 0 too: nothing is wrong and nothing is deliverable. It has no Candidate to take, so `oge apply` and `oge branch` refuse it, and a script that wants "verified work" reads the outcome in `oge status --json`, not the code alone.
   - Outcomes use 3–6 and resumable statuses use 10 and above, so a script can tell a finished Run from one that can be resumed.
   - An attended process waiting at a Gate does not exit just because the Run is waiting. Code 10 applies when execution returns while the Run is still parked and resumable.
   - `oge run --dry-run` and `oge doctor` return 0 when valid or ready, and 2 otherwise. The other commands return 0 on success, 2 on a refusal and 1 on an internal error.

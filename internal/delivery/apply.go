@@ -34,6 +34,8 @@ func Authorize(r *Run, flag string) error {
 		return refuse("Run %s has no Candidate to deliver", r.ID)
 	case run.Live(r.Dir):
 		return refuse("Run %s is still running; deliver it once it ends", r.ID)
+	case r.Outcome == run.Replied:
+		return refuse("Run %s replied and changed nothing, so there is nothing to apply", r.ID)
 	case r.Parked:
 		return refuse("Run %s is parked at a Gate and hasn't ended, so its Candidate isn't deliverable; oge diff %s shows it", r.ID, r.ID)
 	case r.Outcome == "":

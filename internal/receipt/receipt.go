@@ -910,6 +910,8 @@ func (r *Receipt) outcome(e *runEnded, abandoned string) {
 	switch run.Outcome(e.Outcome) {
 	case run.Accepted:
 		r.Headline = "✓ Accepted"
+	case run.Replied:
+		r.Headline = "Replied (no changes)"
 	case run.Rejected:
 		r.Headline = "✗ Not accepted: " + r.rejectedWhy(decided)
 	case run.Overridden:
@@ -1188,6 +1190,8 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 	}
 	if ran {
 		nc = append(nc, what+" ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges")
+	} else if r.Outcome == string(run.Replied) {
+		nc = append(nc, "Nothing was checked: the turn changed no files that need verifying")
 	} else {
 		nc = append(nc, "No Check reached a Verdict: there is no Evidence on any Candidate")
 	}
