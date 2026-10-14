@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -198,7 +199,7 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 		return nil, errors.Join(err, end(ConsultFailed, "open_failed: "+err.Error(), nil))
 	}
 	rec := &adviceRecord{}
-	text, outcome, why := c.advise(ctx, sess, id, brief, rec)
+	text, outcome, why := c.advise(ctx, sess, st, id, brief, rec)
 	_ = sess.Close()
 	if err := end(outcome, why, rec); err != nil {
 		return nil, err
@@ -258,10 +259,10 @@ func (r *adviceRecord) fill(ended map[string]any, c *Chat) {
 }
 
 // advise sends brief to sess and reads its one turn.
-func (c *Chat) advise(ctx context.Context, sess agent.Session, id, brief string, rec *adviceRecord) (text, outcome, why string) {
+func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage, id, brief string, rec *adviceRecord) (text, outcome, why string) {
 	rec.proc = sess.Process()
 	if err := c.log(RecProcessStarted, map[string]any{"chat": c.ID, "consultation": id,
-		"pid": rec.proc.PID, "pgid": rec.proc.PGID}); err != nil {
+		"pid": rec.proc.PID, "pgid": rec.proc.PGID, "launch_profile": launchProfile(st)}); err != nil {
 		return "", ConsultFailed, "chat_log_failed: " + err.Error()
 	}
 	if err := sess.Send(agent.Turn{Text: brief}); err != nil {
@@ -295,7 +296,7 @@ func (c *Chat) advise(ctx context.Context, sess agent.Session, id, brief string,
 				rec.session = ev.Session
 			}
 			rec.mu.Unlock()
-			if ev.Ask != nil {
+			if ev.Ask != nil && ev.Host != nil && ev.Host.Decision == "ask" {
 				// An ask from the advisor never surfaces: it would make
 				// the trust layer visible (docs/ux/advisor.md).
 				_ = ev.Ask.Answer(agent.Answer{Reason: "Nothing can be approved during a Consultation: answer from what you can read."})
@@ -345,7 +346,7 @@ func (c *Chat) adviceBriefing(question string) (string, []map[string]any, string
 			"turns": turns, "sha256": sha256Hex(strings.Join(msgs, "\n"))})
 	}
 	if n > 0 {
-		if d, err := c.repo.Diff(c.Snapshot, commit); err == nil && len(d) > 0 {
+		if d, err := c.diff(c.Snapshot, commit); err == nil && len(d) > 0 {
 			a.Diff = string(d)
 			if len(a.Diff) > maxAdviceDiff {
 				a.Diff = a.Diff[:maxAdviceDiff] + "\n… (cut short: read the rest in the current directory)"
@@ -370,4 +371,32 @@ func (c *Chat) adviceBriefing(question string) (string, []map[string]any, string
 	items = append(items, map[string]any{"item": "workspace", "source": "a disposable clone of the newest settled turn's commit, discarded after",
 		"commit": commit, "turn": n})
 	return briefing.Advisor(a), items, commit, n
+}
+
+// diff is the patch from one commit to another, as delivery shows it:
+// text files as text, a binary one as git's one-line stanza. The Chat
+// repository marks every path -diff, so each is told which it is.
+func (c *Chat) diff(from, to string) ([]byte, error) {
+	changes, err := c.repo.Changes(from, to)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	for _, ch := range changes {
+		text := true
+		for _, oid := range []string{ch.OldOID, ch.NewOID} {
+			if oid == "" {
+				continue
+			}
+			b, err := c.repo.Blob(oid)
+			// A gitlink's oid is a commit, not a blob: git's stanza.
+			text = text && err == nil && bytes.IndexByte(b[:min(len(b), 8000)], 0) < 0
+		}
+		patch, err := c.repo.PathDiff(from, to, ch.Path, text)
+		if err != nil {
+			return nil, err
+		}
+		out.Write(patch)
+	}
+	return out.Bytes(), nil
 }

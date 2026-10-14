@@ -174,7 +174,9 @@ Slices 1 and 2 are the thin first slice: `/advise`, same vendor, fresh read-only
    - Depends on #60 (including the Chat-scoped app-server topology).
 7. **Fog, not tickets yet:** the early trigger (D-A5b), stall detection, and the Öge consult tool (D-A6b). Each waits on dogfooding data.
 
-## Glossary and ADR impact (not edited in this PR)
+## Glossary and ADR impact
+
+Slice 1 (#287) landed the ADR-0009 amendment and the *Advisor* and *Consultation* entries. The rest land with the slices they describe.
 
 - **GLOSSARY:**
   - *Advisor*: add "fresh, read-only Session; event-driven".
