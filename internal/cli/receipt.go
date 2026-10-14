@@ -11,12 +11,26 @@ import (
 	"github.com/erengun/oge/internal/workspace"
 )
 
+// repliedLine is all a Replied Run adds after the reply.
+const repliedLine = "no changes · nothing to verify"
+
 // endScreen is how a Run ends on the terminal: its Receipt, read back
 // from the Ledger the Run just wrote (#63), so the end screen and
 // oge receipt are the same text. A Run Preflight refused before it existed
 // has no Ledger, and its refusal is on stderr.
 func (r *renderer) endScreen(res *run.Result) {
 	if res == nil || res.Dir == "" || res.Outcome == run.Refused {
+		return
+	}
+	if res.Outcome == run.Replied {
+		// The reply is already in the transcript; nothing to verify, so no
+		// Receipt block (#254). oge receipt still has one.
+		line := repliedLine
+		if r.paint.Dim != nil {
+			line = r.paint.Dim(line)
+		}
+		r.p("")
+		r.p("%s", line)
 		return
 	}
 	rc, err := receipt.Build(res.Dir)

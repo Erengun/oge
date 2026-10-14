@@ -30,7 +30,7 @@ status: accepted; bare `oge "<task>"`, terse default output, `--confirm`/`--appl
   | 11 | Infrastructure stop | status |
   | 130 | Interrupted | status |
 
-  - **0 means Accepted and only Accepted.** Overridden is never success (ADR-0007, ADR-0008).
+  - **0 means Accepted and only Accepted.** Overridden is never success (ADR-0007, ADR-0008). Amendment (#254): this contract is for one-shot Runs (`oge "task"`, `oge run`, `oge resume`), which never end Replied. A turn in the interactive `oge` home that changed nothing may end Replied; the interactive exit code isn't a trust statement (chat-first D8), and `oge apply` and `oge branch` refuse a Replied Run.
   - Outcomes use 3–6 and resumable statuses use 10 and above, so a script can tell a finished Run from one that can be resumed.
   - An attended process waiting at a Gate does not exit just because the Run is waiting. Code 10 applies when execution returns while the Run is still parked and resumable.
   - `oge run --dry-run` and `oge doctor` return 0 when valid or ready, and 2 otherwise. The other commands return 0 on success, 2 on a refusal and 1 on an internal error.

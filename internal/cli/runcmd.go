@@ -69,7 +69,7 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 		frozen = res.frozen
 	}
 	u := selectView(env, f, task.Task{}, frozen).(*tui)
-	code, err := u.home(env, root, filepath.Join(state.Private, "history"), starter(env, root, state, u), res, problem,
+	code, err := u.home(env, root, filepath.Join(state.Private, "history"), starter(env, root, state, u, true), res, problem,
 		func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup)
 	return endCode(env, code, err, u.started)
 }
@@ -185,14 +185,14 @@ func openState(env Env, root string) (*ledger.StateRoot, int) {
 
 // starter returns how a Task starts with its resolved config, reporting its
 // Gates to v. fu, when set, makes it a follow-up of that Run (the home).
-func starter(env Env, root string, state *ledger.StateRoot, v view) func(task.Task, *resolved, *run.FollowUp) startFunc {
+func starter(env Env, root string, state *ledger.StateRoot, v view, fromHome bool) func(task.Task, *resolved, *run.FollowUp) startFunc {
 	return func(t task.Task, res *resolved, fu *run.FollowUp) startFunc {
 		frozen, cfgData := res.frozen, res.cfgData
 		return func(ctx context.Context, observe func(run.Event)) (*run.Result, error) {
 			p := run.Params{
 				Repo: root, Task: t, Frozen: frozen, Config: cfgData, Agents: env.Agents,
 				State: state, Version: env.Version, Getenv: env.Getenv, CacheSeedTemplate: env.CacheSeedTemplate, Observe: observe,
-				Follows: fu,
+				Follows: fu, Interactive: fromHome,
 			}
 			if !res.flags.unattended {
 				p.Gates = viewPort{v}
@@ -219,7 +219,7 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved) int
 	v := selectView(env, f, *t, res.frozen)
 	plainOf(v).applying = res.flags.apply
 	withWarning(v, res.warn)
-	out, err := v.show(ctx, in, starter(env, root, state, v)(*t, res, nil))
+	out, err := v.show(ctx, in, starter(env, root, state, v, false)(*t, res, nil))
 	if err != nil {
 		return endCode(env, 0, err, true)
 	}
@@ -232,7 +232,7 @@ func runCycle(env Env, f runFlags, root string, t *task.Task, res *resolved) int
 // outcomeCode maps a Run's outcome to its exit code (ADR-0015).
 func outcomeCode(env Env, res *run.Result) int {
 	switch res.Outcome {
-	case run.Accepted:
+	case run.Accepted, run.Replied:
 		return ExitOK
 	case run.Rejected:
 		return ExitRejected

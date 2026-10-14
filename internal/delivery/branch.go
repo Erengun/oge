@@ -43,7 +43,7 @@ func DefaultBranch(r *Run) string { return "oge/" + r.ID }
 // run for either commit or the branch ref (ADR-0010: Öge's commits run no
 // hooks), and the commits carry the user's own git identity.
 func Branch(r *Run, target, name string, choice Choice) (*Branched, error) {
-	if err := Authorize(r, choice.Outcome); err != nil {
+	if err := AuthorizeTo(r, choice.Outcome, "branch"); err != nil {
 		return nil, err
 	}
 	if err := sameRepo(r, target); err != nil {

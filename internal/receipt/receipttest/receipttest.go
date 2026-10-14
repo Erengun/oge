@@ -409,6 +409,14 @@ func Scenarios() []Scenario {
 			b.End(25200*ms, run.Accepted, C1)
 			return b
 		}},
+		{"replied", func() *Builder {
+			// A turn that changed nothing: no Oracle, QA or Check (#254).
+			b := New(pipeline.Standard)
+			b.Attempt(Attempt{ID: "implement#1", From: 500 * ms, To: 2 * time.Second, Candidate: C1, Exit: "done",
+				Claims: []string{"Add sums two ints."}})
+			b.End(2100*ms, run.Replied, C1)
+			return b
+		}},
 		{"rejected", func() *Builder {
 			b := New(pipeline.Fast)
 			b.Attempt(fastAttempt())

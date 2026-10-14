@@ -1,0 +1,9 @@
+[1mÖGE RECEIPT   [mRun 20261005T090000-a1b2c3 · Standard mode
+Result        [1mReplied (no changes)[m
+Task          fix Add
+Protected     no test changes kept
+Scope         no out-of-scope changes
+Handled       0 operations approved automatically · Human interruptions: 0
+Time          2.1s · preflight 400ms · implement 1.5s · your attention 0s
+Not covered   Nothing was checked: the turn changed no files that need verifying
+Ledger        [2mhead f8b721f0d63d · identifies this Receipt; not tamper-proof[m

@@ -43,6 +43,10 @@ const (
 	InfrastructureStop Outcome = "Infrastructure stop"
 	// Parked is a status: the Run waits for a human decision.
 	Parked Outcome = "Parked"
+	// Replied means the implementer answered and changed nothing to verify:
+	// no Promoted or Ambiguous change against the revision the Run started
+	// from. There is no QA, Check or Verdict, and nothing to deliver.
+	Replied Outcome = "Replied"
 )
 
 // Ledger record types, in the order a Run writes them.
@@ -92,6 +96,10 @@ type Params struct {
 	// fresh Snapshot whose implementer starts from the previous Run's
 	// Candidate. Task.FollowUps carries the human's messages.
 	Follows *FollowUp
+	// Interactive is set only by the home (bare oge), whose turns are chat:
+	// only there may a turn that changed nothing end Replied (#254).
+	// oge "task", oge run and oge resume leave it false.
+	Interactive bool
 }
 
 // FollowUp is the Run a follow-up continues.
@@ -572,6 +580,34 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			a, err = implement(attemptCtx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
 			if err != nil {
 				return nil, err
+			}
+			// A home turn that changed nothing to verify ends here (#254),
+			// before Preflight is joined: no QA, Check or Verdict, and no
+			// wait on setup (the deferred cleanup stops and drains it), so
+			// even a failing setup leaves a reply a reply. Only a first
+			// Attempt that ended normally, with no scope revert or Tamper
+			// event. Compared against the Run's own start, so a follow-up
+			// that left the previous Candidate as it was has replied too.
+			// Excluded files never count.
+			if p.Interactive && w.attempts == 1 && a.Stop == "" && a.Failure == "" && a.Exit == "done" && a.Candidate != "" &&
+				len(a.Reverted) == 0 && a.Tamper() == 0 {
+				promoted, withheld, err := repo.Classify(start, a.Candidate, w.promotedNew)
+				if err != nil {
+					return nil, err
+				}
+				ambiguous := false
+				for _, f := range withheld {
+					ambiguous = ambiguous || f.Class == workspace.ClassAmbiguous
+				}
+				if len(promoted) == 0 && !ambiguous {
+					res.Attempt, res.Candidate = a, a.Candidate
+					res.Friction = agent.SumFriction(res.Friction, a.Friction)
+					p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
+					if err := recordTripwires(l, repo, res, a); err != nil {
+						return nil, err
+					}
+					return end(Replied)
+				}
 			}
 			if !joined {
 				// Setup's outcome comes before the Attempt's: a setup

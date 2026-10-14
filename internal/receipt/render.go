@@ -111,13 +111,15 @@ func (r *Receipt) Lines() []Line {
 		add("Agent claimed", text+" (Claim, "+val(r.Claim.Attempt)+")", Dim)
 		more("Öge found", r.Found, Plain)
 	}
-	if c := r.Candidate; c != nil {
+	replied := r.Outcome == string(run.Replied) // nothing to verify: no Candidate, Checks or QA lines
+	if c := r.Candidate; c != nil && !replied {
 		add("Candidate", fmt.Sprintf("%s · %s · Oracle v%d", short(c.Commit), plural(c.FilesChanged, "file changed", "files changed"), r.Oracle), Plain)
 		for _, l := range c.agentConfig(r.Deliveries) {
 			add("", l, Plain)
 		}
 	}
 	switch c, last := r.final(), r.last(); {
+	case replied:
 	case c != nil:
 		add("Checks", checkText(c, len(r.Checks)), Plain)
 	case last != nil:
@@ -131,7 +133,7 @@ func (r *Receipt) Lines() []Line {
 	default:
 		add("Checks", "none ran", Plain)
 	}
-	if q := r.QA; q != nil && r.Mode != "Fast" {
+	if q := r.QA; q != nil && r.Mode != "Fast" && !replied {
 		add("QA", qaText(q), Plain)
 	}
 	add("Protected", protectedText(r.Protected), Plain)
@@ -190,6 +192,8 @@ func (r *Receipt) tone() Tone {
 	switch r.Outcome {
 	case string(run.Accepted):
 		return Good
+	case string(run.Replied):
+		return Plain
 	case string(run.Overridden), string(run.Parked), NotEnded:
 		return Warn
 	}
