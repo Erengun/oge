@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -227,7 +228,9 @@ func Visible(s string) string {
 			b.WriteString(`\r`)
 		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
 			fmt.Fprintf(&b, `\x%02x`, r)
-		case (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || (r >= 0x200b && r <= 0x200f) || r == 0xfeff || r == 0x2028 || r == 0x2029:
+		case unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029:
+			// Format characters (bidi controls, zero-width, soft hyphen, …)
+			// are invisible or reorder text: show them.
 			fmt.Fprintf(&b, `\u{%x}`, r)
 		default:
 			b.WriteRune(r)
