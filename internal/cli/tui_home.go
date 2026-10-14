@@ -773,7 +773,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Ctrl+C cancels a cut verifying, then clears a Task (↑ brings
 			// it back) and, on an empty box, leaves (as Claude Code's
 			// prompt does).
-			if v := h.verify; v != nil && !v.stopped {
+			if v := h.verify; v != nil && !v.stopped && v.gate == nil {
+				// One waiting at its Gate isn't verifying: it goes with
+				// the Chat.
 				v.stopped = true
 				v.cancel()
 				return h, nil
@@ -1191,6 +1193,9 @@ func (h *home) render() (string, int, int) {
 		top++
 	case h.verify != nil && h.verify.stopped:
 		lines = append(lines, " "+st.dim("cancelling verification…"))
+		top++
+	case h.verify != nil && h.verify.gate != nil:
+		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · waiting for you at its Gate · /apply"))
 		top++
 	case h.verify != nil:
 		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · verifying… · ctrl+c to cancel"))
