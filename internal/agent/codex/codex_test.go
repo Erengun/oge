@@ -289,9 +289,11 @@ func TestCommandApprovalIsDeclinedOneShot(t *testing.T) {
 	if mcp, _ := json.Marshal(cfg["mcp_servers"]); string(mcp) != `{"dummy":{"enabled":false}}` {
 		t.Errorf("mcp_servers = %s", mcp)
 	}
-	// auth.json is denied in the codexHome initialize reported.
+	// auth.json is denied in the codexHome initialize reported. The
+	// recording's codexHome is a Unix path: on Windows it isn't absolute,
+	// so it is ignored there.
 	fs := cfg["permissions"].(map[string]any)[profileName].(map[string]any)["filesystem"].(map[string]any)
-	if fs[filepath.Join("/home/user/.codex", "auth.json")] != "deny" {
+	if runtime.GOOS != "windows" && fs[filepath.Join("/home/user/.codex", "auth.json")] != "deny" {
 		t.Errorf("filesystem = %v", fs)
 	}
 	resp := sent["response"]
