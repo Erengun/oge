@@ -430,6 +430,19 @@ type home struct {
 	turn   *chatTurn
 	verify *chatVerify
 	cuts   int // the cuts started, each one's seq
+	// unchecked: a turn changed something no cut covers yet (it was
+	// interrupted); the next cut does.
+	unchecked bool
+	// stale is the delivery waiting on its stale-edit choice.
+	stale *staleAsk
+	// cutGate is the newest cut's Gate, open at /apply or /branch;
+	// gateFor is that delivery, made once the cut is Accepted.
+	cutGate *gateState
+	gateFor *staleAsk
+	// cutFrozen is the newest cut's Pipeline; recut: a delivery refused
+	// for a late Tamper event asks for the cut again.
+	cutFrozen *pipeline.Frozen
+	recut     bool
 	// resetting: /new is closing the old Chat.
 	resetting bool
 }
@@ -453,6 +466,13 @@ type lastRun struct {
 	branch  func(name string) string                // "" is the default name
 	diff    func(emit func(string) tea.Cmd) tea.Cmd // printed, or paged with $PAGER
 	receipt func() string
+	// patch is the Candidate's diff from the Snapshot, for the Chat's
+	// inline diff.
+	patch func() ([]byte, error)
+	// delivered, when set, is what apply or branch (how) shows, given
+	// what the command printed and its exit code: a Chat's cut marks its
+	// delivery there.
+	delivered func(how, out string, code int) string
 }
 
 // act runs one of the Run's actions by its key; arg is a branch's name.
@@ -570,12 +590,26 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
+	case chatGateMsg:
+		return h, h.cutGated(m)
+	case chatDiffMsg:
+		lines := []string(m)
+		for i, l := range lines {
+			lines[i] = h.st.dim(l)
+		}
+		return h, h.println(strings.Join(lines, "\n"))
 	case chatClosedMsg:
 		h.resetting = false
 		return h, nil
 	}
 	if h.turn != nil {
 		return h.chatUpdate(msg)
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && h.stale != nil {
+		return h, h.staleKey(k)
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && h.cutGate != nil {
+		return h, h.cutGateKey(k)
 	}
 	if h.run != nil {
 		if _, ok := msg.(gateSettledMsg); ok {
@@ -749,7 +783,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Ctrl+C cancels a cut verifying, then clears a Task (↑ brings
 			// it back) and, on an empty box, leaves (as Claude Code's
 			// prompt does).
-			if v := h.verify; v != nil && !v.stopped {
+			if v := h.verify; v != nil && !v.stopped && v.gate == nil {
+				// One waiting at its Gate isn't verifying: it goes with
+				// the Chat.
 				v.stopped = true
 				v.cancel()
 				return h, nil
@@ -1013,6 +1049,22 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // and says so when a newer one is.
 // TODO(#261): ask apply verified / wait.
 func (h *home) act(key, arg string) tea.Cmd {
+	if key == "a" || key == "b" {
+		if v := h.verify; v != nil && v.gate != nil {
+			// The newest cut waits at its Gate: delivered only through it.
+			return h.openCutGate(key, arg)
+		}
+		if h.last != nil && (h.verify != nil || h.unchecked) {
+			// Newer edits than the verified cut: delivering it is a choice.
+			h.stale = &staleAsk{key: key, arg: arg, last: h.last}
+			return nil
+		}
+	}
+	return h.actNow(key, arg)
+}
+
+// actNow is act once any stale-edit choice is made.
+func (h *home) actNow(key, arg string) tea.Cmd {
 	var notice tea.Cmd
 	if h.verify != nil && h.last != nil {
 		notice = h.println(h.ogeLine(h.st.dim("a newer cut is still verifying; this is the last verified one")))
@@ -1023,7 +1075,15 @@ func (h *home) act(key, arg string) tea.Cmd {
 	if key == "d" && h.last != nil && h.openDiff(h.last.id) {
 		return notice // the viewer; the pager is its fallback
 	}
-	return tea.Sequence(notice, h.last.act(key, arg, h.fit))
+	cmd := h.last.act(key, arg, h.fit)
+	if h.recut {
+		// Refused for a late Tamper event: its turns are cut again.
+		h.recut = false
+		if h.chat != nil && h.cutFrozen != nil && h.turn == nil {
+			cmd = tea.Sequence(cmd, h.cutWith(h.cutFrozen, 0))
+		}
+	}
+	return tea.Sequence(notice, cmd)
 }
 
 // onEnded prints the Run's summary above the program (its stages are
@@ -1078,6 +1138,12 @@ func (h *home) View() tea.View {
 func (h *home) view() tea.View {
 	if h.turn != nil {
 		return tea.NewView(h.turnView())
+	}
+	if h.stale != nil {
+		return tea.NewView(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait")))
+	}
+	if h.cutGate != nil {
+		return tea.NewView(strings.Join(gateView(h.st, h.cutGate), "\n"))
 	}
 	if h.run != nil {
 		return h.queueView()
@@ -1151,6 +1217,9 @@ func (h *home) render() (string, int, int) {
 		top++
 	case h.verify != nil && h.verify.stopped:
 		lines = append(lines, " "+st.dim("cancelling verification…"))
+		top++
+	case h.verify != nil && h.verify.gate != nil:
+		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · waiting for you at its Gate · /apply"))
 		top++
 	case h.verify != nil:
 		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · verifying… · ctrl+c to cancel"))
@@ -1593,6 +1662,20 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			if err != nil {
 				return line + "\noge: reading the Run for delivery: " + clean(err.Error()), nil
 			}
+			c := hc.get()
+			l.apply = func() string { return h.chatApply(env, root, c, res) }
+			branch := l.branch
+			l.branch = func(name string) string {
+				// A branch moves the Task's window too: never past a late
+				// Tamper event (as apply).
+				if msg, ok := h.chatDeliverable(c, res); !ok {
+					return msg
+				}
+				return branch(name)
+			}
+			l.delivered = func(how, out string, code int) string {
+				return h.chatDelivered(c, res, how, out, code)
+			}
 			return line, l
 		}
 	}
@@ -1685,22 +1768,27 @@ func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText
 	}
 	// Once applied the Receipt lists the Delivery, so it says nothing about
 	// what was written itself.
-	deliver := func(do func(Env) int) func() string {
-		return func() string {
-			var b strings.Builder
-			q := env
-			q.Stdout, q.Stderr = &b, &b
-			do(q)
-			return b.String()
+	var s *lastRun
+	deliver := func(how string, do func(Env) int) string {
+		var b strings.Builder
+		q := env
+		q.Stdout, q.Stderr = &b, &b
+		code := do(q)
+		if s.delivered != nil {
+			return s.delivered(how, b.String(), code)
 		}
+		return b.String()
 	}
-	s := &lastRun{
-		id:    r.ID,
-		apply: deliver(func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) }),
+	s = &lastRun{
+		id: r.ID,
+		apply: func() string {
+			return deliver("apply", func(q Env) int { return applyCommand(q, r, root, delivery.Choice{}) })
+		},
 		branch: func(name string) string {
-			return deliver(func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })()
+			return deliver("branch", func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })
 		},
 		receipt: receiptText,
+		patch:   func() ([]byte, error) { return delivery.Diff(r) },
 	}
 	s.diff = func(emit func(string) tea.Cmd) tea.Cmd {
 		patch, err := delivery.Diff(r)

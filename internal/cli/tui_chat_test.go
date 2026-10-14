@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
@@ -19,7 +20,7 @@ import (
 func TestChatCutUsesTheTurnsPipeline(t *testing.T) {
 	standard := &pipeline.Frozen{Mode: pipeline.Standard}
 	var got *pipeline.Frozen
-	h := &home{chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen) (*run.Result, error) {
+	h := &home{chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen, _ gate.Port) (*run.Result, error) {
 		got = f
 		return nil, run.ErrNothingToCut
 	}}, turn: &chatTurn{frozen: standard, changed: 1}}
@@ -133,5 +134,23 @@ func TestCutEndedDecidesFromTheRun(t *testing.T) {
 	h.cutEnded(chatCutMsg{seq: 2, err: run.ErrSuperseded})
 	if h.last != older || len(h.scroll) != 0 {
 		t.Errorf("a superseded cut showed: last %v, %q", h.last, h.scroll)
+	}
+}
+
+// A command in the composer when a question takes it is never queued for
+// the agent: it is back in the composer when the turn ends.
+func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
+	a := agent.NewAsk("AskUserQuestion", "", "", func(agent.Answer) error { return nil })
+	a.Questions = []agent.AskQuestion{{Text: "Which?"}}
+	h := &home{st: newStyles(false), turn: &chatTurn{asks: []*agent.Ask{a}},
+		resolve: func(*setupState) (*resolved, []string) { return nil, nil }}
+	h.comp = h.composer()
+	h.comp.set("/apply")
+	h.showAsk()
+	if len(h.turn.queued) != 0 || h.comp.text() != "" {
+		t.Fatalf("queued %q, composer %q", h.turn.queued, h.comp.text())
+	}
+	if queued := h.endTurn(); len(queued) != 0 || h.comp.text() != "/apply" {
+		t.Errorf("after the turn: queued %q, composer %q", queued, h.comp.text())
 	}
 }

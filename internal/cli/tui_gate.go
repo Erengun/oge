@@ -107,8 +107,10 @@ func (m *model) gateKey(k tea.KeyPressMsg) (ok bool) {
 	return true
 }
 
-func (m *model) gateEnter() {
-	g := m.gate
+func (m *model) gateEnter() { m.gate.enter(m.height) }
+
+// enter takes the Gate's line on Enter, in a view height rows tall.
+func (g *gateState) enter(height int) {
 	text := g.input
 	if g.choice == nil {
 		if p, ok, err := g.req.InspectTarget(text); ok {
@@ -118,8 +120,8 @@ func (m *model) gateEnter() {
 				return
 			}
 			limit := inspectMax
-			if m.height > 0 {
-				limit = max(m.height-8, 3)
+			if height > 0 {
+				limit = max(height-8, 3)
 			}
 			g.inspect = inspectLines(g.req, p, limit)
 			return
@@ -170,12 +172,13 @@ func (m *model) gateEnter() {
 }
 
 // gateLines draw the open Gate under the stages: calm, with no default.
-func (m *model) gateLines() []string {
-	g := m.gate
+func (m *model) gateLines() []string { return gateView(m.st, m.gate) }
+
+// gateView draws the open Gate g, in any view.
+func gateView(st styles, g *gateState) []string {
 	if g == nil {
 		return nil
 	}
-	st := m.st
 	if g.inspect != nil {
 		out := []string{"", "  " + st.bold(gateTitle(g.req.Name)) + st.dim(" · inspect")}
 		for _, l := range g.inspect {

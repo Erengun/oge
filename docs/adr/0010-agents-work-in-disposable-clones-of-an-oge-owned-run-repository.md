@@ -37,7 +37,7 @@ Decisions:
 
   Where no OS sandbox is active, Evidence and docs say that arbitrary reads of the user's filesystem are not contained. OS-level Check sandboxing is a high-priority post-MVP item.
 - **Implementer-authored tests have only negative authority.** They run separately from the Oracle and are labelled as the implementer's. A pass is informational. A failure routes along a declared edge that does not accept, to a send-back or a Gate. It never changes the Oracle's Verdict.
-- **The final Candidate is exactly what gets delivered.** Every Ambiguous file is promoted or dropped at a Gate before final acceptance, and the final Check runs on that resolved Candidate. This amends [ADR-0009](0009-briefings-built-by-oge-from-snapshot-and-evidence.md) in part.
+- **The final Candidate is exactly what gets delivered.** Every Ambiguous file is promoted or dropped at a Gate before final acceptance, and the final Check runs on that resolved Candidate. This amends [ADR-0009](0009-briefings-built-by-oge-from-snapshot-and-evidence.md) in part. *Amendment, 2026-10-14 ([#261](https://github.com/Erengun/oge/issues/261)):* in a Chat that Gate opens at delivery (`/apply` or `/branch`), never mid-turn. Promoting every Ambiguous file keeps the cut's Candidate. Dropping one re-cuts it without that file, and the resolved Candidate gets its own Check (a Recheck) before anything is delivered.
   - Öge writes nothing to the user's repository until the user runs `oge apply`, `oge branch` or `oge diff`.
   - Delivery reads the immutable Candidate data that Öge keeps in private state.
   - Öge never pushes, merges, commits to or checks out the user's working branch.

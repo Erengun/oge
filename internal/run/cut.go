@@ -70,8 +70,10 @@ type chatPrep struct {
 // cutMark is a cut whose Run reached the walk: the next cut follows it.
 type cutMark struct {
 	run    string
+	dir    string // its Run's directory
 	commit string
 	turn   int
+	prev   *cutMark // the cut it follows
 }
 
 // cutEntry is how a cut's Run enters the walk: Start takes the Chat's
@@ -222,8 +224,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	e.waits, e.waited = c.prep.control.Waits()
 	// The Task's turns are every turn since the last delivery (D7), and
 	// so are its Tamper events: one an earlier cut carried, or a late one
-	// on a turn already cut, still gates this one.
-	// TODO(#261): delivery moves e.delivered.
+	// on a turn already cut, still gates this one. Delivered moves it.
 	if e.tamper, err = c.chatRecords(RecTamperEvent, e.delivered+1, to); err != nil {
 		return nil, err
 	}
@@ -302,7 +303,11 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	case ctx.Err() != nil && !verdict, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
 	default:
 		c.supersedeMu.Lock()
-		c.lastCut = &cutMark{run: res.ID, commit: head, turn: to}
+		c.lastCut = &cutMark{run: res.ID, dir: res.Dir, commit: head, turn: to, prev: c.lastCut}
+		if c.cuts == nil {
+			c.cuts = map[string]*cutMark{}
+		}
+		c.cuts[res.ID] = c.lastCut
 		c.supersedeMu.Unlock()
 	}
 	return res, nil
@@ -321,6 +326,9 @@ func (c *Chat) toCut(lc *cutMark) (*cutEntry, error) {
 	if lc != nil {
 		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
 	}
+	c.supersedeMu.Lock()
+	e.delivered = c.delivered
+	c.supersedeMu.Unlock()
 	if to < e.from {
 		return nil, ErrNothingToCut
 	}
