@@ -394,8 +394,13 @@ func (s *session) exitErr(err error) error {
 	}
 }
 
+// notify sends a notification; a failed write reports codex having
+// exited, and why Öge ended it, as call does.
 func (s *session) notify(method string, params any) error {
-	return s.write(map[string]any{"method": method, "params": params})
+	if err := s.write(map[string]any{"method": method, "params": params}); err != nil {
+		return s.exitErr(err)
+	}
+	return nil
 }
 
 func (s *session) write(v any) error {
