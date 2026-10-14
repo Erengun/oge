@@ -127,7 +127,7 @@ func TestNoColorHasNoEscapes(t *testing.T) {
 	if st.themeName() != "" || askBackground(st) != nil {
 		t.Errorf("a colourless set has theme %q", st.themeName())
 	}
-	for _, paint := range []func(string) string{st.bold, st.dim, st.accent, st.ok, st.bad} {
+	for _, paint := range []func(string) string{st.bold, st.dim, st.accent, st.ok, st.bad, st.warn, st.border, st.user, st.agent, st.ask, st.diffAdd, st.diffDel} {
 		if got := paint("x"); got != "x" {
 			t.Errorf("NO_COLOR painted %q", got)
 		}
@@ -156,5 +156,71 @@ func TestStatusKeepsGlyphAndWordWithoutColour(t *testing.T) {
 				t.Errorf("%s: %q lost its glyph", name, got)
 			}
 		}
+	}
+}
+
+// Every new role paints in every preset, except the two the ansi preset
+// has no colour for: user then falls back to bold and agent to plain.
+func TestNewRolesPaintInEveryPreset(t *testing.T) {
+	for _, name := range pipeline.KnownThemes {
+		for _, bg := range []struct{ dark, known bool }{{false, false}, {true, true}, {false, true}} {
+			st := themed(name, bg.dark, bg.known)
+			roles := map[string]func(string) string{"warn": st.warn, "border": st.border, "user": st.user, "ask": st.ask, "diffAdd": st.diffAdd, "diffDel": st.diffDel}
+			if paletteOf(name, bg.dark, bg.known).agent != nil {
+				roles["agent"] = st.agent
+			}
+			for role, paint := range roles {
+				if out := paint("x"); !strings.Contains(out, "\x1b[") || ansi.Strip(out) != "x" {
+					t.Errorf("%s %+v %s paints %q", name, bg, role, out)
+				}
+			}
+			if out := st.agent("x"); ansi.Strip(out) != "x" {
+				t.Errorf("%s %+v agent changed the text: %q", name, bg, out)
+			}
+		}
+	}
+}
+
+func TestDaltonizedNewRolesAvoidRedAndGreen(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		p := paletteOf("daltonized", dark, true)
+		for role, c := range map[string]color.Color{"diffAdd": p.diffAdd, "diffDel": p.diffDel, "warn": p.warn, "ask": p.ask} {
+			r, g, b, _ := c.RGBA()
+			if g > r && g > b {
+				t.Errorf("dark=%v: %s is green", dark, role)
+			}
+		}
+		// Added is blue, removed is orange: never red against green.
+		ar, _, ab, _ := p.diffAdd.RGBA()
+		dr, _, db, _ := p.diffDel.RGBA()
+		if ab <= ar || dr <= db {
+			t.Errorf("dark=%v: diff colours are not blue and orange", dark)
+		}
+	}
+}
+
+func TestDiffLineKeepsItsSignAndText(t *testing.T) {
+	st := themed("dark", true, true)
+	for _, l := range []string{"    +added", "    -removed", "    +++ b/x", "    --- a/x", "     context", "    @@ -1 +1 @@"} {
+		if got := ansi.Strip(st.diffLine(l)); got != l {
+			t.Errorf("diffLine(%q) = %q", l, got)
+		}
+	}
+	if st.diffLine("    +a") != st.diffAdd("    +a") || st.diffLine("    -a") != st.diffDel("    -a") || st.diffLine("    +++ b") != st.dim("    +++ b") {
+		t.Error("diffLine picks the wrong roles")
+	}
+}
+
+func TestCustomThemeOverridesNewRoles(t *testing.T) {
+	c, probs := parseCustomTheme([]byte("warn = \"#010203\"\nuser = 4\ndiff_add = \"#0a0b0c\"\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	p := c.overlay(paletteOf("dark", true, true))
+	if p.warn != rgb(0x010203) || p.diffAdd != rgb(0x0a0b0c) || p.user == paletteOf("dark", true, true).user {
+		t.Errorf("overlay = %+v", p)
+	}
+	if p.border != paletteOf("dark", true, true).border {
+		t.Error("an unnamed role changed")
 	}
 }

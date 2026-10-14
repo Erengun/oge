@@ -595,7 +595,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatDiffMsg:
 		lines := []string(m)
 		for i, l := range lines {
-			lines[i] = h.st.dim(l)
+			lines[i] = h.st.diffLine(l)
 		}
 		return h, h.println(strings.Join(lines, "\n"))
 	case chatClosedMsg:
@@ -1207,7 +1207,7 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
 		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
 	}
-	lines = append(lines, st.dim("╭─")+st.bold(title)+st.dim(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
+	lines = append(lines, st.border("╭─")+st.bold(title)+st.border(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
 	for i, r := range rows {
 		body := r
 		if empty && i == 0 {
@@ -1217,9 +1217,9 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 			}
 		}
 		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(body)), 0))
-		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
+		lines = append(lines, st.border("│")+" "+body+pad+" "+st.border("│"))
 	}
-	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
+	lines = append(lines, st.border("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
 	return lines, cr, cc
 }
 

@@ -24,8 +24,25 @@ const customThemeFile = "theme.toml"
 
 // customTheme is a parsed theme file. A nil colour keeps the base's.
 type customTheme struct {
-	base            string // "" keeps the preset the view is on
-	accent, ok, bad color.Color
+	base string // "" keeps the preset the view is on
+	// colours holds the file's role colours by key; a missing key keeps
+	// the base's.
+	colours map[string]color.Color
+}
+
+// themeKeys are the roles a theme file can override, with the palette
+// field each one sets.
+var themeKeys = map[string]func(*palette) *color.Color{
+	"accent":   func(p *palette) *color.Color { return &p.accent },
+	"ok":       func(p *palette) *color.Color { return &p.ok },
+	"bad":      func(p *palette) *color.Color { return &p.bad },
+	"warn":     func(p *palette) *color.Color { return &p.warn },
+	"border":   func(p *palette) *color.Color { return &p.border },
+	"user":     func(p *palette) *color.Color { return &p.user },
+	"agent":    func(p *palette) *color.Color { return &p.agent },
+	"diff_add": func(p *palette) *color.Color { return &p.diffAdd },
+	"diff_del": func(p *palette) *color.Color { return &p.diffDel },
+	"ask":      func(p *palette) *color.Color { return &p.ask },
 }
 
 var hexColour = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
@@ -87,22 +104,18 @@ func parseCustomTheme(data []byte) (*customTheme, []pipeline.Problem) {
 				continue
 			}
 			c.base = s
-		case "accent", "ok", "bad":
+		case "accent", "ok", "bad", "warn", "border", "user", "agent", "diff_add", "diff_del", "ask":
 			col, good := parseColour(v)
 			if !good {
 				probs = append(probs, pipeline.Problem{Key: k, Msg: "must be #rrggbb or an ANSI colour 0-15"})
 				continue
 			}
-			switch k {
-			case "accent":
-				c.accent = col
-			case "ok":
-				c.ok = col
-			case "bad":
-				c.bad = col
+			if c.colours == nil {
+				c.colours = map[string]color.Color{}
 			}
+			c.colours[k] = col
 		default:
-			probs = append(probs, pipeline.Problem{Key: k, Msg: "unknown key (base, accent, ok, bad)"})
+			probs = append(probs, pipeline.Problem{Key: k, Msg: "unknown key (base, accent, ok, bad, warn, border, user, agent, diff_add, diff_del, ask)"})
 		}
 	}
 	if len(probs) > 0 {
@@ -116,14 +129,8 @@ func (c *customTheme) overlay(p palette) palette {
 	if c == nil {
 		return p
 	}
-	if c.accent != nil {
-		p.accent = c.accent
-	}
-	if c.ok != nil {
-		p.ok = c.ok
-	}
-	if c.bad != nil {
-		p.bad = c.bad
+	for k, col := range c.colours {
+		*themeKeys[k](&p) = col
 	}
 	return p
 }
