@@ -139,7 +139,9 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/new")
 	}
 	h.last, h.thread = nil, nil
-	// A fresh task is a fresh Chat: the next message opens a new Session.
+	// A fresh task is a fresh Chat: the next message opens a new Session,
+	// and the old one's cut in flight ends unshown.
+	h.verify = nil
 	h.chat.reset()
 	return nil, ""
 }
@@ -426,8 +428,14 @@ func deliverSlash(key, cli string) func(*home, []string) (tea.Cmd, string) {
 				h.thread = nil
 			}
 			return h.delivered(cli, args), ""
+		case h.last != nil && h.verify != nil:
+			// The newest cut whose Verdict is in, never one still verifying.
+			// TODO(#261): ask apply verified / wait.
+			return tea.Sequence(h.println(h.ogeLine(h.st.dim("a newer cut is still verifying; this is the last verified one"))), h.act(key, name)), ""
 		case h.last != nil:
 			return h.act(key, name), ""
+		case h.verify != nil:
+			return nil, "/" + cli + ": the cut is still verifying"
 		case cli == "apply" || cli == "branch":
 			return nil, "/" + cli + ": no Accepted Run to take in this session"
 		case h.deliver == nil:

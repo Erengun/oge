@@ -424,9 +424,12 @@ type home struct {
 	now  func() time.Time
 	// chat is the session's Chat (#259): each message is its turn. nil
 	// runs each message as a one-shot Run (an agent without auto mode, or
-	// OGE_CHAT=0). turn is the turn in flight, then its cut.
-	chat *homeChat
-	turn *chatTurn
+	// OGE_CHAT=0). turn is the turn in flight; verify is the newest cut
+	// verifying in the background, while turns go on.
+	chat   *homeChat
+	turn   *chatTurn
+	verify *chatVerify
+	cuts   int // the cuts started, each one's seq
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -561,6 +564,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.diff != nil {
 			h.diff.resize(ws.Width)
 		}
+	}
+	if m, ok := msg.(chatCutMsg); ok {
+		return h, h.cutEnded(m) // in the background: whatever else is on
 	}
 	if h.turn != nil {
 		return h.chatUpdate(msg)
@@ -734,8 +740,14 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.visual = 0
 			h.vimState.cancel()
 		case "ctrl+c":
-			// Ctrl+C clears a Task (↑ brings it back) and, on an empty
-			// box, leaves (as Claude Code's prompt does).
+			// Ctrl+C cancels a cut verifying, then clears a Task (↑ brings
+			// it back) and, on an empty box, leaves (as Claude Code's
+			// prompt does).
+			if v := h.verify; v != nil && !v.stopped {
+				v.stopped = true
+				v.cancel()
+				return h, nil
+			}
 			if h.comp.empty() {
 				h.quit = true
 				return h, tea.Quit
@@ -1119,6 +1131,12 @@ func (h *home) render() (string, int, int) {
 	switch {
 	case h.actions:
 		lines = append(lines, " "+st.bold("[a] apply  [d] diff  [r] receipt  [b] branch")+"   "+st.dim("esc back"))
+		top++
+	case h.verify != nil && h.verify.stopped:
+		lines = append(lines, " "+st.dim("cancelling verification…"))
+		top++
+	case h.verify != nil:
+		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · verifying… · ctrl+c to cancel"))
 		top++
 	case h.last != nil:
 		lines = append(lines, " "+st.dim("↓ actions · /apply /diff /receipt /branch · /new"))

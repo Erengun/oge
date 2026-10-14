@@ -260,3 +260,61 @@ func TestHomeChatAskShowsHiddenCharacters(t *testing.T) {
 	s.composer()
 	s.quitChat(f)
 }
+
+// The cut verifies in the background: while its Check holds, the next
+// turn is sent and replies, and its cut supersedes the held one, which
+// shows no Verdict; the newer Verdict covers both turns. /apply while a
+// newer cut verifies takes the last verified one and says so; Ctrl+C with
+// no turn running cancels the verification, and the next one quits.
+func TestHomeChatVerifiesInTheBackground(t *testing.T) {
+	t.Parallel()
+	mark := filepath.Join(t.TempDir(), "checking")
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "fixed Add", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "hold.go", Content: "package fx\n"}}},
+		{Reply: "and more", Writes: []multiturn.File{{Path: "more.go", Content: "package fx\n"}}},
+		{Reply: "waiting", Writes: []multiturn.File{{Path: "wait.go", Content: "package fx\n"}}},
+	}}, func(f *runFixture) {
+		// The first Check on hold.go holds, and every Check on wait.go.
+		hold := `if [ -f hold.go ] && [ ! -f "` + mark + `" ]; then touch "` + mark + `"; while :; do sleep 0.1; done; fi; ` +
+			`if [ -f wait.go ]; then while :; do sleep 0.1; done; fi; go test -json ./...`
+		writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte("schema = 1\n[project]\ntest_globs = [\"**/*_test.go\"]\noutput_globs = [\"**/*.go\"]\n[[check.commands]]\nrun = '"+hold+"'\nreport = \"go-test-json\"\n"))
+	})
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("verifying…")
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(mark); err == nil {
+			break
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("the first cut's Check never held")
+		}
+	}
+	s.composer()
+	s.type_("and more\r")
+	s.expect("  and more") // replied while the first cut's Check holds
+	s.expect("oge › ✓ Accepted · 3 files · ")
+	s.composer()
+	if out := s.out.String(); strings.Count(out, "Accepted") != 1 || strings.Contains(out, "cancelled") {
+		t.Errorf("the superseded cut showed something:\n%s", out)
+	}
+	s.type_("wait\r")
+	s.expect("  waiting")
+	s.expect("verifying…")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("a newer cut is still verifying")
+	s.expect("Applied")
+	if _, err := os.Stat(filepath.Join(f.repo, "more.go")); err != nil {
+		t.Errorf("/apply didn't take the last verified cut: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.repo, "wait.go")); err == nil {
+		t.Error("/apply took the cut still verifying")
+	}
+	s.composer()
+	s.type_("\x03")
+	s.expect("verification cancelled")
+	s.composer()
+	s.quitChat(f)
+}
