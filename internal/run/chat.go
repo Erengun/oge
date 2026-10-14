@@ -754,7 +754,7 @@ func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, 
 		a.Reverted = append(a.Reverted, late...)
 		// The Session lives on: the Workspace gets the commit's content
 		// back too, so the next turn doesn't start from the late write.
-		if err := c.restoreFrom(commit, late); err != nil {
+		if err := c.restoreLate(a, n, late); err != nil {
 			a.Failure = failAttempt(a.Failure, "revert_failed: "+err.Error())
 		}
 	}
@@ -810,33 +810,38 @@ func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, 
 	return ts, map[string]any{"commit": commit, "promoted": ts.Promoted, "ambiguous": ts.Ambiguous, "excluded": ts.Excluded}, nil
 }
 
-// restoreFrom writes each late path back into the Workspace as commit
-// holds it, or removes it when commit doesn't.
-func (c *Chat) restoreFrom(commit string, late []workspace.Revert) error {
+// restoreLate puts the Workspace back in scope after late writes,
+// through the scope check's own revert, which never writes through a
+// link (the agent is still alive). The late Tamper events are recorded
+// already; a protected write the check finds beyond late is recorded as
+// one more, late, on turn n.
+func (c *Chat) restoreLate(a *Attempt, n int, late []workspace.Revert) error {
+	noPut := func([]byte) (string, error) { return "", nil }
+	s, err := c.repo.CheckScope(c.Workspace, c.Snapshot, scopeRules(a.Role, c.protected, noPut, map[string][]string{}))
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
 	for _, r := range late {
-		dst := filepath.Join(c.Workspace, filepath.FromSlash(r.Path))
-		data, ok, err := c.repo.Show(commit, r.Path)
+		seen[r.Path] = true
+	}
+	var more []workspace.Revert
+	for _, r := range s.Reverts {
+		if r.Tamper && !seen[r.Path] {
+			more = append(more, r)
+		}
+	}
+	applyErr := s.Apply()
+	if len(more) > 0 {
+		c.logMu.Lock()
+		err := recordTamper(c.l, a, more, applyErr == nil, true, map[string]any{"chat": c.ID, "turn": n})
+		c.logMu.Unlock()
 		if err != nil {
 			return err
 		}
-		mode := os.FileMode(0o644)
-		if fi, err := os.Lstat(dst); err == nil && fi.Mode().IsRegular() {
-			mode = fi.Mode().Perm()
-		}
-		if err := os.RemoveAll(dst); err != nil {
-			return err
-		}
-		if !ok {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(dst, data, mode); err != nil {
-			return err
-		}
+		a.Reverted = append(a.Reverted, more...)
 	}
-	return nil
+	return applyErr
 }
 
 // promotedNew is walk.promotedNew without a human's promotions, which a

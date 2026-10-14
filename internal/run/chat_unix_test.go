@@ -54,3 +54,37 @@ func TestChatReopensAfterCrash(t *testing.T) {
 		t.Errorf("turn 2's manifest %v", mans[len(mans)-1])
 	}
 }
+
+// Putting the Workspace back after a late write never writes through a
+// link: here the agent, still alive, swapped a protected file's parent
+// directory for a link out of the Workspace.
+func TestChatRestoreLateNeverFollowsALink(t *testing.T) {
+	fr := scopedFrozen()
+	fr.Project.TestGlobs = append(fr.Project.TestGlobs, "**/*_test.go")
+	c := openChatIn(t.Context(), t, stubAdapter{newStub(nil)}, 0, fr,
+		map[string]string{"add.go": "package fx\n", "sub/x_test.go": additiveBase})
+	outside := t.TempDir()
+	sub := filepath.Join(c.Workspace, "sub")
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, sub); err != nil {
+		t.Fatal(err)
+	}
+	a := &Attempt{ID: "chat#1", Role: "implementer"}
+	if err := c.restoreLate(a, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := os.ReadDir(outside); len(left) != 0 {
+		t.Errorf("wrote outside the Workspace: %v", left)
+	}
+	if got, _ := os.ReadFile(filepath.Join(sub, "x_test.go")); string(got) != additiveBase {
+		t.Errorf("the Oracle test wasn't put back: %q", got)
+	}
+	if fi, err := os.Lstat(sub); err != nil || !fi.IsDir() {
+		t.Errorf("sub is not a directory again: %v %v", fi, err)
+	}
+	if r := recordsOf(t, c, RecTamperEvent); len(r) == 0 || r[0]["turn"] != float64(1) || r[0]["late"] != true {
+		t.Errorf("TamperEvent %v", r)
+	}
+}

@@ -69,6 +69,9 @@ func openChatIn(ctx context.Context, t *testing.T, ad agent.Adapter, idle time.D
 	f := &followFixture{user: t.TempDir()}
 	f.git(t, "init", "-q", "-b", "main")
 	for p, s := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(f.user, filepath.FromSlash(p))), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		f.write(t, p, s)
 	}
 	f.git(t, "add", "-A")
