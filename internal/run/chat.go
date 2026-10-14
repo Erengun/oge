@@ -147,6 +147,10 @@ type Chat struct {
 	// supersede cancels the cut in flight, if any: a newer cut does.
 	supersedeMu sync.Mutex
 	supersede   context.CancelCauseFunc
+	// Under supersedeMu: cutTo is each verified cut's last turn, by its
+	// Run; delivered is the last turn delivered (D7).
+	cutTo     map[string]int
+	delivered int
 
 	mu     sync.Mutex
 	sess   agent.Session

@@ -216,8 +216,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	e.waits, e.waited = c.prep.control.Waits()
 	// The Task's turns are every turn since the last delivery (D7), and
 	// so are its Tamper events: one an earlier cut carried, or a late one
-	// on a turn already cut, still gates this one.
-	// TODO(#261): delivery moves e.delivered.
+	// on a turn already cut, still gates this one. Delivered moves it.
 	if e.tamper, err = c.tamperRecords(e.delivered+1, to); err != nil {
 		return nil, err
 	}
@@ -264,6 +263,10 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	default:
 		c.supersedeMu.Lock()
 		c.lastCut = &cutMark{run: res.ID, commit: head, turn: to}
+		if c.cutTo == nil {
+			c.cutTo = map[string]int{}
+		}
+		c.cutTo[res.ID] = to
 		c.supersedeMu.Unlock()
 	}
 	return res, nil
@@ -282,6 +285,9 @@ func (c *Chat) toCut(lc *cutMark) (*cutEntry, error) {
 	if lc != nil {
 		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
 	}
+	c.supersedeMu.Lock()
+	e.delivered = c.delivered
+	c.supersedeMu.Unlock()
 	if to < e.from {
 		return nil, ErrNothingToCut
 	}
