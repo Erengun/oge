@@ -56,6 +56,21 @@ type LaunchSpec struct {
 // AutoPermissions is LaunchSpec.Permissions for the agent's auto mode.
 const AutoPermissions = "auto"
 
+// AutoMode is an Adapter whose agent has its own auto permission mode,
+// which a Chat runs under (D2). The bare oge home opens a Chat only on
+// one; an agent without it runs each message as a one-shot Run under its
+// Launch profile.
+type AutoMode interface {
+	Adapter
+	AutoMode() bool
+}
+
+// HasAutoMode reports whether a has an auto permission mode.
+func HasAutoMode(a Adapter) bool {
+	m, ok := a.(AutoMode)
+	return ok && m.AutoMode()
+}
+
 // Session is one agent conversation. At most one turn is in flight;
 // Interrupt is non-terminal.
 type Session interface {

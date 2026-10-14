@@ -31,8 +31,8 @@ import (
 // Its Chat log, in its private directory, is a Ledger written ahead
 // (slice 5). After each turn the same scope check an implementer Attempt
 // gets reverts and records protected writes, and a turn with changes is
-// cut into a Run (slice 6, cut.go). Nothing opens a Chat but tests until
-// the home is wired to it (slice 7).
+// cut into a Run (slice 6, cut.go). The bare oge home opens one per session
+// (slice 7).
 
 // Chat log records (docs/ux/chat-first.md, "Ledger and Receipt"). A turn's
 // scope check writes ScopeObserved, ScopeReverted and TamperEvent, as an
@@ -44,8 +44,10 @@ const (
 	RecHeldOutViewed   = "HeldOutViewed"
 )
 
-// ChatFlag is the hidden environment flag a Chat opens behind: "1" opens
-// one. TODO(#256-decision): slice 7 flips it when the home is wired.
+// ChatFlag is the hidden escape hatch from the Chat: "0" refuses to open
+// one, and the bare oge home then runs each message as today's one-shot
+// pipeline. Slice 7 (#259) made the Chat the home's default; the flag stays
+// only because the home's fake-agent tests drive the old path.
 const ChatFlag = "OGE_CHAT"
 
 // DefaultIdleTimeout is how long a Chat Session may sit with no turn in
@@ -53,7 +55,7 @@ const ChatFlag = "OGE_CHAT"
 const DefaultIdleTimeout = 30 * time.Minute
 
 var (
-	ErrChatDisabled = errors.New("chat isn't enabled (" + ChatFlag + ")")
+	ErrChatDisabled = errors.New("chat is turned off (" + ChatFlag + "=0)")
 	// ErrSessionReuse is D1: only an implementer Session may be reused.
 	// A verifier's (QA's) Session is always fresh.
 	ErrSessionReuse = errors.New("only an implementer Session may be reused")
@@ -238,7 +240,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	if getenv(ChatFlag) != "1" {
+	if getenv(ChatFlag) == "0" {
 		return nil, ErrChatDisabled
 	}
 	role := p.Role

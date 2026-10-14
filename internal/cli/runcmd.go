@@ -69,9 +69,33 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 		frozen = res.frozen
 	}
 	u := selectView(env, f, task.Task{}, frozen).(*tui)
+	hc := homeChatFor(env, root, state)
+	defer hc.close()
 	code, err := u.home(env, root, filepath.Join(state.Private, "history"), starter(env, root, state, u, true), res, problem,
-		func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup)
+		func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup, hc)
 	return endCode(env, code, err, u.started)
+}
+
+// homeChatFor is the home's Chat, opened by the first message whose
+// implementer has an auto mode (D2); nil with the OGE_CHAT=0 escape hatch.
+// The Chat launches in the agent's auto mode under Öge's hard denies:
+// the PreToolUse hook and Bash parser, and the sandbox's deny-read of
+// $HOME and Öge's state roots (run.OpenChat). Its turns never change the
+// session's exit code: interactive oge exits 0 on a clean quit (D8).
+func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
+	if env.Getenv(run.ChatFlag) == "0" {
+		return nil
+	}
+	return &homeChat{
+		agents: env.Agents,
+		open: func(res *resolved) (*run.Chat, error) {
+			return run.OpenChat(context.Background(), run.ChatParams{Repo: root, Frozen: res.frozen, Agents: env.Agents,
+				State: state, Getenv: env.Getenv, Config: res.cfgData, CacheSeedTemplate: env.CacheSeedTemplate})
+		},
+		cut: func(c *run.Chat) (*run.Result, error) {
+			return c.Cut(context.Background(), run.CutParams{Version: env.Version})
+		},
+	}
 }
 
 // endCode is the exit code of a view that returned err: a forced stop, Öge's
@@ -234,7 +258,8 @@ func outcomeCode(env Env, res *run.Result) int {
 	switch res.Outcome {
 	case run.Accepted, run.Replied:
 		return ExitOK
-	case run.Rejected:
+	case run.Rejected, run.Failed:
+		// Failed is a Chat cut's (no one-shot Run ends Failed): never 0.
 		return ExitRejected
 	case run.Infeasible:
 		return ExitInfeasible

@@ -53,6 +53,9 @@ func New() *Adapter { return &Adapter{} }
 // stdin is closed, and again after SIGTERM, before SIGKILL.
 const closeGrace = 5 * time.Second
 
+// AutoMode is true: claude's --permission-mode auto runs a Chat (D2).
+func (a *Adapter) AutoMode() bool { return true }
+
 // Open spawns claude and completes the initialize handshake, which spends
 // no quota. The envelope is checked when the first turn's system/init
 // arrives: claude reports it only after a user message.

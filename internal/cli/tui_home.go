@@ -422,6 +422,11 @@ type home struct {
 	// terminal, and its Ctrl+C is its own (nil in tests).
 	hold func(bool)
 	now  func() time.Time
+	// chat is the session's Chat (#259): each message is its turn. nil
+	// runs each message as a one-shot Run (an agent without auto mode, or
+	// OGE_CHAT=0). turn is the turn in flight, then its cut.
+	chat *homeChat
+	turn *chatTurn
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -556,6 +561,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.diff != nil {
 			h.diff.resize(ws.Width)
 		}
+	}
+	if h.turn != nil {
+		return h.chatUpdate(msg)
 	}
 	if h.run != nil {
 		if _, ok := msg.(gateSettledMsg); ok {
@@ -845,6 +853,9 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.comp.clearUndo()
 	h.navigating = false
 	h.visual = 0
+	if h.chat.fits(res) {
+		return h.chatSubmit(text, res)
+	}
 	t := task.Parse(text)
 	if h.thread != nil {
 		// A follow-up: the whole thread, this message last.
@@ -1039,6 +1050,9 @@ func (h *home) View() tea.View {
 }
 
 func (h *home) view() tea.View {
+	if h.turn != nil {
+		return tea.NewView(h.turnView())
+	}
 	if h.run != nil {
 		return h.queueView()
 	}
@@ -1434,7 +1448,7 @@ func editInEditor(env Env, text string, hold func(bool)) tea.Cmd {
 // code. res is the config as of now (nil when problem says why it can't be
 // resolved); resolve reads it again when a Task is sent.
 func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *resolved, *run.FollowUp) startFunc,
-	res *resolved, problem []string, resolve func(*setupState) (*resolved, []string), sel *setupState) (code int, err error) {
+	res *resolved, problem []string, resolve func(*setupState) (*resolved, []string), sel *setupState, hc *homeChat) (code int, err error) {
 	// A signal while composing ends the session; during a Run it goes to
 	// the Run (forwardTo), as Ctrl+C does.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1526,6 +1540,27 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.thread = nextThread(h.thread, cur, e.res, used.flags)
 		return text, l, false
 	}
+	if hc != nil {
+		h.chat = hc
+		hc.verdict = func(res *run.Result, changed int) (string, *lastRun) {
+			line := verdictLine(res, changed)
+			if res.Dir == "" {
+				return line, nil
+			}
+			receiptText := func() string {
+				var b strings.Builder
+				p := *u.plain
+				p.w = &b
+				p.endScreen(res)
+				return b.String()
+			}
+			l, err := takeRun(env, root, res, h.hold, receiptText)
+			if err != nil {
+				return line + "\noge: reading the Run for delivery: " + clean(err.Error()), nil
+			}
+			return line, l
+		}
+	}
 	h.deliver, h.runs, h.label = deliverer(env), recentRuns(env, root), labeller(env, root)
 	h.diffOf = diffLoader(env)
 	h.listFiles = func() ([]string, error) { return workspace.TrackedFiles(root) }
@@ -1598,10 +1633,20 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 		}
 		return buf.String(), nil, code
 	}
-	r, err := delivery.Load(res.Dir)
+	s, err := takeRun(env, root, res, hold, receiptText)
 	if err != nil {
 		fmt.Fprintf(&buf, "oge: reading the Run for delivery: %s\n", clean(err.Error()))
 		return buf.String(), nil, ExitInternal
+	}
+	return buf.String(), s, ExitOK
+}
+
+// takeRun is what can take the Run res from the home: /apply, /branch,
+// /diff and /receipt. receiptText is its Receipt as the home prints it.
+func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText func() string) (*lastRun, error) {
+	r, err := delivery.Load(res.Dir)
+	if err != nil {
+		return nil, err
 	}
 	// Once applied the Receipt lists the Delivery, so it says nothing about
 	// what was written itself.
@@ -1640,7 +1685,7 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 			return nil
 		})
 	}
-	return buf.String(), s, ExitOK
+	return s, nil
 }
 
 // pageFailedMsg says the pager failed to show the diff.
