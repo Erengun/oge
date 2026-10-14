@@ -47,6 +47,8 @@ type homeChat struct {
 
 	mu sync.Mutex
 	c  *run.Chat
+	// closing counts the Chats /new is closing: quitting waits for them.
+	closing sync.WaitGroup
 }
 
 // fits reports whether a message on res goes to the Chat: one is open, or
@@ -83,19 +85,28 @@ func (hc *homeChat) close() {
 	if c := hc.get(); c != nil {
 		_ = c.Close()
 	}
+	hc.closing.Wait()
 }
 
-// reset closes the Chat, so the next message opens a new one (/new).
-func (hc *homeChat) reset() {
+// reset closes the Chat in the background, so the next message opens a
+// new one (/new): closing waits for a cut in flight to unwind. The
+// command's message is chatClosedMsg; nil when no Chat is open.
+func (hc *homeChat) reset() tea.Cmd {
 	if hc == nil {
-		return
+		return nil
 	}
 	hc.mu.Lock()
 	c := hc.c
 	hc.c = nil
 	hc.mu.Unlock()
-	if c != nil {
+	if c == nil {
+		return nil
+	}
+	hc.closing.Add(1)
+	return func() tea.Msg {
+		defer hc.closing.Done()
 		_ = c.Close()
+		return chatClosedMsg{}
 	}
 }
 
@@ -132,6 +143,8 @@ type (
 		ev agent.Event
 		ok bool
 	}
+	// chatClosedMsg is a Chat /new closed, closed.
+	chatClosedMsg struct{}
 	// chatCutMsg is the end of the cut seq.
 	chatCutMsg struct {
 		seq int
@@ -341,6 +354,14 @@ func (h *home) turnEnded() (tea.Model, tea.Cmd) {
 		// An interrupted turn's changes wait for the next turn's cut.
 		return h.nextTurn(nil)
 	}
+	cut := h.startCut()
+	m, next := h.nextTurn(nil)
+	return m, tea.Batch(cut, next)
+}
+
+// startCut starts the turn's cut, in the Pipeline it resolved for the
+// turn, and makes it the one verifying.
+func (h *home) startCut() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	if v := h.verify; v != nil {
 		// Its turns are this cut's: so are its changes, at least.
@@ -350,12 +371,10 @@ func (h *home) turnEnded() (tea.Model, tea.Cmd) {
 	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, cancel: cancel}
 	hc, f, seq := h.chat, h.turn.frozen, h.cuts
 	c := hc.get()
-	cut := func() tea.Msg {
+	return func() tea.Msg {
 		res, err := hc.cut(ctx, c, f)
 		return chatCutMsg{seq, res, err}
 	}
-	m, next := h.nextTurn(nil)
-	return m, tea.Batch(cut, next)
 }
 
 // endTurn opens the composer again, keeping what was typed during the
@@ -407,7 +426,8 @@ func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
 
 // cutEnded prints the newest cut's Verdict line; h.last moves to it only
 // when it has one. A superseded cut, or one the Chat no longer has, ends
-// unshown.
+// unshown. Whether it was cancelled is the Run's to say: one that
+// reached its Verdict before Ctrl+C took effect shows it.
 func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	v := h.verify
 	if v == nil || v.seq != msg.seq {
@@ -415,10 +435,14 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	}
 	h.verify = nil
 	v.cancel()
+	res := msg.res
+	verdict := msg.err == nil && res != nil && res.Check != nil &&
+		(res.Outcome == run.Accepted || res.Outcome == run.Failed || res.Outcome == run.Parked)
 	var line string
 	switch {
 	case errors.Is(msg.err, run.ErrNothingToCut), errors.Is(msg.err, run.ErrSuperseded):
-	case v.stopped:
+		return nil
+	case v.stopped && !verdict:
 		h.last = nil // as on an error: the older cut isn't what was just changed
 		line = h.ogeLine("■ verification cancelled: nothing was verified")
 	case msg.err != nil:
@@ -426,12 +450,12 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		line = h.ogeLine("✗ verifying the change: " + clean(msg.err.Error()))
 	default:
 		var l string
-		l, h.last = h.chat.verdict(msg.res, v.changed)
+		l, h.last = h.chat.verdict(res, v.changed)
 		line = h.ogeLine(l)
 	}
-	if line == "" {
-		return nil
-	}
+	// The action row acts on h.last: never on a cut the human hasn't
+	// seen yet.
+	h.actions = false
 	return h.println(line)
 }
 

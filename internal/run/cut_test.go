@@ -530,3 +530,35 @@ func TestCutReusesAVerdict(t *testing.T) {
 		t.Errorf("a Verdict was reused across Pipelines: %d Checks", n)
 	}
 }
+
+// A cut that reuses a Check still takes its turns' Tamper events to their
+// Gate: the reuse is of the Check, never of the walk after it.
+func TestCutReusedCheckStillGatesTamper(t *testing.T) {
+	one := multiturn.File{Path: "x.go", Content: "package fx\n\n// one\n"}
+	two := multiturn.File{Path: "x.go", Content: "package fx\n\n// two\n"}
+	edited := strings.Replace(cutAddTest, "Add(2, 3) != 5", "false", 1)
+	c := openCut(t, "",
+		multiturn.Turn{Reply: "1", Writes: []multiturn.File{one}},
+		multiturn.Turn{Reply: "2", Writes: []multiturn.File{two}},
+		multiturn.Turn{Reply: "3", Writes: []multiturn.File{one, {Path: "add_test.go", Content: edited}}})
+	t.Cleanup(func() { c.Close() })
+	var first *Result
+	for i := range 3 {
+		drain(t, send(t, c, fmt.Sprint("turn ", i)), nil)
+		res := cut(t, c)
+		if i == 0 {
+			first = res
+		}
+		if i < 2 && res.Outcome != Accepted {
+			t.Fatalf("cut %d: %s %v", i, res.Outcome, res.Why)
+		}
+		if i == 2 {
+			if reused := runRecords(t, res.Dir, RecVerdictReused); len(reused) != 1 || reused[0]["run"] != first.ID {
+				t.Errorf("VerdictReused %v, want the first cut's", reused)
+			}
+			if res.Outcome != Parked || len(runRecords(t, res.Dir, RecTamperEvent)) != 1 {
+				t.Errorf("a reused Check skipped the Tamper Gate: %s %v", res.Outcome, res.Why)
+			}
+		}
+	}
+}

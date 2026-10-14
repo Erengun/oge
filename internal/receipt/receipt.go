@@ -146,6 +146,9 @@ type Check struct {
 	CacheMs       int64         `json:"cache_materialise_ms"`
 	Uncontained   bool          `json:"uncontained"`
 	Interrupted   bool          `json:"interrupted,omitempty"`
+	// ReusedFrom is the Run whose Check this one is: a Chat's cut of the
+	// same tree, on the same Oracle and Pipeline (#260).
+	ReusedFrom string `json:"reused_from,omitempty"`
 }
 
 // FailingTest is an expected test the Check didn't see pass.
@@ -377,6 +380,7 @@ type (
 		Candidate     string
 		OracleVersion int `json:"oracle_version"`
 		Manifest      string
+		ReusedFrom    string `json:"reused_from"`
 	}
 	checkEnded struct {
 		Check       int
@@ -626,7 +630,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 					manifests[d.Check] = &m
 				}
 			}
-			r.Checks = append(r.Checks, Check{Number: d.Check, Candidate: d.Candidate, Oracle: d.OracleVersion})
+			r.Checks = append(r.Checks, Check{Number: d.Check, Candidate: d.Candidate, Oracle: d.OracleVersion, ReusedFrom: clean(d.ReusedFrom)})
 		case run.RecCheckEnded:
 			var d checkEnded
 			if !get(rec.Data, &d) {

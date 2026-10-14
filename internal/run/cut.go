@@ -151,6 +151,26 @@ func (c *Chat) prepare(m *oracle.Manifest, snap string) {
 // that one returns ErrSuperseded, with its Run's Result if it had one.
 // Turns are never held up by a cut: Send doesn't wait on it.
 func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
+	if err := c.Err(); errors.Is(err, ErrChatClosed) {
+		return nil, err
+	}
+	f := cp.Frozen
+	if f == nil {
+		f = c.frozen
+	}
+	if why, err := c.sameOracle(f); err != nil || why != "" {
+		if err != nil {
+			return nil, err
+		}
+		return &Result{Outcome: Refused, Why: []string{why}}, nil
+	}
+	// Only a cut that can run supersedes the one in flight.
+	c.supersedeMu.Lock()
+	lc := c.lastCut
+	c.supersedeMu.Unlock()
+	if _, err := c.toCut(lc); err != nil {
+		return nil, err
+	}
 	ctx, supersede := context.WithCancelCause(ctx)
 	defer supersede(nil)
 	c.supersedeMu.Lock()
@@ -167,40 +187,11 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	if errors.Is(context.Cause(ctx), ErrSuperseded) {
 		return nil, ErrSuperseded // superseded before it began
 	}
-	f := cp.Frozen
-	if f == nil {
-		f = c.frozen
-	}
-	if why, err := c.sameOracle(f); err != nil || why != "" {
-		if err != nil {
-			return nil, err
-		}
-		return &Result{Outcome: Refused, Why: []string{why}}, nil
-	}
-	// The Candidate is a turn commit, never the live Workspace: the
-	// Session may be writing to it.
-	c.scopeMu.Lock()
-	head, to := c.last, c.lastTurn
-	c.scopeMu.Unlock()
-	e := &cutEntry{chat: c.ID, chatRepo: c.repo.Dir, dir: c.Dir, work: filepath.Join(c.work, cutsDir), snap: c.Snapshot, info: c.info,
-		candidate: head, base: c.Snapshot, from: 1, to: to}
-	if lc := c.lastCut; lc != nil {
-		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
-	}
-	if to < e.from {
-		return nil, ErrNothingToCut
-	}
-	promoted, withheld, err := c.repo.Classify(e.base, head, c.promotedNew)
+	e, err := c.toCut(c.lastCut) // the cut it waited on may have moved it
 	if err != nil {
 		return nil, err
 	}
-	ambiguous := false
-	for _, w := range withheld {
-		ambiguous = ambiguous || w.Class == workspace.ClassAmbiguous
-	}
-	if len(promoted) == 0 && !ambiguous {
-		return nil, ErrNothingToCut
-	}
+	head, to := e.candidate, e.to
 	select {
 	case <-c.prepared:
 	case <-c.stop:
@@ -255,11 +246,13 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	res, err := Start(ctx, Params{Repo: c.source, Task: task.Task{Text: msgs[0], FollowUps: msgs[1:]}, Frozen: f, Config: c.config,
 		Agents: c.agents, State: c.state, Version: cp.Version, Getenv: c.getenv, CacheWait: cp.CacheWait,
 		Observe: cp.Observe, Gates: cp.Gates, cut: e})
-	if errors.Is(context.Cause(ctx), ErrSuperseded) {
-		return res, ErrSuperseded // its turns are the newer cut's
-	}
 	if err != nil {
 		return nil, err
+	}
+	// A Run that reached its Verdict before it was superseded completed.
+	verdict := res.Check != nil && (res.Outcome == Accepted || res.Outcome == Failed || res.Outcome == Parked)
+	if errors.Is(context.Cause(ctx), ErrSuperseded) && !verdict {
+		return res, ErrSuperseded // its turns are the newer cut's
 	}
 	if res.Outcome == Refused && c.prep.setup != nil && !c.prep.setup.Pass {
 		c.refused = res
@@ -267,11 +260,43 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	// A cut that was cancelled, stopped or refused verified nothing: the
 	// next cut covers its turns again.
 	switch {
-	case ctx.Err() != nil, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
+	case ctx.Err() != nil && !verdict, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
 	default:
+		c.supersedeMu.Lock()
 		c.lastCut = &cutMark{run: res.ID, commit: head, turn: to}
+		c.supersedeMu.Unlock()
 	}
 	return res, nil
+}
+
+// toCut is the cut of the turns since lc, or ErrNothingToCut when they
+// changed nothing Promoted or Ambiguous.
+func (c *Chat) toCut(lc *cutMark) (*cutEntry, error) {
+	// The Candidate is a turn commit, never the live Workspace: the
+	// Session may be writing to it.
+	c.scopeMu.Lock()
+	head, to := c.last, c.lastTurn
+	c.scopeMu.Unlock()
+	e := &cutEntry{chat: c.ID, chatRepo: c.repo.Dir, dir: c.Dir, work: filepath.Join(c.work, cutsDir), snap: c.Snapshot, info: c.info,
+		candidate: head, base: c.Snapshot, from: 1, to: to}
+	if lc != nil {
+		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
+	}
+	if to < e.from {
+		return nil, ErrNothingToCut
+	}
+	promoted, withheld, err := c.repo.Classify(e.base, head, c.promotedNew)
+	if err != nil {
+		return nil, err
+	}
+	ambiguous := false
+	for _, w := range withheld {
+		ambiguous = ambiguous || w.Class == workspace.ClassAmbiguous
+	}
+	if len(promoted) == 0 && !ambiguous {
+		return nil, ErrNothingToCut
+	}
+	return e, nil
 }
 
 // sameOracle is why f can't be a cut's Pipeline: only the Shift+Tab mode

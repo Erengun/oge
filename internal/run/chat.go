@@ -138,7 +138,7 @@ type Chat struct {
 	cancelPrep context.CancelFunc
 
 	cutMu   sync.Mutex // one cut at a time
-	lastCut *cutMark   // the last cut that reached a Run's walk
+	lastCut *cutMark   // the last cut that reached a Run's walk; written under supersedeMu too
 	refused *Result    // the cut setup's failure refused
 	// verified are the cuts' Check results by what they checked, for the
 	// Chat's lifetime: a cut of the same tree reuses its Verdict.

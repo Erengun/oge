@@ -40,6 +40,9 @@ type Builder struct {
 	files   map[string][]byte // commit+":"+path → content
 	// V0 and Manifests are the Oracle manifests' blob ids by version.
 	Manifests map[int]string
+	// ReusedFrom, when set, is the Run whose Check the next Check reuses
+	// (a Chat's cut of a tree already checked, #260).
+	ReusedFrom string
 }
 
 // New starts a Run in mode with the Task "fix Add" and Oracle v0 (the
@@ -241,7 +244,14 @@ type Test struct {
 // the tests' dispositions; its Verdict follows unless the Check reached
 // none (infra set).
 func (b *Builder) Check(n int, candidate string, v int, from, to time.Duration, tests []Test, extra func(*oracle.Result)) {
-	b.Add(from, run.RecCheckStarted, map[string]any{"check": n, "candidate": candidate, "oracle_version": v, "manifest": b.Manifests[v]})
+	started := map[string]any{"check": n, "candidate": candidate, "oracle_version": v, "manifest": b.Manifests[v]}
+	if b.ReusedFrom != "" {
+		started["reused_from"] = b.ReusedFrom
+	}
+	b.Add(from, run.RecCheckStarted, started)
+	if b.ReusedFrom != "" {
+		b.Add(from, run.RecVerdictReused, map[string]any{"check": n, "run": b.ReusedFrom, "run_check": 1, "candidate": candidate, "manifest": b.Manifests[v]})
+	}
 	res := oracle.Result{Pass: true, Cache: oracle.CacheClone, CacheMs: 210, VisibleMs: (to - from).Milliseconds()}
 	cmd := oracle.Execution{Run: "go test -json ./...", Pass: true, DurationMs: (to - from).Milliseconds()}
 	for _, t := range tests {
@@ -357,6 +367,16 @@ func Scenarios() []Scenario {
 			b.Attempt(fastAttempt())
 			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
 			b.End(7300*ms, run.Accepted, C1)
+			return b
+		}},
+		{"accepted-reused", func() *Builder {
+			// A Chat's cut of a tree an earlier cut checked: its Check is
+			// that one's (#260).
+			b := New(pipeline.Fast)
+			b.Attempt(fastAttempt())
+			b.ReusedFrom = "r-earlier"
+			b.Check(1, C1, 0, 6200*ms, 6210*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(6300*ms, run.Accepted, C1)
 			return b
 		}},
 		{"accepted-setup", func() *Builder {

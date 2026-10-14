@@ -430,6 +430,8 @@ type home struct {
 	turn   *chatTurn
 	verify *chatVerify
 	cuts   int // the cuts started, each one's seq
+	// resetting: /new is closing the old Chat.
+	resetting bool
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -565,8 +567,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.diff.resize(ws.Width)
 		}
 	}
-	if m, ok := msg.(chatCutMsg); ok {
+	switch m := msg.(type) {
+	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
+	case chatClosedMsg:
+		h.resetting = false
+		return h, nil
 	}
 	if h.turn != nil {
 		return h.chatUpdate(msg)
@@ -1002,14 +1008,22 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // act runs one of the last Run's actions. Applying it ends the thread: the
 // next message is a fresh Task.
+//
+// It is the newest cut whose Verdict is in, never one still verifying,
+// and says so when a newer one is.
+// TODO(#261): ask apply verified / wait.
 func (h *home) act(key, arg string) tea.Cmd {
+	var notice tea.Cmd
+	if h.verify != nil && h.last != nil {
+		notice = h.println(h.ogeLine(h.st.dim("a newer cut is still verifying; this is the last verified one")))
+	}
 	if key == "a" {
 		h.thread = nil
 	}
 	if key == "d" && h.last != nil && h.openDiff(h.last.id) {
-		return nil // the viewer; the pager is its fallback
+		return notice // the viewer; the pager is its fallback
 	}
-	return h.last.act(key, arg, h.fit)
+	return tea.Sequence(notice, h.last.act(key, arg, h.fit))
 }
 
 // onEnded prints the Run's summary above the program (its stages are
@@ -1131,6 +1145,9 @@ func (h *home) render() (string, int, int) {
 	switch {
 	case h.actions:
 		lines = append(lines, " "+st.bold("[a] apply  [d] diff  [r] receipt  [b] branch")+"   "+st.dim("esc back"))
+		top++
+	case h.resetting:
+		lines = append(lines, " "+st.dim("starting a new Chat…"))
 		top++
 	case h.verify != nil && h.verify.stopped:
 		lines = append(lines, " "+st.dim("cancelling verification…"))

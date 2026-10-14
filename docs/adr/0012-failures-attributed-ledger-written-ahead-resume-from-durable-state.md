@@ -72,8 +72,8 @@ status: accepted (`verify = "before"` planner requirement amended in part by ADR
   - *Amended for the Chat ([#260](https://github.com/Erengun/oge/issues/260), [docs/ux/chat-first.md](../ux/chat-first.md) D3, weakening 4):* a Chat's turns are Chat Attempts outside any Run, and they run alongside a cut's Run while its QA and Check verify in the background. Within the Run, Attempts stay sequential.
     - The two never share a Workspace: the turns write the Chat's, and the cut's Run works on disposable clones of the turn commit it cut.
     - Each keeps its own record, written ahead: the Chat log holds the turns and their process records, and the Run's Ledger holds the cut. Neither writes the other's.
-    - One cut verifies at a time. A newer cut cancels the one in flight, which ends an Infrastructure stop with `stop: superseded` in its Ledger: no Verdict, no Recheck, and the newer cut covers its turns.
-    - A cut whose tree an earlier cut of the same Chat checked, on the same Oracle manifest and frozen Pipeline (its mode included), reuses that Check. Its Ledger records `VerdictReused`, naming the Run whose Check it is.
+    - One cut verifies at a time. A newer cut that can run (something changed, on the same Oracle) cancels the one in flight. A cancelled cut that hadn't reached its Verdict ends an Infrastructure stop with `stop: superseded` in its Ledger: no Verdict, no Recheck, and the newer cut covers its turns. One that had reached its Verdict completes as usual.
+    - A cut whose tree an earlier cut of the same Chat checked, on the same Oracle manifest and frozen Pipeline (its mode included), reuses that Check. Its Ledger records `VerdictReused`, naming the Run whose Check it is, and its Receipt says so. The walk after the Check, its Gates included, runs as usual.
 
 ## Consequences
 
