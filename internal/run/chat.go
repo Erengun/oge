@@ -123,6 +123,10 @@ type Chat struct {
 	unctx     func() bool // stops the parent context closing the Chat
 	reopening sync.Mutex  // one Session reopens at a time
 
+	// consults are the Consultations in flight: Close cancels and waits
+	// for them before it closes the log (advisor.go).
+	consults sync.WaitGroup
+
 	logMu sync.Mutex // the Chat log takes one record at a time
 	l     *ledger.Ledger
 
@@ -1084,9 +1088,10 @@ func (c *Chat) Close() error {
 		if unctx != nil {
 			unctx()
 		}
-		close(c.stop)
+		close(c.stop) // cancels every Consultation
 		_ = sess.Close()
 		<-pumped
+		c.consults.Wait()
 		c.cancelPrep()
 		<-c.prepared
 		c.cutMu.Lock() // a cut in flight still uses the seed and the control

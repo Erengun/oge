@@ -26,11 +26,12 @@ func advisorScript(t *testing.T, body string) string {
 	return p
 }
 
-// withAdvisor makes the fake running script c's advisor.
+// withAdvisor makes the fake running script c's advisor, under the
+// implementer's agent name: only the Chat's own agent advises. The
+// implementer's Session keeps its own adapter.
 func withAdvisor(c *Chat, script string) *recorder {
 	r := &recorder{Adapter: &fake.Adapter{Script: script}}
-	c.agents["adv"] = r
-	c.advisor = pipeline.AdvisorConfig{Agent: "adv"}
+	c.agents["claude"] = r
 	return r
 }
 
@@ -54,12 +55,13 @@ func TestConsultReadsADisposableClone(t *testing.T) {
 		{Reply: "I made Add negate-safe.", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add() {}\n"}}},
 	}}, 0)
 	drain(t, send(t, c, "make Add safe"), nil)
-	r := withAdvisor(c, advisorScript(t, "echo planted > planted.go\necho > add.go\necho \"role $OGE_FAKE_ROLE\"\necho 'Inject a Clock.'\n"))
+	r := withAdvisor(c, advisorScript(t, "cat add.go\necho planted > planted.go\necho > add.go\necho \"role $OGE_FAKE_ROLE\"\necho 'Inject a Clock.'\n"))
 	adv, err := c.Consult(t.Context(), "is there a cleaner seam?")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adv.Text != "role advisor\nInject a Clock." || adv.Turn != 1 || adv.Effort != "high" || adv.Agent != "adv" {
+	// It read turn 1's add.go in its clone, then wrote over it there.
+	if adv.Text != "package fx\n\nfunc Add() {}\nrole advisor\nInject a Clock." || adv.Turn != 1 || adv.Effort != "high" || adv.Agent != "claude" {
 		t.Errorf("advice %+v", adv)
 	}
 	if _, err := os.Stat(filepath.Join(c.Workspace, "planted.go")); !errors.Is(err, os.ErrNotExist) {
@@ -91,7 +93,7 @@ func TestConsultReadsADisposableClone(t *testing.T) {
 		s["turn"] != float64(1) || s["question"] != sha("is there a cleaner seam?") {
 		t.Errorf("ConsultationStarted %v", s)
 	}
-	if !reflect.DeepEqual(s["advisor"], map[string]any{"agent": "adv", "model": "", "role": "advisor", "network": "off", "effort": "high"}) {
+	if !reflect.DeepEqual(s["advisor"], map[string]any{"agent": "claude", "model": "", "role": "advisor", "network": "off", "effort": "high"}) {
 		t.Errorf("advisor identity %v", s["advisor"])
 	}
 	if got := blob(t, c, s, "briefing"); got != sent {
@@ -174,8 +176,9 @@ func TestConsultWithholdsAPlantedHeldOutTest(t *testing.T) {
 	if res.Outcome != Failed {
 		t.Fatalf("outcome %s %v", res.Outcome, res.Why)
 	}
-	// The advisor echoes its Briefing back as its advice.
-	r := withAdvisor(c, advisorScript(t, "printf '%s\\n' \"$OGE_FAKE_TURN\"\n"))
+	// The advisor lists its clone, prints its test files and echoes its
+	// Briefing back, all as its advice.
+	r := withAdvisor(c, advisorScript(t, "ls -aR .\ncat *_test.go\nprintf '%s\\n' \"$OGE_FAKE_TURN\"\n"))
 	adv, err := c.Consult(t.Context(), "why does it fail?")
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +188,9 @@ func TestConsultWithholdsAPlantedHeldOutTest(t *testing.T) {
 	r.mu.Unlock()
 	s := recordsOf(t, c, RecConsultationStarted)[0]
 	e := recordsOf(t, c, RecConsultationEnded)[0]
+	if !strings.Contains(adv.Text, "add_test.go") || !strings.Contains(adv.Text, "func TestAdd(") {
+		t.Errorf("the advisor didn't list its clone:\n%s", adv.Text)
+	}
 	if !strings.Contains(sent, "1 failing") || !strings.Contains(sent, "1 held-out test failed") {
 		t.Errorf("the Briefing lacks the newest Verdict's count:\n%s", sent)
 	}
@@ -195,5 +201,20 @@ func TestConsultWithholdsAPlantedHeldOutTest(t *testing.T) {
 				t.Errorf("held-out %q reached the advisor:\n%s", never, where)
 			}
 		}
+	}
+}
+
+// Only the Chat's own agent advises until #292: [advisor] naming
+// another is refused before anything opens.
+func TestConsultRefusesAnotherAgent(t *testing.T) {
+	c := openChat(t, multiturn.Scenario{}, 0)
+	r := &recorder{Adapter: &fake.Adapter{Script: advisorScript(t, "echo advice\n")}}
+	c.agents["codex"] = r
+	c.advisor = pipeline.AdvisorConfig{Agent: "codex"}
+	if _, err := c.Consult(t.Context(), "anything?"); !errors.Is(err, ErrAdvisorAgent) || !strings.Contains(err.Error(), "#292") {
+		t.Fatalf("Consult: %v", err)
+	}
+	if len(r.sent) > 0 || len(recordsOf(t, c, RecConsultationStarted)) > 0 {
+		t.Error("a refused Consultation opened a Session or was recorded")
 	}
 }

@@ -29,11 +29,14 @@ func TestAdvisorProfileOnlyReads(t *testing.T) {
 	if !strings.Contains(joined, "--tools Read,Glob,Grep ") || !strings.Contains(joined, "--permission-mode default") {
 		t.Errorf("advisor args: %s", joined)
 	}
-	ws, err := filepath.EvalSymlinks(t.TempDir())
+	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := newPolicy(agent.LaunchSpec{Role: "advisor", Workspace: ws}, "abc")
+	// ws is the advisor's clone; live is the Chat Workspace it is denied.
+	ws, live := filepath.Join(dir, "clone"), filepath.Join(dir, "live")
+	spec := agent.LaunchSpec{Role: "advisor", Workspace: ws, DenyRead: []string{live}}
+	p := newPolicy(spec, "abc")
 	in := func(k, v string) json.RawMessage { b, _ := json.Marshal(map[string]string{k: v}); return b }
 	for _, c := range []struct {
 		tool  string
@@ -42,6 +45,15 @@ func TestAdvisorProfileOnlyReads(t *testing.T) {
 	}{
 		{"Read", in("file_path", ws+"/a.go"), "allow"},
 		{"Grep", in("pattern", "Add"), "allow"},
+		{"Read", in("file_path", "a.go"), "allow"},
+		{"Read", in("file_path", "/etc/passwd"), "deny"},
+		{"Read", in("file_path", live+"/a.go"), "deny"},
+		{"Read", in("file_path", "../live/a.go"), "deny"},
+		{"Glob", json.RawMessage(`{"pattern":"*.go","path":"/etc"}`), "deny"},
+		{"Glob", json.RawMessage(`{"pattern":"*.go","path":"` + live + `"}`), "deny"},
+		{"mcp__x__y", json.RawMessage(`{}`), "deny"},
+		{"WebFetch", in("url", "https://example.com"), "deny"},
+		{"Task", in("prompt", "write a file"), "deny"},
 		{"Write", in("file_path", ws+"/a.go"), "deny"},
 		{"Edit", in("file_path", ws+"/a.go"), "deny"},
 		{"NotebookEdit", in("notebook_path", ws+"/a.ipynb"), "deny"},
@@ -51,6 +63,25 @@ func TestAdvisorProfileOnlyReads(t *testing.T) {
 		if d := p.decide(c.tool, c.input); d.Decision != c.want {
 			t.Errorf("%s: %s (%s), want %s", c.tool, d.Decision, d.Reason, c.want)
 		}
+	}
+	// The sandbox's rules deny the live Workspace too.
+	settings := ""
+	if args, err = prof.args(spec, "id", nil); err != nil {
+		t.Fatal(err)
+	}
+	for i, a := range args {
+		if a == "--settings" && i+1 < len(args) {
+			settings = args[i+1]
+		}
+	}
+	var set struct {
+		Permissions struct{ Deny []string } `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(settings), &set); err != nil {
+		t.Fatalf("settings %q: %v", settings, err)
+	}
+	if want := "Read(/" + live + "/**)"; !oneOf(want, set.Permissions.Deny) {
+		t.Errorf("permissions.deny %v lacks %s", set.Permissions.Deny, want)
 	}
 	if !New().AdvisorReadOnly() || New().StrongestModel() != "opus" {
 		t.Error("the claude adapter's advisor is not read-only on opus")

@@ -65,6 +65,10 @@ type Advice struct {
 	Duration             time.Duration
 }
 
+// ErrAdvisorAgent is why a Consultation was refused: [advisor] names an
+// agent other than the Chat's.
+var ErrAdvisorAgent = errors.New("only the Chat's own agent advises")
+
 // chatVerdict is a Chat's newest cut Verdict, as an Advisor is told it.
 type chatVerdict struct {
 	turn     int // the last turn it checked
@@ -85,7 +89,8 @@ func (c *Chat) advisorFor() (agent.Adapter, pipeline.Stage, error) {
 	}
 	cfg := c.advisor
 	if cfg.Agent != "" && cfg.Agent != st.Agent {
-		st.Agent, st.Profile, st.Model = cfg.Agent, "", ""
+		// Cross-vendor advice is opt-in after #60 (docs/ux/advisor.md).
+		return nil, st, fmt.Errorf("%w: [advisor] agent %q differs from the Chat's %s; a different agent advises from #292", ErrAdvisorAgent, cfg.Agent, st.Agent)
 	}
 	ad := c.agents[st.Agent]
 	if ad == nil {
@@ -114,9 +119,16 @@ func (c *Chat) advisorFor() (agent.Adapter, pipeline.Stage, error) {
 // Session is denied without reaching the human. Cancelling ctx cancels
 // the Consultation; its records stay in the Chat log either way.
 func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
-	if errors.Is(c.Err(), ErrChatClosed) {
+	// Close waits for every Consultation it lets start, and refuses the
+	// rest, so ConsultationEnded never lands on a closed log.
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
 		return nil, ErrChatClosed
 	}
+	c.consults.Add(1)
+	c.mu.Unlock()
+	defer c.consults.Done()
 	ad, st, err := c.advisorFor()
 	if err != nil {
 		return nil, err
@@ -149,8 +161,14 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 	if r, ok := ad.(agent.ReadOnly); ok && r.AdvisorReadOnly() {
 		readOnly = ReadOnlyTools
 	}
+	// The live Workspace holds a turn's in-flight edits: the Advisor
+	// reads only its clone.
+	denyRead := append(append([]string(nil), c.deny...), c.Workspace)
+	if c.instr != "" {
+		items = append(items, map[string]any{"item": "repo_instructions", "source": "the Snapshot's CLAUDE.md", "sha256": sha256Hex(c.instr)})
+	}
 	manifest := map[string]any{"chat": c.ID, "consultation": id, "role": "advisor", "items": items,
-		"briefing": sha256Hex(brief), "session_reused": false}
+		"briefing": sha256Hex(brief), "deny_read": denyRead, "session": "fresh", "session_reused": false}
 	mJSON, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, err
@@ -190,17 +208,15 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 
 	spec := agent.LaunchSpec{Role: "advisor", Model: st.Model, Effort: st.Effort, Profile: st.Profile,
 		Workspace: ws, Network: st.Network, RunID: c.ID + "/" + id, RepoInstructions: c.instr,
-		// The live Workspace holds a turn's in-flight edits: the Advisor
-		// reads only its clone.
-		DenyRead: append(append([]string(nil), c.deny...), c.Workspace), Cache: cache,
+		DenyRead: denyRead, Cache: cache,
 		StateRoots: c.spec.StateRoots}
 	sess, err := ad.Open(ctx, spec)
 	if err != nil {
 		return nil, errors.Join(err, end(ConsultFailed, "open_failed: "+err.Error(), nil))
 	}
+	defer sess.Close()
 	rec := &adviceRecord{}
 	text, outcome, why := c.advise(ctx, sess, st, id, brief, rec)
-	_ = sess.Close()
 	if err := end(outcome, why, rec); err != nil {
 		return nil, err
 	}
