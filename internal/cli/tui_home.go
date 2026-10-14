@@ -1194,6 +1194,35 @@ func (h *home) wheel(msg tea.MouseWheelMsg) tea.Cmd {
 	return nil
 }
 
+// boxLines is the composer's box, drawn at width, with the cursor's row in
+// it and its column; blank is shown in an empty box. The idle composer and
+// a turn's live area share it.
+func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol int) {
+	st := h.st
+	inner := max(width-4, 1)
+	h.comp.sel, h.comp.selPaint = h.selection(), st.selected
+	rows, cr, cc := h.comp.layout(inner)
+	empty := len(h.comp.lines) == 1 && len(h.comp.lines[0]) == 0
+	title := " " + h.title + " "
+	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
+		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
+	}
+	lines = append(lines, st.dim("╭─")+st.bold(title)+st.dim(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
+	for i, r := range rows {
+		body := r
+		if empty && i == 0 {
+			body = blank
+			if h.job != nil {
+				body = st.dim("running… (ctrl+c to stop)")
+			}
+		}
+		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(body)), 0))
+		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
+	}
+	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
+	return lines, cr, cc
+}
+
 // render is the composer frame, and where the cursor is in it.
 func (h *home) render() (string, int, int) {
 	st := h.st
@@ -1201,11 +1230,6 @@ func (h *home) render() (string, int, int) {
 	if width <= 0 {
 		width = 80
 	}
-	inner := max(width-4, 1)
-	h.comp.sel, h.comp.selPaint = h.selection(), st.selected
-	rows, cr, cc := h.comp.layout(inner)
-	blank := len(h.comp.lines) == 1 && len(h.comp.lines[0]) == 0
-
 	var lines []string
 	top := 0 // lines above the box
 	switch {
@@ -1228,23 +1252,8 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, " "+st.dim("↓ actions · /apply /diff /receipt /branch · /new"))
 		top++
 	}
-	title := " " + h.title + " "
-	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
-		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
-	}
-	lines = append(lines, st.dim("╭─")+st.bold(title)+st.dim(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
-	for i, r := range rows {
-		body := r
-		if blank && i == 0 {
-			body = st.dim("Describe the task")
-			if h.job != nil {
-				body = st.dim("running… (ctrl+c to stop)")
-			}
-		}
-		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(body)), 0))
-		lines = append(lines, st.dim("│")+" "+body+pad+" "+st.dim("│"))
-	}
-	lines = append(lines, st.dim("╰"+strings.Repeat("─", max(width-2, 0))+"╯"))
+	box, cr, cc := h.boxLines(width, st.dim("Describe the task"))
+	lines = append(lines, box...)
 	if h.vim {
 		mode := "-- INSERT --"
 		switch {
