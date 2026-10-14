@@ -147,11 +147,11 @@ func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
 	h.comp = h.composer()
 	h.comp.set("/apply")
 	h.showAsk()
-	if len(h.turn.queued) != 0 || h.comp.text() != "" {
+	if len(h.turn.queued) != 1 || h.comp.text() != "" {
 		t.Fatalf("queued %q, composer %q", h.turn.queued, h.comp.text())
 	}
-	if queued := h.endTurn(); len(queued) != 0 || h.comp.text() != "/apply" {
-		t.Errorf("after the turn: queued %q, composer %q", queued, h.comp.text())
+	if queued := h.endTurn(); len(queued) != 1 || queued[0] != "/apply" {
+		t.Errorf("after the turn: queued %q", queued)
 	}
 }
 
@@ -162,5 +162,83 @@ func TestFeedbackTurnShowsWorking(t *testing.T) {
 	h.comp = h.composer()
 	if v := h.view().Content; !strings.Contains(v, "working… · esc to interrupt") || strings.Contains(v, "[ctrl+e] editor") {
 		t.Errorf("the feedback turn's live area:\n%s", v)
+	}
+}
+
+func turnQueueHome() *home {
+	h := &home{width: 80, height: 24, st: newStyles(false), turn: &chatTurn{},
+		hist:    &history{},
+		resolve: func(*setupState) (*resolved, []string) { return &resolved{frozen: &pipeline.Frozen{}}, nil },
+		chat:    &homeChat{}}
+	h.comp = h.composer()
+	return h
+}
+
+// During a turn the box stays, with each queued message dim above it, and
+// Up on an empty box takes the last one back to edit.
+func TestQueuedMessagesStayVisible(t *testing.T) {
+	h := turnQueueHome()
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	for _, m := range []string{"first", "/diff", "second"} {
+		h.comp.set(m)
+		h.chatKey(enter)
+	}
+	v := h.turnView()
+	for _, want := range []string{"working…", "queued › first", "queued › /diff", "queued › second", "╭─", "Type to queue a message"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view lacks %q:\n%s", want, v)
+		}
+	}
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.comp.text() != "second" || len(h.turn.queued) != 2 {
+		t.Fatalf("up: composer %q, queued %q", h.comp.text(), h.turn.queued)
+	}
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyUp}) // the box isn't empty: no pull
+	if len(h.turn.queued) != 2 {
+		t.Errorf("up on a filled box pulled: %q", h.turn.queued)
+	}
+}
+
+// Everything queued is one turn, in order with a blank line between.
+func TestQueuedMessagesAreOneTurn(t *testing.T) {
+	h := turnQueueHome()
+	h.turn.queued = []string{"first", "second"}
+	queued := h.endTurn()
+	h.submitQueued(queued)
+	if h.turn == nil || h.turn.text != "first\n\nsecond" {
+		t.Fatalf("turn %+v", h.turn)
+	}
+}
+
+// A paste over the limit, queued during a turn, reaches the turn whole.
+func TestQueuedPasteIsKeptWhole(t *testing.T) {
+	h := turnQueueHome()
+	big := strings.Repeat("line of the paste\n", pasteLines+5)
+	h.comp.insertPaste(big)
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(h.turn.queued) != 1 || h.turn.queued[0] != strings.TrimSpace(big) {
+		t.Fatalf("queued %q", h.turn.queued)
+	}
+	h.submitQueued(h.endTurn())
+	if h.turn == nil || h.turn.text != strings.TrimSpace(big) {
+		t.Fatalf("turn text %v", h.turn)
+	}
+}
+
+// With a command queued, it runs and the messages wait, unsent, in the
+// composer with the draft: no turn starts under the command's prompt.
+func TestQueuedCommandHoldsTheMessages(t *testing.T) {
+	h := turnQueueHome()
+	h.turn.queued = []string{"first", "/nosuch", "!echo hi", "second"}
+	h.comp.set("draft")
+	h.submitQueued(h.endTurn())
+	if !strings.Contains(strings.Join(h.msg, "\n"), "not available") { // the shell line ran last
+		t.Errorf("the commands didn't run: %q", h.msg)
+	}
+	if h.turn != nil {
+		t.Fatalf("a turn started: %+v", h.turn)
+	}
+	if got, want := h.comp.text(), "first\n\nsecond\n\ndraft"; got != want {
+		t.Errorf("composer %q, want %q", got, want)
 	}
 }
