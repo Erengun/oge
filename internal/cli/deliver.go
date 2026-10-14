@@ -361,7 +361,7 @@ func banner(w io.Writer, r *delivery.Run) {
 }
 
 func applyCommand(env Env, r *delivery.Run, root string, c delivery.Choice) int {
-	if code := authorize(env, r, c); code != ExitOK {
+	if code := authorize(env, r, c, "apply"); code != ExitOK {
 		return code
 	}
 	a, err := delivery.Apply(r, root, c)
@@ -384,8 +384,8 @@ func applyCommand(env Env, r *delivery.Run, root string, c delivery.Choice) int 
 // authorize refuses a delivery the Run's outcome doesn't allow, or one
 // that leaves a held-back choice unmade. Either way, a non-Accepted
 // Candidate's outcome and why it isn't Accepted are shown first.
-func authorize(env Env, r *delivery.Run, c delivery.Choice) int {
-	err := delivery.Authorize(r, c.Outcome)
+func authorize(env Env, r *delivery.Run, c delivery.Choice, verb string) int {
+	err := delivery.AuthorizeTo(r, c.Outcome, verb)
 	if err == nil {
 		_, err = delivery.Hold(r, c)
 	}
@@ -443,7 +443,7 @@ func appliedPlan(r *delivery.Run, p *delivery.Plan) string {
 }
 
 func branchCommand(env Env, r *delivery.Run, root, name string, c delivery.Choice) int {
-	if code := authorize(env, r, c); code != ExitOK {
+	if code := authorize(env, r, c, "branch"); code != ExitOK {
 		return code
 	}
 	b, err := delivery.Branch(r, root, name, c)

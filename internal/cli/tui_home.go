@@ -997,7 +997,11 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 		h.quit = true
 		return h, tea.Quit
 	}
-	h.last = last
+	if last != nil || e.res == nil || e.res.Outcome != run.Replied {
+		// A Replied turn leaves the earlier Run's actions alone: its
+		// verified Candidate can still be applied (#254).
+		h.last = last
+	}
 	h.reopen()
 	h.takeQueue()
 	return h, h.println(text)

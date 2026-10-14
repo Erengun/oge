@@ -28,14 +28,18 @@ const (
 // with no flag, Overridden only with --overridden, Rejected only with
 // --rejected. A flag that names another outcome is refused too. What the
 // Candidate holds back is Hold's to decide.
-func Authorize(r *Run, flag string) error {
+func Authorize(r *Run, flag string) error { return AuthorizeTo(r, flag, "apply") }
+
+// AuthorizeTo is Authorize for the delivery verb that names what the
+// refusal of a Replied Run says there is nothing to do.
+func AuthorizeTo(r *Run, flag, verb string) error {
 	switch {
 	case r.Candidate == "":
 		return refuse("Run %s has no Candidate to deliver", r.ID)
 	case run.Live(r.Dir):
 		return refuse("Run %s is still running; deliver it once it ends", r.ID)
 	case r.Outcome == run.Replied:
-		return refuse("Run %s replied and changed nothing, so there is nothing to apply", r.ID)
+		return refuse("nothing to %s: Run %s replied without changes", verb, r.ID)
 	case r.Parked:
 		return refuse("Run %s is parked at a Gate and hasn't ended, so its Candidate isn't deliverable; oge diff %s shows it", r.ID, r.ID)
 	case r.Outcome == "":

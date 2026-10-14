@@ -163,6 +163,11 @@ func TestHomeTitleAndSetupAreEscaped(t *testing.T) {
 // homeNorm hides what differs between runs: ids, hashes and durations.
 var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|(\d+m)?\d+(\.\d+)?m?s\b`)
 
+// homeScript fixes Add, and on a follow-up turn, which starts from the fixed
+// file, adds a comment: a turn that changes nothing ends Replied (#254), and
+// these sessions' later turns are meant to be Runs.
+const homeScript = "if grep -q 'a + b' add.go; then echo '// again' >> add.go; echo 'exit: done'; exit 0; fi\n" + fixScript
+
 // homeSession runs Main on a pipe the test types into, with the fake agent.
 type homeSession struct {
 	t      *testing.T
@@ -190,7 +195,7 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 		t.Fatal(err)
 	}
 	script := filepath.Join(filepath.Dir(f.repo), "agent.sh")
-	if err := os.WriteFile(script, []byte(fixScript), 0o644); err != nil {
+	if err := os.WriteFile(script, []byte(homeScript), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s := &homeSession{t: t, f: f, pw: pw, exit: make(chan int, 1)}
