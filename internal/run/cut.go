@@ -21,8 +21,9 @@ import (
 // Run (docs/ux/chat-first.md, slice 6; ADR-0007 as amended): when the
 // turns since the last cut changed something Promoted or Ambiguous, the
 // newest turn commit becomes an immutable Candidate, and a Run of its own
-// enters the walk at QA. It runs in the foreground for now.
-// TODO(#260): verify in the background, cancelled by a newer cut.
+// enters the walk at QA. It verifies in the background of the Chat (D3):
+// turns go on during QA and the Check, as Chat Attempts outside the Run
+// (ADR-0012, as amended), and a newer cut cancels the one in flight.
 
 // cutsDir holds the cuts' disposable directories in a Chat's: the
 // implementer is denied reading it, as QA writes held-out tests there.
@@ -31,6 +32,13 @@ const cutsDir = "cuts"
 // ErrNothingToCut means no turn since the last cut changed anything
 // Promoted or Ambiguous: there is no Run, and no wait on Preflight.
 var ErrNothingToCut = errors.New("nothing to cut")
+
+// ErrSuperseded is why a cut stopped without a Verdict: a newer cut
+// cancelled it, and covers its turns.
+var ErrSuperseded = errors.New("superseded by a newer cut")
+
+// WhySuperseded is a superseded cut's Run's stop reason.
+const WhySuperseded = "superseded: a newer cut cancelled this one's verification, and covers its turns"
 
 // WhySetupChanged is a cut's Refused reason when its Pipeline changes the
 // Chat's Oracle, setup or Checks.
@@ -89,6 +97,24 @@ type cutEntry struct {
 	waits    int
 	waited   time.Duration
 	recorded bool
+	checks   map[checkKey]checkedBy // the Chat's, under its cutMu
+}
+
+// checkKey is what a Check result depends on: the tree checked, the
+// Oracle version's manifest and the frozen Pipeline, its mode included.
+type checkKey struct{ tree, oracle, pipeline string }
+
+// checkedBy is a cut's Check result, and the Run and Check that ran it.
+type checkedBy struct {
+	run   string
+	check int
+	cr    *oracle.Result
+}
+
+// checkKey is checked's key, on the manifest and frozen Pipeline blobs.
+func (e *cutEntry) checkKey(repo *workspace.RunRepo, checked, manifest, frozen string) (checkKey, error) {
+	tree, err := repo.TreeOf(checked)
+	return checkKey{tree: tree, oracle: manifest, pipeline: frozen}, err
 }
 
 // prepare starts the Chat's Preflight in the background: setup on the
@@ -120,11 +146,26 @@ func (c *Chat) prepare(m *oracle.Manifest, snap string) {
 // returns ErrNothingToCut otherwise. The cut is refused (fails closed)
 // while the Chat's Preflight and Snapshot control haven't finished: ctx
 // ending first refuses it. Closing the Chat cancels a cut in flight.
+//
+// One cut verifies at a time, and a newer one cancels the one in flight:
+// that one returns ErrSuperseded, with its Run's Result if it had one.
+// Turns are never held up by a cut: Send doesn't wait on it.
 func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
+	ctx, supersede := context.WithCancelCause(ctx)
+	defer supersede(nil)
+	c.supersedeMu.Lock()
+	if c.supersede != nil {
+		c.supersede(ErrSuperseded)
+	}
+	c.supersede = supersede
+	c.supersedeMu.Unlock()
 	c.cutMu.Lock()
 	defer c.cutMu.Unlock()
 	if err := c.Err(); errors.Is(err, ErrChatClosed) {
 		return nil, err
+	}
+	if errors.Is(context.Cause(ctx), ErrSuperseded) {
+		return nil, ErrSuperseded // superseded before it began
 	}
 	f := cp.Frozen
 	if f == nil {
@@ -165,6 +206,9 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	case <-c.stop:
 		return nil, ErrChatClosed
 	case <-ctx.Done():
+		if errors.Is(context.Cause(ctx), ErrSuperseded) {
+			return nil, ErrSuperseded
+		}
 		return &Result{Outcome: Refused, Why: []string{"the Preflight and the Snapshot control hadn't finished; nothing is verified against an unchecked setup"}}, nil
 	}
 	if c.refused != nil {
@@ -174,6 +218,10 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 		return &r, nil
 	}
 	e.prep = c.prep
+	if c.verified == nil {
+		c.verified = map[checkKey]checkedBy{}
+	}
+	e.checks = c.verified
 	e.waits, e.waited = c.prep.control.Waits()
 	// The Task's turns are every turn since the last delivery (D7), and
 	// so are its Tamper events: one an earlier cut carried, or a late one
@@ -207,6 +255,9 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	res, err := Start(ctx, Params{Repo: c.source, Task: task.Task{Text: msgs[0], FollowUps: msgs[1:]}, Frozen: f, Config: c.config,
 		Agents: c.agents, State: c.state, Version: cp.Version, Getenv: c.getenv, CacheWait: cp.CacheWait,
 		Observe: cp.Observe, Gates: cp.Gates, cut: e})
+	if errors.Is(context.Cause(ctx), ErrSuperseded) {
+		return res, ErrSuperseded // its turns are the newer cut's
+	}
 	if err != nil {
 		return nil, err
 	}

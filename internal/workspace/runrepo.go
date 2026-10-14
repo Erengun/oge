@@ -413,6 +413,13 @@ func (r *RunRepo) Import(from, commit, ref string) error {
 	return err
 }
 
+// TreeOf is commit's tree: two commits with the same files have the same
+// one.
+func (r *RunRepo) TreeOf(commit string) (string, error) {
+	out, err := r.git("", "", nil, "rev-parse", commit+"^{tree}")
+	return strings.TrimSpace(string(out)), err
+}
+
 // ChangedFiles lists paths that differ between two commits.
 func (r *RunRepo) ChangedFiles(from, to string) ([]string, error) {
 	out, err := r.git("", "", nil, "diff-tree", "-r", "--name-only", "-z", "--no-renames", from, to)

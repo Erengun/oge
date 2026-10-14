@@ -69,6 +69,7 @@ const (
 	RecCheckEnded        = "CheckEnded"
 	RecControlEnded      = "ControlEnded"
 	RecVerdict           = "Verdict"
+	RecVerdictReused     = "VerdictReused"
 	RecRunEnded          = "RunEnded"
 )
 
@@ -356,6 +357,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	}
 	var w *walk // the walk of the graph, once it starts
 	end := func(o Outcome, why ...string) (*Result, error) {
+		superseded := o == InfrastructureStop && errors.Is(context.Cause(ctx), ErrSuperseded)
+		if superseded {
+			why = []string{WhySuperseded} // a newer cut's Check covers this one's
+		}
 		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
 		if o != Accepted && w != nil && res.Candidate != "" {
 			// The final Candidate's: a Run that stops before its Check
@@ -368,6 +373,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": res.Candidate}
 		if o == Parked {
 			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
+		}
+		if superseded {
+			data["stop"] = "superseded"
 		}
 		if len(res.Unresolved) > 0 {
 			// The Receipt's Not covered line (#63).
@@ -744,17 +752,39 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if checked != a.Candidate {
 			started["checked_tree"] = checked // held-back agent config left out (#107)
 		}
+		// A cut whose tree an earlier cut of the Chat checked, on the same
+		// Oracle and Pipeline, reuses that Check (D3): the Run records
+		// whose it is.
+		var key checkKey
+		var hit *checkedBy
+		if p.cut != nil {
+			if key, err = p.cut.checkKey(repo, checked, mBlob, frozenBlob); err != nil {
+				return nil, err
+			}
+			if by, ok := p.cut.checks[key]; ok {
+				hit = &by
+				started["reused_from"] = by.run
+			}
+		}
 		if err := l.Append(RecCheckStarted, started); err != nil {
 			return nil, err
 		}
-		// With held-out tests, two executions: the visible Oracle in a build
-		// no held-out file enters, and the held-out tests on their own
-		// (#46); both must pass.
-		cr, err := runner.SplitCheck(ctx, repo, m, checked, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control)
-		if err != nil {
-			return nil, err
+		var cr *oracle.Result
+		if hit != nil {
+			if err := l.Append(RecVerdictReused, map[string]any{"check": check, "run": hit.run, "run_check": hit.check,
+				"candidate": a.Candidate, "tree": key.tree, "manifest": key.oracle, "frozen": key.pipeline}); err != nil {
+				return nil, err
+			}
+			cr = hit.cr
+		} else {
+			// With held-out tests, two executions: the visible Oracle in a
+			// build no held-out file enters, and the held-out tests on their
+			// own (#46); both must pass.
+			if cr, err = runner.SplitCheck(ctx, repo, m, checked, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control); err != nil {
+				return nil, err
+			}
 		}
-		if ctx.Err() != nil {
+		if hit == nil && ctx.Err() != nil {
 			if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true, "interrupted": true}); err != nil {
 				return nil, err
 			}
@@ -765,8 +795,15 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if cr.Pass {
 			verdict = "pass"
 		}
-		if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true}); err != nil {
+		ended := map[string]any{"check": check, "result": cr, "uncontained": true}
+		if hit != nil {
+			ended["reused_from"] = hit.run
+		}
+		if err := l.Append(RecCheckEnded, ended); err != nil {
 			return nil, err
+		}
+		if p.cut != nil && hit == nil && cr.Infra == "" {
+			p.cut.checks[key] = checkedBy{run: res.ID, check: check, cr: cr}
 		}
 		// TODO(#73-decision): the Snapshot control is recorded once a Check
 		// has consulted it; one no Verdict needed is stopped unrecorded at

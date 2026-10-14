@@ -140,6 +140,13 @@ type Chat struct {
 	cutMu   sync.Mutex // one cut at a time
 	lastCut *cutMark   // the last cut that reached a Run's walk
 	refused *Result    // the cut setup's failure refused
+	// verified are the cuts' Check results by what they checked, for the
+	// Chat's lifetime: a cut of the same tree reuses its Verdict.
+	verified map[checkKey]checkedBy
+
+	// supersede cancels the cut in flight, if any: a newer cut does.
+	supersedeMu sync.Mutex
+	supersede   context.CancelCauseFunc
 
 	mu     sync.Mutex
 	sess   agent.Session

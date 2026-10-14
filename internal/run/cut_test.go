@@ -399,3 +399,134 @@ func TestCancelledCutIsCutAgain(t *testing.T) {
 		t.Errorf("the second cut has no Candidate: %+v", res)
 	}
 }
+
+// waitFor waits for the file at path, failing if done ends first.
+func waitFor[T any](t *testing.T, path string, done <-chan T) {
+	t.Helper()
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		select {
+		case <-done:
+			t.Fatal("the cut ended before its Check held")
+		default:
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("the Check never started")
+		}
+	}
+}
+
+// While a cut's Check is held, the next turn is sent and replies; its cut
+// supersedes the held one, which ends with no Verdict and a superseded
+// stop in its Ledger, and covers both turns' changes.
+func TestCutSupersededByANewerCut(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "checking")
+	f := cutFrozen(t, "")
+	// Only the first Check on hold.go holds; the next one runs through.
+	f.Checks[0].Run = "if [ -f hold.go ] && [ ! -f '" + mark + "' ]; then touch '" + mark + "'; while :; do sleep 0.1; done; fi; " + f.Checks[0].Run
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "held", Writes: []multiturn.File{{Path: "hold.go", Content: "package fx\n"}}},
+		{Reply: "and more", Writes: []multiturn.File{{Path: "more.go", Content: "package fx\n"}}}}}), 0, f,
+		map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	t.Cleanup(func() { c.Close() })
+	drain(t, send(t, c, "hold"), nil)
+	type out struct {
+		res *Result
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		res, err := c.Cut(t.Context(), CutParams{})
+		done <- out{res, err}
+	}()
+	waitFor(t, mark, done)
+	evs := drain(t, send(t, c, "more"), nil) // the held Check doesn't hold the turn up
+	replied := false
+	for _, ev := range evs {
+		replied = replied || strings.Contains(ev.Text, "and more")
+	}
+	if !replied {
+		t.Fatalf("the turn sent during the Check didn't reply: %+v", evs)
+	}
+	newer := cut(t, c)
+	var older out
+	select {
+	case older = <-done:
+	case <-time.After(40 * time.Second):
+		t.Fatal("the superseded cut didn't end")
+	}
+	if !errors.Is(older.err, ErrSuperseded) || older.res == nil {
+		t.Fatalf("the older cut: %+v, %v; want ErrSuperseded with its Run", older.res, older.err)
+	}
+	if len(runRecords(t, older.res.Dir, RecVerdict)) != 0 {
+		t.Error("a superseded cut has a Verdict")
+	}
+	if ended := runRecords(t, older.res.Dir, RecRunEnded); len(ended) != 1 || ended[0]["stop"] != "superseded" {
+		t.Errorf("the superseded cut's RunEnded %v", ended)
+	}
+	if newer.Outcome != Accepted {
+		t.Fatalf("the newer cut %s %v", newer.Outcome, newer.Why)
+	}
+	started := runRecords(t, newer.Dir, RecRunStarted)[0]
+	if started["follows"] != nil || !reflect.DeepEqual(started["turns"], map[string]any{"from": float64(1), "to": float64(2)}) {
+		t.Errorf("the newer cut doesn't cover the superseded one's turns: %v", started)
+	}
+	if ch := runRecords(t, newer.Dir, RecAttemptEnded)[0]["changed"]; !reflect.DeepEqual(ch, []any{"hold.go", "more.go"}) {
+		t.Errorf("the newer cut's changes %v", ch)
+	}
+}
+
+// A cut of a tree an earlier cut checked, on the same Oracle and
+// Pipeline, reuses its Check: no Check runs, and its Ledger names the Run
+// whose it is. Another Pipeline checks again.
+func TestCutReusesAVerdict(t *testing.T) {
+	count := filepath.Join(t.TempDir(), "checks")
+	f := cutFrozen(t, "")
+	f.Checks[0].Run = "echo x >> '" + count + "'; " + f.Checks[0].Run
+	one := multiturn.File{Path: "x.go", Content: "package fx\n\n// one\n"}
+	two := multiturn.File{Path: "x.go", Content: "package fx\n\n// two\n"}
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "1", Writes: []multiturn.File{one}}, {Reply: "2", Writes: []multiturn.File{two}},
+		{Reply: "3", Writes: []multiturn.File{one}}, {Reply: "4", Writes: []multiturn.File{two}}}}), 0, f,
+		map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	t.Cleanup(func() { c.Close() })
+	checks := func() int {
+		b, _ := os.ReadFile(count)
+		return strings.Count(string(b), "x")
+	}
+	var res []*Result
+	before := 0 // the Snapshot control runs the Check too
+	for i := range 3 {
+		drain(t, send(t, c, fmt.Sprint("turn ", i)), nil)
+		res = append(res, cut(t, c))
+		if res[i].Outcome != Accepted {
+			t.Fatalf("cut %d: %s %v", i, res[i].Outcome, res[i].Why)
+		}
+		if i == 0 {
+			before = checks() - 1
+		}
+	}
+	if n := checks() - before; n != 2 {
+		t.Errorf("%d Checks ran, want 2: the third cut's tree is the first's", n)
+	}
+	reused := runRecords(t, res[2].Dir, RecVerdictReused)
+	if len(reused) != 1 || reused[0]["run"] != res[0].ID {
+		t.Errorf("the third cut's VerdictReused %v, want the first cut's Run %s", reused, res[0].ID)
+	}
+	if len(runRecords(t, res[2].Dir, RecVerdict)) != 1 {
+		t.Error("the reusing cut has no Verdict")
+	}
+	// The second cut's tree again, in another Pipeline: checked again.
+	g := *f
+	g.Limits.Retries++
+	drain(t, send(t, c, "turn 3"), nil)
+	r, err := c.Cut(t.Context(), CutParams{Frozen: &g})
+	if err != nil || r.Outcome != Accepted {
+		t.Fatalf("cut in another Pipeline: %+v, %v", r, err)
+	}
+	if n := checks() - before; n != 3 || len(runRecords(t, r.Dir, RecVerdictReused)) != 0 {
+		t.Errorf("a Verdict was reused across Pipelines: %d Checks", n)
+	}
+}
