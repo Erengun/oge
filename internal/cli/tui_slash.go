@@ -42,6 +42,7 @@ func slashCommands() []slashCmd {
 		{name: "/agent", usage: "/agent <stage> <agent[@profile]>", desc: "bind a Stage's agent (from setup)", args: true, run: (*home).agentCmd},
 		{name: "/model", usage: "/model <stage> <model>", desc: "a Stage's model (from setup)", args: true, run: (*home).modelCmd},
 		{name: "/effort", usage: "/effort <stage> <level>", desc: "a Stage's effort, Claude only (from setup)", args: true, run: (*home).effortCmd},
+		{name: "/advise", usage: "/advise <question>", desc: "ask a fresh advisor for a second opinion", args: true, run: (*home).adviseCmd},
 		{name: "/runs", usage: "/runs", desc: "recent Runs in this repo", run: (*home).runsCmd},
 		{name: "/receipt", usage: "/receipt [run]", desc: "the Receipt of a Run", run: deliverSlash("r", "receipt")},
 		{name: "/diff", usage: "/diff [run]", desc: "a Run's Candidate: files, then each diff", run: (*home).diffCmd},
@@ -94,6 +95,7 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		h.msg = []string{word + ": unknown command · " + strings.Join(names, " ")}
 		return nil, true
 	}
+	h.adviceEdit = nil // a command replaced what the box held
 	cmd, problem := c.run(h, args)
 	if problem != "" {
 		h.msg = []string{problem}
@@ -146,6 +148,11 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		h.verify = nil
 	}
 	h.actions = false
+	if h.adv != nil {
+		h.adv.cancel()
+		h.adv = nil
+	}
+	h.adviceEdit = nil
 	cmd := h.chat.reset()
 	h.resetting = cmd != nil
 	return cmd, ""

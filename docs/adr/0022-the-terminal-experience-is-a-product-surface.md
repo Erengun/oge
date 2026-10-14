@@ -52,3 +52,7 @@ This sits beside "Trust must earn its overhead" (#66) and the speed and interrup
 ## Amendment (2026-10-13)
 
 The implementer's text streams into the transcript: its replies print whole (cleaned of control sequences) above its stage line, in the TUI and in plain mode. Tool activity stays dim and transient. QA's text never streams, and neither does any other non-implementer role's. See `docs/ux/chat-first.md`, slice 1.
+
+## Amendment (2026-10-14)
+
+An advisor's advice is shown as one block when it lands (a header with who, how long and what it cost, the text behind a bar, and "a Claim, not checked"), after any turn streaming at the time has settled. The advisor's text never streams, as QA's never does. A block is a Consultation's whole answer, kept out of the implementer's stream. See `docs/ux/advisor.md`, slice 2.

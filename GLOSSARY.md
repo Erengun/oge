@@ -278,6 +278,10 @@ _Avoid_: Consultant, expert, oracle
 One request for an Advisor's advice, made by pipeline policy, the user or an agent, with or without a pending Host request. It is recorded in the Chat log. There are three triggers: the user asks, the feedback budget is spent, or the agent asks the human a question. It cannot create Evidence, choose an accepting edge or resolve a Gate.
 _Avoid_: Advisor request, second opinion
 
+**Advice turn**:
+An Öge turn that carries a Consultation's advice into the implementer's Session, verbatim and prefixed as an unchecked second opinion. It is never Task text, and it neither counts against nor resets the feedback budget. What the user edits the advice into and sends is the user's turn instead.
+_Avoid_: Advisor turn, advice message
+
 **Handoff**:
 Moving a Stage to a different agent within a Run: a new Attempt with a fresh Session and a Briefing Öge builds from the Run's record. It needs no transcript transfer.
 _Avoid_: Transfer, take-over, session import
