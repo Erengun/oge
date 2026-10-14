@@ -227,6 +227,9 @@ func checkText(c *Check, n int) string {
 		}
 		s += fmt.Sprintf(" · %d of %d commands passed", passed, len(c.Commands))
 	}
+	if c.ReusedFrom != "" {
+		s += " · reused from Run " + val(c.ReusedFrom) + " (same tree, Oracle and Pipeline)"
+	}
 	if n > 1 {
 		s += fmt.Sprintf(" · %d Checks in all", n)
 	}
@@ -450,6 +453,9 @@ func (r *Receipt) Markdown() string {
 		line := fmt.Sprintf("Check #%d on %s · Oracle v%d · %s · cache %s", c.Number, val(short(c.Candidate)), c.Oracle, v, val(orNone(c.Cache)))
 		if c.CacheWhy != "" {
 			line += " (" + val(c.CacheWhy) + ")"
+		}
+		if c.ReusedFrom != "" {
+			line += " · reused from Run " + val(c.ReusedFrom)
 		}
 		fmt.Fprintf(&b, "- %s\n", mdText(line, false))
 		for _, e := range c.Commands {

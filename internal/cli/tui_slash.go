@@ -139,9 +139,16 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/new")
 	}
 	h.last, h.thread = nil, nil
-	// A fresh task is a fresh Chat: the next message opens a new Session.
-	h.chat.reset()
-	return nil, ""
+	// A fresh task is a fresh Chat: the next message opens a new Session,
+	// and the old one's cut in flight ends unshown.
+	if v := h.verify; v != nil {
+		v.cancel()
+		h.verify = nil
+	}
+	h.actions = false
+	cmd := h.chat.reset()
+	h.resetting = cmd != nil
+	return cmd, ""
 }
 
 func (h *home) notifyCmd(args []string) (tea.Cmd, string) {
@@ -428,6 +435,8 @@ func deliverSlash(key, cli string) func(*home, []string) (tea.Cmd, string) {
 			return h.delivered(cli, args), ""
 		case h.last != nil:
 			return h.act(key, name), ""
+		case h.verify != nil:
+			return nil, "/" + cli + ": the cut is still verifying"
 		case cli == "apply" || cli == "branch":
 			return nil, "/" + cli + ": no Accepted Run to take in this session"
 		case h.deliver == nil:

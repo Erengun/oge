@@ -23,9 +23,10 @@ import (
 // slice 7): Enter sends the message as a turn, whose reply and dim tool
 // one-liners are printed as they come. A turn that changes nothing ends
 // there: no stages, no Receipt, no action row. A turn with Promoted or
-// Ambiguous changes is cut into a Run at once (D4), and the cut is waited
-// for (background verify is #260), then summed up on one Verdict line;
-// /apply, /diff and /receipt act on its Run.
+// Ambiguous changes is cut into a Run at once (D4), verified in the
+// background while the composer stays live (D3), then summed up on one
+// Verdict line; a newer cut supersedes it. /apply, /diff and /receipt act
+// on the newest cut whose Verdict is in.
 //
 // The agent's words are always indented; Öge's own lines start at the
 // margin with the oge › marker, so a reply can't pass for a Verdict.
@@ -46,6 +47,8 @@ type homeChat struct {
 
 	mu sync.Mutex
 	c  *run.Chat
+	// closing counts the Chats /new is closing: quitting waits for them.
+	closing sync.WaitGroup
 }
 
 // fits reports whether a message on res goes to the Chat: one is open, or
@@ -82,23 +85,32 @@ func (hc *homeChat) close() {
 	if c := hc.get(); c != nil {
 		_ = c.Close()
 	}
+	hc.closing.Wait()
 }
 
-// reset closes the Chat, so the next message opens a new one (/new).
-func (hc *homeChat) reset() {
+// reset closes the Chat in the background, so the next message opens a
+// new one (/new): closing waits for a cut in flight to unwind. The
+// command's message is chatClosedMsg; nil when no Chat is open.
+func (hc *homeChat) reset() tea.Cmd {
 	if hc == nil {
-		return
+		return nil
 	}
 	hc.mu.Lock()
 	c := hc.c
 	hc.c = nil
 	hc.mu.Unlock()
-	if c != nil {
+	if c == nil {
+		return nil
+	}
+	hc.closing.Add(1)
+	return func() tea.Msg {
+		defer hc.closing.Done()
 		_ = c.Close()
+		return chatClosedMsg{}
 	}
 }
 
-// chatTurn is the Chat turn in flight, then its cut.
+// chatTurn is the Chat turn in flight.
 type chatTurn struct {
 	text    string // the message, back in the composer if the Chat can't open
 	frozen  *pipeline.Frozen
@@ -106,12 +118,18 @@ type chatTurn struct {
 	asks    []*agent.Ask // the prompts waiting, one shown at a time
 	answers []string     // the shown question ask's answers so far
 	changed int          // Promoted and Ambiguous paths the turn changed
-	cutting bool
-	cancel  context.CancelFunc // cancels the cut
-	// stopped: Esc or Ctrl+C interrupted the turn or cancelled the cut; a
-	// second Ctrl+C then quits.
+	// stopped: Esc or Ctrl+C interrupted the turn; a second Ctrl+C then
+	// quits.
 	stopped bool
 	queued  []string // messages typed and sent during the turn
+}
+
+// chatVerify is a cut verifying in the background.
+type chatVerify struct {
+	seq     int
+	changed int
+	cancel  context.CancelFunc
+	stopped bool // Ctrl+C cancelled it
 }
 
 type (
@@ -125,8 +143,11 @@ type (
 		ev agent.Event
 		ok bool
 	}
-	// chatCutMsg is the cut's end.
+	// chatClosedMsg is a Chat /new closed, closed.
+	chatClosedMsg struct{}
+	// chatCutMsg is the end of the cut seq.
 	chatCutMsg struct {
+		seq int
 		res *run.Result
 		err error
 	}
@@ -196,8 +217,6 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.turnEnded()
 		}
 		return h, tea.Sequence(h.chatEvent(msg.ev), nextEvent(h.turn.events))
-	case chatCutMsg:
-		return h.cutEnded(msg)
 	case tea.KeyPressMsg:
 		return h.chatKey(msg)
 	case tea.PasteMsg:
@@ -327,20 +346,34 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 	return nil
 }
 
-// turnEnded cuts a turn that changed something, or opens the composer.
+// turnEnded opens the composer, and cuts a turn that changed something in
+// the background: the cut supersedes one still verifying, and covers its
+// turns.
 func (h *home) turnEnded() (tea.Model, tea.Cmd) {
 	if h.turn.changed == 0 || h.turn.stopped {
 		// An interrupted turn's changes wait for the next turn's cut.
 		return h.nextTurn(nil)
 	}
-	h.turn.cutting = true
+	cut := h.startCut()
+	m, next := h.nextTurn(nil)
+	return m, tea.Batch(cut, next)
+}
+
+// startCut starts the turn's cut, in the Pipeline it resolved for the
+// turn, and makes it the one verifying.
+func (h *home) startCut() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
-	h.turn.cancel = cancel
-	hc, f := h.chat, h.turn.frozen
+	if v := h.verify; v != nil {
+		// Its turns are this cut's: so are its changes, at least.
+		h.turn.changed = max(h.turn.changed, v.changed)
+	}
+	h.cuts++
+	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, cancel: cancel}
+	hc, f, seq := h.chat, h.turn.frozen, h.cuts
 	c := hc.get()
-	return h, func() tea.Msg {
+	return func() tea.Msg {
 		res, err := hc.cut(ctx, c, f)
-		return chatCutMsg{res, err}
+		return chatCutMsg{seq, res, err}
 	}
 }
 
@@ -391,33 +424,43 @@ func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
 	return h.chatSubmit(queued[0], res, queued[1:])
 }
 
-// cutEnded prints the cut's Verdict line and opens the composer.
-func (h *home) cutEnded(msg chatCutMsg) (tea.Model, tea.Cmd) {
-	changed, stopped := h.turn.changed, h.turn.stopped
-	h.turn.cancel()
+// cutEnded prints the newest cut's Verdict line; h.last moves to it only
+// when it has one. A superseded cut, or one the Chat no longer has, ends
+// unshown. Whether it was cancelled is the Run's to say: one that
+// reached its Verdict before Ctrl+C took effect shows it.
+func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
+	v := h.verify
+	if v == nil || v.seq != msg.seq {
+		return nil
+	}
+	h.verify = nil
+	v.cancel()
+	res := msg.res
+	verdict := msg.err == nil && res != nil && res.Check != nil &&
+		(res.Outcome == run.Accepted || res.Outcome == run.Failed || res.Outcome == run.Parked)
 	var line string
 	switch {
-	case errors.Is(msg.err, run.ErrNothingToCut):
-	case stopped:
-		h.last = nil
+	case errors.Is(msg.err, run.ErrNothingToCut), errors.Is(msg.err, run.ErrSuperseded):
+		return nil
+	case v.stopped && !verdict:
+		h.last = nil // as on an error: the older cut isn't what was just changed
 		line = h.ogeLine("■ verification cancelled: nothing was verified")
 	case msg.err != nil:
 		h.last = nil // never an older cut's: it isn't what was just changed
 		line = h.ogeLine("✗ verifying the change: " + clean(msg.err.Error()))
 	default:
 		var l string
-		l, h.last = h.chat.verdict(msg.res, changed)
+		l, h.last = h.chat.verdict(res, v.changed)
 		line = h.ogeLine(l)
 	}
-	var print tea.Cmd
-	if line != "" {
-		print = h.println(line)
-	}
-	return h.nextTurn(print)
+	// The action row acts on h.last: never on a cut the human hasn't
+	// seen yet.
+	h.actions = false
+	return h.println(line)
 }
 
-// chatKey takes a key during a turn. Esc interrupts the turn or cancels
-// its cut; so does Ctrl+C, and a second Ctrl+C quits. y or n answers a
+// chatKey takes a key during a turn. Esc interrupts the turn; so does
+// Ctrl+C, and a second Ctrl+C quits. y or n answers a
 // permission prompt; a question takes the composer's text or an option's
 // number. Otherwise the composer stays live, and Enter queues a message
 // for when the turn has ended.
@@ -473,17 +516,13 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return h, nil
 }
 
-// stop interrupts the turn, or cancels its cut.
+// stop interrupts the turn.
 func (h *home) stop() {
 	t := h.turn
 	if t.stopped {
 		return
 	}
 	t.stopped, t.asks = true, nil
-	if t.cutting {
-		t.cancel()
-		return
-	}
 	if c := h.chat.get(); c != nil {
 		_ = c.Interrupt()
 	}
@@ -535,10 +574,6 @@ func (h *home) turnView() string {
 			lines = append(lines, "    "+r)
 		}
 		lines = append(lines, "    "+h.st.bold("[y] yes  [n] no"))
-	case t.cutting && t.stopped:
-		lines = append(lines, h.ogeLine(h.st.dim("cancelling verification…")))
-	case t.cutting:
-		lines = append(lines, h.ogeLine(h.st.dim(files(t.changed)+" · verifying… · esc to cancel")))
 	case t.stopped:
 		lines = append(lines, h.ogeLine(h.st.dim("interrupting… · ctrl+c again quits")))
 	default:

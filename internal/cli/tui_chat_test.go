@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
@@ -22,10 +23,7 @@ func TestChatCutUsesTheTurnsPipeline(t *testing.T) {
 		got = f
 		return nil, run.ErrNothingToCut
 	}}, turn: &chatTurn{frozen: standard, changed: 1}}
-	_, cmd := h.turnEnded()
-	if cmd == nil {
-		t.Fatal("a turn with changes wasn't cut")
-	}
+	cmd := h.startCut()
 	if _, ok := cmd().(chatCutMsg); !ok || got != standard {
 		t.Errorf("the cut ran in %v, not the turn's Pipeline", got)
 	}
@@ -99,5 +97,41 @@ func TestQuestionsOneAtATime(t *testing.T) {
 	h.chatKey(enter)
 	if len(got) != 1 || !got[0].Allow || strings.Join(got[0].Answers, ",") != "blue,Grace" {
 		t.Errorf("answers %+v", got)
+	}
+}
+
+// A cut's end moves h.last only with a Verdict, decided from its Run,
+// not from Ctrl+C: one that reached its Verdict first shows it. Either
+// way the action row closes, so [a] never takes a cut not yet seen.
+func TestCutEndedDecidesFromTheRun(t *testing.T) {
+	older, newer := &lastRun{id: "older"}, &lastRun{id: "newer"}
+	for _, tc := range []struct {
+		name    string
+		res     *run.Result
+		want    *lastRun
+		printed string
+	}{
+		{"verdict after ctrl+c", &run.Result{Outcome: run.Accepted, Check: &oracle.Result{Pass: true}}, newer, "✓ shown"},
+		{"cancelled", &run.Result{Outcome: run.InfrastructureStop}, nil, "verification cancelled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &home{st: newStyles(false), comp: newComposer(), last: older, actions: true,
+				chat:   &homeChat{verdict: func(*run.Result, int) (string, *lastRun) { return "✓ shown", newer }},
+				verify: &chatVerify{seq: 1, cancel: func() {}, stopped: true}}
+			h.cutEnded(chatCutMsg{seq: 1, res: tc.res})
+			if h.last != tc.want || h.actions || h.verify != nil {
+				t.Errorf("last %v, actions %v, verify %v", h.last, h.actions, h.verify)
+			}
+			if got := strings.Join(h.scroll, "\n"); !strings.Contains(got, tc.printed) {
+				t.Errorf("printed %q, want %q", got, tc.printed)
+			}
+		})
+	}
+	// A superseded cut, or one /new let go, ends unshown.
+	h := &home{st: newStyles(false), comp: newComposer(), last: older, verify: &chatVerify{seq: 2, cancel: func() {}}}
+	h.cutEnded(chatCutMsg{seq: 1, res: &run.Result{Outcome: run.Accepted, Check: &oracle.Result{Pass: true}}})
+	h.cutEnded(chatCutMsg{seq: 2, err: run.ErrSuperseded})
+	if h.last != older || len(h.scroll) != 0 {
+		t.Errorf("a superseded cut showed: last %v, %q", h.last, h.scroll)
 	}
 }

@@ -21,8 +21,9 @@ import (
 // Run (docs/ux/chat-first.md, slice 6; ADR-0007 as amended): when the
 // turns since the last cut changed something Promoted or Ambiguous, the
 // newest turn commit becomes an immutable Candidate, and a Run of its own
-// enters the walk at QA. It runs in the foreground for now.
-// TODO(#260): verify in the background, cancelled by a newer cut.
+// enters the walk at QA. It verifies in the background of the Chat (D3):
+// turns go on during QA and the Check, as Chat Attempts outside the Run
+// (ADR-0012, as amended), and a newer cut cancels the one in flight.
 
 // cutsDir holds the cuts' disposable directories in a Chat's: the
 // implementer is denied reading it, as QA writes held-out tests there.
@@ -31,6 +32,13 @@ const cutsDir = "cuts"
 // ErrNothingToCut means no turn since the last cut changed anything
 // Promoted or Ambiguous: there is no Run, and no wait on Preflight.
 var ErrNothingToCut = errors.New("nothing to cut")
+
+// ErrSuperseded is why a cut stopped without a Verdict: a newer cut
+// cancelled it, and covers its turns.
+var ErrSuperseded = errors.New("superseded by a newer cut")
+
+// WhySuperseded is a superseded cut's Run's stop reason.
+const WhySuperseded = "superseded: a newer cut cancelled this one's verification, and covers its turns"
 
 // WhySetupChanged is a cut's Refused reason when its Pipeline changes the
 // Chat's Oracle, setup or Checks.
@@ -89,6 +97,24 @@ type cutEntry struct {
 	waits    int
 	waited   time.Duration
 	recorded bool
+	checks   map[checkKey]checkedBy // the Chat's, under its cutMu
+}
+
+// checkKey is what a Check result depends on: the tree checked, the
+// Oracle version's manifest and the frozen Pipeline, its mode included.
+type checkKey struct{ tree, oracle, pipeline string }
+
+// checkedBy is a cut's Check result, and the Run and Check that ran it.
+type checkedBy struct {
+	run   string
+	check int
+	cr    *oracle.Result
+}
+
+// checkKey is checked's key, on the manifest and frozen Pipeline blobs.
+func (e *cutEntry) checkKey(repo *workspace.RunRepo, checked, manifest, frozen string) (checkKey, error) {
+	tree, err := repo.TreeOf(checked)
+	return checkKey{tree: tree, oracle: manifest, pipeline: frozen}, err
 }
 
 // prepare starts the Chat's Preflight in the background: setup on the
@@ -120,9 +146,11 @@ func (c *Chat) prepare(m *oracle.Manifest, snap string) {
 // returns ErrNothingToCut otherwise. The cut is refused (fails closed)
 // while the Chat's Preflight and Snapshot control haven't finished: ctx
 // ending first refuses it. Closing the Chat cancels a cut in flight.
+//
+// One cut verifies at a time, and a newer one cancels the one in flight:
+// that one returns ErrSuperseded, with its Run's Result if it had one.
+// Turns are never held up by a cut: Send doesn't wait on it.
 func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
-	c.cutMu.Lock()
-	defer c.cutMu.Unlock()
 	if err := c.Err(); errors.Is(err, ErrChatClosed) {
 		return nil, err
 	}
@@ -136,35 +164,42 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 		}
 		return &Result{Outcome: Refused, Why: []string{why}}, nil
 	}
-	// The Candidate is a turn commit, never the live Workspace: the
-	// Session may be writing to it.
-	c.scopeMu.Lock()
-	head, to := c.last, c.lastTurn
-	c.scopeMu.Unlock()
-	e := &cutEntry{chat: c.ID, chatRepo: c.repo.Dir, dir: c.Dir, work: filepath.Join(c.work, cutsDir), snap: c.Snapshot, info: c.info,
-		candidate: head, base: c.Snapshot, from: 1, to: to}
-	if lc := c.lastCut; lc != nil {
-		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
+	// Only a cut that can run supersedes the one in flight.
+	c.supersedeMu.Lock()
+	lc := c.lastCut
+	c.supersedeMu.Unlock()
+	if _, err := c.toCut(lc); err != nil {
+		return nil, err
 	}
-	if to < e.from {
-		return nil, ErrNothingToCut
+	ctx, supersede := context.WithCancelCause(ctx)
+	defer supersede(nil)
+	c.supersedeMu.Lock()
+	if c.supersede != nil {
+		c.supersede(ErrSuperseded)
 	}
-	promoted, withheld, err := c.repo.Classify(e.base, head, c.promotedNew)
+	c.supersede = supersede
+	c.supersedeMu.Unlock()
+	c.cutMu.Lock()
+	defer c.cutMu.Unlock()
+	if err := c.Err(); errors.Is(err, ErrChatClosed) {
+		return nil, err
+	}
+	if errors.Is(context.Cause(ctx), ErrSuperseded) {
+		return nil, ErrSuperseded // superseded before it began
+	}
+	e, err := c.toCut(c.lastCut) // the cut it waited on may have moved it
 	if err != nil {
 		return nil, err
 	}
-	ambiguous := false
-	for _, w := range withheld {
-		ambiguous = ambiguous || w.Class == workspace.ClassAmbiguous
-	}
-	if len(promoted) == 0 && !ambiguous {
-		return nil, ErrNothingToCut
-	}
+	head, to := e.candidate, e.to
 	select {
 	case <-c.prepared:
 	case <-c.stop:
 		return nil, ErrChatClosed
 	case <-ctx.Done():
+		if errors.Is(context.Cause(ctx), ErrSuperseded) {
+			return nil, ErrSuperseded
+		}
 		return &Result{Outcome: Refused, Why: []string{"the Preflight and the Snapshot control hadn't finished; nothing is verified against an unchecked setup"}}, nil
 	}
 	if c.refused != nil {
@@ -174,6 +209,10 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 		return &r, nil
 	}
 	e.prep = c.prep
+	if c.verified == nil {
+		c.verified = map[checkKey]checkedBy{}
+	}
+	e.checks = c.verified
 	e.waits, e.waited = c.prep.control.Waits()
 	// The Task's turns are every turn since the last delivery (D7), and
 	// so are its Tamper events: one an earlier cut carried, or a late one
@@ -210,17 +249,54 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A Run that reached its Verdict before it was superseded completed.
+	verdict := res.Check != nil && (res.Outcome == Accepted || res.Outcome == Failed || res.Outcome == Parked)
+	if errors.Is(context.Cause(ctx), ErrSuperseded) && !verdict {
+		return res, ErrSuperseded // its turns are the newer cut's
+	}
 	if res.Outcome == Refused && c.prep.setup != nil && !c.prep.setup.Pass {
 		c.refused = res
 	}
 	// A cut that was cancelled, stopped or refused verified nothing: the
 	// next cut covers its turns again.
 	switch {
-	case ctx.Err() != nil, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
+	case ctx.Err() != nil && !verdict, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
 	default:
+		c.supersedeMu.Lock()
 		c.lastCut = &cutMark{run: res.ID, commit: head, turn: to}
+		c.supersedeMu.Unlock()
 	}
 	return res, nil
+}
+
+// toCut is the cut of the turns since lc, or ErrNothingToCut when they
+// changed nothing Promoted or Ambiguous.
+func (c *Chat) toCut(lc *cutMark) (*cutEntry, error) {
+	// The Candidate is a turn commit, never the live Workspace: the
+	// Session may be writing to it.
+	c.scopeMu.Lock()
+	head, to := c.last, c.lastTurn
+	c.scopeMu.Unlock()
+	e := &cutEntry{chat: c.ID, chatRepo: c.repo.Dir, dir: c.Dir, work: filepath.Join(c.work, cutsDir), snap: c.Snapshot, info: c.info,
+		candidate: head, base: c.Snapshot, from: 1, to: to}
+	if lc != nil {
+		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
+	}
+	if to < e.from {
+		return nil, ErrNothingToCut
+	}
+	promoted, withheld, err := c.repo.Classify(e.base, head, c.promotedNew)
+	if err != nil {
+		return nil, err
+	}
+	ambiguous := false
+	for _, w := range withheld {
+		ambiguous = ambiguous || w.Class == workspace.ClassAmbiguous
+	}
+	if len(promoted) == 0 && !ambiguous {
+		return nil, ErrNothingToCut
+	}
+	return e, nil
 }
 
 // sameOracle is why f can't be a cut's Pipeline: only the Shift+Tab mode
