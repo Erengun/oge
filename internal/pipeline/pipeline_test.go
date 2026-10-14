@@ -337,3 +337,22 @@ func TestEmptyProfileIsAProblem(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexImplementerLimitation(t *testing.T) {
+	cfg, probs := Load([]byte("schema = 1\n[project]\ntest_globs = [\"*_test.go\"]\n[[check.commands]]\nrun = \"go test -json ./...\"\nreport = \"go-test-json\"\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	for agent, want := range map[string]int{"codex": 1, "claude": 0} {
+		f, probs := Resolve(cfg, Overrides{}, []string{agent})
+		if len(probs) > 0 {
+			t.Fatal(probs)
+		}
+		if len(f.Limitations) != want {
+			t.Errorf("%s: limitations %q, want %d", agent, f.Limitations, want)
+		}
+		if want > 0 && !strings.Contains(f.Limitations[0], "credentials") {
+			t.Errorf("%s: %q", agent, f.Limitations[0])
+		}
+	}
+}
