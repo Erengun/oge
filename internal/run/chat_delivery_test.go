@@ -1,7 +1,9 @@
 package run
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
 )
@@ -18,13 +20,13 @@ func TestDeliveredMovesTheTask(t *testing.T) {
 	if first.Outcome != Accepted {
 		t.Fatalf("outcome %s %v", first.Outcome, first.Why)
 	}
-	if err := c.Delivered("no-such-run", "apply"); err == nil {
+	if err := c.Delivered("no-such-run", "apply", ""); err == nil {
 		t.Error("delivering a Run that is no cut of the Chat was taken")
 	}
-	if err := c.Delivered(first.ID, "apply"); err != nil {
+	if err := c.Delivered(first.ID, "apply", first.Candidate); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Delivered(first.ID, "branch"); err != nil {
+	if err := c.Delivered(first.ID, "branch", first.Candidate); err != nil {
 		t.Fatal(err) // delivered again: nothing moves
 	}
 	drain(t, send(t, c, "now Mul"), nil)
@@ -37,5 +39,41 @@ func TestDeliveredMovesTheTask(t *testing.T) {
 	recs := runRecords(t, c.Dir, RecDelivered)
 	if len(recs) != 1 || recs[0]["run"] != first.ID || recs[0]["turn"] != float64(1) || recs[0]["how"] != "apply" {
 		t.Errorf("Delivered records %v", recs)
+	}
+	if c.Applied() != first.Candidate {
+		t.Errorf("Applied %q, want the first cut's Candidate", c.Applied())
+	}
+}
+
+// A late Tamper event on a cut's turn, recorded after the cut was
+// verified, refuses delivering it, and the Chat cuts its turns again: the
+// next cut, with no new turn, carries the event to its Gate.
+func TestDeliverableRefusesALateTamper(t *testing.T) {
+	sub := cutAdd + "\nfunc Sub(a, b int) int { return a - b }\n"
+	c := openCut(t, "", multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: sub}}})
+	drain(t, send(t, c, "add Sub"), nil)
+	first := cut(t, c)
+	if first.Outcome != Accepted {
+		t.Fatalf("first cut %s %v", first.Outcome, first.Why)
+	}
+	if err := c.Deliverable(first.ID, first.Dir); err != nil {
+		t.Fatalf("deliverable before the late event: %v", err)
+	}
+	writeIn(t, c.Workspace, "add_test.go", "package fx\n")
+	c.mu.Lock()
+	sess := c.sess
+	c.mu.Unlock()
+	_ = sess.Close()
+	select {
+	case <-c.Done():
+	case <-time.After(20 * time.Second):
+		t.Fatal("the Session never ended")
+	}
+	if err := c.Deliverable(first.ID, first.Dir); !errors.Is(err, ErrTamperAfterCut) {
+		t.Fatalf("deliverable after a late Tamper event: %v", err)
+	}
+	again := cut(t, c)
+	if tamper := runRecords(t, again.Dir, RecTamperEvent); again.Outcome != Parked || len(tamper) != 1 {
+		t.Errorf("the cut again %s %v, TamperEvent %v", again.Outcome, again.Why, tamper)
 	}
 }
