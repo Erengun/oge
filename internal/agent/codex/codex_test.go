@@ -46,8 +46,9 @@ func TestMain(m *testing.M) {
 const ws = "/home/user/scratch/ws-b"
 
 type rec struct {
-	Dir string         `json:"dir"`
-	Msg map[string]any `json:"msg"`
+	Proc string         `json:"proc,omitempty"`
+	Dir  string         `json:"dir"`
+	Msg  map[string]any `json:"msg"`
 }
 
 func load(t *testing.T, name string) []rec {
@@ -73,6 +74,12 @@ func load(t *testing.T, name string) []rec {
 // after its initialize handshake.
 func probeThen(t *testing.T, name string) []rec {
 	out := load(t, "init_account.jsonl")
+	// config/read, from a throwaway CODEX_HOME declaring one MCP server.
+	for _, r := range load(t, "mcp_servers.jsonl") {
+		if r.Proc == "M" {
+			out = append(out, r)
+		}
+	}
 	rest := load(t, name)
 	for i, r := range rest {
 		if r.Msg["method"] == "initialized" {
@@ -273,6 +280,15 @@ func TestCommandApprovalIsDeclinedOneShot(t *testing.T) {
 	if cfg["default_permissions"] != profileName || cfg["project_doc_max_bytes"] != float64(0) {
 		t.Errorf("config = %v", cfg)
 	}
+	// The MCP server config/read reported is turned off for the thread.
+	if mcp, _ := json.Marshal(cfg["mcp_servers"]); string(mcp) != `{"dummy":{"enabled":false}}` {
+		t.Errorf("mcp_servers = %s", mcp)
+	}
+	// auth.json is denied in the codexHome initialize reported.
+	fs := cfg["permissions"].(map[string]any)[profileName].(map[string]any)["filesystem"].(map[string]any)
+	if fs[filepath.Join("/home/user/.codex", "auth.json")] != "deny" {
+		t.Errorf("filesystem = %v", fs)
+	}
 	resp := sent["response"]
 	if len(resp) != 1 || resp[0]["result"].(map[string]any)["decision"] != "decline" {
 		t.Errorf("approval answer = %v, want a one-shot decline", resp)
@@ -382,6 +398,36 @@ func TestDeathDuringTurnFailsIt(t *testing.T) {
 	}
 	if len(unknown) != 1 || unknown[0] != "thread/brandNew" {
 		t.Errorf("unknown events = %q, want the method only", unknown)
+	}
+}
+
+func TestMCPServerStartFailsClosed(t *testing.T) {
+	h := &harness{t: t}
+	script := upToThread(t)
+	for _, r := range load(t, "mcp_servers.jsonl") {
+		if r.Proc == "S" {
+			script = append(script, r)
+		}
+	}
+	s, err := h.open(script, agent.LaunchSpec{})
+	if err == nil {
+		defer s.Close()
+		timeout := time.After(10 * time.Second)
+	drain:
+		for {
+			select {
+			case _, ok := <-s.Events():
+				if !ok {
+					break drain
+				}
+			case <-timeout:
+				t.Fatal("the session didn't end")
+			}
+		}
+		err = s.Send(agent.Turn{Text: "go"})
+	}
+	if err == nil || !strings.Contains(err.Error(), "MCP server (dummy)") {
+		t.Fatalf("err = %v, want the MCP server to fail the Session closed", err)
 	}
 }
 

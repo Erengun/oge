@@ -30,6 +30,9 @@ const profileName = "oge_implementer"
 // the self-test, to codex sandbox -P.
 type profile struct {
 	spec agent.LaunchSpec
+	// mcpOff are the MCP servers Codex's config declares, each turned
+	// off for the thread: they would run outside the sandbox.
+	mcpOff []string
 	// perm is the permission profile, as thread/start's config takes it.
 	perm map[string]any
 }
@@ -45,7 +48,6 @@ func newProfile(spec agent.LaunchSpec) *profile {
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		fs[filepath.Join(home, ".ssh")] = "deny"
-		fs[filepath.Join(home, ".codex", "auth.json")] = "deny"
 	}
 	if spec.Cache != "" {
 		fs[filepath.Clean(spec.Cache)] = "write"
@@ -55,6 +57,12 @@ func newProfile(spec agent.LaunchSpec) *profile {
 		perm["network"] = map[string]any{"enabled": true}
 	}
 	return &profile{spec: spec, perm: perm}
+}
+
+// denyAuth denies reading Codex's auth.json in home, the codexHome
+// initialize reported.
+func (p *profile) denyAuth(home string) {
+	p.perm["filesystem"].(map[string]any)[filepath.Join(filepath.Clean(home), "auth.json")] = "deny"
 }
 
 // config is thread/start's config: the isolation recipe, which leaves
@@ -73,6 +81,16 @@ func (p *profile) config() map[string]any {
 	}
 	if p.spec.Effort != "" {
 		c["model_reasoning_effort"] = p.spec.Effort
+	}
+	if len(p.mcpOff) > 0 {
+		// A process-level -c mcp_servers={} merges with config.toml
+		// rather than replacing it (checked on 0.162.1); a per-server
+		// enabled=false is honoured.
+		off := map[string]any{}
+		for _, name := range p.mcpOff {
+			off[name] = map[string]any{"enabled": false}
+		}
+		c["mcp_servers"] = off
 	}
 	return c
 }

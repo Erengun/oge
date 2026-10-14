@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -112,7 +113,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	}
 	s := &session{
 		cmd: cmd, stdin: stdin, events: make(chan agent.Event, 256), stop: make(chan struct{}), exited: make(chan struct{}),
-		pending: map[int]chan reply{}, items: map[string][]string{}, prof: prof, hash: prof.hash(),
+		pending: map[int]chan reply{}, items: map[string][]string{}, prof: prof,
 		ws: withReal(spec.Workspace), timeout: a.Timeout, grace: a.CloseGrace,
 	}
 	if s.timeout == 0 {
@@ -139,6 +140,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 func (s *session) start(ctx context.Context, a *Adapter, path string, env []string) error {
 	var init struct {
 		UserAgent string `json:"userAgent"`
+		CodexHome string `json:"codexHome"`
 	}
 	if err := s.call(ctx, "initialize", map[string]any{"clientInfo": map[string]any{"name": "oge", "title": "Öge", "version": "0"}}, &init); err != nil {
 		return err
@@ -149,6 +151,11 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 		return fmt.Errorf("codex %s is older than %s, the oldest Öge supports; update codex", clip(ver), MinVersion)
 	}
 	s.version = ver
+	home := init.CodexHome
+	if home == "" {
+		home = codexHome(env)
+	}
+	s.prof.denyAuth(home)
 	if err := s.notify("initialized", map[string]any{}); err != nil {
 		return err
 	}
@@ -176,6 +183,24 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	if l := limits.RateLimits; l != nil && l.Reached != nil {
 		return fmt.Errorf("codex's usage limit is reached (%s); run oge again once it resets", clip(*l.Reached))
 	}
+	// Codex's MCP servers would run as its children, outside the sandbox
+	// and without approvals: each one the effective config declares,
+	// project layers included, is turned off for the thread.
+	var cfg struct {
+		Config struct {
+			MCP map[string]json.RawMessage `json:"mcp_servers"`
+		} `json:"config"`
+	}
+	if err := s.call(ctx, "config/read", map[string]any{"includeLayers": false, "cwd": s.prof.spec.Workspace}, &cfg); err != nil {
+		return err
+	}
+	for name := range cfg.Config.MCP {
+		s.prof.mcpOff = append(s.prof.mcpOff, name)
+	}
+	sort.Strings(s.prof.mcpOff)
+	s.mu.Lock()
+	s.hash = s.prof.hash()
+	s.mu.Unlock()
 	test := a.SelfTest
 	if test == nil {
 		test = sandboxSelfTest
@@ -210,6 +235,17 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	s.thread, s.opened = env0.Thread.ID, true
 	s.mu.Unlock()
 	return nil
+}
+
+// codexHome is $CODEX_HOME in env, else ~/.codex.
+func codexHome(env []string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(env[i], "CODEX_HOME="); ok && v != "" {
+			return v
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".codex")
 }
 
 const authBelongs = "; authentication belongs to Codex: fix it in codex itself (codex login), then run oge again"
@@ -524,7 +560,7 @@ type message struct {
 var ignored = map[string]bool{
 	"turn/started": true, "thread/started": true, "thread/status/changed": true, "turn/diff/updated": true,
 	"serverRequest/resolved": true, "remoteControl/status/changed": true, "deprecationNotice": true,
-	"thread/goal/cleared": true, "account/rateLimits/updated": true, "turn/plan/updated": true,
+	"thread/goal/cleared": true, "account/rateLimits/updated": true, "account/updated": true, "turn/plan/updated": true,
 }
 
 func (s *session) frame(line []byte) error {
@@ -599,6 +635,18 @@ func (s *session) notification(m message) {
 		} `json:"tokenUsage"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	if m.Method == "mcpServer/startupStatus/updated" {
+		// An MCP server started despite being turned off: it runs outside
+		// the sandbox, so the Session can't go on (fail closed).
+		var mp struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(m.Params, &mp)
+		why := "envelope_failed: an MCP server (" + clip(mp.Name) + ") started outside Öge's sandbox"
+		s.kill(errors.New(why))
+		s.settle(agent.Event{Failure: why})
+		return
+	}
 	s.mu.Lock()
 	ours := p.ThreadID == "" || p.ThreadID == s.thread
 	s.mu.Unlock()
@@ -686,7 +734,9 @@ func (s *session) request(m message) error {
 		item
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	s.mu.Lock()
 	d := agent.HostDecision{Family: agent.Approval, By: "launch_profile:" + s.hash, Decision: "deny"}
+	s.mu.Unlock()
 	switch m.Method {
 	case "item/commandExecution/requestApproval":
 		d.Tool, d.Target = "Bash", s.target(p.command())
