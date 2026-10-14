@@ -48,6 +48,9 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 ## When the trust pipeline runs
 
 - **After every turn:** a hash comparison for scope and tamper. Edits to the Oracle are reverted and recorded silently. The Chat log records the comparison, so "0 files changed, no Check" is Evidence.
+  - The check runs while the Session is alive (ADR-0007, as amended). Each turn's commit restores protected paths from the Snapshot, so it can't carry a race.
+  - A protected write between the comparison and the commit is a late Tamper event on that turn. A write after the commit is caught by the next turn's check and attributed to that turn. When the Session ends between turns, a final check records one as a late Tamper event on the last turn.
+  - After a reopen, `SessionReopened` (pid, pgid) is the process record in place of `ProcessStarted`.
 - **No Promoted or Ambiguous change:** no QA, no Check, no Verdict, no Receipt, and no waiting on preflight. Excluded files never count.
 - **Changes present:** Öge cuts mechanically; the agent's `Exit:` is only a Claim.
   - The cut freezes the Pipeline, the config and the current Shift+Tab mode.
@@ -77,7 +80,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 - **Chat log** (written ahead):
   - `ChatStarted`, then `SnapshotTaken` or `SnapshotRefreshed`;
   - per turn: `TurnStarted` (the message hash), `AttemptEnded` (the events blob, the reply, Usage), and the scope or tamper observation;
-  - `held_out_viewed`.
+  - `HeldOutViewed`. Its `turn` is the last turn started when the user viewed the held-out tests (0 before the first).
 - **Each cut gets a Run directory** with today's Ledger, plus:
   - `chat` and the turn range;
   - `follows`, set to the previous cut;
@@ -87,7 +90,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 - **The Task** is the user's turns since the last delivery, verbatim and hashed. Agent text is never summarized into QA's Briefing, so the judged party never writes its own exam.
 - **Receipt disclosures:**
   - `Task from N turns; refers to agent text`, when that applies;
-  - `held_out_viewed`;
+  - `HeldOutViewed`;
   - the number of verify and send-back cycles.
 - `oge runs` lists cuts only.
 

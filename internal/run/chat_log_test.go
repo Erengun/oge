@@ -1,13 +1,17 @@
 package run
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/pipeline"
@@ -175,6 +179,76 @@ func TestChatTurnExcludedAndAmbiguous(t *testing.T) {
 	}
 	s = settledOf(t, drain(t, send(t, c, "note"), nil)).Scope
 	if s == nil || !reflect.DeepEqual(s.Ambiguous, []string{"notes.txt"}) || len(s.Promoted)+len(s.Excluded) != 0 {
+		t.Errorf("turn 2 scope %+v", s)
+	}
+}
+
+// countingAdapter opens its stub, and counts the opens.
+type countingAdapter struct {
+	s     *stub
+	opens *int
+}
+
+func (a countingAdapter) Open(context.Context, agent.LaunchSpec) (agent.Session, error) {
+	*a.opens++
+	return a.s, nil
+}
+
+// A Chat log that fails as the Session dies ends the Chat for good: no
+// Send reopens a Session on a broken log.
+func TestChatLogFailureNeverReopens(t *testing.T) {
+	st, opens := newStub(nil), 0
+	c := openChatWith(context.Background(), t, countingAdapter{st, &opens}, 0)
+	ch := send(t, c, "hi")
+	c.logMu.Lock()
+	c.l.Close()
+	c.logMu.Unlock()
+	st.die()
+	if s := settledOf(t, drain(t, ch, nil)); !strings.Contains(s.Failure, "chat_ended") {
+		t.Errorf("settled %+v", s)
+	}
+	<-c.Done()
+	if err := c.Err(); err == nil || errors.Is(err, ErrChatLost) || !strings.Contains(err.Error(), "chat log failed") {
+		t.Errorf("Err() = %v", err)
+	}
+	if _, err := c.Send(context.Background(), "again"); err == nil || opens != 1 {
+		t.Errorf("Send on a broken log: %v, %d opens", err, opens)
+	}
+}
+
+// A protected write after the last turn's check, by a process that
+// outlived it, is caught once the Session ends: reverted, and a late
+// Tamper event on the last turn.
+func TestChatFinalScopeAfterIdle(t *testing.T) {
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{{Reply: "hi"}}}), 300*time.Millisecond,
+		scopedFrozen(), map[string]string{"add.go": "package fx\n", "add_test.go": additiveBase})
+	settledOf(t, drain(t, send(t, c, "yo"), nil))
+	writeIn(t, c.Workspace, "add_test.go", "package fx\n")
+	select {
+	case <-c.Done():
+	case <-time.After(20 * time.Second):
+		t.Fatal("the idle Session was never closed")
+	}
+	tamper := recordsOf(t, c, RecTamperEvent)
+	if len(tamper) != 1 || tamper[0]["turn"] != float64(1) || tamper[0]["late"] != true || tamper[0]["path"] != "add_test.go" {
+		t.Errorf("TamperEvent %v", tamper)
+	}
+	if got, _ := os.ReadFile(filepath.Join(c.Workspace, "add_test.go")); string(got) != additiveBase {
+		t.Errorf("the Oracle test wasn't put back: %q", got)
+	}
+}
+
+// A turn that puts a file back as the Snapshot has it changed nothing to
+// cut.
+func TestChatTurnBackToSnapshotIsNoChange(t *testing.T) {
+	orig := "package fx\n\nfunc Add(a, b int) int { return a - b }\n"
+	c := openScoped(t,
+		multiturn.Turn{Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n"}}},
+		multiturn.Turn{Writes: []multiturn.File{{Path: "add.go", Content: orig}}})
+	if s := settledOf(t, drain(t, send(t, c, "one"), nil)).Scope; s == nil || !reflect.DeepEqual(s.Promoted, []string{"add.go"}) {
+		t.Errorf("turn 1 scope %+v", s)
+	}
+	if s := settledOf(t, drain(t, send(t, c, "undo"), nil)).Scope; s == nil || len(s.Promoted)+len(s.Ambiguous)+len(s.Excluded) != 0 {
 		t.Errorf("turn 2 scope %+v", s)
 	}
 }

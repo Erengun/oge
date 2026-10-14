@@ -41,6 +41,10 @@ func TestChatReopensAfterCrash(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(c.Workspace, "b.go")); err != nil {
 		t.Errorf("the work didn't survive: %v", err)
 	}
+	// Written ahead: the new process's record before its first turn.
+	if types := strings.Join(typesOf(t, c), " "); !strings.Contains(types, RecSessionReopened+" "+RecTurnStarted) {
+		t.Errorf("SessionReopened isn't ahead of the turn: %s", types)
+	}
 	if r := recordsOf(t, c, RecSessionReopened); len(r) != 1 || r[0]["reason"] != "lost" || r[0]["turn"] != float64(2) {
 		t.Errorf("SessionReopened %v", r)
 	}

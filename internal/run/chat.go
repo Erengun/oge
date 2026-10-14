@@ -105,9 +105,12 @@ type Chat struct {
 	logMu sync.Mutex // the Chat log takes one record at a time
 	l     *ledger.Ledger
 
-	// last is the commit of the Workspace after the last turn's scope
-	// check: the Snapshot at first. Only the pump touches it.
-	last string
+	// scopeMu serializes the scope checks. last is the commit of the
+	// Workspace after the last turn's check, the Snapshot at first, and
+	// reverted each turn's reverts, for its Tamper event ids.
+	scopeMu  sync.Mutex
+	last     string
+	reverted map[int][]workspace.Revert
 
 	mu     sync.Mutex
 	sess   agent.Session
@@ -141,6 +144,7 @@ type turnOut struct {
 	closed bool
 
 	n      int          // the turn's number
+	rec    sync.Mutex   // guards the record below: the pump writes it
 	stream bytes.Buffer // its events, for the AttemptEnded blob
 	reply  []string     // what it said
 	usage  *agent.Event // its last Usage
@@ -150,6 +154,8 @@ func newTurnOut() *turnOut { return &turnOut{ch: make(chan agent.Event, 64)} }
 
 // record keeps ev for the turn's AttemptEnded.
 func (t *turnOut) record(ev agent.Event) {
+	t.rec.Lock()
+	defer t.rec.Unlock()
 	_ = json.NewEncoder(&t.stream).Encode(ev)
 	switch {
 	case ev.Kind == agent.Claim && ev.Tool == "":
@@ -235,7 +241,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	}
 
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
-		frozen: p.Frozen, adapter: adapter, ctx: ctx}
+		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{}}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -402,6 +408,26 @@ func (c *Chat) reopen(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reopening the chat Session: %w", err)
 	}
+	reason := "lost"
+	if errors.Is(why, ErrChatIdle) {
+		reason = "idle"
+	}
+	c.mu.Lock()
+	next := c.turns + 1
+	c.mu.Unlock()
+	// SessionReopened is the new process's record, in place of
+	// ProcessStarted, and is in the log before any turn reaches it.
+	proc := sess.Process()
+	if err := c.log(RecSessionReopened, map[string]any{"chat": c.ID, "reason": reason, "turn": next,
+		"pid": proc.PID, "pgid": proc.PGID, "permissions": agent.AutoPermissions}); err != nil {
+		_ = sess.Close()
+		c.mu.Lock()
+		if !c.closed {
+			c.err = fmt.Errorf("the chat log failed: %w", err)
+		}
+		c.mu.Unlock()
+		return err
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -409,17 +435,10 @@ func (c *Chat) reopen(ctx context.Context) error {
 		return ErrChatClosed
 	}
 	c.sess, c.pumped, c.err, c.rebrief = sess, make(chan struct{}), nil, true
-	pumped, next := c.pumped, c.turns+1
+	pumped = c.pumped
 	c.mu.Unlock()
-	reason := "lost"
-	if errors.Is(why, ErrChatIdle) {
-		reason = "idle"
-	}
-	proc := sess.Process()
-	err = c.log(RecSessionReopened, map[string]any{"chat": c.ID, "reason": reason, "turn": next,
-		"pid": proc.PID, "pgid": proc.PGID, "permissions": agent.AutoPermissions})
 	go c.pump(sess, pumped)
-	return err
+	return nil
 }
 
 // start begins a turn with c.mu held, and releases it. TurnStarted and
@@ -459,16 +478,20 @@ func (c *Chat) start(text string, out *turnOut) error {
 	}
 	c.mu.Lock()
 	var last *agent.Event
+	// ran: the message reached the agent, which may have written before
+	// its Session ended, so the turn gets its scope check.
+	ran := false
 	if err != nil {
 		last = &agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()}
 	} else if c.err != nil {
 		last = &agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()}
+		ran = true
 	} else {
 		c.sending = nil
 	}
 	c.mu.Unlock()
 	if last != nil {
-		ev := c.finish(out, *last, false)
+		ev := c.finish(out, *last, ran)
 		c.mu.Lock()
 		c.sending = nil
 		out.end(&ev)
@@ -530,6 +553,8 @@ func (c *Chat) pump(sess agent.Session, pumped chan struct{}) {
 		// The agent ran in this turn: its writes are checked too.
 		ev := c.finish(cur, agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + why.Error()}, true)
 		cur.end(&ev)
+	} else if cur == nil {
+		c.finalScope()
 	}
 	c.mu.Lock()
 	c.drop()
@@ -551,18 +576,21 @@ func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
 			}
 			ev.Scope, changes = ts, ch
 		}
-		blob, err := c.blobs.Put(redact.Redact(out.stream.Bytes()))
+		out.rec.Lock()
+		stream, reply, usage := append([]byte(nil), out.stream.Bytes()...), strings.Join(out.reply, "\n"), out.usage
+		out.rec.Unlock()
+		blob, err := c.blobs.Put(redact.Redact(stream))
 		if err != nil {
 			return err
 		}
 		ev.Failure = failAttempt(ev.Failure, a.Failure)
 		ended := map[string]any{"chat": c.ID, "turn": out.n, "attempt": a.ID, "events": blob,
-			"reply":   string(redact.Redact([]byte(strings.Join(out.reply, "\n")))),
+			"reply":   string(redact.Redact([]byte(reply))),
 			"failure": string(redact.Redact([]byte(ev.Failure)))}
 		if ev.Stop != "" {
 			ended["stop"] = string(redact.Redact([]byte(ev.Stop)))
 		}
-		if u := out.usage; u != nil {
+		if u := usage; u != nil {
 			ended["usage"] = map[string]any{"cost_usd": u.CostUSD, "tokens": u.Tokens}
 		}
 		if changes != nil {
@@ -572,13 +600,69 @@ func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
 	}()
 	if err != nil {
 		ev.Failure = failAttempt(ev.Failure, "chat_log_failed: "+err.Error())
-		c.mu.Lock()
-		if c.err == nil {
-			c.err = fmt.Errorf("the chat log failed: %w", err)
-		}
-		c.mu.Unlock()
+		c.logFailed(err)
 	}
 	return ev
+}
+
+// logFailed ends the Chat for good on a Chat log failure: it overrides an
+// idle timeout or a lost Session, so no Send reopens on a broken log.
+func (c *Chat) logFailed(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !errors.Is(c.err, ErrChatClosed) {
+		c.err = fmt.Errorf("the chat log failed: %w", err)
+	}
+}
+
+// finalScope checks the Workspace once more after the Session has ended
+// with no turn in flight (an idle timeout, a crash between turns, or
+// Close): a protected write made after the last turn's check, by a
+// process that outlived it, is reverted and recorded as a late Tamper
+// event on the last turn. Nothing is committed.
+func (c *Chat) finalScope() {
+	c.mu.Lock()
+	n := c.turns
+	c.mu.Unlock()
+	if n == 0 {
+		return
+	}
+	c.scopeMu.Lock()
+	defer c.scopeMu.Unlock()
+	a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: c.role}
+	s, err := c.repo.CheckScope(c.Workspace, c.Snapshot, scopeRules(a.Role, c.protected, c.blobs.Put, map[string][]string{}))
+	if err != nil || s.Tamper() == 0 {
+		return // the next turn's check compares again
+	}
+	var tamper []workspace.Revert
+	for _, r := range s.Reverts {
+		if r.Tamper {
+			tamper = append(tamper, r)
+		}
+	}
+	err = func() error {
+		if err := c.log(RecScopeObserved, map[string]any{
+			"chat": c.ID, "turn": n, "attempt": a.ID, "role": a.Role, "state": "late", "final": true,
+			"reverted": tamper, "tamper": len(tamper), "enforcement": workspace.RevertOnly,
+		}); err != nil {
+			return err
+		}
+		applyErr := s.Apply()
+		done := map[string]any{"chat": c.ID, "turn": n, "attempt": a.ID, "reverted": applyErr == nil}
+		if applyErr != nil {
+			done["error"] = applyErr.Error()
+		}
+		if err := c.log(RecScopeReverted, done); err != nil {
+			return err
+		}
+		a.Reverted = c.reverted[n]
+		c.logMu.Lock()
+		defer c.logMu.Unlock()
+		return recordTamper(c.l, a, tamper, applyErr == nil, true, map[string]any{"chat": c.ID, "turn": n})
+	}()
+	if err != nil {
+		c.logFailed(err)
+	}
 }
 
 // checkScope is a turn's scope check: the one an implementer Attempt gets
@@ -588,7 +672,15 @@ func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
 // Workspace is then committed as the turn's commit, whose changes since
 // the last turn's are classified. A comparison or revert the Workspace
 // defeats fails the turn (a.Failure); err is a Chat log failure.
+//
+// The check is against the Snapshot, so a non-additive edit in a later
+// turn to an Oracle test file kept additively earlier puts the whole file
+// back at the Snapshot's, dropping the earlier addition too: as a
+// send-back's Attempt is held to the Snapshot, not the last Candidate.
 func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, error) {
+	c.scopeMu.Lock()
+	defer c.scopeMu.Unlock()
+	defer func() { c.reverted[n] = a.Reverted }()
 	turn := map[string]any{"chat": c.ID, "turn": n}
 	added := map[string][]string{}
 	s, err := c.repo.CheckScope(c.Workspace, c.Snapshot, scopeRules(a.Role, c.protected, c.blobs.Put, added))
@@ -636,8 +728,19 @@ func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, 
 		return nil, nil, err
 	}
 	if len(late) > 0 {
+		// A kept file written again after the comparison is not kept.
+		gone := map[string]bool{}
+		for _, r := range late {
+			gone[r.Path] = true
+		}
+		pruned := []KeptTest{}
+		for _, k := range kept {
+			if !gone[k.Path] {
+				pruned = append(pruned, k)
+			}
+		}
 		if err := c.log(RecScopeObserved, map[string]any{
-			"chat": c.ID, "turn": n, "attempt": a.ID, "role": a.Role, "state": "late", "reverted": late,
+			"chat": c.ID, "turn": n, "attempt": a.ID, "role": a.Role, "state": "late", "reverted": late, "kept": pruned,
 			"tamper": countTamper(late), "enforcement": workspace.RevertOnly,
 		}); err != nil {
 			return nil, nil, err
@@ -649,13 +752,35 @@ func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, 
 			return nil, nil, err
 		}
 		a.Reverted = append(a.Reverted, late...)
+		// The Session lives on: the Workspace gets the commit's content
+		// back too, so the next turn doesn't start from the late write.
+		if err := c.restoreFrom(commit, late); err != nil {
+			a.Failure = failAttempt(a.Failure, "revert_failed: "+err.Error())
+		}
 	}
 	if err := c.repo.SetRef(fmt.Sprintf("refs/oge/chat/turns/%d", n), commit); err != nil {
 		return nil, nil, err
 	}
-	changed, err := c.repo.ChangedFiles(c.last, commit)
+	// The turn's changes: what it changed since the last turn, and only
+	// where that differs from the Snapshot, so putting a file back is no
+	// change to cut.
+	sinceLast, err := c.repo.ChangedFiles(c.last, commit)
 	if err != nil {
 		return nil, nil, err
+	}
+	sinceSnap, err := c.repo.ChangedFiles(c.Snapshot, commit)
+	if err != nil {
+		return nil, nil, err
+	}
+	differs := map[string]bool{}
+	for _, p := range sinceSnap {
+		differs[p] = true
+	}
+	var changed []string
+	for _, p := range sinceLast {
+		if differs[p] {
+			changed = append(changed, p)
+		}
 	}
 	_, withheld, err := c.repo.Classify(c.Snapshot, commit, c.promotedNew)
 	if err != nil {
@@ -685,6 +810,35 @@ func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, 
 	return ts, map[string]any{"commit": commit, "promoted": ts.Promoted, "ambiguous": ts.Ambiguous, "excluded": ts.Excluded}, nil
 }
 
+// restoreFrom writes each late path back into the Workspace as commit
+// holds it, or removes it when commit doesn't.
+func (c *Chat) restoreFrom(commit string, late []workspace.Revert) error {
+	for _, r := range late {
+		dst := filepath.Join(c.Workspace, filepath.FromSlash(r.Path))
+		data, ok, err := c.repo.Show(commit, r.Path)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if fi, err := os.Lstat(dst); err == nil && fi.Mode().IsRegular() {
+			mode = fi.Mode().Perm()
+		}
+		if err := os.RemoveAll(dst); err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, data, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // promotedNew is walk.promotedNew without a human's promotions, which a
 // Chat has none of yet.
 func (c *Chat) promotedNew(p string) bool {
@@ -696,7 +850,8 @@ func (c *Chat) promotedNew(p string) bool {
 }
 
 // HeldOutViewed records that the user viewed held-out tests during the
-// Chat, for the Receipt's disclosure. what says which.
+// Chat, for the Receipt's disclosure. what says which. Its turn is the
+// last turn started, 0 before the first.
 func (c *Chat) HeldOutViewed(what string) error {
 	c.mu.Lock()
 	n := c.turns
