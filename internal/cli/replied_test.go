@@ -47,6 +47,20 @@ func homeTurn(t *testing.T, f *runFixture, script, text string, args ...string) 
 	return f.onlyRun(t)
 }
 
+// repliedThenComposer waits for the Replied line and for the composer
+// drawn again after the Run. The composer is looked for after the Run's
+// last frame, not after the line: the renderer can draw it before the
+// printed line lands, or in the same write, and an idle composer isn't
+// drawn again.
+func (s *homeSession) repliedThenComposer() {
+	s.t.Helper()
+	s.expect(repliedLine)
+	if at := strings.LastIndex(s.out.String(), "ctrl+c to cancel"); at > s.mark {
+		s.mark = at
+	}
+	s.composer()
+}
+
 func endedOutcome(t *testing.T, dir string) string {
 	t.Helper()
 	got := records(t, dir, run.RecRunEnded)
@@ -67,11 +81,7 @@ func TestHomeRepliedSkipsQAAndCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.type_("yo\r")
-	s.expect(repliedLine)
-	// The composer is ready again, drawn after the line: the home isn't
-	// waiting. It may come in the same write as the line.
-	s.mark = strings.LastIndex(s.out.String(), repliedLine)
-	s.composer()
+	s.repliedThenComposer() // the home isn't waiting
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -238,8 +248,6 @@ func TestHomeRepliedKeepsEarlierRunsActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.type_("thanks\r")
-	s.expect(repliedLine)
-	s.mark = len(s.out.String())
-	s.composer()
+	s.repliedThenComposer()
 	s.actions() // the Accepted Run can still be taken
 }
