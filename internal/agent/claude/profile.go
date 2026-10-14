@@ -103,8 +103,9 @@ type profile struct {
 // claude 2.1.296's --help (choices acceptEdits, auto, bypassPermissions,
 // manual, dontAsk, plan); its asks arrive as can_use_tool requests over
 // --permission-prompt-tool stdio, like any prompt (spike row 4).
-// TODO(#256-decision): auto mode's classifier was checked against --help
-// only, not live: the scenario fake stands in for its asks.
+// Slice 7 (#259) launches every bare-oge Chat this way. Auto mode's
+// classifier was checked against --help only, not live: the scenario fake
+// stands in for its asks, and the live check is #114's attended run.
 func permissionMode(perms string) (string, error) {
 	switch perms {
 	case "":

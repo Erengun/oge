@@ -139,6 +139,8 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/new")
 	}
 	h.last, h.thread = nil, nil
+	// A fresh task is a fresh Chat: the next message opens a new Session.
+	h.chat.reset()
 	return nil, ""
 }
 
@@ -508,7 +510,7 @@ func (d slashDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 // completes it, until Esc closes it for that text.
 func (h *home) syncMenu() {
 	text := h.comp.text()
-	if h.run != nil || h.panel != nil || h.saving || h.review != nil || h.search != nil || h.actions ||
+	if h.run != nil || h.turn != nil || h.panel != nil || h.saving || h.review != nil || h.search != nil || h.actions ||
 		!slashPrefix.MatchString(text) || (h.menuOff && text == h.menuOffText) {
 		h.menu = nil
 		return

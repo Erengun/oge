@@ -1,0 +1,597 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/claude"
+	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/receipt"
+	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/task"
+)
+
+// The bare oge home talks to one Chat for the session (docs/ux/chat-first.md,
+// slice 7): Enter sends the message as a turn, whose reply and dim tool
+// one-liners are printed as they come. A turn that changes nothing ends
+// there: no stages, no Receipt, no action row. A turn with Promoted or
+// Ambiguous changes is cut into a Run at once (D4), and the cut is waited
+// for (background verify is #260), then summed up on one Verdict line;
+// /apply, /diff and /receipt act on its Run.
+//
+// The agent's words are always indented; Öge's own lines start at the
+// margin with the oge › marker, so a reply can't pass for a Verdict.
+//
+// TODO(#259-decision): HeldOutViewed (D6) has no caller in the home yet:
+// no home view shows held-out tests. The view that does records it.
+
+// homeChat is the session's Chat, opened by the first message.
+type homeChat struct {
+	// open opens the Chat on the config the first message resolved.
+	open func(res *resolved) (*run.Chat, error)
+	// cut cuts the Chat's turns since the last cut into a Run, in the
+	// Pipeline f resolved for the turn (its Shift+Tab mode).
+	cut func(ctx context.Context, c *run.Chat, f *pipeline.Frozen) (*run.Result, error)
+	// verdict is the cut's Verdict line, and what can take its Run.
+	verdict func(res *run.Result, changed int) (string, *lastRun)
+	agents  map[string]agent.Adapter
+
+	mu sync.Mutex
+	c  *run.Chat
+}
+
+// fits reports whether a message on res goes to the Chat: one is open, or
+// res's implementer has an auto mode to open one in. An agent without one
+// (the fake, Codex later) runs each message as a one-shot Run under its
+// Launch profile.
+func (hc *homeChat) fits(res *resolved) bool {
+	if hc == nil {
+		return false
+	}
+	if hc.get() != nil {
+		return true
+	}
+	for _, s := range res.frozen.Stages {
+		if s.Role == "implementer" && agent.HasAutoMode(hc.agents[s.Agent]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (hc *homeChat) get() *run.Chat {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	return hc.c
+}
+
+// close closes the Chat, if one was opened: its Session ends and its
+// Workspace goes.
+func (hc *homeChat) close() {
+	if hc == nil {
+		return
+	}
+	if c := hc.get(); c != nil {
+		_ = c.Close()
+	}
+}
+
+// reset closes the Chat, so the next message opens a new one (/new).
+func (hc *homeChat) reset() {
+	if hc == nil {
+		return
+	}
+	hc.mu.Lock()
+	c := hc.c
+	hc.c = nil
+	hc.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// chatTurn is the Chat turn in flight, then its cut.
+type chatTurn struct {
+	text    string // the message, back in the composer if the Chat can't open
+	frozen  *pipeline.Frozen
+	events  <-chan agent.Event
+	asks    []*agent.Ask // the prompts waiting, one shown at a time
+	answers []string     // the shown question ask's answers so far
+	changed int          // Promoted and Ambiguous paths the turn changed
+	cutting bool
+	cancel  context.CancelFunc // cancels the cut
+	// stopped: Esc or Ctrl+C interrupted the turn or cancelled the cut; a
+	// second Ctrl+C then quits.
+	stopped bool
+	queued  []string // messages typed and sent during the turn
+}
+
+type (
+	// chatSentMsg is a message's turn started, or why it couldn't.
+	chatSentMsg struct {
+		events <-chan agent.Event
+		err    error
+	}
+	// chatEvMsg is the turn's next event; ok is false once they end.
+	chatEvMsg struct {
+		ev agent.Event
+		ok bool
+	}
+	// chatCutMsg is the cut's end.
+	chatCutMsg struct {
+		res *run.Result
+		err error
+	}
+)
+
+// ogeLine is one of Öge's own lines: at the margin, after the marker.
+func (h *home) ogeLine(text string) string {
+	return h.st.accent("oge ›") + " " + text
+}
+
+// agentLines indents the agent's words, every line.
+func agentLines(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// chatSubmit sends text as the next turn, opening the Chat first.
+func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
+	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
+	h.comp = h.composer()
+	hc, ctx := h.chat, h.ctx
+	send := func() tea.Msg {
+		hc.mu.Lock()
+		if hc.c == nil {
+			c, err := hc.open(res)
+			if err != nil {
+				hc.mu.Unlock()
+				return chatSentMsg{err: err}
+			}
+			hc.c = c
+		}
+		c := hc.c
+		hc.mu.Unlock()
+		ch, err := c.Send(ctx, text)
+		return chatSentMsg{events: ch, err: err}
+	}
+	echo := h.println(h.st.bold("> " + task.Parse(text).Title))
+	return h, tea.Sequence(echo, send)
+}
+
+// nextEvent waits for the turn's next event.
+func nextEvent(ch <-chan agent.Event) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		return chatEvMsg{ev, ok}
+	}
+}
+
+// chatUpdate is update while a turn or its cut is in flight.
+func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case chatSentMsg:
+		if msg.err != nil {
+			text := h.turn.text
+			h.endTurn()
+			h.comp.set(text) // kept, to send again
+			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
+			return h, nil
+		}
+		h.turn.events = msg.events
+		return h, nextEvent(msg.events)
+	case chatEvMsg:
+		if !msg.ok {
+			return h.turnEnded()
+		}
+		return h, tea.Sequence(h.chatEvent(msg.ev), nextEvent(h.turn.events))
+	case chatCutMsg:
+		return h.cutEnded(msg)
+	case tea.KeyPressMsg:
+		return h.chatKey(msg)
+	case tea.PasteMsg:
+		if a := h.ask(); a == nil || a.Questions != nil {
+			h.comp.insertPaste(msg.Content)
+		}
+	case ctxDoneMsg:
+		h.quit = true
+		return h, tea.Quit
+	}
+	return h, nil
+}
+
+// ask is the prompt shown, nil when none waits.
+func (h *home) ask() *agent.Ask {
+	if len(h.turn.asks) == 0 {
+		return nil
+	}
+	return h.turn.asks[0]
+}
+
+// askRows is a's Detail wrapped to the frame's width by display width,
+// every row of it. Detail is shown as it is: it is already visible
+// (agent.Visible) and is never cleaned, which would redact it.
+func (h *home) askRows(a *agent.Ask) []string {
+	width := h.width
+	if width <= 0 {
+		width = 80
+	}
+	width = max(width-4, 4)
+	var rows []string
+	for _, l := range strings.Split(a.Detail, "\n") {
+		rows = append(rows, strings.Split(ansi.Hardwrap(l, width, true), "\n")...)
+	}
+	return rows
+}
+
+// askFits reports whether a's whole Detail shows in the frame now: at
+// most agent.AskMaxLines rows, with the prompt's two other lines.
+func (h *home) askFits(a *agent.Ask) bool {
+	n := len(h.askRows(a))
+	return n <= agent.AskMaxLines && (h.height <= 0 || n+3 <= h.height)
+}
+
+// showAsk readies the prompt now shown: a question takes the composer, so
+// what was typed there before it appeared is queued, never sent as its
+// answer.
+func (h *home) showAsk() {
+	h.turn.answers = nil
+	if a := h.ask(); a != nil && a.Questions != nil {
+		if text := strings.TrimSpace(h.comp.text()); text != "" {
+			h.turn.queued = append(h.turn.queued, text)
+			h.comp = h.composer()
+		}
+	}
+}
+
+// chatEvent prints what a turn's event shows: the reply's words, a tool's
+// dim one-liner, a denial; an Ask waits in the live area for its answer.
+func (h *home) chatEvent(ev agent.Event) tea.Cmd {
+	switch ev.Kind {
+	case agent.Claim:
+		if ev.Tool == "" {
+			if t := cleanLines(ev.Text); t != "" {
+				return h.println(agentLines(t))
+			}
+			return nil
+		}
+		if ev.Tool == "TodoWrite" {
+			return nil
+		}
+		if s, ok := activityStep(ev); ok {
+			return h.println(h.st.dim("  " + s))
+		}
+	case agent.HostRequest:
+		if hd := ev.Host; hd != nil && hd.Decision == "cancel" && hd.By == "agent" {
+			// The agent withdrew that ask: only it goes.
+			for i, a := range h.turn.asks {
+				if a == ev.Ask {
+					h.turn.asks = append(h.turn.asks[:i:i], h.turn.asks[i+1:]...)
+					if i == 0 {
+						h.showAsk()
+					}
+					break
+				}
+			}
+			return nil
+		}
+		if a := ev.Ask; a != nil {
+			if a.Questions == nil && !h.askFits(a) {
+				// Consent to what the prompt can't show isn't consent.
+				_ = a.Answer(agent.Answer{Reason: fmt.Sprintf("Öge denied this: it is too long to show the user for approval (more than %d lines). Run it as shorter commands.", agent.AskMaxLines)})
+				return h.println(h.ogeLine(h.st.dim("denied " + clean(a.Tool) + ": too long to show for approval")))
+			}
+			h.turn.asks = append(h.turn.asks, a)
+			if len(h.turn.asks) == 1 {
+				h.showAsk()
+			}
+			return nil
+		}
+		if ev.Host != nil && ev.Host.By == "human" {
+			return nil // the answer is printed where it was given
+		}
+		if s, ok := activityStep(ev); ok {
+			return h.println(h.st.dim("  " + s))
+		}
+	case agent.TurnSettled:
+		h.turn.asks = nil
+		var tamper tea.Cmd
+		if sc := ev.Scope; sc != nil {
+			h.turn.changed = len(sc.Promoted) + len(sc.Ambiguous)
+			if len(sc.Tamper) > 0 {
+				// A protected path the turn wrote was put back (ADR-0009).
+				tamper = h.println(h.ogeLine(h.st.dim("reverted " + clean(strings.Join(sc.Tamper, ", ")) + ": protected")))
+			}
+		}
+		switch {
+		case h.turn.stopped:
+			return tea.Sequence(tamper, h.println(h.ogeLine(h.st.dim("■ interrupted"))))
+		case ev.Stop != "":
+			return tea.Sequence(tamper, h.println(h.ogeLine("■ "+clean(ev.Stop))))
+		case ev.Failure != "":
+			return tea.Sequence(tamper, h.println(h.ogeLine("✗ "+clean(ev.Failure))))
+		}
+		return tamper
+	}
+	return nil
+}
+
+// turnEnded cuts a turn that changed something, or opens the composer.
+func (h *home) turnEnded() (tea.Model, tea.Cmd) {
+	if h.turn.changed == 0 || h.turn.stopped {
+		// An interrupted turn's changes wait for the next turn's cut.
+		return h.nextTurn(nil)
+	}
+	h.turn.cutting = true
+	ctx, cancel := context.WithCancel(context.Background())
+	h.turn.cancel = cancel
+	hc, f := h.chat, h.turn.frozen
+	c := hc.get()
+	return h, func() tea.Msg {
+		res, err := hc.cut(ctx, c, f)
+		return chatCutMsg{res, err}
+	}
+}
+
+// endTurn opens the composer again, keeping what was typed during the
+// turn and not yet sent; it returns the messages queued meanwhile.
+func (h *home) endTurn() []string {
+	text, queued := h.comp.text(), h.turn.queued
+	h.turn = nil
+	h.reopen()
+	if strings.TrimSpace(text) != "" {
+		h.comp.set(text)
+	}
+	return queued
+}
+
+// nextTurn ends the turn, printing print first, and sends the next message
+// typed during it, if any.
+func (h *home) nextTurn(print tea.Cmd) (tea.Model, tea.Cmd) {
+	stopped := h.turn.stopped
+	queued := h.endTurn()
+	if len(queued) == 0 {
+		return h, print
+	}
+	if stopped {
+		// After Esc nothing is sent on its own: what was queued is back in
+		// the composer, for the human to send or change.
+		h.comp.set(strings.TrimSpace(strings.Join(append(queued, h.comp.text()), "\n")))
+		return h, print
+	}
+	draft := h.comp.text()
+	_, send := h.submitQueued(queued)
+	if h.turn != nil {
+		h.comp.set(draft)
+	}
+	return h, tea.Sequence(print, send)
+}
+
+// submitQueued sends the first queued message as a turn; the rest stay
+// queued behind it.
+func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
+	res, problem := h.resolve(h.sel)
+	if problem != nil {
+		h.msg = problem
+		h.comp.set(strings.Join(queued, "\n"))
+		return h, nil
+	}
+	h.hist.add(queued[0])
+	return h.chatSubmit(queued[0], res, queued[1:])
+}
+
+// cutEnded prints the cut's Verdict line and opens the composer.
+func (h *home) cutEnded(msg chatCutMsg) (tea.Model, tea.Cmd) {
+	changed, stopped := h.turn.changed, h.turn.stopped
+	h.turn.cancel()
+	var line string
+	switch {
+	case errors.Is(msg.err, run.ErrNothingToCut):
+	case stopped:
+		h.last = nil
+		line = h.ogeLine("■ verification cancelled: nothing was verified")
+	case msg.err != nil:
+		h.last = nil // never an older cut's: it isn't what was just changed
+		line = h.ogeLine("✗ verifying the change: " + clean(msg.err.Error()))
+	default:
+		var l string
+		l, h.last = h.chat.verdict(msg.res, changed)
+		line = h.ogeLine(l)
+	}
+	var print tea.Cmd
+	if line != "" {
+		print = h.println(line)
+	}
+	return h.nextTurn(print)
+}
+
+// chatKey takes a key during a turn. Esc interrupts the turn or cancels
+// its cut; so does Ctrl+C, and a second Ctrl+C quits. y or n answers a
+// permission prompt; a question takes the composer's text or an option's
+// number. Otherwise the composer stays live, and Enter queues a message
+// for when the turn has ended.
+func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	t := h.turn
+	switch k.String() {
+	case "ctrl+c":
+		if t.stopped {
+			h.quit = true
+			return h, tea.Quit
+		}
+		h.stop()
+		return h, nil
+	case "esc":
+		h.stop()
+		return h, nil
+	}
+	a := h.ask()
+	if a != nil && a.Questions == nil {
+		switch k.String() {
+		case "y":
+			if !h.askFits(a) {
+				return h, nil // what isn't shown can't be approved
+			}
+			return h, h.answer(a, agent.Answer{Allow: true})
+		case "n":
+			return h, h.answer(a, agent.Answer{})
+		}
+		return h, nil
+	}
+	if k.String() == "enter" {
+		text := strings.TrimSpace(h.comp.text())
+		if text == "" {
+			return h, nil
+		}
+		h.comp = h.composer()
+		if a != nil {
+			// One question at a time, each with its own numbers.
+			q := a.Questions[len(h.turn.answers)]
+			if n, err := strconv.Atoi(text); err == nil && n >= 1 && n <= len(q.Options) {
+				text = q.Options[n-1]
+			}
+			h.turn.answers = append(h.turn.answers, text)
+			if len(h.turn.answers) < len(a.Questions) {
+				return h, h.println(h.ogeLine(h.st.dim("answered: " + clean(text))))
+			}
+			return h, h.answer(a, agent.Answer{Allow: true, Answers: h.turn.answers})
+		}
+		t.queued = append(t.queued, text)
+		return h, nil
+	}
+	h.comp.key(k)
+	return h, nil
+}
+
+// stop interrupts the turn, or cancels its cut.
+func (h *home) stop() {
+	t := h.turn
+	if t.stopped {
+		return
+	}
+	t.stopped, t.asks = true, nil
+	if t.cutting {
+		t.cancel()
+		return
+	}
+	if c := h.chat.get(); c != nil {
+		_ = c.Interrupt()
+	}
+}
+
+// answer answers the prompt shown and prints what was answered.
+func (h *home) answer(a *agent.Ask, ans agent.Answer) tea.Cmd {
+	h.turn.asks = h.turn.asks[1:]
+	h.showAsk()
+	// What is printed is redacted and short (Target), never the Detail.
+	what := clean(strings.TrimSpace(a.Tool + " " + a.Target))
+	err := a.Answer(ans)
+	switch {
+	case errors.Is(err, claude.ErrAskClosed):
+		return h.println(h.ogeLine(h.st.dim("that question was withdrawn")))
+	case err != nil:
+		return h.println(h.ogeLine("✗ answering: " + clean(err.Error())))
+	case len(ans.Answers) > 0:
+		return h.println(h.ogeLine(h.st.dim("answered: " + clean(ans.Answers[len(ans.Answers)-1]))))
+	case ans.Allow:
+		return h.println(h.ogeLine(h.st.dim("allowed: " + what)))
+	}
+	return h.println(h.ogeLine(h.st.dim("denied: " + what)))
+}
+
+// turnView is the live area during a turn: its prompt or what it is
+// doing, then the composer's text.
+func (h *home) turnView() string {
+	t := h.turn
+	var lines []string
+	a := h.ask()
+	switch {
+	case a != nil && a.Questions != nil:
+		// The question is the agent's text: indented, never after the
+		// marker.
+		q := a.Questions[len(t.answers)]
+		lines = append(lines, agentLines(cleanLines(q.Text)))
+		for i, o := range q.Options {
+			lines = append(lines, fmt.Sprintf("    %d. %s", i+1, clean(o)))
+		}
+		lines = append(lines, h.ogeLine(h.st.dim("type an answer or an option's number · enter")))
+	case a != nil:
+		lines = append(lines, h.ogeLine("Allow "+clean(a.Tool)+"?"))
+		if !h.askFits(a) {
+			lines = append(lines, "    "+h.st.bold("too long to show at this width; [n] to deny or widen the terminal"))
+			break
+		}
+		for _, r := range h.askRows(a) {
+			lines = append(lines, "    "+r)
+		}
+		lines = append(lines, "    "+h.st.bold("[y] yes  [n] no"))
+	case t.cutting && t.stopped:
+		lines = append(lines, h.ogeLine(h.st.dim("cancelling verification…")))
+	case t.cutting:
+		lines = append(lines, h.ogeLine(h.st.dim(files(t.changed)+" · verifying… · esc to cancel")))
+	case t.stopped:
+		lines = append(lines, h.ogeLine(h.st.dim("interrupting… · ctrl+c again quits")))
+	default:
+		lines = append(lines, h.ogeLine(h.st.dim("working… · esc to interrupt")))
+	}
+	if a == nil || a.Questions != nil {
+		box := " › " + strings.ReplaceAll(h.comp.text(), "\n", " ⏎ ")
+		if n := len(t.queued); n > 0 {
+			box += h.st.dim(fmt.Sprintf("   (%s queued)", plural(n, "message")))
+		}
+		lines = append(lines, box)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// verdictLine sums a cut's Run up in one line.
+func verdictLine(res *run.Result, changed int) string {
+	if n := res.Attempt; n != nil && len(n.Changed) > 0 {
+		changed = len(n.Changed)
+	}
+	what := plural(changed, "file")
+	switch res.Outcome {
+	case run.Accepted:
+		check := "Check passed"
+		if c := res.Check; c != nil {
+			passed := 0
+			for _, t := range c.Tests {
+				if t.Attested == "pass" {
+					passed++
+				}
+			}
+			if passed > 0 {
+				check = fmt.Sprintf("%d passed", passed)
+			}
+		}
+		return "✓ Accepted · " + what + " · " + check + " · /apply /diff"
+	case run.Failed:
+		return "✗ Failed · " + what + " · the Check failed · /diff /receipt"
+	case run.Parked:
+		at := ""
+		if res.Gate != "" {
+			at = ": the " + receipt.GateTitle(res.Gate)
+		}
+		return "… Waiting for you" + at + " · " + what + " · /receipt"
+	case run.Refused:
+		if len(res.Why) > 0 && res.Why[0] == run.WhySetupChanged {
+			return "✗ Refused: setup changed since this Chat opened; /new to start a new Chat"
+		}
+		why := ""
+		if len(res.Why) > 0 {
+			why = ": " + clean(res.Why[0])
+		}
+		return "✗ Refused" + why
+	}
+	return "✗ " + clean(string(res.Outcome)) + " · " + what + " · /receipt"
+}

@@ -330,6 +330,9 @@ func toolInput(name, target string) map[string]any {
 		return map[string]any{"command": target}
 	case "Read", "Edit", "Write":
 		return map[string]any{"file_path": target}
+	case "AskUserQuestion":
+		return map[string]any{"questions": []any{map[string]any{"question": target,
+			"options": []any{map[string]any{"label": "yes"}, map[string]any{"label": "no"}}}}}
 	}
 	return map[string]any{"target": target}
 }

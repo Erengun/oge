@@ -91,7 +91,13 @@ func TestHomeRepliedSkipsQAAndCheck(t *testing.T) {
 	if at < 0 {
 		t.Fatalf("the reply is not shown:\n%s", got)
 	}
-	for _, bad := range []string{"ÖGE RECEIPT", "↓ actions"} {
+	// No Check or QA row, spinning, failed or "not run" (#259).
+	for _, l := range strings.Split(got[at:], "\n") {
+		if l = strings.TrimSpace(l); strings.Contains(l, "check ") && !strings.HasPrefix(l, "· check ") {
+			t.Errorf("a Replied Run's check row isn't just pending: %q", l)
+		}
+	}
+	for _, bad := range []string{"ÖGE RECEIPT", "↓ actions", "✗", "not run"} {
 		if strings.Contains(got[at:], bad) {
 			t.Errorf("a Replied Run showed %q:\n%s", bad, got)
 		}

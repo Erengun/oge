@@ -28,7 +28,7 @@ func chatFrozen(role string) *pipeline.Frozen {
 
 func chatOn(k string) string {
 	if k == ChatFlag {
-		return "1"
+		return "" // the Chat is the default
 	}
 	return os.Getenv(k) // a cut's Check finds go on PATH
 }
@@ -329,9 +329,14 @@ func TestChatRefusesVerifierReuse(t *testing.T) {
 	if err := reuse("implementer"); err != nil {
 		t.Errorf("reuse(implementer) = %v", err)
 	}
-	_, err = OpenChat(context.Background(), ChatParams{Frozen: chatFrozen("implementer"), Agents: agents, Getenv: func(string) string { return "" }})
+	_, err = OpenChat(context.Background(), ChatParams{Frozen: chatFrozen("implementer"), Agents: agents, Getenv: func(k string) string {
+		if k == ChatFlag {
+			return "0"
+		}
+		return ""
+	}})
 	if !errors.Is(err, ErrChatDisabled) {
-		t.Errorf("without the flag: %v", err)
+		t.Errorf("with the escape hatch: %v", err)
 	}
 }
 

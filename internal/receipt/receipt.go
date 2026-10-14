@@ -927,6 +927,8 @@ func (r *Receipt) outcome(e *runEnded, abandoned string) {
 		}
 	case run.Infeasible:
 		r.Headline = "✗ Infeasible"
+	case run.Failed:
+		r.Headline = "✗ Failed: the Check failed on this cut"
 	case run.Parked:
 		r.WaitingAt = e.Gate
 		r.Headline = "… Waiting for you: the " + GateTitle(e.Gate)

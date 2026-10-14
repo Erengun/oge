@@ -97,7 +97,7 @@ func (h *home) syncAt() {
 	a := &h.at
 	query, col, ok := h.comp.mention()
 	text := h.comp.text()
-	if !ok || h.run != nil || h.panel != nil || h.saving || h.review != nil || h.search != nil || h.actions ||
+	if !ok || h.run != nil || h.turn != nil || h.panel != nil || h.saving || h.review != nil || h.search != nil || h.actions ||
 		h.menu != nil || (a.off && text == a.offText) {
 		a.list = nil
 		return

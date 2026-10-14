@@ -53,6 +53,9 @@ func New() *Adapter { return &Adapter{} }
 // stdin is closed, and again after SIGTERM, before SIGKILL.
 const closeGrace = 5 * time.Second
 
+// AutoMode is true: claude's --permission-mode auto runs a Chat (D2).
+func (a *Adapter) AutoMode() bool { return true }
+
 // Open spawns claude and completes the initialize handshake, which spends
 // no quota. The envelope is checked when the first turn's system/init
 // arrives: claude reports it only after a user message.
@@ -722,12 +725,33 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		}
 		return s.answer(id, subtype, d, input)
 	}
-	pa := &pendingAsk{}
+	var in map[string]any
+	_ = json.Unmarshal(input, &in)
+	detail := askDetail(tool, in, input, s.policy.ws)
+	if strings.TrimSpace(detail) == "" || strings.Count(detail, "\n")+1 > agent.AskMaxLines {
+		// The human can't consent to what the prompt can't show: denied
+		// without asking.
+		d.Decision, d.Rule = "deny", ruleAskTooLong
+		d.Reason = fmt.Sprintf("Öge denied this: it is too long to show the user for approval (more than %d lines). Run it as shorter commands.", agent.AskMaxLines)
+		if strings.TrimSpace(detail) == "" {
+			d.Reason = "Öge denied this: there is nothing to show the user for approval."
+		}
+		if useID != "" {
+			s.decided[useID] = d
+		}
+		s.friction.decided(d)
+		sofar := s.friction.sofar()
+		s.mu.Unlock()
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
+		return s.answer(id, subtype, d, input)
+	}
+	a := &agent.Ask{} // filled below; a withdrawal names it by this pointer
+	pa := &pendingAsk{ask: a}
 	s.asks[id] = pa
 	s.mu.Unlock()
 	ask := d
 	ask.Decision, ask.Rule, ask.By, ask.Reason, ask.Hint = "ask", ruleAutoAsk, "agent_auto_mode", "", ""
-	reply := func(allow bool) error {
+	reply := func(ans agent.Answer) error {
 		s.mu.Lock()
 		if pa.done {
 			s.mu.Unlock()
@@ -739,18 +763,53 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		got := ask
 		got.By, got.Rule, got.Decision = "human", ruleHumanAnswer, "deny"
 		got.Reason = "The user denied this."
-		if allow {
+		if ans.Reason != "" {
+			got.Reason = ans.Reason
+		}
+		updated := input
+		if ans.Allow {
 			got.Decision, got.Reason = "allow", ""
+			if len(ans.Answers) > 0 && tool == "AskUserQuestion" {
+				updated = withAnswer(in, ans.Answers)
+			}
 		}
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &got})
-		return s.answer(id, subtype, got, input)
+		return s.answer(id, subtype, got, updated)
 	}
-	s.emit(agent.Event{Kind: agent.HostRequest, Host: &ask, Ask: agent.NewAsk(tool, ask.Target, reply)})
+	*a = *agent.NewAsk(tool, ask.Target, detail, reply)
+	if tool == "AskUserQuestion" {
+		a.Questions = questions(in)
+	}
+	s.emit(agent.Event{Kind: agent.HostRequest, Host: &ask, Ask: a})
 	return nil
 }
 
+// withAnswer is an AskUserQuestion's input with the human's answers, one
+// per question in order, as claude takes them back.
+func withAnswer(in map[string]any, texts []string) json.RawMessage {
+	out := map[string]any{}
+	for k, v := range in {
+		out[k] = v
+	}
+	answers := map[string]any{}
+	qs, _ := in["questions"].([]any)
+	for i, q := range qs {
+		m, _ := q.(map[string]any)
+		text, _ := m["question"].(string)
+		if i < len(texts) {
+			answers[text] = texts[i]
+		}
+	}
+	out["answers"] = answers
+	b, _ := json.Marshal(out)
+	return b
+}
+
 // pendingAsk is an Ask not yet answered or withdrawn.
-type pendingAsk struct{ done bool }
+type pendingAsk struct {
+	done bool
+	ask  *agent.Ask // what the host was shown
+}
 
 // ErrAskClosed is a Reply to an Ask that was answered or withdrawn.
 var ErrAskClosed = errors.New("the ask was already answered or withdrawn")
@@ -766,7 +825,7 @@ func (s *session) withdraw(id string) {
 	s.mu.Unlock()
 	if pa != nil {
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &agent.HostDecision{Family: agent.Approval,
-			Decision: "cancel", By: "agent", Rule: ruleWithdrawn}})
+			Decision: "cancel", By: "agent", Rule: ruleWithdrawn}, Ask: pa.ask})
 	}
 }
 
