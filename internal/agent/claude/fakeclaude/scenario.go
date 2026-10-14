@@ -34,6 +34,7 @@ type scen struct {
 	dir   string
 	queue []map[string]any // user messages that arrived mid-turn
 	seq   int
+	hooks bool // the host registered a PreToolUse hook at initialize
 }
 
 func runScenario(path string) {
@@ -108,6 +109,8 @@ func (s *scen) serve(sc multiturn.Scenario) {
 		case "control_request":
 			switch subtype(m) {
 			case "initialize":
+				r, _ := m["request"].(map[string]any)
+				s.hooks = r["hooks"] != nil
 				s.respond(m, map[string]any{"commands": []any{}, "agents": []any{}, "models": []any{}})
 			case "interrupt": // idle: nothing to interrupt
 				s.respond(m, map[string]any{"still_queued": []any{}})
@@ -150,7 +153,8 @@ func (s *scen) turn(msg map[string]any, t multiturn.Turn) {
 	s.lifecycle(uuid, "queued")
 	s.lifecycle(uuid, "started")
 	s.emit(map[string]any{"type": "system", "subtype": "init", "cwd": s.dir, "model": scenModel,
-		"permissionMode": "auto", "tools": []string{"Bash", "Edit", "Read", "Write"}})
+		"permissionMode": "auto", "tools": []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
+		"claude_code_version": "2.1.289", "capabilities": []string{"interrupt_receipt_v1"}})
 	if t.Reply != "" {
 		s.assistant(map[string]any{"type": "text", "text": t.Reply})
 	}
@@ -158,19 +162,35 @@ func (s *scen) turn(msg map[string]any, t multiturn.Turn) {
 		useID := s.id("toolu")
 		s.assistant(map[string]any{"type": "tool_use", "id": useID, "name": tl.Name,
 			"input": toolInput(tl.Name, tl.Target)})
-		s.toolResult(useID, "ok", false, nil)
+		if s.hook(tl.Name, toolInput(tl.Name, tl.Target), useID) {
+			s.toolResult(useID, "ok", false, nil)
+		} else {
+			s.toolResult(useID, "denied by the PreToolUse hook", true, nil)
+		}
 	}
 	allowed := true
+	var useID string
 	if t.Ask != nil {
-		useID := s.id("toolu")
+		useID = s.id("toolu")
 		s.assistant(map[string]any{"type": "tool_use", "id": useID, "name": t.Ask.Tool,
 			"input": toolInput(t.Ask.Tool, t.Ask.Target)})
+		if allowed = s.hook(t.Ask.Tool, toolInput(t.Ask.Tool, t.Ask.Target), useID); !allowed {
+			s.toolResult(useID, "denied by the PreToolUse hook", true, nil)
+		}
+	}
+	if t.Ask != nil && allowed {
 		reqID := s.id("ask")
 		s.emit(map[string]any{"type": "control_request", "request_id": reqID, "uuid": s.id("c"),
 			"request": map[string]any{"subtype": "can_use_tool", "tool_name": t.Ask.Tool,
 				"display_name": t.Ask.Tool, "input": toolInput(t.Ask.Tool, t.Ask.Target),
 				"description": t.Ask.Target, "tool_use_id": useID}})
-		allowed = s.awaitAnswer(reqID)
+		var interrupted bool
+		allowed, interrupted = s.awaitAnswer(reqID)
+		if interrupted {
+			s.result(uuid, t, true)
+			s.lifecycle(uuid, "cancelled")
+			return
+		}
 		if allowed {
 			s.toolResult(useID, "ok", false, nil)
 		} else {
@@ -183,6 +203,10 @@ func (s *scen) turn(msg map[string]any, t multiturn.Turn) {
 			abs := filepath.Join(s.dir, filepath.FromSlash(f.Path))
 			s.assistant(map[string]any{"type": "tool_use", "id": useID, "name": "Write",
 				"input": map[string]any{"file_path": abs, "content": f.Content}})
+			if !s.hook("Write", map[string]any{"file_path": abs, "content": f.Content}, useID) {
+				s.toolResult(useID, "denied by the PreToolUse hook", true, nil)
+				continue
+			}
 			if err := multiturn.WriteFiles(s.dir, []multiturn.File{f}); err != nil {
 				fail("%v", err)
 			}
@@ -202,26 +226,61 @@ func (s *scen) turn(msg map[string]any, t multiturn.Turn) {
 	s.lifecycle(uuid, "completed")
 }
 
-// awaitAnswer waits for the control_response to request id; a deny, or
-// stdin closing, is false. Other user messages queue.
-func (s *scen) awaitAnswer(id string) bool {
+// hook sends the PreToolUse hook_callback a host that registered one
+// gets before every tool use, and reports whether the tool may run: false
+// on a hook deny. It also says what the hook answered, as text.
+func (s *scen) hook(tool string, input map[string]any, useID string) bool {
+	if !s.hooks {
+		return true
+	}
+	id := s.id("hook")
+	s.emit(map[string]any{"type": "control_request", "request_id": id, "request": map[string]any{
+		"subtype": "hook_callback", "callback_id": "oge_pre_tool_use", "input": map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input, "tool_use_id": useID}}})
+	body, _ := s.awaitResponse(id)
+	out, _ := body["hookSpecificOutput"].(map[string]any)
+	ok := out["permissionDecision"] != "deny"
+	verdict := "continue"
+	if !ok {
+		verdict = "deny"
+	}
+	s.assistant(map[string]any{"type": "text", "text": "hook " + tool + ": " + verdict})
+	return ok
+}
+
+// awaitResponse waits for the control_response to request id and returns
+// its body; interrupted is true when an interrupt came first, which
+// cancels the request as claude does (control_cancel_request). Other
+// user messages queue.
+func (s *scen) awaitResponse(id string) (body map[string]any, interrupted bool) {
 	for {
 		m, ok := s.read()
 		if !ok {
-			return false
+			return nil, false
 		}
-		switch m["type"] {
-		case "control_response":
+		switch {
+		case m["type"] == "control_response":
 			r, _ := m["response"].(map[string]any)
 			if r["request_id"] != id {
 				continue
 			}
 			body, _ := r["response"].(map[string]any)
-			return body["behavior"] != "deny"
-		case "user":
+			return body, false
+		case m["type"] == "control_request" && subtype(m) == "interrupt":
+			s.emit(map[string]any{"type": "control_cancel_request", "request_id": id})
+			s.respond(m, map[string]any{"still_queued": []any{}})
+			return nil, true
+		case m["type"] == "user":
 			s.queue = append(s.queue, m)
 		}
 	}
+}
+
+// awaitAnswer waits for the answer to the can_use_tool request id; a
+// deny, or stdin closing, is false.
+func (s *scen) awaitAnswer(id string) (allowed, interrupted bool) {
+	body, interrupted := s.awaitResponse(id)
+	return body != nil && body["behavior"] != "deny", interrupted
 }
 
 // hold waits for an interrupt control request and answers it with the

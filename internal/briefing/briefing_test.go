@@ -67,3 +67,19 @@ func TestBriefingWithFollowUps(t *testing.T) {
 		t.Errorf("a first Run's Briefing mentions follow-ups:\n%s", b)
 	}
 }
+
+// The Chat Briefing asks for no Exit and says nothing about denials: the
+// agent's auto mode asks the human instead.
+func TestChatBriefing(t *testing.T) {
+	b := Chat([]string{"go test ./..."})
+	for _, want := range []string{"How this Chat works", "`go test ./...`", Assumptions} {
+		if !strings.Contains(b, want) {
+			t.Errorf("Chat Briefing lacks %q:\n%s", want, b)
+		}
+	}
+	for _, not := range []string{"Exit:", "denied"} {
+		if strings.Contains(b, not) {
+			t.Errorf("Chat Briefing has %q:\n%s", not, b)
+		}
+	}
+}

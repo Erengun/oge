@@ -92,6 +92,14 @@ _Avoid_: Snapshot, save point, partial Candidate
 One Öge-owned conversation with an agent. An Attempt uses exactly one Session; a Session belongs to one Stage and may continue into later Attempts of that Stage only where the Role kind or Stage explicitly allows reuse.
 _Avoid_: Thread, conversation, agent session id (the agent's own id is mapped, not used)
 
+**Chat**:
+What bare `oge` opens: one Snapshot, one implementer Workspace and one long-lived implementer Session that the user talks to, a **turn** at a time. A Chat hosts Runs; it isn't one (docs/ux/chat-first.md).
+_Avoid_: Conversation, thread, chat session (a Session is one agent conversation, and a Chat holds one)
+
+**Turn**:
+One user message in a Chat: one `Send` to the implementer Session, which ends when the agent's reply settles. Messages sent during a turn queue; Esc interrupts it without ending the Session.
+_Avoid_: Round, exchange, Attempt (one-shot)
+
 **Check**:
 A node of a Pipeline where Öge runs Oracle commands on a Candidate and derives a Verdict from the resulting Evidence.
 _Avoid_: Test stage, validation step

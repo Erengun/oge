@@ -42,7 +42,19 @@ type LaunchSpec struct {
 	// Cache is a Run-private directory, outside the Workspace, for the
 	// agent's tool caches (such as GOCACHE).
 	Cache string
+	// Permissions is who decides a tool call: "" is Öge's Launch-profile
+	// policy; AutoPermissions is the agent's own auto mode under Öge's
+	// hard denies, with its asks routed to the host (Chat, D2 in
+	// docs/ux/chat-first.md).
+	Permissions string
+	// StateRoots are Öge's state directories (the state dir, its private
+	// and work roots), wherever they are. Under AutoPermissions the
+	// sandbox denies reading them, reopening only the Workspace and cache.
+	StateRoots []string
 }
+
+// AutoPermissions is LaunchSpec.Permissions for the agent's auto mode.
+const AutoPermissions = "auto"
 
 // Session is one agent conversation. At most one turn is in flight;
 // Interrupt is non-terminal.
@@ -122,7 +134,25 @@ type Event struct {
 	// Todos is the agent's plan after a todo update (a Claim with Tool
 	// "TodoWrite"): display only, never written to the stream or Ledger.
 	Todos []Todo `json:"-"`
+	// Ask is set on a Host request the agent's auto mode raised for the
+	// human (Host.Decision "ask"): the turn waits for its Reply. Never
+	// written to the stream or Ledger.
+	Ask *Ask `json:"-"`
 }
+
+// Ask is a permission prompt waiting for the host's answer.
+type Ask struct {
+	Tool, Target string
+	reply        func(allow bool) error
+}
+
+// NewAsk returns an Ask that reply answers; adapters build it.
+func NewAsk(tool, target string, reply func(allow bool) error) *Ask {
+	return &Ask{Tool: tool, Target: target, reply: reply}
+}
+
+// Reply answers the ask; only the first answer counts.
+func (a *Ask) Reply(allow bool) error { return a.reply(allow) }
 
 // ContextUse is the context an agent's last message used (input, cache read
 // and cache creation tokens) against the window the agent reported for its
