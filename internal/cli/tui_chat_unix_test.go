@@ -83,6 +83,7 @@ func TestHomeChatRepliesRemembersAndCuts(t *testing.T) {
 		{Reply: "hello from the chat"},
 		{Reply: "still the same session", Tools: []multiturn.Tool{{Name: "Bash", Target: "ls"}}},
 		{Reply: "fixed Add", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"}}},
+		{Reply: "still here"},
 	}}, nil)
 	s.composer()
 	s.type_("yo\r")
@@ -101,11 +102,29 @@ func TestHomeChatRepliesRemembersAndCuts(t *testing.T) {
 	s.expect("oge › ✓ Accepted · 1 file · ")
 	s.composer()
 	s.type_("/apply\r")
-	s.expect("Applied")
+	s.expect("oge › ✓ Applied ")
+	s.expect("  1 file: add.go")
+	s.expect("  checks: ")
 	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "a + b") {
 		t.Errorf("/apply didn't deliver the cut:\n%s", b)
 	}
+	s.composer()
+	s.type_("anything else?\r") // the Chat goes on
+	s.expect("  still here")
+	s.mark = len(s.out.String()) // the composer back after the turn, not the one typed in
+	s.composer()
 	s.quitChat(f)
+	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
+	recs, _ := ledger.Replay(logs[0])
+	delivered := 0
+	for _, r := range recs {
+		if r.Type == run.RecDelivered {
+			delivered++
+		}
+	}
+	if delivered != 1 {
+		t.Errorf("%d Delivered records in the Chat log, want 1", delivered)
+	}
 }
 
 // An ask shows its whole command and takes y or n; a command too long to
@@ -305,6 +324,16 @@ func TestHomeChatVerifiesInTheBackground(t *testing.T) {
 	s.expect("verifying…")
 	s.composer()
 	s.type_("/apply\r")
+	s.expect("newer edits, unchecked: [a] apply verified  [w] wait")
+	s.type_("w")
+	s.expect("waiting: nothing delivered")
+	s.composer()
+	if _, err := os.Stat(filepath.Join(f.repo, "more.go")); err == nil {
+		t.Error("[w] applied something")
+	}
+	s.type_("/apply\r")
+	s.expect("newer edits, unchecked: [a] apply verified  [w] wait")
+	s.type_("a")
 	s.expect("a newer cut is still verifying")
 	s.expect("Applied")
 	s.composer()
@@ -388,4 +417,229 @@ func TestHomeChatQuitDuringVerify(t *testing.T) {
 	s.type_("\x03") // cancels the verification; the next quits at once
 	s.quitChat(f)
 	checkGone(t, pids)
+}
+
+// A Verdict shows its diff inline when it is 20 lines or fewer, dim and
+// indented; a longer one only behind /diff.
+func TestHomeChatInlineDiff(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	var long strings.Builder
+	long.WriteString(fixed)
+	for i := range 25 {
+		long.WriteString("// long line " + strconv.Itoa(i) + "\n")
+	}
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "fixed Add", Writes: []multiturn.File{{Path: "add.go", Content: fixed}}},
+		{Reply: "and long", Writes: []multiturn.File{{Path: "add.go", Content: long.String()}}},
+	}}, nil)
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.expect("    +func Add(a, b int) int { return a + b }")
+	s.composer()
+	s.type_("and long\r")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.composer()
+	if out := s.out.String(); strings.Contains(out, "long line 3") {
+		t.Errorf("a diff over 20 lines showed inline:\n%s", out)
+	}
+	s.quitChat(f)
+}
+
+// A protected write's Tamper Gate never shows mid-turn: the cut waits
+// for you, and /apply opens its Gate. Rejecting there applies nothing;
+// the next cut, still gated by that Tamper event, is acknowledged at
+// /apply and applied.
+func TestHomeChatTamperGateAtApply(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "tampered", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "add_test.go", Content: "package fx\n"}}},
+		{Reply: "again", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// again\n"}}},
+	}}, nil)
+	s.composer()
+	s.type_("weaken the test\r")
+	s.expect("reverted add_test.go")
+	s.expect("oge › … Waiting for you: the tamper Gate · /apply")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("acknowledge")
+	s.type_("reject the tests stay\r")
+	s.expect("oge › ✗ Rejected")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); strings.Contains(string(b), "a + b") {
+		t.Fatal("a rejected Tamper Gate applied the cut")
+	}
+	s.type_("once more\r")
+	s.expect("oge › … Waiting for you: the tamper Gate · /apply")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("acknowledge")
+	s.type_("acknowledge the revert is right\r")
+	s.expect("oge › ✓ Accepted")
+	s.expect("oge › ✓ Applied ")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "// again") {
+		t.Errorf("the acknowledged cut wasn't applied:\n%s", b)
+	}
+	s.quitChat(f)
+}
+
+// An Ambiguous file's Gate shows at /apply: promoting every file keeps
+// the Verdict and applies it; dropping one re-cuts without it, which is
+// checked again before it is applied.
+func TestHomeChatAmbiguousGateAtApply(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	for _, c := range []struct {
+		name, choice string
+		kept         bool
+	}{{"keep", "p", true}, {"drop", "d", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+				{Reply: "and notes", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "extra.go", Content: "package fx\n"}}},
+				{Reply: "noted", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// two\n"}}},
+			}}, nil)
+			s.composer()
+			s.type_("fix Add\r")
+			s.expect("oge › … Waiting for you: the ")
+			s.composer()
+			s.type_("/apply\r")
+			s.expect("extra.go")
+			s.type_(c.choice + "\r")
+			s.expect("oge › ✓ Accepted")
+			s.expect("oge › ✓ Applied ")
+			s.composer()
+			if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "a + b") {
+				t.Errorf("the cut wasn't applied:\n%s", b)
+			}
+			if _, err := os.Stat(filepath.Join(f.repo, "extra.go")); (err == nil) != c.kept {
+				t.Errorf("extra.go applied: %v, want %v", err == nil, c.kept)
+			}
+			// The next cut applies on the reviewed one, which only its own
+			// Run's repository holds.
+			s.type_("note it\r")
+			gated := false
+			for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+				out := s.out.String()[s.mark:]
+				if gated = strings.Contains(out, "… Waiting for you"); gated || strings.Contains(out, "✓ Accepted ·") {
+					break
+				}
+				if time.Since(start) > time.Minute {
+					t.Fatal("the next cut never got its Verdict")
+				}
+			}
+			s.composer()
+			s.type_("/apply\r")
+			if gated {
+				s.expect("extra.go")
+				s.type_(c.choice + "\r")
+			}
+			s.expect("oge › ✓ Applied ")
+			s.composer()
+			if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); string(b) != fixed+"\n// two\n" {
+				t.Errorf("add.go after the next apply: %q", b)
+			}
+			if out := s.out.String(); strings.Contains(out, "isn't in Run") {
+				t.Errorf("the next apply was refused:\n%s", out)
+			}
+			s.quitChat(f)
+		})
+	}
+}
+
+// A second /apply merges on the cut last applied, not the Snapshot: a
+// later cut undoing part of the first one's edit lands exactly.
+func TestHomeChatSecondApplyMergesOnTheLast(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "fixed and noted", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// a note\n"}}},
+		{Reply: "note gone", Writes: []multiturn.File{{Path: "add.go", Content: fixed}}},
+	}}, nil)
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("oge › ✓ Accepted")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("oge › ✓ Applied ")
+	s.composer()
+	s.type_("drop the note\r")
+	s.expect("oge › ✓ Accepted")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("oge › ✓ Applied ")
+	s.expect("  1 file: add.go")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); string(b) != fixed {
+		t.Errorf("add.go is %q, want the second cut's exactly", b)
+	}
+	s.quitChat(f)
+}
+
+// A slash command typed during a turn never reaches the agent: it waits
+// in the composer for the turn to end.
+func TestHomeChatSlashWaitsForTheTurn(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "working on it", Hold: true},
+	}}, nil)
+	s.composer()
+	s.type_("long job\r")
+	s.expect("working on it")
+	s.type_("/apply\r")
+	s.expect("/apply: wait for the turn to finish")
+	s.type_("\x1b")
+	s.expect("interrupted")
+	s.composer()
+	if out := s.out.String(); strings.Contains(out, "message queued") {
+		t.Errorf("/apply was sent as a message:\n%s", out)
+	}
+	s.type_("\x15") // clear the composer, for quitChat
+	s.quitChat(f)
+}
+
+// A Gate decided at /apply whose cut a newer turn's cut supersedes while
+// it is checked again delivers nothing.
+func TestHomeChatSupersededGateDeliversNothing(t *testing.T) {
+	t.Parallel()
+	mark := filepath.Join(t.TempDir(), "armed")
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "with notes", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "notes.txt", Content: "notes\n"}}},
+		{Reply: "and more", Writes: []multiturn.File{{Path: "more.go", Content: "package fx\n"}}},
+	}}, func(f *runFixture) {
+		hold := `if [ -f "` + mark + `" ] && [ ! -f more.go ]; then touch "` + mark + `.held"; while :; do sleep 0.1; done; fi; go test -json ./...`
+		writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte("schema = 1\n[project]\ntest_globs = [\"**/*_test.go\"]\noutput_globs = [\"**/*.go\"]\n[[check.commands]]\nrun = '"+hold+"'\nreport = \"go-test-json\"\n"))
+	})
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("oge › … Waiting for you: the ")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("notes.txt")
+	writeFile(t, mark, nil)
+	s.type_("d\r")
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(mark + ".held"); err == nil {
+			break
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("the Recheck never held")
+		}
+	}
+	s.composer()
+	s.type_("and more\r")
+	s.expect("  and more")
+	s.expect("oge › … Waiting for you: the ")
+	s.composer()
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); strings.Contains(string(b), "a + b") {
+		t.Error("the superseded cut's Gate delivered it")
+	}
+	if out := s.out.String(); strings.Contains(out, "Applied") {
+		t.Errorf("something was applied:\n%s", out)
+	}
+	s.quitChat(f)
 }

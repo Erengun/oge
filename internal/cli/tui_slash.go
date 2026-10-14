@@ -433,6 +433,9 @@ func deliverSlash(key, cli string) func(*home, []string) (tea.Cmd, string) {
 				h.thread = nil
 			}
 			return h.delivered(cli, args), ""
+		case (cli == "apply" || cli == "branch") && h.verify != nil && h.verify.gate != nil:
+			// The newest cut waits at its Gate: delivered only through it.
+			return h.openCutGate(key, name), ""
 		case h.last != nil:
 			return h.act(key, name), ""
 		case h.verify != nil:
