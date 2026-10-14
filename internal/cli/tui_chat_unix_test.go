@@ -500,6 +500,7 @@ func TestHomeChatAmbiguousGateAtApply(t *testing.T) {
 			t.Parallel()
 			s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
 				{Reply: "and notes", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "extra.go", Content: "package fx\n"}}},
+				{Reply: "noted", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// two\n"}}},
 			}}, nil)
 			s.composer()
 			s.type_("fix Add\r")
@@ -516,6 +517,33 @@ func TestHomeChatAmbiguousGateAtApply(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(f.repo, "extra.go")); (err == nil) != c.kept {
 				t.Errorf("extra.go applied: %v, want %v", err == nil, c.kept)
+			}
+			// The next cut applies on the reviewed one, which only its own
+			// Run's repository holds.
+			s.type_("note it\r")
+			gated := false
+			for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+				out := s.out.String()[s.mark:]
+				if gated = strings.Contains(out, "… Waiting for you"); gated || strings.Contains(out, "✓ Accepted ·") {
+					break
+				}
+				if time.Since(start) > time.Minute {
+					t.Fatal("the next cut never got its Verdict")
+				}
+			}
+			s.composer()
+			s.type_("/apply\r")
+			if gated {
+				s.expect("extra.go")
+				s.type_(c.choice + "\r")
+			}
+			s.expect("oge › ✓ Applied ")
+			s.composer()
+			if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); string(b) != fixed+"\n// two\n" {
+				t.Errorf("add.go after the next apply: %q", b)
+			}
+			if out := s.out.String(); strings.Contains(out, "isn't in Run") {
+				t.Errorf("the next apply was refused:\n%s", out)
 			}
 			s.quitChat(f)
 		})

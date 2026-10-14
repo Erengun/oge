@@ -70,6 +70,7 @@ type chatPrep struct {
 // cutMark is a cut whose Run reached the walk: the next cut follows it.
 type cutMark struct {
 	run    string
+	dir    string // its Run's directory
 	commit string
 	turn   int
 	prev   *cutMark // the cut it follows
@@ -263,7 +264,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	case ctx.Err() != nil && !verdict, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
 	default:
 		c.supersedeMu.Lock()
-		c.lastCut = &cutMark{run: res.ID, commit: head, turn: to, prev: c.lastCut}
+		c.lastCut = &cutMark{run: res.ID, dir: res.Dir, commit: head, turn: to, prev: c.lastCut}
 		if c.cuts == nil {
 			c.cuts = map[string]*cutMark{}
 		}

@@ -30,7 +30,7 @@ func (c *Chat) Delivered(run, how, rev string) error {
 		c.delivered = m.turn
 	}
 	if ok && how == "apply" {
-		c.applied = rev
+		c.applied, c.appliedRun = rev, m.dir
 	}
 	c.supersedeMu.Unlock()
 	if !ok {
@@ -43,11 +43,12 @@ func (c *Chat) Delivered(run, how, rev string) error {
 }
 
 // Applied is the commit last applied to the user's tree from this Chat,
-// "" before the first apply.
-func (c *Chat) Applied() string {
+// "" before the first apply, and the directory of the Run whose
+// repository holds it.
+func (c *Chat) Applied() (rev, runDir string) {
 	c.supersedeMu.Lock()
 	defer c.supersedeMu.Unlock()
-	return c.applied
+	return c.applied, c.appliedRun
 }
 
 // Deliverable refuses delivering the cut run when its turns since the

@@ -361,13 +361,14 @@ func banner(w io.Writer, r *delivery.Run) {
 }
 
 func applyCommand(env Env, r *delivery.Run, root string, c delivery.Choice) int {
-	code, _ := applyOnto(env, r, root, c, "")
+	code, _ := applyOnto(env, r, root, c, delivery.Base{}, false)
 	return code
 }
 
-// applyOnto is applyCommand merging on base ("" is the Snapshot), and
-// what it applied.
-func applyOnto(env Env, r *delivery.Run, root string, c delivery.Choice, base string) (int, *delivery.Applied) {
+// applyOnto is applyCommand merging on base (the zero Base is the
+// Snapshot), and what it applied; inChat, its hints are the Chat's slash
+// commands.
+func applyOnto(env Env, r *delivery.Run, root string, c delivery.Choice, base delivery.Base, inChat bool) (int, *delivery.Applied) {
 	if code := authorize(env, r, c, "apply"); code != ExitOK {
 		return code, nil
 	}
@@ -375,11 +376,19 @@ func applyOnto(env Env, r *delivery.Run, root string, c delivery.Choice, base st
 	var conflict *delivery.ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		fmt.Fprintf(env.Stderr, "oge: not applied: your working tree changed since the Snapshot in a way Candidate %s can't land on. Nothing was written.\n", delivery.Short(r.Candidate))
+		since := "the Snapshot"
+		if base.Rev != "" {
+			since = "the last apply"
+		}
+		fmt.Fprintf(env.Stderr, "oge: not applied: your working tree changed since %s in a way Candidate %s can't land on. Nothing was written.\n", since, delivery.Short(r.Candidate))
 		for _, c := range conflict.Conflicts {
 			fmt.Fprintf(env.Stderr, "  %s\n", clean(c))
 		}
-		fmt.Fprintf(env.Stderr, "Commit, stash or undo those edits and run oge apply %s again, or take it as a branch: oge branch %s\n", r.ID, r.ID)
+		if inChat {
+			fmt.Fprintln(env.Stderr, "Commit, stash or undo those edits and /apply again, or take it as a branch: /branch")
+		} else {
+			fmt.Fprintf(env.Stderr, "Commit, stash or undo those edits and run oge apply %s again, or take it as a branch: oge branch %s\n", r.ID, r.ID)
+		}
 		return ExitRefused, nil
 	case err != nil:
 		return deliveryFailed(env, err), nil

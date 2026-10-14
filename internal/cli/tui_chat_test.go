@@ -136,3 +136,21 @@ func TestCutEndedDecidesFromTheRun(t *testing.T) {
 		t.Errorf("a superseded cut showed: last %v, %q", h.last, h.scroll)
 	}
 }
+
+// A command in the composer when a question takes it is never queued for
+// the agent: it is back in the composer when the turn ends.
+func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
+	a := agent.NewAsk("AskUserQuestion", "", "", func(agent.Answer) error { return nil })
+	a.Questions = []agent.AskQuestion{{Text: "Which?"}}
+	h := &home{st: newStyles(false), turn: &chatTurn{asks: []*agent.Ask{a}},
+		resolve: func(*setupState) (*resolved, []string) { return nil, nil }}
+	h.comp = h.composer()
+	h.comp.set("/apply")
+	h.showAsk()
+	if len(h.turn.queued) != 0 || h.comp.text() != "" {
+		t.Fatalf("queued %q, composer %q", h.turn.queued, h.comp.text())
+	}
+	if queued := h.endTurn(); len(queued) != 0 || h.comp.text() != "/apply" {
+		t.Errorf("after the turn: queued %q, composer %q", queued, h.comp.text())
+	}
+}

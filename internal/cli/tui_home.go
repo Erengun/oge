@@ -1664,6 +1664,15 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			}
 			c := hc.get()
 			l.apply = func() string { return h.chatApply(env, root, c, res) }
+			branch := l.branch
+			l.branch = func(name string) string {
+				// A branch moves the Task's window too: never past a late
+				// Tamper event (as apply).
+				if msg, ok := h.chatDeliverable(c, res); !ok {
+					return msg
+				}
+				return branch(name)
+			}
 			l.delivered = func(how, out string, code int) string {
 				return h.chatDelivered(c, res, how, out, code)
 			}

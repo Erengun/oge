@@ -40,8 +40,8 @@ func TestDeliveredMovesTheTask(t *testing.T) {
 	if len(recs) != 1 || recs[0]["run"] != first.ID || recs[0]["turn"] != float64(1) || recs[0]["how"] != "apply" {
 		t.Errorf("Delivered records %v", recs)
 	}
-	if c.Applied() != first.Candidate {
-		t.Errorf("Applied %q, want the first cut's Candidate", c.Applied())
+	if rev, dir := c.Applied(); rev != first.Candidate || dir != first.Dir {
+		t.Errorf("Applied %q in %q, want the first cut's Candidate in its Run", rev, dir)
 	}
 }
 

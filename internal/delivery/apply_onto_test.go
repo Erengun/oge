@@ -102,7 +102,7 @@ func TestApplyOntoRefusesAMissingBase(t *testing.T) {
 		os.WriteFile(filepath.Join(ws, "a.txt"), []byte("A\n"), 0o644)
 	})
 	r.Outcome = "Accepted"
-	_, err := ApplyOnto(r, user, Choice{}, strings.Repeat("ab", 20))
+	_, err := ApplyOnto(r, user, Choice{}, Base{Rev: strings.Repeat("ab", 20)})
 	if err == nil || !strings.Contains(err.Error(), "oge branch") {
 		t.Fatalf("err %v, want a refusal pointing to a branch", err)
 	}

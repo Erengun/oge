@@ -126,6 +126,7 @@ type chatTurn struct {
 	// quits.
 	stopped bool
 	queued  []string // messages typed and sent during the turn
+	slash   string   // a command typed before a question took the composer
 }
 
 // chatVerify is a cut verifying in the background.
@@ -304,7 +305,13 @@ func (h *home) showAsk() {
 	h.turn.answers = nil
 	if a := h.ask(); a != nil && a.Questions != nil {
 		if text := strings.TrimSpace(h.comp.text()); text != "" {
-			h.turn.queued = append(h.turn.queued, text)
+			if _, _, _, ok := parseSlash(text); ok {
+				// A command never reaches the agent: it is back in the
+				// composer when the turn ends.
+				h.turn.slash = text
+			} else {
+				h.turn.queued = append(h.turn.queued, text)
+			}
 			h.comp = h.composer()
 		}
 	}
@@ -517,6 +524,9 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 // turn and not yet sent; it returns the messages queued meanwhile.
 func (h *home) endTurn() []string {
 	text, queued := h.comp.text(), h.turn.queued
+	if strings.TrimSpace(text) == "" {
+		text = h.turn.slash
+	}
 	h.turn = nil
 	h.reopen()
 	if strings.TrimSpace(text) != "" {
@@ -828,6 +838,23 @@ func (h *home) chatDelivered(c *run.Chat, res *run.Result, how, out string, code
 	return out
 }
 
+// chatDeliverable refuses delivering the cut res when a Tamper event on
+// its turns was recorded after it was verified, and asks for the cut
+// again, whose Gate shows it.
+func (h *home) chatDeliverable(c *run.Chat, res *run.Result) (string, bool) {
+	if c == nil {
+		return "", true
+	}
+	err := c.Deliverable(res.ID, res.Dir)
+	if err == nil {
+		return "", true
+	}
+	if errors.Is(err, run.ErrTamperAfterCut) {
+		h.recut = true
+	}
+	return h.ogeLine("✗ not delivered: " + clean(err.Error())), false
+}
+
 // chatApply is /apply of the cut res: summed up in three lines (the
 // outcome, the files written, the checks) with the Receipt behind
 // /receipt, and marked delivered (D7). After the Chat's first apply it
@@ -839,20 +866,17 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 	if err != nil {
 		return "oge: " + clean(err.Error())
 	}
-	base := ""
+	var base delivery.Base
 	if c != nil {
-		if err := c.Deliverable(res.ID, res.Dir); err != nil {
-			if errors.Is(err, run.ErrTamperAfterCut) {
-				h.recut = true
-			}
-			return h.ogeLine("✗ not applied: " + clean(err.Error()))
+		if msg, ok := h.chatDeliverable(c, res); !ok {
+			return msg
 		}
-		base = c.Applied()
+		base.Rev, base.From = c.Applied()
 	}
 	var b strings.Builder
 	q := env
 	q.Stdout, q.Stderr = &b, &b
-	code, a := applyOnto(q, r, root, delivery.Choice{}, base)
+	code, a := applyOnto(q, r, root, delivery.Choice{}, base, true)
 	if code != ExitOK || a == nil {
 		return strings.TrimSuffix(b.String(), "\n")
 	}

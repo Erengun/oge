@@ -508,15 +508,20 @@ type Applied struct {
 // never touching the index, HEAD or any branch. The Delivery is recorded
 // before the first write.
 func Apply(r *Run, target string, c Choice) (*Applied, error) {
-	return ApplyOnto(r, target, c, "")
+	return ApplyOnto(r, target, c, Base{})
 }
+
+// Base is what a Chat's apply merges on: Rev, the commit last applied,
+// and From, the directory of the Run whose repository holds it. The zero
+// Base is the Snapshot.
+type Base struct{ Rev, From string }
 
 // ApplyOnto is Apply three-way on base in place of the Snapshot: a Chat's
 // second apply onto the working tree that holds the first (ADR-0015, as
 // amended by #261). base is the commit last applied, and the Run's
 // repository must hold it: otherwise the apply is refused, for a branch
 // instead. "" is the Snapshot.
-func ApplyOnto(r *Run, target string, c Choice, base string) (*Applied, error) {
+func ApplyOnto(r *Run, target string, c Choice, base Base) (*Applied, error) {
 	if err := Authorize(r, c.Outcome); err != nil {
 		return nil, err
 	}
@@ -533,15 +538,25 @@ func ApplyOnto(r *Run, target string, c Choice, base string) (*Applied, error) {
 	}
 	defer unlock()
 	from := r.Snapshot
-	if base != "" {
-		if _, err := r.repo().TreeOf(base); err != nil {
-			return nil, refuse("the Candidate last applied (%s) isn't in Run %s, so its changes can't be merged on it; take it as a branch: oge branch %s", Short(base), r.ID, r.ID)
+	if base.Rev != "" {
+		if _, err := r.repo().TreeOf(base.Rev); err != nil && base.From != "" {
+			// A resolved Candidate or a hold-back's commit lives only in
+			// its own Run's repository: taken from there.
+			_ = r.repo().Import(filepath.Join(base.From, "repo.git"), base.Rev, "refs/oge/applied")
 		}
-		from = base
+		if _, err := r.repo().TreeOf(base.Rev); err != nil {
+			return nil, refuse("the Candidate last applied (%s) isn't in Run %s, so its changes can't be merged on it; take it as a branch: oge branch %s", Short(base.Rev), r.ID, r.ID)
+		}
+		from = base.Rev
 	}
 	p, err := planApply(r, target, from, h.Rev)
 	if err != nil {
 		return nil, err
+	}
+	if from != r.Snapshot {
+		for i, why := range p.Conflicts {
+			p.Conflicts[i] = strings.ReplaceAll(why, "since the Snapshot", "since the last apply")
+		}
 	}
 	if len(p.Conflicts) > 0 {
 		return &Applied{Plan: p, Held: h}, &ConflictError{Conflicts: p.Conflicts}
@@ -551,7 +566,7 @@ func ApplyOnto(r *Run, target string, c Choice, base string) (*Applied, error) {
 	}
 	note := map[string]any{"kind": "apply", "candidate": r.Candidate, "outcome": r.Outcome, "flag": c.Outcome,
 		"files": p.Writes(), "merged": p.Merged, "target": target}
-	if base != "" {
+	if base.Rev != "" {
 		note["base"] = from // what the change was merged on: the Candidate last applied
 	}
 	if err := record(r, h.note(note)); err != nil {
