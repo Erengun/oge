@@ -103,7 +103,9 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		env = append(env, "GOCACHE="+spec.Cache)
 	}
 	prof := newProfile(spec)
-	cmd := exec.Command(path, "app-server")
+	// notify runs a command outside the sandbox at a turn's end: pinned
+	// empty for the process and, in config, for the thread.
+	cmd := exec.Command(path, "app-server", "-c", "notify=[]")
 	cmd.Dir, cmd.Env = spec.Workspace, env
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -182,7 +184,7 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	if l := limits.RateLimits; l != nil && l.Reached != nil {
 		return fmt.Errorf("codex's usage limit is reached (%s); run oge again once it resets", clip(*l.Reached))
 	}
-	if err := projectMCP(s.prof.spec.Workspace); err != nil {
+	if err := projectConfig(s.prof.spec.Workspace); err != nil {
 		return err
 	}
 	// Codex's MCP servers would run as its children, outside the sandbox
@@ -239,11 +241,14 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	return nil
 }
 
-// projectMCP fails closed when the Workspace's project config declares
-// MCP servers: config/read leaves an untrusted project's layer out, and
+// projectConfig fails closed when the Workspace's project config sets
+// anything. config/read leaves an untrusted project's layer out, and
 // thread/start then trusts the Workspace and loads it (checked live on
-// 0.162.1), too late to turn them off.
-func projectMCP(ws string) error {
+// 0.162.1), too late to undo: mcp_servers would run servers outside the
+// sandbox, notify a command, model_providers another host. No key is
+// known to be harmless there, so none is allowed; profiles.* are keys
+// too.
+func projectConfig(ws string) error {
 	b, err := os.ReadFile(filepath.Join(ws, ".codex", "config.toml"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -251,19 +256,17 @@ func projectMCP(ws string) error {
 	if err != nil {
 		return fmt.Errorf("the repository's .codex/config.toml can't be read: %w", err)
 	}
-	var cfg struct {
-		MCP map[string]any `toml:"mcp_servers"`
-	}
+	var cfg map[string]any
 	if _, err := toml.Decode(string(b), &cfg); err != nil {
-		return errors.New("the repository's .codex/config.toml can't be parsed, so Öge can't tell whether it declares MCP servers")
+		return errors.New("the repository's .codex/config.toml can't be parsed, so Öge can't tell what it would change")
 	}
-	if len(cfg.MCP) > 0 {
-		names := make([]string, 0, len(cfg.MCP))
-		for n := range cfg.MCP {
-			names = append(names, n)
+	if len(cfg) > 0 {
+		keys := make([]string, 0, len(cfg))
+		for k := range cfg {
+			keys = append(keys, k)
 		}
-		sort.Strings(names)
-		return fmt.Errorf("the repository's .codex/config.toml declares MCP servers (%s), which would run outside Öge's sandbox; codex can't run here until they're removed", clip(strings.Join(names, ", ")))
+		sort.Strings(keys)
+		return fmt.Errorf("the repository's .codex/config.toml sets %s, which Codex would load outside Öge's control (MCP servers, notify commands or model providers run outside the sandbox); codex can't run here until it's emptied", clip(strings.Join(keys, ", ")))
 	}
 	return nil
 }

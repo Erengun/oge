@@ -570,6 +570,7 @@ func TestSandboxSelfTestExitCodes(t *testing.T) {
 		{"3", "", "", "couldn't read the Workspace"},
 		{"4", "/private/dir", "", "let a command read /private/dir"},
 		{"5", ws + "/.git/HEAD", "", "let a command write"},
+		{"6", ws + "/.codex", "", "already exists"},
 		{"1", "boom " + secret, "", "codex sandbox failed"},
 		{"0", "", "5s", "didn't finish"},
 	} {
@@ -651,17 +652,25 @@ func TestProjectMCPConfigFailsClosed(t *testing.T) {
 	script := probeThen(t, "command_approval.jsonl")
 	asImplementer(t, script)
 	_, err := h.open(script, agent.LaunchSpec{})
-	if err == nil || !strings.Contains(err.Error(), "declares MCP servers (proj)") {
+	if err == nil || !strings.Contains(err.Error(), "sets mcp_servers") {
 		t.Fatalf("Open = %v", err)
 	}
 	if len(h.sent()["thread/start"]) != 0 {
 		t.Error("a thread started despite the project's MCP servers")
 	}
-	for body, bad := range map[string]bool{"model = \"x\"\n": false, "mcp_servers.a.command = \"x\"\n": true, "not toml [": true} {
+	for body, bad := range map[string]bool{
+		"":                                   false,
+		"# only a comment\n":                 false,
+		"notify = [\"sh\", \"-c\", \"x\"]\n": true,
+		"[model_providers.p]\nbase_url = \"x\"\n":       true,
+		"[profiles.x.mcp_servers.a]\ncommand = \"x\"\n": true,
+		"model = \"x\"\n": true,
+		"not toml [":      true,
+	} {
 		dir := t.TempDir()
 		_ = os.Mkdir(filepath.Join(dir, ".codex"), 0o700)
 		_ = os.WriteFile(filepath.Join(dir, ".codex", "config.toml"), []byte(body), 0o600)
-		if err := projectMCP(dir); (err != nil) != bad {
+		if err := projectConfig(dir); (err != nil) != bad {
 			t.Errorf("%q: %v", body, err)
 		}
 	}
@@ -719,11 +728,21 @@ func TestAuthDenyNeedsAnAbsoluteHome(t *testing.T) {
 func TestCodexProbe(t *testing.T) {
 	dir := t.TempDir()
 	p := newProfile(agent.LaunchSpec{Workspace: dir})
-	if got := p.codexProbe(); got != filepath.Join(dir, ".codex") {
-		t.Errorf("no .codex: probe %s", got)
+	if got, err := p.codexProbe(); err != nil || got != filepath.Join(dir, ".codex") {
+		t.Errorf("no .codex: probe %s, %v", got, err)
 	}
 	_ = os.Mkdir(filepath.Join(dir, ".codex"), 0o700)
-	if got := p.codexProbe(); got != filepath.Join(dir, ".codex", "oge-self-test") {
-		t.Errorf("with .codex: probe %s", got)
+	a, _ := p.codexProbe()
+	b, _ := p.codexProbe()
+	if filepath.Dir(a) != filepath.Join(dir, ".codex") || a == b {
+		t.Errorf("with .codex: probes %s and %s, want unique names inside it", a, b)
+	}
+	file := t.TempDir()
+	_ = os.WriteFile(filepath.Join(file, ".codex"), nil, 0o600)
+	if _, err := newProfile(agent.LaunchSpec{Workspace: file}).codexProbe(); err == nil {
+		t.Error("a .codex file was probed")
+	}
+	if err := sandboxSelfTest(context.Background(), fakePath, os.Environ(), newProfile(agent.LaunchSpec{Workspace: file}), nil); err == nil || !strings.Contains(err.Error(), "plain directory") {
+		t.Errorf("self-test with a .codex file = %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package codex
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -82,6 +83,7 @@ func (p *profile) config() map[string]any {
 		"permissions":              map[string]any{profileName: p.perm},
 		"default_permissions":      profileName,
 		"shell_environment_policy": map[string]any{"ignore_default_excludes": false},
+		"notify":                   []any{},
 	}
 	if p.spec.Effort != "" {
 		c["model_reasoning_effort"] = p.spec.Effort
@@ -199,10 +201,12 @@ func (p *profile) check(e envelope) error {
 // selfTestScript reads $1 (the Workspace: the control, proving the
 // sandbox ran), must fail to append to $2 (the Workspace's .git, when
 // there is one; the append writes nothing), must fail to create the
-// directory $3 (in or as the Workspace's .codex; removed if it was
-// created), and must fail to read every further argument.
+// directory $3 (in or as the Workspace's .codex, which must not exist
+// yet; removed if it was created), and must fail to read every further
+// argument.
 const selfTestScript = `ls "$1" >/dev/null 2>&1 || exit 3
 if [ -n "$2" ]; then ( : >> "$2" ) 2>/dev/null && { echo "$2"; exit 5; }; fi
+[ -e "$3" ] || [ -L "$3" ] && { echo "$3"; exit 6; }
 mkdir "$3" 2>/dev/null && { rmdir "$3"; echo "$3"; exit 5; }
 shift 3
 for p in "$@"; do
@@ -244,14 +248,33 @@ func (p *profile) gitProbe() string {
 	return git
 }
 
-// codexProbe is a directory the self-test must fail to create: the
-// Workspace's .codex itself when there is none, else one inside it.
-func (p *profile) codexProbe() string {
-	dir := filepath.Join(p.spec.Workspace, ".codex")
-	if _, err := os.Lstat(dir); err != nil {
-		return dir
+// codexState is "absent" or "dir": the Workspace's .codex, which the
+// self-test probes. Anything else (a file, a symlink) fails closed.
+func (p *profile) codexState() (string, error) {
+	fi, err := os.Lstat(filepath.Join(p.spec.Workspace, ".codex"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "absent", nil
+	case err != nil:
+		return "", err
+	case !fi.IsDir():
+		return "", errors.New("the Workspace's .codex isn't a plain directory")
 	}
-	return filepath.Join(dir, "oge-self-test")
+	return "dir", nil
+}
+
+// codexProbe is a directory the self-test must fail to create: the
+// Workspace's .codex itself when there is none, else a uniquely named
+// one inside it.
+func (p *profile) codexProbe() (string, error) {
+	state, err := p.codexState()
+	dir := filepath.Join(p.spec.Workspace, ".codex")
+	if err != nil || state == "absent" {
+		return dir, err
+	}
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return filepath.Join(dir, "oge-self-test-"+hex.EncodeToString(b[:])), nil
 }
 
 // sandboxSelfTest proves, without a model, what thread/start can't show:
@@ -259,8 +282,12 @@ func (p *profile) codexProbe() string {
 // Workspace's .git and .codex (ADR-0018). It runs codex sandbox -P in its own
 // process group, bounded by selfTestTimeout.
 func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile, probes []string) error {
+	codexDir, err := p.codexProbe()
+	if err != nil {
+		return err
+	}
 	args := []string{"sandbox", "-c", "permissions." + profileName + "=" + inlineTOML(p.perm), "-P", profileName,
-		"-C", p.spec.Workspace, "--", "/bin/sh", "-c", selfTestScript, "oge-self-test", p.spec.Workspace, p.gitProbe(), p.codexProbe()}
+		"-C", p.spec.Workspace, "--", "/bin/sh", "-c", selfTestScript, "oge-self-test", p.spec.Workspace, p.gitProbe(), codexDir}
 	cmd := exec.Command(path, append(args, probes...)...)
 	var out bytes.Buffer
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = p.spec.Workspace, env, &out, &out
@@ -269,7 +296,6 @@ func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile,
 	}
 	done := make(chan error, 1)
 	go func() { done <- proc.Wait(cmd) }()
-	var err error
 	select {
 	case err = <-done:
 	case <-time.After(selfTestTimeout):
@@ -292,6 +318,8 @@ func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile,
 		return fmt.Errorf("the sandbox let a command read %s", last)
 	case errors.As(err, &ee) && ee.ExitCode() == 5:
 		return fmt.Errorf("the sandbox let a command write %s", last)
+	case errors.As(err, &ee) && ee.ExitCode() == 6:
+		return fmt.Errorf("the self-test's probe %s already exists, so it can't prove .codex is read-only", last)
 	}
 	return fmt.Errorf("codex sandbox failed (%v): %s", err, last)
 }
@@ -299,7 +327,11 @@ func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile,
 // selfTestKey is what a self-test result may be reused for: the same
 // binary and version, platform, profile, and paths probed (ADR-0018).
 func selfTestKey(path, version string, p *profile, probes []string) string {
-	b, _ := json.Marshal([]any{path, version, runtime.GOOS, runtime.GOARCH, p.perm, p.spec.Workspace, p.gitProbe(), p.codexProbe(), probes})
+	codexState, err := p.codexState()
+	if err != nil {
+		codexState = "unusable" // the self-test itself fails closed
+	}
+	b, _ := json.Marshal([]any{path, version, runtime.GOOS, runtime.GOARCH, p.perm, p.spec.Workspace, p.gitProbe(), codexState, probes})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
