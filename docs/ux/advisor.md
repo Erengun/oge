@@ -8,7 +8,7 @@ Status: design proposal for #282, not yet approved. The decisions D-A1…D-A6 ne
 
 ## Model
 
-A **Consultation** is one request for advice. It opens a **fresh, read-only advisor Session** in a disposable clone of the Chat's newest turn, gives it an Öge-built Briefing, collects one answer and closes it.
+A **Consultation** is one request for advice. It opens a **fresh, read-only advisor Session** in a disposable clone of the Chat's newest settled turn's commit (never a turn's in-flight edits), gives it an Öge-built Briefing, collects one answer and closes it.
 - There is no Stage, no Run and no standing agent. Nothing is opened, pre-warmed or paid for until a Consultation starts.
 - A Consultation lives in the Chat, between turns and cuts, like a turn does. It is recorded in the Chat log.
 - Advice reaches the implementer only as an **advice turn**: an Öge-authored turn in the live Session, like D5's feedback turn.
@@ -152,6 +152,7 @@ Slices 1 and 2 are the thin first slice: `/advise`, same vendor, fresh read-only
 2. **`/advise` and send to agent** (Sonnet).
    - The `advising…` status line, Esc to cancel, the advice block, and ↵ / e / esc.
    - `Chat.SendAdvice`: an Öge turn (`by=oge`, with the Consultation id) and a new manifest source. It is outside D5's budget and the Task.
+   - It is a third turn kind in `Chat.send`, next to the user's turn and the feedback turn. It neither checks nor increments `c.feedbacks`, because the automatic case (slice 4) fires exactly when that guard trips.
    - `AdviceSent`.
    - Lands the ADR-0022 note: advisor text is shown as a block, and QA text still never streams.
    - Depends on 1.
