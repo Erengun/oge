@@ -860,7 +860,7 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 	var first, note string
 	switch {
 	case p.Writes() == 0 && p.Already == 0:
-		return h.ogeLine("✗ nothing applied: everything " + clean(res.ID) + " changes is held back") + heldLines(a.Held)
+		return h.ogeLine("✗ nothing applied: everything "+clean(res.ID)+" changes is held back") + heldLines(a.Held)
 	case p.Writes() == 0:
 		first = "✓ " + clean(res.ID) + " is already in your working tree; nothing to change"
 	case p.Merged > 0:

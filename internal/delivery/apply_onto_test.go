@@ -81,7 +81,9 @@ func TestApplyOntoTakesAPartialRevert(t *testing.T) {
 func TestApplyOntoKeepsTheUsersRevert(t *testing.T) {
 	user, r, c1 := chatCuts(t, map[string]string{"a.txt": "1\n2\n3\n4\n5\n6\n7\n"},
 		func(ws string) { os.WriteFile(filepath.Join(ws, "a.txt"), []byte("ONE\n2\n3\n4\n5\n6\n7\n"), 0o644) },
-		func(ws string) { os.WriteFile(filepath.Join(ws, "a.txt"), []byte("ONE\n2\n3\n4\n5\n6\nSEVEN\n"), 0o644) })
+		func(ws string) {
+			os.WriteFile(filepath.Join(ws, "a.txt"), []byte("ONE\n2\n3\n4\n5\n6\nSEVEN\n"), 0o644)
+		})
 	os.WriteFile(filepath.Join(user, "a.txt"), []byte("1\n2\n3\n4\n5\n6\n7\n"), 0o644) // undone by hand
 	p := applyOnto(t, r, user, c1)
 	b, _ := os.ReadFile(filepath.Join(user, "a.txt"))

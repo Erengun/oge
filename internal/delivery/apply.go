@@ -120,7 +120,9 @@ func (p *Plan) Deletes() int {
 // tree ours, the Candidate theirs. Working-tree bytes meet working-tree
 // bytes, so the user's attributes (eol, filters, encodings) never come
 // into it.
-func PlanApply(r *Run, target string) (*Plan, error) { return planApply(r, target, r.Snapshot, r.Candidate) }
+func PlanApply(r *Run, target string) (*Plan, error) {
+	return planApply(r, target, r.Snapshot, r.Candidate)
+}
 
 // planApply is PlanApply delivering rev, the Candidate or the commit Hold
 // made of it, three-way on base: the Snapshot, or what was last applied.
