@@ -137,6 +137,8 @@ type harness struct {
 	tests int
 	// selfTest is what the faked self-test returns.
 	selfTest error
+	// prepare, when set, fills the Workspace before Open.
+	prepare func(ws string)
 }
 
 func (h *harness) open(script []rec, spec agent.LaunchSpec) (agent.Session, error) {
@@ -144,6 +146,9 @@ func (h *harness) open(script []rec, spec agent.LaunchSpec) (agent.Session, erro
 	h.ws = filepath.Join(dir, "ws")
 	if err := os.Mkdir(h.ws, 0o700); err != nil {
 		h.t.Fatal(err)
+	}
+	if h.prepare != nil {
+		h.prepare(h.ws)
 	}
 	// The recorded Workspace becomes a real one, as JSON escapes it.
 	quoted, _ := json.Marshal(h.ws)
@@ -630,10 +635,95 @@ func TestInterruptOnlyAKnownRunningTurn(t *testing.T) {
 func TestProfileTOML(t *testing.T) {
 	priv := filepath.Join(t.TempDir(), "private")
 	p := newProfile(agent.LaunchSpec{Workspace: ws, DenyRead: []string{priv}, Network: "off"})
-	got := toml(p.perm)
-	for _, want := range []string{`"extends"=":workspace"`, strconv.Quote(priv) + `="deny"`, `":workspace_roots"={".git"="read"}`} {
+	got := inlineTOML(p.perm)
+	for _, want := range []string{`"extends"=":workspace"`, strconv.Quote(priv) + `="deny"`, `":workspace_roots"={".codex"="read", ".git"="read"}`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("toml = %s, missing %s", got, want)
 		}
+	}
+}
+
+func TestProjectMCPConfigFailsClosed(t *testing.T) {
+	h := &harness{t: t, prepare: func(ws string) {
+		_ = os.Mkdir(filepath.Join(ws, ".codex"), 0o700)
+		_ = os.WriteFile(filepath.Join(ws, ".codex", "config.toml"), []byte("[mcp_servers.proj]\ncommand = \"/bin/cat\"\n"), 0o600)
+	}}
+	script := probeThen(t, "command_approval.jsonl")
+	asImplementer(t, script)
+	_, err := h.open(script, agent.LaunchSpec{})
+	if err == nil || !strings.Contains(err.Error(), "declares MCP servers (proj)") {
+		t.Fatalf("Open = %v", err)
+	}
+	if len(h.sent()["thread/start"]) != 0 {
+		t.Error("a thread started despite the project's MCP servers")
+	}
+	for body, bad := range map[string]bool{"model = \"x\"\n": false, "mcp_servers.a.command = \"x\"\n": true, "not toml [": true} {
+		dir := t.TempDir()
+		_ = os.Mkdir(filepath.Join(dir, ".codex"), 0o700)
+		_ = os.WriteFile(filepath.Join(dir, ".codex", "config.toml"), []byte(body), 0o600)
+		if err := projectMCP(dir); (err != nil) != bad {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+}
+
+func TestMCPToolCallFailsClosed(t *testing.T) {
+	h := &harness{t: t}
+	base := upToThread(t)
+	script := append(base, lines(t, base, "command_approval.jsonl", 8, 9)...)
+	thread := script[len(script)-2].Msg["params"].(map[string]any)["threadId"]
+	script = append(script, rec{Dir: "s2c", Msg: map[string]any{"method": "item/started", "params": map[string]any{
+		"threadId": thread, "item": map[string]any{"type": "mcpToolCall", "id": "m1", "server": "x", "tool": "read"}}}})
+	s, err := h.open(script, agent.LaunchSpec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_ = s.Send(agent.Turn{Text: "go"})
+	evs := untilSettled(t, s)
+	if last := evs[len(evs)-1]; !strings.Contains(last.Failure, "envelope_failed: the agent called an MCP tool") {
+		t.Errorf("settled = %+v", last)
+	}
+}
+
+func TestOpenReportsWhyItFailedClosed(t *testing.T) {
+	h := &harness{t: t}
+	script := probeThen(t, "command_approval.jsonl")
+	var start []rec
+	for _, r := range load(t, "mcp_servers.jsonl") {
+		if r.Proc == "S" {
+			start = append(start, r)
+		}
+	}
+	// An MCP server reports starting during the probe.
+	script = append(append(append([]rec{}, script[:2]...), start...), script[2:]...)
+	_, err := h.open(script, agent.LaunchSpec{})
+	if err == nil || !strings.Contains(err.Error(), "MCP server (dummy)") {
+		t.Fatalf("Open = %v, want the fail-closed reason", err)
+	}
+}
+
+func TestAuthDenyNeedsAnAbsoluteHome(t *testing.T) {
+	p := newProfile(agent.LaunchSpec{Workspace: ws})
+	before := len(p.perm["filesystem"].(map[string]any))
+	p.denyAuth("relative/codex")
+	p.denyAuth("")
+	if after := len(p.perm["filesystem"].(map[string]any)); after != before {
+		t.Errorf("a relative codex home was denied: %v", p.perm)
+	}
+	if home, err := os.UserHomeDir(); err == nil && p.perm["filesystem"].(map[string]any)[filepath.Join(home, ".codex", "auth.json")] != "deny" {
+		t.Error("~/.codex/auth.json isn't denied")
+	}
+}
+
+func TestCodexProbe(t *testing.T) {
+	dir := t.TempDir()
+	p := newProfile(agent.LaunchSpec{Workspace: dir})
+	if got := p.codexProbe(); got != filepath.Join(dir, ".codex") {
+		t.Errorf("no .codex: probe %s", got)
+	}
+	_ = os.Mkdir(filepath.Join(dir, ".codex"), 0o700)
+	if got := p.codexProbe(); got != filepath.Join(dir, ".codex", "oge-self-test") {
+		t.Errorf("with .codex: probe %s", got)
 	}
 }

@@ -40,14 +40,16 @@ type profile struct {
 func newProfile(spec agent.LaunchSpec) *profile {
 	fs := map[string]any{
 		// Writes under .git are not the implementer's, as in the claude
-		// policy: a read entry inside the writable root is enforced.
-		":workspace_roots": map[string]any{".git": "read"},
+		// policy, nor under .codex, whose config a later Session would
+		// load: a read entry inside the writable root is enforced.
+		":workspace_roots": map[string]any{".git": "read", ".codex": "read"},
 	}
 	for _, d := range spec.DenyRead {
 		fs[filepath.Clean(d)] = "deny"
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		fs[filepath.Join(home, ".ssh")] = "deny"
+		fs[filepath.Join(home, ".codex", "auth.json")] = "deny"
 	}
 	if spec.Cache != "" {
 		fs[filepath.Clean(spec.Cache)] = "write"
@@ -59,10 +61,12 @@ func newProfile(spec agent.LaunchSpec) *profile {
 	return &profile{spec: spec, perm: perm}
 }
 
-// denyAuth denies reading Codex's auth.json in home, the codexHome
-// initialize reported.
+// denyAuth also denies reading Codex's auth.json in home, the codexHome
+// Codex reports, when that is an absolute path.
 func (p *profile) denyAuth(home string) {
-	p.perm["filesystem"].(map[string]any)[filepath.Join(filepath.Clean(home), "auth.json")] = "deny"
+	if filepath.IsAbs(home) {
+		p.perm["filesystem"].(map[string]any)[filepath.Join(filepath.Clean(home), "auth.json")] = "deny"
+	}
 }
 
 // config is thread/start's config: the isolation recipe, which leaves
@@ -114,8 +118,8 @@ func (p *profile) hash() string {
 	return hex.EncodeToString(sum[:6])
 }
 
-// toml is v as an inline TOML value, every key quoted, for codex's -c.
-func toml(v any) string {
+// inlineTOML is v as an inline TOML value, every key quoted, for codex's -c.
+func inlineTOML(v any) string {
 	switch v := v.(type) {
 	case map[string]any:
 		keys := make([]string, 0, len(v))
@@ -125,7 +129,7 @@ func toml(v any) string {
 		sort.Strings(keys)
 		parts := make([]string, len(keys))
 		for i, k := range keys {
-			parts[i] = strconv.Quote(k) + "=" + toml(v[k])
+			parts[i] = strconv.Quote(k) + "=" + inlineTOML(v[k])
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case string:
@@ -194,11 +198,13 @@ func (p *profile) check(e envelope) error {
 
 // selfTestScript reads $1 (the Workspace: the control, proving the
 // sandbox ran), must fail to append to $2 (the Workspace's .git, when
-// there is one; the append writes nothing) and must fail to read every
-// further argument.
+// there is one; the append writes nothing), must fail to create the
+// directory $3 (in or as the Workspace's .codex; removed if it was
+// created), and must fail to read every further argument.
 const selfTestScript = `ls "$1" >/dev/null 2>&1 || exit 3
 if [ -n "$2" ]; then ( : >> "$2" ) 2>/dev/null && { echo "$2"; exit 5; }; fi
-shift 2
+mkdir "$3" 2>/dev/null && { rmdir "$3"; echo "$3"; exit 5; }
+shift 3
 for p in "$@"; do
   if [ -d "$p" ]; then ls "$p" >/dev/null 2>&1 && { echo "$p"; exit 4; }
   else head -c1 "$p" >/dev/null 2>&1 && { echo "$p"; exit 4; }; fi
@@ -238,13 +244,23 @@ func (p *profile) gitProbe() string {
 	return git
 }
 
+// codexProbe is a directory the self-test must fail to create: the
+// Workspace's .codex itself when there is none, else one inside it.
+func (p *profile) codexProbe() string {
+	dir := filepath.Join(p.spec.Workspace, ".codex")
+	if _, err := os.Lstat(dir); err != nil {
+		return dir
+	}
+	return filepath.Join(dir, "oge-self-test")
+}
+
 // sandboxSelfTest proves, without a model, what thread/start can't show:
 // that the same inline profile denies reading each probe and writing the
-// Workspace's .git (ADR-0018). It runs codex sandbox -P in its own
+// Workspace's .git and .codex (ADR-0018). It runs codex sandbox -P in its own
 // process group, bounded by selfTestTimeout.
 func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile, probes []string) error {
-	args := []string{"sandbox", "-c", "permissions." + profileName + "=" + toml(p.perm), "-P", profileName,
-		"-C", p.spec.Workspace, "--", "/bin/sh", "-c", selfTestScript, "oge-self-test", p.spec.Workspace, p.gitProbe()}
+	args := []string{"sandbox", "-c", "permissions." + profileName + "=" + inlineTOML(p.perm), "-P", profileName,
+		"-C", p.spec.Workspace, "--", "/bin/sh", "-c", selfTestScript, "oge-self-test", p.spec.Workspace, p.gitProbe(), p.codexProbe()}
 	cmd := exec.Command(path, append(args, probes...)...)
 	var out bytes.Buffer
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = p.spec.Workspace, env, &out, &out
@@ -283,7 +299,7 @@ func sandboxSelfTest(ctx context.Context, path string, env []string, p *profile,
 // selfTestKey is what a self-test result may be reused for: the same
 // binary and version, platform, profile, and paths probed (ADR-0018).
 func selfTestKey(path, version string, p *profile, probes []string) string {
-	b, _ := json.Marshal([]any{path, version, runtime.GOOS, runtime.GOARCH, p.perm, p.spec.Workspace, p.gitProbe(), probes})
+	b, _ := json.Marshal([]any{path, version, runtime.GOOS, runtime.GOARCH, p.perm, p.spec.Workspace, p.gitProbe(), p.codexProbe(), probes})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

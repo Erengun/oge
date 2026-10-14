@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/proc"
 	"github.com/erengun/oge/internal/redact"
@@ -151,11 +153,8 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 		return fmt.Errorf("codex %s is older than %s, the oldest Öge supports; update codex", clip(ver), MinVersion)
 	}
 	s.version = ver
-	home := init.CodexHome
-	if home == "" {
-		home = codexHome(env)
-	}
-	s.prof.denyAuth(home)
+	s.prof.denyAuth(init.CodexHome)
+	s.prof.denyAuth(codexHome(env))
 	if err := s.notify("initialized", map[string]any{}); err != nil {
 		return err
 	}
@@ -182,6 +181,9 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	}
 	if l := limits.RateLimits; l != nil && l.Reached != nil {
 		return fmt.Errorf("codex's usage limit is reached (%s); run oge again once it resets", clip(*l.Reached))
+	}
+	if err := projectMCP(s.prof.spec.Workspace); err != nil {
+		return err
 	}
 	// Codex's MCP servers would run as its children, outside the sandbox
 	// and without approvals: each one the effective config declares,
@@ -237,15 +239,44 @@ func (s *session) start(ctx context.Context, a *Adapter, path string, env []stri
 	return nil
 }
 
-// codexHome is $CODEX_HOME in env, else ~/.codex.
+// projectMCP fails closed when the Workspace's project config declares
+// MCP servers: config/read leaves an untrusted project's layer out, and
+// thread/start then trusts the Workspace and loads it (checked live on
+// 0.162.1), too late to turn them off.
+func projectMCP(ws string) error {
+	b, err := os.ReadFile(filepath.Join(ws, ".codex", "config.toml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the repository's .codex/config.toml can't be read: %w", err)
+	}
+	var cfg struct {
+		MCP map[string]any `toml:"mcp_servers"`
+	}
+	if _, err := toml.Decode(string(b), &cfg); err != nil {
+		return errors.New("the repository's .codex/config.toml can't be parsed, so Öge can't tell whether it declares MCP servers")
+	}
+	if len(cfg.MCP) > 0 {
+		names := make([]string, 0, len(cfg.MCP))
+		for n := range cfg.MCP {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("the repository's .codex/config.toml declares MCP servers (%s), which would run outside Öge's sandbox; codex can't run here until they're removed", clip(strings.Join(names, ", ")))
+	}
+	return nil
+}
+
+// codexHome is $CODEX_HOME in env; ~/.codex is always denied too, and
+// a relative one is ignored (denyAuth).
 func codexHome(env []string) string {
 	for i := len(env) - 1; i >= 0; i-- {
 		if v, ok := strings.CutPrefix(env[i], "CODEX_HOME="); ok && v != "" {
 			return v
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".codex")
+	return ""
 }
 
 const authBelongs = "; authentication belongs to Codex: fix it in codex itself (codex login), then run oge again"
@@ -284,6 +315,7 @@ type session struct {
 	last      string              // the turn's last agent message
 	usage     *agent.Event
 	dead      error
+	why       error // why Öge ended the Session, failing closed
 	closeOnce sync.Once
 }
 
@@ -344,6 +376,12 @@ func (s *session) call(ctx context.Context, method string, params, out any) erro
 func (s *session) exitErr(err error) error {
 	select {
 	case <-s.exited:
+		s.mu.Lock()
+		why := s.why
+		s.mu.Unlock()
+		if why != nil {
+			return why
+		}
 		return fmt.Errorf("codex exited%s", s.stderr.reason())
 	case <-time.After(2 * time.Second):
 		if err == nil {
@@ -642,9 +680,13 @@ func (s *session) notification(m message) {
 			Name string `json:"name"`
 		}
 		_ = json.Unmarshal(m.Params, &mp)
-		why := "envelope_failed: an MCP server (" + clip(mp.Name) + ") started outside Öge's sandbox"
-		s.kill(errors.New(why))
-		s.settle(agent.Event{Failure: why})
+		s.failClosed("an MCP server (" + clip(mp.Name) + ") started outside Öge's sandbox")
+		return
+	}
+	if m.Method == "item/started" && p.Item.Type == "mcpToolCall" {
+		// A tripwire: an MCP tool from anywhere (apps, plugins) runs
+		// outside the sandbox and never asks for approval.
+		s.failClosed("the agent called an MCP tool, which runs outside Öge's sandbox")
 		return
 	}
 	s.mu.Lock()
@@ -712,6 +754,19 @@ func (s *session) notification(m message) {
 		// Only the method is kept (ADR-0005, ADR-0018).
 		s.emit(agent.Event{Kind: agent.Unknown, Text: clip(m.Method)})
 	}
+}
+
+// failClosed ends the Session: the turn in flight fails, and Open and
+// Send report why.
+func (s *session) failClosed(what string) {
+	why := errors.New("envelope_failed: " + what)
+	s.mu.Lock()
+	if s.why == nil {
+		s.why = why
+	}
+	s.mu.Unlock()
+	s.kill(why)
+	s.settle(agent.Event{Failure: why.Error()})
 }
 
 // Policy rules, as recorded on each HostDecision; the same names as the
