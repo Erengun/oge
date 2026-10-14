@@ -147,7 +147,7 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	s.type_("y")
 	s.expect("allowed: Bash touch b.go")
 	s.expect("oge › ✗ Failed · 1 file")
-	s.expectAfter("  looking at it", "[ctrl+e] editor")
+	s.composerAfter("  looking at it")
 	s.type_("/apply\r")
 	s.expect("ended Failed")
 	if _, err := os.Stat(filepath.Join(f.repo, "b.go")); err == nil {
@@ -175,8 +175,31 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	s.quitChat(f)
 }
 
-// expectAfter waits until text is written after the last anchor: a
-// composer the feedback turn's end shows, not the one before it began.
+// composerAfter waits for the idle composer once anchor, a line a turn
+// prints, has been written: the composer that turn's end shows, never
+// the one before it began. The renderer may draw the composer before
+// the last printed line, or in the same write, and doesn't redraw an
+// idle one, so this reads the settled screen, as composer does: a turn
+// in flight, Öge's feedback turn too, shows "working…" there.
+func (s *homeSession) composerAfter(anchor string) {
+	s.t.Helper()
+	const hint = "[ctrl+e] editor"
+	last, since := "", time.Now()
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		out := s.out.String()
+		if !strings.Contains(out[s.mark:], anchor) {
+			continue
+		}
+		if cur := vtScreen(out); cur != last {
+			last, since = cur, time.Now()
+		} else if time.Since(since) >= 300*time.Millisecond && idleComposer(cur, hint) {
+			return
+		}
+	}
+	s.t.Fatalf("no idle composer after %q in:\n%s\nscreen:\n%s", anchor, s.out.String(), last)
+}
+
+// expectAfter waits until text is written after the last anchor.
 func (s *homeSession) expectAfter(anchor, text string) {
 	s.t.Helper()
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
@@ -254,7 +277,7 @@ func TestHomeChatFeedbackQueuesAndDrops(t *testing.T) {
 	s.type_("n")
 	s.expect("denied: Bash touch c.go")
 	s.expect("Öge → agent: Öge's Check failed on your last change")
-	s.expectAfter("  on it", "[ctrl+e] editor")
+	s.composerAfter("  on it")
 	// The Chat log: the feedback turn started only after the user's turn
 	// in flight had ended.
 	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
@@ -288,7 +311,7 @@ func TestHomeChatFeedbackQueuesAndDrops(t *testing.T) {
 	s.expect("oge › ✗ Failed · 1 file") // its feedback waits, then is dropped
 	s.type_("y")
 	s.expect("allowed: Bash touch d.go")
-	s.expectAfter("  after the newer cut", "[ctrl+e] editor")
+	s.composerAfter("  after the newer cut")
 	out := s.out.String()
 	from := strings.LastIndex(out, "allowed: Bash touch d.go")
 	if n := strings.Count(out[from:strings.LastIndex(out, "  after the newer cut")], "Öge → agent"); n != 1 {

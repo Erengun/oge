@@ -154,3 +154,13 @@ func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
 		t.Errorf("after the turn: queued %q, composer %q", queued, h.comp.text())
 	}
 }
+
+// Öge's feedback turn shows as busy as a user turn: the live area says
+// it is working, and Esc interrupts it.
+func TestFeedbackTurnShowsWorking(t *testing.T) {
+	h := &home{width: 80, height: 24, st: newStyles(false), turn: &chatTurn{oge: true, text: "Öge's Check failed on your last change: 1 failing."}}
+	h.comp = h.composer()
+	if v := h.view().Content; !strings.Contains(v, "working… · esc to interrupt") || strings.Contains(v, "[ctrl+e] editor") {
+		t.Errorf("the feedback turn's live area:\n%s", v)
+	}
+}
