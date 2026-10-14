@@ -147,11 +147,11 @@ func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
 	h.comp = h.composer()
 	h.comp.set("/apply")
 	h.showAsk()
-	if len(h.turn.queued) != 0 || h.comp.text() != "" {
+	if len(h.turn.queued) != 1 || h.comp.text() != "" {
 		t.Fatalf("queued %q, composer %q", h.turn.queued, h.comp.text())
 	}
-	if queued := h.endTurn(); len(queued) != 0 || h.comp.text() != "/apply" {
-		t.Errorf("after the turn: queued %q, composer %q", queued, h.comp.text())
+	if queued := h.endTurn(); len(queued) != 1 || queued[0] != "/apply" {
+		t.Errorf("after the turn: queued %q", queued)
 	}
 }
 
@@ -199,17 +199,46 @@ func TestQueuedMessagesStayVisible(t *testing.T) {
 	}
 }
 
-// Everything queued is one turn, in order with a blank line between; a
-// queued command runs and never reaches the agent.
+// Everything queued is one turn, in order with a blank line between.
 func TestQueuedMessagesAreOneTurn(t *testing.T) {
 	h := turnQueueHome()
-	h.turn.queued = []string{"first", "/nosuch", "second"}
+	h.turn.queued = []string{"first", "second"}
 	queued := h.endTurn()
 	h.submitQueued(queued)
 	if h.turn == nil || h.turn.text != "first\n\nsecond" {
 		t.Fatalf("turn %+v", h.turn)
 	}
-	if !strings.Contains(strings.Join(h.msg, "\n"), "/nosuch") {
-		t.Errorf("the command didn't run: %q", h.msg)
+}
+
+// A paste over the limit, queued during a turn, reaches the turn whole.
+func TestQueuedPasteIsKeptWhole(t *testing.T) {
+	h := turnQueueHome()
+	big := strings.Repeat("line of the paste\n", pasteLines+5)
+	h.comp.insertPaste(big)
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(h.turn.queued) != 1 || h.turn.queued[0] != strings.TrimSpace(big) {
+		t.Fatalf("queued %q", h.turn.queued)
+	}
+	h.submitQueued(h.endTurn())
+	if h.turn == nil || h.turn.text != strings.TrimSpace(big) {
+		t.Fatalf("turn text %v", h.turn)
+	}
+}
+
+// With a command queued, it runs and the messages wait, unsent, in the
+// composer with the draft: no turn starts under the command's prompt.
+func TestQueuedCommandHoldsTheMessages(t *testing.T) {
+	h := turnQueueHome()
+	h.turn.queued = []string{"first", "/nosuch", "!echo hi", "second"}
+	h.comp.set("draft")
+	h.submitQueued(h.endTurn())
+	if !strings.Contains(strings.Join(h.msg, "\n"), "not available") { // the shell line ran last
+		t.Errorf("the commands didn't run: %q", h.msg)
+	}
+	if h.turn != nil {
+		t.Fatalf("a turn started: %+v", h.turn)
+	}
+	if got, want := h.comp.text(), "first\n\nsecond\n\ndraft"; got != want {
+		t.Errorf("composer %q, want %q", got, want)
 	}
 }

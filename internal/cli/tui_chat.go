@@ -126,7 +126,6 @@ type chatTurn struct {
 	// quits.
 	stopped bool
 	queued  []string // messages typed and sent during the turn
-	slash   string   // a command typed before a question took the composer
 	// oge: the turn is Öge's feedback turn (D5).
 	oge bool
 	// feedback is a failing cut's feedback turn, held until this turn
@@ -257,8 +256,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			text, held := h.turn.text, h.turn.feedback != ""
-			h.endTurn()
-			h.comp.set(text) // kept, to send again
+			queued := h.endTurn()
+			// Kept, to send again, with what was queued and typed since.
+			h.comp.set(strings.TrimSpace(strings.Join(append(append([]string{text}, queued...), h.comp.text()), "\n\n")))
 			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
 			if held {
 				// The feedback turn waited on this one: say it goes unsent.
@@ -327,14 +327,8 @@ func (h *home) askFits(a *agent.Ask) bool {
 func (h *home) showAsk() {
 	h.turn.answers = nil
 	if a := h.ask(); a != nil && a.Questions != nil {
-		if text := strings.TrimSpace(h.comp.text()); text != "" {
-			if _, _, _, ok := parseSlash(text); ok {
-				// A command never reaches the agent: it is back in the
-				// composer when the turn ends.
-				h.turn.slash = text
-			} else {
-				h.turn.queued = append(h.turn.queued, text)
-			}
+		if text := strings.TrimSpace(h.comp.expanded()); text != "" {
+			h.enqueue(text)
 			h.comp = h.composer()
 		}
 	}
@@ -553,10 +547,7 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 // endTurn opens the composer again, keeping what was typed during the
 // turn and not yet sent; it returns the messages queued meanwhile.
 func (h *home) endTurn() []string {
-	text, queued := h.comp.text(), h.turn.queued
-	if strings.TrimSpace(text) == "" {
-		text = h.turn.slash
-	}
+	text, queued := h.comp.expanded(), h.turn.queued
 	h.turn = nil
 	h.reopen()
 	if strings.TrimSpace(text) != "" {
@@ -587,35 +578,65 @@ func (h *home) nextTurn(print tea.Cmd) (tea.Model, tea.Cmd) {
 	return h, tea.Sequence(print, send)
 }
 
-// submitQueued runs the queued /commands, then sends the queued messages
-// as one turn, joined by a blank line.
+// queuedCommand reports whether a queued line is a /command or a !shell
+// line: it runs on its own and is never the agent's message.
+func queuedCommand(q string) bool {
+	if _, _, _, ok := parseSlash(q); ok {
+		return true
+	}
+	if _, escaped := unescapeBang(q); escaped {
+		return false
+	}
+	_, shell := shellLine(q)
+	return shell
+}
+
+// submitQueued runs the queued commands in order. With none queued, the
+// messages go as one turn, joined by a blank line. With any, they are back
+// in the composer, unsent: a command's prompt or viewer is on screen, and
+// a turn started under it would hide it.
 func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
-	draft := h.comp.text()
+	draft := h.comp.expanded()
 	var cmds []tea.Cmd
 	var msgs []string
+	ran := false // a command was queued: the messages wait
 	for _, q := range queued {
-		if _, _, _, ok := parseSlash(q); ok {
-			if cmd, _ := h.slash(q); cmd != nil {
+		if queuedCommand(q) {
+			ran = true
+			if h.job != nil {
+				msgs = append(msgs, q) // after a running shell job: waits too
+				continue
+			}
+			var cmd tea.Cmd
+			if _, _, _, ok := parseSlash(q); ok {
+				cmd, _ = h.slash(q)
+			} else {
+				line, _ := shellLine(q)
+				cmd = h.shellSubmit(line)
+			}
+			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 			continue
 		}
 		msgs = append(msgs, q)
 	}
-	h.comp.set(draft) // a command clears the box
-	if len(msgs) == 0 {
-		return h, tea.Batch(cmds...)
+	keep := strings.TrimSpace(strings.Join(append(msgs, draft), "\n\n"))
+	if ran || len(msgs) == 0 {
+		h.comp.set(keep)
+		return h, tea.Sequence(cmds...)
 	}
+	h.comp.set(draft)
 	res, problem := h.resolve(h.sel)
 	if problem != nil {
 		h.msg = problem
-		h.comp.set(strings.Join(msgs, "\n"))
-		return h, tea.Batch(cmds...)
+		h.comp.set(keep)
+		return h, nil
 	}
 	text := strings.Join(msgs, "\n\n")
 	h.hist.add(text)
 	_, send := h.chatSubmit(text, res, nil)
-	return h, tea.Sequence(tea.Batch(cmds...), send)
+	return h, send
 }
 
 // cutEnded prints the newest cut's Verdict line; h.last moves to it only
@@ -805,6 +826,7 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return h, nil
 		}
+		full := strings.TrimSpace(h.comp.expanded()) // a paste, whole
 		h.comp = h.composer()
 		if a != nil {
 			// One question at a time, each with its own numbers.
@@ -818,7 +840,7 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return h, h.answer(a, agent.Answer{Allow: true, Answers: h.turn.answers})
 		}
-		h.enqueue(text)
+		h.enqueue(full)
 		return h, nil
 	}
 	if k.String() == "up" && a == nil && h.comp.empty() && len(t.queued) > 0 {
@@ -833,8 +855,8 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // enqueue holds text, typed during the turn, for when it has ended: a
-// message goes with the others as one turn, a /command runs and never
-// reaches the agent (submitQueued).
+// message goes with the others as one turn, a /command or !shell line runs
+// and never reaches the agent (submitQueued).
 func (h *home) enqueue(text string) {
 	h.turn.queued = append(h.turn.queued, text)
 }
@@ -910,7 +932,11 @@ func (h *home) turnView() string {
 		for _, q := range t.queued {
 			lines = append(lines, h.st.dim(ansi.Truncate(" queued › "+clean(strings.ReplaceAll(q, "\n", " ⏎ ")), width, "…")))
 		}
-		box, _, _ := h.boxLines(width, h.st.dim("Type to queue a message"))
+		blank := h.st.dim("Type to queue a message")
+		if a != nil {
+			blank = "" // a question's box is its answer's
+		}
+		box, _, _ := h.boxLines(width, blank)
 		lines = append(lines, box...)
 	}
 	return strings.Join(lines, "\n")
