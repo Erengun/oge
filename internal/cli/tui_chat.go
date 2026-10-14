@@ -199,7 +199,25 @@ func (p cutGates) Decide(ctx context.Context, r gate.Request) (gate.Decision, er
 
 // ogeLine is one of Öge's own lines: at the margin, after the marker.
 func (h *home) ogeLine(text string) string {
+	// The glyph carries the status; its colour only backs it up.
+	switch {
+	case strings.HasPrefix(text, "✓"):
+		text = h.st.ok("✓") + strings.TrimPrefix(text, "✓")
+	case strings.HasPrefix(text, "✗"):
+		text = h.st.bad("✗") + strings.TrimPrefix(text, "✗")
+	case strings.HasPrefix(text, "■"):
+		text = h.st.warn("■") + strings.TrimPrefix(text, "■")
+	}
 	return h.st.accent("oge ›") + " " + text
+}
+
+// userBar is the human's echoed message as a bar across the width: a
+// subtle background where there is colour, bold where there is none.
+func (h *home) userBar(text string) string {
+	if h.st.th != nil && h.width > 0 {
+		text += strings.Repeat(" ", max(h.width-1-ansi.StringWidth(text), 0))
+	}
+	return h.st.user(text)
 }
 
 // agentLines indents the agent's words, every line.
@@ -231,7 +249,7 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		ch, err := c.Send(ctx, text)
 		return chatSentMsg{events: ch, err: err}
 	}
-	echo := h.println(h.st.bold("> " + task.Parse(text).Title))
+	echo := h.println(h.userBar("> " + task.Parse(text).Title))
 	return h, tea.Sequence(echo, send)
 }
 
@@ -355,7 +373,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 			return nil
 		}
 		if s, ok := activityStep(ev); ok {
-			return h.println(h.st.dim("  " + s))
+			return h.println("  " + h.st.agent("⏺") + " " + h.st.dim(s))
 		}
 	case agent.HostRequest:
 		if hd := ev.Host; hd != nil && hd.Decision == "cancel" && hd.By == "agent" {
@@ -387,7 +405,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 			return nil // the answer is printed where it was given
 		}
 		if s, ok := activityStep(ev); ok {
-			return h.println(h.st.dim("  " + s))
+			return h.println("  " + h.st.bad("⏺") + " " + h.st.dim(s))
 		}
 	case agent.TurnSettled:
 		h.turn.asks = nil
@@ -862,15 +880,15 @@ func (h *home) turnView() string {
 		}
 		lines = append(lines, h.ogeLine(h.st.dim("type an answer or an option's number · enter")))
 	case a != nil:
-		lines = append(lines, h.ogeLine("Allow "+clean(a.Tool)+"?"))
+		lines = append(lines, h.ogeLine(h.st.ask("Allow "+clean(a.Tool)+"?")))
 		if !h.askFits(a) {
-			lines = append(lines, "    "+h.st.bold("too long to show at this width; [n] to deny or widen the terminal"))
+			lines = append(lines, "    "+h.st.warn("too long to show at this width; [n] to deny or widen the terminal"))
 			break
 		}
 		for _, r := range h.askRows(a) {
 			lines = append(lines, "    "+r)
 		}
-		lines = append(lines, "    "+h.st.bold("[y] yes  [n] no"))
+		lines = append(lines, "    "+h.st.ask("[y] yes  [n] no"))
 	case t.stopped:
 		lines = append(lines, h.ogeLine(h.st.dim("interrupting… · ctrl+c again quits")))
 	default:
