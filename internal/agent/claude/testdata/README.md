@@ -21,6 +21,7 @@ One JSON object per line:
 | `interrupt.ndjson` | `interrupt` control request mid-turn, receipt `{"still_queued": []}`, `result error_during_execution` with `terminal_reason: aborted_streaming`, then a normal second turn in the same process. |
 | `hook_decider.ndjson` | Host `PreToolUse` hook registered through `initialize.hooks`, `hook_callback` requests for every tool call (Read, Edit, Write, sandboxed Bash), allow (`continue: true`) and deny (`permissionDecision: deny`) responses. Launch uses `--permission-mode default`, `--allowedTools Edit(tests/**)` and inline `--settings` sandbox JSON with an absolute `denyWrite` list. |
 | `resume.ndjson` | `--session-id` run that plants a fact, SIGKILL, then a new process with `--resume` recalling it under the same `session_id`. |
+| `midturn.ndjson` | Spike for #281, recorded separately with `claude` 2.1.299 on 2026-10-14 (`--model haiku`, `--permission-mode auto`). Its argv adds `--replay-user-messages`, which Öge's launch argv doesn't use, so the `isReplay` user echoes here are not Öge's normal wire shape. A user message written mid-turn while a tool runs is folded in after the next `tool_result` (note A, one `result`). One written while the model writes its final reply becomes claude's own next turn (note B, a second `system/init` and `result`, `result_index: 1`). The initialize response and the `system/init` lists are `[trimmed]`. Paths are redacted as above. |
 
 The spike's other logs (`leak_*`, `verifier_*`, `widen_*`, `bare`) are research evidence, not contract frames. They stay at the source commit.
 
