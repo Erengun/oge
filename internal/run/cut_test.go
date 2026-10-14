@@ -10,9 +10,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/agent/fake"
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/pipeline"
@@ -259,10 +262,14 @@ func TestCutLateTamperOnACutTurn(t *testing.T) {
 	}
 }
 
-// A cut whose Check fails is never sent back (#262 does that in the
-// Session): it ends Failed with its Verdict, and the next cut follows it.
-func TestCutFailingCheckFails(t *testing.T) {
-	c := openCut(t, "", multiturn.Turn{Reply: "oops", Writes: []multiturn.File{{Path: "add.go", Content: strings.Replace(cutAdd, "a + b", "a - b", 1)}}})
+// A cut whose Check fails ends Failed with its Verdict and a feedback
+// turn, never a fresh implementer (D5). Sent, the feedback turn is Öge's
+// in the Chat log and never the Task's (D7), and its changes cut as
+// usual: the next cut follows, counting the chain's cycles.
+func TestCutFailingCheckSendsFeedback(t *testing.T) {
+	c := openCut(t, "",
+		multiturn.Turn{Reply: "oops", Writes: []multiturn.File{{Path: "add.go", Content: strings.Replace(cutAdd, "a + b", "a - b", 1)}}},
+		multiturn.Turn{Reply: "fixed", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\n// Add sums.\n"}}})
 	drain(t, send(t, c, "break it"), nil)
 	res := cut(t, c)
 	if res.Outcome != Failed {
@@ -274,8 +281,69 @@ func TestCutFailingCheckFails(t *testing.T) {
 	if a := runRecords(t, res.Dir, RecAttemptStarting); len(a) != 0 {
 		t.Errorf("an implementer Attempt started: %v", a)
 	}
-	if _, err := c.Cut(t.Context(), CutParams{}); !errors.Is(err, ErrNothingToCut) {
-		t.Errorf("after a failed cut: %v", err)
+	if !strings.HasPrefix(res.Feedback, "Öge's Check failed on your last change") {
+		t.Fatalf("feedback %q", res.Feedback)
+	}
+	ch, err := c.SendFeedback(t.Context(), res.Feedback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	second := cut(t, c)
+	if second.Outcome != Accepted {
+		t.Fatalf("second cut %s %v", second.Outcome, second.Why)
+	}
+	started := runRecords(t, second.Dir, RecRunStarted)[0]
+	if hashes, _ := started["task_turns"].([]any); len(hashes) != 1 || hashes[0].(map[string]any)["sha256"] != sha("break it") {
+		t.Errorf("task_turns %v: a feedback turn is never the Task's", started["task_turns"])
+	}
+	if !reflect.DeepEqual(started["cycles"], map[string]any{"verify": float64(2), "send_back": float64(1)}) || started["refers_to_agent_text"] != false {
+		t.Errorf("RunStarted disclosures %v %v", started["cycles"], started["refers_to_agent_text"])
+	}
+	turns := runRecords(t, c.Dir, RecTurnStarted)
+	if len(turns) != 2 || turns[0]["by"] != nil || turns[1]["by"] != "oge" {
+		t.Errorf("TurnStarted %v", turns)
+	}
+}
+
+// The chain of cuts gets FeedbackBudget feedback turns; the user's own
+// turn starts a new chain.
+func TestFeedbackBudget(t *testing.T) {
+	var turns []multiturn.Turn
+	for range FeedbackBudget + 2 {
+		turns = append(turns, multiturn.Turn{Reply: "ok"})
+	}
+	c := openCut(t, "", turns...)
+	drain(t, send(t, c, "yo"), nil)
+	for i := range FeedbackBudget {
+		ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+		if err != nil {
+			t.Fatalf("feedback %d: %v", i+1, err)
+		}
+		drain(t, ch, nil)
+	}
+	if _, err := c.SendFeedback(t.Context(), "Öge's Check failed"); !errors.Is(err, ErrFeedbackBudget) {
+		t.Fatalf("feedback %d: %v, want ErrFeedbackBudget", FeedbackBudget+1, err)
+	}
+	drain(t, send(t, c, "try again"), nil)
+	if _, err := c.SendFeedback(t.Context(), "Öge's Check failed"); err != nil {
+		t.Errorf("after the user's turn: %v", err)
+	}
+}
+
+// A Task of more than one turn refers to agent text QA never sees, and a
+// held-out view in its turns is disclosed (D6, D7).
+func TestCutDisclosures(t *testing.T) {
+	c := openCut(t, "", multiturn.Turn{Reply: "which file?"},
+		multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\n// Add sums.\n"}}})
+	drain(t, send(t, c, "document Add"), nil)
+	if err := c.HeldOutViewed("held-out tests"); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, send(t, c, "add.go"), nil)
+	started := runRecords(t, cut(t, c).Dir, RecRunStarted)[0]
+	if started["refers_to_agent_text"] != true || started["held_out_viewed"] != float64(1) {
+		t.Errorf("RunStarted disclosures %v %v", started["refers_to_agent_text"], started["held_out_viewed"])
 	}
 }
 
@@ -559,6 +627,139 @@ func TestCutReusedCheckStillGatesTamper(t *testing.T) {
 			if res.Outcome != Parked || len(runRecords(t, res.Dir, RecTamperEvent)) != 1 {
 				t.Errorf("a reused Check skipped the Tamper Gate: %s %v", res.Outcome, res.Why)
 			}
+		}
+	}
+}
+
+// The Receipt's cycles cover the Task's turns, every user turn since the
+// last delivery, not only the chain since the user's last turn (D6).
+func TestCutCyclesCoverTheTask(t *testing.T) {
+	broken := func(op string) []multiturn.File {
+		return []multiturn.File{{Path: "add.go", Content: strings.Replace(cutAdd, "a + b", op, 1)}}
+	}
+	c := openCut(t, "",
+		multiturn.Turn{Reply: "one", Writes: broken("a - b")},
+		multiturn.Turn{Reply: "two", Writes: broken("a * b")},
+		multiturn.Turn{Reply: "three", Writes: broken("a / b")},
+		multiturn.Turn{Reply: "four", Writes: broken("a + b + 0")})
+	feedback := func(res *Result) {
+		t.Helper()
+		ch, err := c.SendFeedback(t.Context(), res.Feedback)
+		if err != nil {
+			t.Fatal(err)
+		}
+		drain(t, ch, nil)
+	}
+	drain(t, send(t, c, "first"), nil)
+	feedback(cut(t, c))
+	if res := cut(t, c); res.Outcome != Failed {
+		t.Fatalf("second cut %s %v", res.Outcome, res.Why)
+	}
+	drain(t, send(t, c, "second"), nil) // a new chain, the same Task
+	res := cut(t, c)
+	if res.Outcome != Failed {
+		t.Fatalf("third cut %s %v", res.Outcome, res.Why)
+	}
+	feedback(res)
+	last := cut(t, c)
+	if last.Outcome != Accepted {
+		t.Fatalf("last cut %s %v", last.Outcome, last.Why)
+	}
+	started := runRecords(t, last.Dir, RecRunStarted)[0]
+	if !reflect.DeepEqual(started["cycles"], map[string]any{"verify": float64(4), "send_back": float64(2)}) {
+		t.Errorf("cycles %v, want 4 verify and 2 send-back over the Task", started["cycles"])
+	}
+	if hashes, _ := started["task_turns"].([]any); len(hashes) != 2 {
+		t.Errorf("task_turns %v", started["task_turns"])
+	}
+}
+
+// recorder keeps every turn's text its Sessions are sent.
+type recorder struct {
+	agent.Adapter
+	mu   sync.Mutex
+	sent []string
+}
+
+func (r *recorder) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Session, error) {
+	s, err := r.Adapter.Open(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &recordedSession{s, r}, nil
+}
+
+type recordedSession struct {
+	agent.Session
+	r *recorder
+}
+
+func (s *recordedSession) Send(t agent.Turn) error {
+	s.r.mu.Lock()
+	s.r.sent = append(s.r.sent, t.Text)
+	s.r.mu.Unlock()
+	return s.Session.Send(t)
+}
+
+// A cut whose planted held-out test fails sends feedback with its count
+// (its criterion ids when the Task names them), and the agent is never sent the test's name, file,
+// assertion or logged text (D5, ADR-0009), end to end.
+func TestCutFeedbackWithholdsAPlantedHeldOutTest(t *testing.T) {
+	const heldOut = "package fx\n\nimport \"testing\"\n\n// AC-1: negatives.\nfunc TestZebraQuokkaPlanted(t *testing.T) {\n\tt.Log(\"quokka-logged-marker\")\n\tif Add(-2, 1) != -1 {\n\t\tt.Fatal(\"zebra-assertion-marker\")\n\t}\n}\n"
+	script := filepath.Join(t.TempDir(), "qa.sh")
+	if err := os.WriteFile(script, []byte("cat > /dev/null\nprintf '%s' '"+heldOut+"' > zq_test.go\necho 'exit: extended'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	impl := &recorder{Adapter: fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "guarded", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int {\n\tif a < 0 {\n\t\treturn 0\n\t}\n\treturn a + b\n}\n"}}},
+		{Reply: "looking"},
+	}})}
+	resolve := func(fast bool) *pipeline.Frozen {
+		f, probs := pipeline.Resolve(nil, pipeline.Overrides{Fast: fast, Checks: []string{"go test -json ./..."},
+			Tests: []string{"**/*_test.go"}, Outputs: []string{"**/*.go"}}, []string{"claude"})
+		if len(probs) > 0 {
+			t.Fatalf("resolve: %v", probs)
+		}
+		return f
+	}
+	fast, standard := resolve(true), resolve(false)
+	if !reflect.DeepEqual(standard.Checks, fast.Checks) {
+		t.Fatalf("checks differ: %+v %+v", standard.Checks, fast.Checks)
+	}
+	for i := range standard.Stages {
+		if standard.Stages[i].Role == "verifier" {
+			standard.Stages[i].Agent = fake.Name // QA plants the held-out test
+		}
+	}
+	c := openChatIn(t.Context(), t, impl, 0, fast, map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	c.agents["fake"] = &fake.Adapter{Script: script}
+	drain(t, send(t, c, "guard Add"), nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	res, err := c.Cut(ctx, CutParams{Frozen: standard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != Failed || res.Feedback == "" {
+		t.Fatalf("outcome %s %v, feedback %q", res.Outcome, res.Why, res.Feedback)
+	}
+	if !strings.HasPrefix(res.Feedback, "Öge's Check failed on your last change: 1 failing.") {
+		t.Errorf("feedback without the count:\n%s", res.Feedback)
+	}
+	ch, err := c.SendFeedback(t.Context(), res.Feedback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	impl.mu.Lock()
+	sent := strings.Join(impl.sent, "\n")
+	impl.mu.Unlock()
+	if !strings.Contains(sent, "1 held-out test failed") {
+		t.Errorf("the agent never got the feedback turn:\n%s", sent)
+	}
+	for _, never := range []string{"ZebraQuokka", "zq_test.go", "quokka-logged-marker", "zebra-assertion-marker"} {
+		if strings.Contains(res.Feedback, never) || strings.Contains(sent, never) {
+			t.Errorf("held-out %q reached the feedback or the agent:\n%s", never, sent)
 		}
 	}
 }

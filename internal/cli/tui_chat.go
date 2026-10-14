@@ -127,12 +127,19 @@ type chatTurn struct {
 	stopped bool
 	queued  []string // messages typed and sent during the turn
 	slash   string   // a command typed before a question took the composer
+	// oge: the turn is Öge's feedback turn (D5).
+	oge bool
+	// feedback is a failing cut's feedback turn, held until this turn
+	// ends: sent then, unless this turn cuts anew or was interrupted.
+	feedback string
+	fbFrozen *pipeline.Frozen
 }
 
 // chatVerify is a cut verifying in the background.
 type chatVerify struct {
 	seq     int
 	changed int
+	frozen  *pipeline.Frozen
 	cancel  context.CancelFunc
 	stopped bool // Ctrl+C cancelled it
 	// gate is the Gate its Run waits at, if any: shown only at delivery.
@@ -240,14 +247,30 @@ func nextEvent(ch <-chan agent.Event) tea.Cmd {
 func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case chatSentMsg:
+		if msg.err != nil && h.turn.oge {
+			// The composer holds the human's draft, never the feedback.
+			line := h.ogeLine("✗ sending the feedback turn: " + clean(msg.err.Error()))
+			if errors.Is(msg.err, run.ErrFeedbackBudget) {
+				line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
+			}
+			return h.nextTurn(h.println(line))
+		}
 		if msg.err != nil {
-			text := h.turn.text
+			text, held := h.turn.text, h.turn.feedback != ""
 			h.endTurn()
 			h.comp.set(text) // kept, to send again
 			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
+			if held {
+				// The feedback turn waited on this one: say it goes unsent.
+				return h, h.println(h.ogeLine(h.st.dim("the failing cut's feedback turn wasn't sent")))
+			}
 			return h, nil
 		}
 		h.turn.events = msg.events
+		if h.turn.oge {
+			// Shown once it is sent: a spent budget prints no such line.
+			return h, tea.Sequence(h.println(h.st.dim("Öge → agent: "+clean(h.turn.text))), nextEvent(msg.events))
+		}
 		return h, nextEvent(msg.events)
 	case chatEvMsg:
 		if !msg.ok {
@@ -393,6 +416,13 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 // the background: the cut supersedes one still verifying, and covers its
 // turns.
 func (h *home) turnEnded() (tea.Model, tea.Cmd) {
+	if fb := h.turn.feedback; fb != "" && h.turn.changed == 0 && !h.turn.stopped {
+		// The feedback turn waited for this one, which cut nothing newer:
+		// it goes first, before the messages queued meanwhile.
+		f := h.turn.fbFrozen
+		queued := h.endTurn()
+		return h, h.feedbackSubmit(fb, f, queued)
+	}
 	if h.turn.changed == 0 || h.turn.stopped {
 		// An interrupted turn's changes wait for the next turn's cut.
 		h.unchecked = h.unchecked || h.turn.changed > 0
@@ -421,7 +451,7 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 	h.unchecked = false
 	h.cutGate, h.gateFor = nil, nil
 	h.cutFrozen = f
-	h.verify = &chatVerify{seq: h.cuts, changed: changed, cancel: cancel}
+	h.verify = &chatVerify{seq: h.cuts, changed: changed, frozen: f, cancel: cancel}
 	hc, seq := h.chat, h.cuts
 	c := hc.get()
 	reqs, done := make(chan chatGateMsg), make(chan chatCutMsg, 1)
@@ -617,7 +647,39 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		}
 		return tea.Sequence(h.println(line), diff, h.actNow(deliver.key, deliver.arg))
 	}
+	// After Ctrl+C on the verify, the human has taken over: no feedback.
+	if verdict && res.Feedback != "" && !v.stopped {
+		if h.turn != nil {
+			// Nothing enters a running turn: it waits, and a newer cut of
+			// that turn drops it (D5).
+			h.turn.feedback, h.turn.fbFrozen = res.Feedback, v.frozen
+			return tea.Sequence(h.println(line), diff)
+		}
+		return tea.Sequence(h.println(line), diff, h.feedbackSubmit(res.Feedback, v.frozen, nil))
+	}
 	return tea.Sequence(h.println(line), diff)
+}
+
+// feedbackSubmit sends a failing cut's feedback turn into the Chat's
+// Session (D5), shown dim by its first line, the failing count and
+// criterion ids. The composer keeps the human's draft; its changes cut
+// as any turn's do.
+func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) tea.Cmd {
+	c := h.chat.get()
+	if c == nil {
+		if len(queued) > 0 {
+			_, send := h.submitQueued(queued) // never lost with the feedback
+			return send
+		}
+		return nil
+	}
+	first, _, _ := strings.Cut(text, "\n")
+	h.turn = &chatTurn{text: first, frozen: f, queued: queued, oge: true}
+	ctx := h.ctx
+	return func() tea.Msg {
+		ch, err := c.SendFeedback(ctx, text)
+		return chatSentMsg{events: ch, err: err}
+	}
 }
 
 // staleAsk is /apply or /branch while newer edits than the verified cut

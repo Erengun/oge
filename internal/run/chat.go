@@ -159,8 +159,16 @@ type Chat struct {
 	sess   agent.Session
 	pumped chan struct{} // closed when the Session's events end
 	turns  int
-	msgs   []string     // the user's turns, verbatim
+	msgs   []string     // the turns' messages, verbatim
 	unsent map[int]bool // the turns whose message never reached the agent
+	// oge are the turns Öge sent (feedback turns, D5): never the Task's.
+	oge map[int]bool
+	// feedbacks are the feedback turns sent since the user's last turn:
+	// the chain's budget (D5).
+	feedbacks int
+	// verdictCuts are the last turns of the cuts that reached a Verdict,
+	// for the Receipt's cycle count (D6).
+	verdictCuts []int
 	// rebrief is set when the Session was reopened: its first turn gets
 	// the re-brief.
 	rebrief bool
@@ -177,6 +185,7 @@ type Chat struct {
 type queuedTurn struct {
 	text string
 	out  *turnOut
+	oge  bool // a feedback turn
 }
 
 // turnOut is one turn's event channel. Only its methods send on it or
@@ -286,7 +295,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
 		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
-		source: p.Repo, config: p.Config, unsent: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate}
+		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -408,6 +417,24 @@ func (c *Chat) log(typ string, data any) error {
 // re-briefs (#185). The caller must drain the channel, and answers an Ask
 // (an event with Ask set) for the turn to go on.
 func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error) {
+	return c.send(ctx, text, false)
+}
+
+// ErrFeedbackBudget is why no feedback turn was sent: the chain of cuts
+// has had FeedbackBudget of them (D5). The user's call.
+var ErrFeedbackBudget = errors.New("the chain's feedback turns are spent")
+
+// SendFeedback sends a failing cut's feedback turn (Result.Feedback), as
+// Send does: Öge's turn, recorded as one (TurnStarted's by is "oge"),
+// never part of a Task (D7). It queues behind a turn in flight, and
+// returns ErrFeedbackBudget once the chain has had FeedbackBudget. The
+// caller owns staleness: it drops a cut's feedback once a newer cut
+// exists or a turn since has changed something.
+func (c *Chat) SendFeedback(ctx context.Context, text string) (<-chan agent.Event, error) {
+	return c.send(ctx, text, true)
+}
+
+func (c *Chat) send(ctx context.Context, text string, oge bool) (<-chan agent.Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -425,12 +452,18 @@ func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error
 		c.mu.Unlock()
 		return nil, err
 	}
+	if !oge {
+		c.feedbacks = 0 // the user's own turn starts a chain
+	} else if c.feedbacks >= FeedbackBudget {
+		c.mu.Unlock()
+		return nil, ErrFeedbackBudget
+	}
 	if c.cur != nil {
-		c.queue = append(c.queue, queuedTurn{text, out})
+		c.queue = append(c.queue, queuedTurn{text, out, oge})
 		c.mu.Unlock()
 		return out.ch, nil
 	}
-	err := c.start(text, out)
+	err := c.start(text, out, oge)
 	return out.ch, err
 }
 
@@ -490,12 +523,15 @@ func (c *Chat) reopen(ctx context.Context) error {
 
 // start begins a turn with c.mu held, and releases it. TurnStarted and
 // the turn's manifest are written ahead of the message.
-func (c *Chat) start(text string, out *turnOut) error {
+func (c *Chat) start(text string, out *turnOut, oge bool) error {
 	c.turns++
 	n := c.turns
 	out.n = n
 	c.msgs = append(c.msgs, text)
-	msgs := append([]string(nil), c.msgs...)
+	if oge {
+		c.oge[n] = true
+	}
+	msgs := c.userMsgs(n)
 	fresh := n == 1 || c.rebrief
 	c.rebrief = false
 	sess := c.sess
@@ -508,17 +544,24 @@ func (c *Chat) start(text string, out *turnOut) error {
 		sent = text + c.brief
 	case fresh:
 		sent = briefing.ChatReopened(task.Task{Text: msgs[0], FollowUps: msgs[1:]}, c.checks)
+		if oge {
+			sent += "\n\n" + text // the re-brief holds the user's turns only
+		}
 	}
 	var err error
 	if !fresh {
 		err = reuse(c.role) // D1, again at the point of reuse
 	}
 	if err == nil {
-		err = c.log(RecTurnStarted, map[string]any{"chat": c.ID, "turn": n, "message": sha256Hex(text)})
+		started := map[string]any{"chat": c.ID, "turn": n, "message": sha256Hex(text)}
+		if oge {
+			started["by"] = "oge"
+		}
+		err = c.log(RecTurnStarted, started)
 	}
 	if err == nil {
 		// The manifest is written ahead of the turn (ADR-0009 as amended).
-		err = c.log(RecBriefingManifest, c.manifest(n, fresh, msgs, sent))
+		err = c.log(RecBriefingManifest, c.manifest(n, fresh, msgs, text, sent, oge))
 	}
 	if err == nil {
 		err = sess.Send(agent.Turn{Text: sent})
@@ -537,6 +580,9 @@ func (c *Chat) start(text string, out *turnOut) error {
 	} else {
 		c.sending = nil
 	}
+	if err == nil && oge {
+		c.feedbacks++ // it reached the agent: only then does it count
+	}
 	c.mu.Unlock()
 	if last != nil {
 		ev := c.finish(out, *last, ran)
@@ -549,6 +595,18 @@ func (c *Chat) start(text string, out *turnOut) error {
 	return err
 }
 
+// userMsgs are the user's messages of the first n turns, with c.mu held:
+// a Task, or a re-brief, never holds Öge's own turns (D7).
+func (c *Chat) userMsgs(n int) []string {
+	var out []string
+	for i, m := range c.msgs[:n] {
+		if !c.oge[i+1] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
@@ -558,7 +616,7 @@ func sha256Hex(s string) string {
 // turn carries the chat Briefing (after a reopen, the re-brief with the
 // user's turns so far); every later one is the user's message verbatim,
 // in the same Session (D1, disclosed).
-func (c *Chat) manifest(n int, fresh bool, msgs []string, sent string) map[string]any {
+func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, oge bool) map[string]any {
 	if fresh {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: "implementer"}
 		t := task.Task{Text: msgs[0], FollowUps: msgs[1:]}
@@ -566,8 +624,12 @@ func (c *Chat) manifest(n int, fresh bool, msgs []string, sent string) map[strin
 		m["chat"], m["turn"], m["session_reused"] = c.ID, n, false
 		return m
 	}
+	source := "the user's message, verbatim"
+	if oge {
+		source = "Öge's feedback turn: the failing Check's count and criterion ids, through the held-out filter"
+	}
 	return map[string]any{"chat": c.ID, "turn": n, "attempt": fmt.Sprintf("chat#%d", n), "role": "implementer",
-		"items":   []map[string]string{{"item": "turn", "source": "the user's message, verbatim", "sha256": sha256Hex(msgs[n-1])}},
+		"items":   []map[string]string{{"item": "turn", "source": source, "sha256": sha256Hex(text)}},
 		"session": "reused", "session_reused": true}
 }
 
@@ -930,7 +992,7 @@ func (c *Chat) settled(t *turnOut) {
 	if len(c.queue) > 0 {
 		q := c.queue[0]
 		c.queue = c.queue[1:]
-		_ = c.start(q.text, q.out)
+		_ = c.start(q.text, q.out, q.oge)
 		return
 	}
 	c.timer.Reset(c.idle)

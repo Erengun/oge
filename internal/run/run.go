@@ -259,6 +259,10 @@ type Result struct {
 	// Unresolved are the Ambiguous files a Run that isn't Accepted ended
 	// with: in its Candidate, never promoted or dropped.
 	Unresolved []string
+	// Feedback is a failing cut's feedback turn for its Chat's Session
+	// (D5): the failing count and criterion ids, never held-out text.
+	// Empty once a newer cut superseded it.
+	Feedback string
 }
 
 // gateHeldOutConflict is where a Run parks when QA's held-out test no
@@ -851,9 +855,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			return nil, err
 		}
 		if p.cut != nil && verdict == "fail" {
-			// TODO(#262): a Chat sends a failing cut back as a feedback turn
-			// in its live Session. Until then the cut ends with its Verdict:
-			// no fresh implementer.
+			// A Chat sends a failing cut back as a feedback turn in its live
+			// Session (D5), never as a fresh implementer: the cut ends with
+			// its Verdict, and the Chat sends the turn.
+			res.Feedback = feedbackTurn(cr, blobs, m, goSources(repo, a.Candidate))
 			return end(Failed, "the Check failed on the cut")
 		}
 		// TODO(#47): failing own tests become a condition here.

@@ -93,6 +93,17 @@ func (r *Receipt) Lines() []Line {
 	if r.Task != "" {
 		add("Task", val(r.Task), Plain)
 	}
+	if c := r.Chat; c != nil {
+		text := "Task from " + plural(c.TaskTurns, "turn", "turns")
+		if c.RefersToAgentText {
+			text += "; refers to agent text QA can't see (not filled in)"
+		}
+		add("Chat", text, Plain)
+		if c.HeldOutViewed > 0 {
+			add("", "held out viewed during the Task's turns ("+plural(c.HeldOutViewed, "time", "times")+")", Plain)
+		}
+		add("", plural(c.VerifyCycles, "verify cycle", "verify cycles")+" · "+plural(c.SendBackCycles, "send-back", "send-backs")+" in this chain", Plain)
+	}
 	if r.Label != "" {
 		add("Label", val(r.Label)+" (yours; not Evidence)", Plain)
 	}

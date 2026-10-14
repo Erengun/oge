@@ -62,7 +62,7 @@ func (c *Chat) Deliverable(run, dir string) error {
 	if m == nil {
 		return fmt.Errorf("run %s is no verified cut of this Chat", run)
 	}
-	recs, err := c.tamperRecords(from, m.turn)
+	recs, err := c.chatRecords(RecTamperEvent, from, m.turn)
 	if err != nil || len(recs) == 0 {
 		return err
 	}

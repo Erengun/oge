@@ -163,3 +163,35 @@ func TestSendBackLeavesOutTheHeldOutExecutionsOutput(t *testing.T) {
 		t.Errorf("no held-out count:\n%s", got)
 	}
 }
+
+// A feedback turn carries the failing count and criterion ids, never a
+// held-out test's name, file or output (D5, ADR-0009).
+func TestFeedbackTurnWithholdsHeldOut(t *testing.T) {
+	blobs, err := ledger.OpenBlobs(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := `{"Action":"output","Package":"fx","Test":"TestZebraQuokka","Output":"    zq_test.go:9: quokka says Add(-1, 1) = 7\n"}
+{"Action":"fail","Package":"fx","Test":"TestZebraQuokka"}
+{"Action":"output","Package":"fx","Test":"TestAdd","Output":"    add_test.go:9: Add(2, 3) = 0\n"}
+{"Action":"fail","Package":"fx","Test":"TestAdd"}
+`
+	id, _ := blobs.Put([]byte(out))
+	rep := oracle.ParseGoTestJSON([]byte(out))
+	cr := &oracle.Result{Why: "2 Oracle tests didn't pass", Missing: []string{"fx.TestAdd", "fx.TestZebraQuokka"},
+		Commands: []oracle.Execution{{Run: "go test -json ./...", Why: "exit 1", Report: &rep, Stdout: oracle.Output{Blob: id}}},
+		Tests: []oracle.TestResult{{TestID: oracle.TestID{Package: "fx", Name: "TestAdd"}, Attested: "fail"},
+			{TestID: oracle.TestID{Package: "fx", Name: "TestZebraQuokka"}, Attested: "fail"}}}
+	m := &oracle.Manifest{Expected: []oracle.TestID{{Package: "fx", Name: "TestAdd"}, {Package: "fx", Name: "TestZebraQuokka"}},
+		HeldOut: []oracle.HeldOut{{Test: oracle.TestID{Package: "fx", Name: "TestZebraQuokka"}, File: "zq_test.go", Criteria: []string{"AC-2", "AC-1"}}}}
+	got := feedbackTurn(cr, blobs, m, nil)
+	first, _, _ := strings.Cut(got, "\n")
+	if first != "Öge's Check failed on your last change: 2 failing (criteria AC-1, AC-2)." {
+		t.Errorf("first line %q", first)
+	}
+	for _, never := range []string{"ZebraQuokka", "zq_test.go", "quokka"} {
+		if strings.Contains(got, never) {
+			t.Errorf("the feedback turn says %q:\n%s", never, got)
+		}
+	}
+}
