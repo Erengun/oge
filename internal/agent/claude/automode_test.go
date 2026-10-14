@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -126,5 +127,17 @@ func TestAutoModeAskWithdrawn(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, "a.txt")); err == nil {
 		t.Error("the withdrawn ask's write happened")
+	}
+}
+
+// A typed answer goes back to claude as the AskUserQuestion's answers.
+func TestWithAnswer(t *testing.T) {
+	in := map[string]any{"questions": []any{map[string]any{"question": "Which name?", "options": []any{map[string]any{"label": "Ada"}}}}}
+	var got map[string]any
+	if err := json.Unmarshal(withAnswer(in, "Grace"), &got); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := got["answers"].(map[string]any); a["Which name?"] != "Grace" || got["questions"] == nil {
+		t.Errorf("withAnswer = %v", got)
 	}
 }

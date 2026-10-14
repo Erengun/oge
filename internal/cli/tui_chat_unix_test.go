@@ -153,7 +153,8 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	s.quitChat(f)
 }
 
-// Esc interrupts the turn in flight, and the composer comes back.
+// Esc interrupts the turn in flight; a message typed during it is sent
+// next, and the composer comes back.
 func TestHomeChatEscInterrupts(t *testing.T) {
 	t.Parallel()
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
@@ -163,10 +164,10 @@ func TestHomeChatEscInterrupts(t *testing.T) {
 	s.composer()
 	s.type_("long job\r")
 	s.expect("working on it")
+	s.type_("go on\r") // typed ahead: sent once the turn has ended
+	time.Sleep(100 * time.Millisecond)
 	s.type_("\x1b")
 	s.expect("interrupted")
-	s.composer()
-	s.type_("go on\r")
 	s.expect("next turn")
 	s.composer()
 	s.quitChat(f)
@@ -209,4 +210,27 @@ func TestHomeChatEscapeHatch(t *testing.T) {
 		t.Errorf("OGE_CHAT=0 opened a Chat: %v", logs)
 	}
 	f.onlyRun(t)
+}
+
+// AskUserQuestion shows the question and its options, and takes an
+// option's number or typed text as the answer.
+func TestHomeChatAnswersAQuestion(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "first", Ask: &multiturn.Ask{Tool: "AskUserQuestion", Target: "Ship it?"}},
+		{Reply: "second", Ask: &multiturn.Ask{Tool: "AskUserQuestion", Target: "Which name?"}},
+	}}, nil)
+	s.composer()
+	s.type_("ask me\r")
+	s.expect("Ship it?")
+	s.expect("2. no")
+	s.type_("2\r")
+	s.expect("answered: no")
+	s.composer()
+	s.type_("again\r")
+	s.expect("Which name?")
+	s.type_("Ada\r")
+	s.expect("answered: Ada")
+	s.composer()
+	s.quitChat(f)
 }
