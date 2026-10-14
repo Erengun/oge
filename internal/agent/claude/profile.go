@@ -40,6 +40,10 @@ var implementerTools = []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
 // confines to reading and to creating new test files (spec #35).
 var verifierTools = []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"}
 
+// advisorTools are the advisor's: only tools that read (docs/ux/advisor.md).
+// Without Bash it can't write, and its policy denies anything else.
+var advisorTools = []string{"Read", "Glob", "Grep"}
+
 // builtinPlugins are the @builtin plugins claude LastTested ships inside
 // its own binary and loads even isolated (observed live on #46). They are
 // part of the pinned binary, so a verifier may start with exactly this
@@ -127,6 +131,10 @@ func profileFor(role string) (profile, error) {
 		// Edit only on new files matching the test globs) plus the
 		// revert after the Attempt, not native Edit(<glob>) allow rules.
 		return profile{role: role, tools: verifierTools}, nil
+	case "advisor":
+		// A fresh, read-only Session in a disposable clone: Öge's policy
+		// answers every request, so no ask ever reaches the human.
+		return profile{role: role, tools: advisorTools}, nil
 	}
 	return profile{}, fmt.Errorf("claude adapter: no Launch profile for the %s role yet", role)
 }

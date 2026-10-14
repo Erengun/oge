@@ -263,6 +263,9 @@ type Result struct {
 	// (D5): the failing count and criterion ids, never held-out text.
 	// Empty once a newer cut superseded it.
 	Feedback string
+	// failures are Feedback's body, kept when a newer cut clears it: the
+	// newest Verdict an Advisor is told of.
+	failures string
 }
 
 // gateHeldOutConflict is where a Run parks when QA's held-out test no
@@ -858,7 +861,8 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			// A Chat sends a failing cut back as a feedback turn in its live
 			// Session (D5), never as a fresh implementer: the cut ends with
 			// its Verdict, and the Chat sends the turn.
-			res.Feedback = feedbackTurn(cr, blobs, m, goSources(repo, a.Candidate))
+			res.failures = verdictFailures(cr, blobs, m, goSources(repo, a.Candidate))
+			res.Feedback = feedbackTurn(res.failures)
 			return end(Failed, "the Check failed on the cut")
 		}
 		// TODO(#47): failing own tests become a condition here.

@@ -292,6 +292,11 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	if verdict {
 		c.mu.Lock()
 		c.verdictCuts = append(c.verdictCuts, to)
+		if c.verdict == nil || to >= c.verdict.turn {
+			// The newest Verdict, for an Advisor's Briefing: a superseded
+			// cut's too, which a newer cut's replaces.
+			c.verdict = &chatVerdict{turn: to, run: res.ID, outcome: res.Outcome, failures: res.failures}
+		}
 		c.mu.Unlock()
 	}
 	if res.Outcome == Refused && c.prep.setup != nil && !c.prep.setup.Pass {

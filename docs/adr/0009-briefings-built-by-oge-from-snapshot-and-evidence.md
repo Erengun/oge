@@ -1,5 +1,5 @@
 ---
-status: accepted (Ambiguous-file rule amended in part by ADR-0010; parallel shape amended in part by ADR-0012; Codex verifier/reviewer launch settings amended in part by ADR-0018; Briefing assumptions instruction amended in part by ADR-0019)
+status: accepted (Ambiguous-file rule amended in part by ADR-0010; parallel shape amended in part by ADR-0012; Codex verifier/reviewer launch settings amended in part by ADR-0018; Briefing assumptions instruction amended in part by ADR-0019; the Advisor's Briefing amended by #287)
 ---
 
 # Öge builds every Briefing from the Snapshot, approved inputs and Evidence; judged roles never get Claims, authorship or withheld files
@@ -23,6 +23,7 @@ Each of these is a channel for the implementer's narrative or for held-out conte
   - The verifier and reviewer never get the implementer's transcript, Exit, self-report, an unapproved Plan or an authorship label.
   - The verifier also does not see earlier Verdicts.
   - The reviewer never sees held-out test source, because reviewer findings can cross back to the implementer.
+  - *Amendment (2026-10-14, [#287](https://github.com/Erengun/oge/issues/287)):* the Advisor is not a judged role, and its Briefing may carry agent text ([docs/ux/advisor.md](../ux/advisor.md), D-A2). A Consultation's Briefing holds the question, the Task (the user's turns since the last delivery, verbatim), the newest turn's diff against the Snapshot, the newest Verdict's failures through the same held-out filter as a feedback turn, and the implementer's last reply, verbatim. That reply is a Briefing-manifest item labelled a Claim. It is never the whole transcript or a summary of it. Agent text still never enters a verifier's, reviewer's or QA's Briefing, and advice never does either. Held-out tests are kept from the Advisor structurally: it reads a disposable clone of the newest settled turn's commit, and Öge's private state is denied to it, as it is to the implementer.
 - **Held-out failures go back only as a count plus Acceptance criterion ids.** The file name, source, assertion text, expected values and command output never go back. Visible failures go back in full.
 - **Send-back, retry and repair start a fresh Session.** Reuse is an explicit opt-in, never where a trust property needs fresh context. Resume after an Infrastructure stop may reuse the Session.
   - *Amendment (2026-10-13, [#256](https://github.com/Erengun/oge/issues/256)):* in bare `oge`, a Chat reuses one implementer Session across its turns ([docs/ux/chat-first.md](../ux/chat-first.md), D1). The light chat Briefing goes in once, without `Exit: done`; every later user message reaches the Session verbatim and gets its own Briefing-manifest entry, with its hash and `session_reused=true`, so the reuse is disclosed. Reusing a verifier or QA Session is a hard error. One-shot `oge "task"`, `oge run` and `oge resume` are unchanged: every Attempt there is fresh.
