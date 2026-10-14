@@ -219,13 +219,21 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.nextTurn(h.println(line))
 		}
 		if msg.err != nil {
-			text := h.turn.text
+			text, held := h.turn.text, h.turn.feedback != ""
 			h.endTurn()
 			h.comp.set(text) // kept, to send again
 			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
+			if held {
+				// The feedback turn waited on this one: say it goes unsent.
+				return h, h.println(h.ogeLine(h.st.dim("the failing cut's feedback turn wasn't sent")))
+			}
 			return h, nil
 		}
 		h.turn.events = msg.events
+		if h.turn.oge {
+			// Shown once it is sent: a spent budget prints no such line.
+			return h, tea.Sequence(h.println(h.st.dim("Öge → agent: "+clean(h.turn.text))), nextEvent(msg.events))
+		}
 		return h, nextEvent(msg.events)
 	case chatEvMsg:
 		if !msg.ok {
@@ -478,7 +486,8 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	// The action row acts on h.last: never on a cut the human hasn't
 	// seen yet.
 	h.actions = false
-	if verdict && res.Feedback != "" {
+	// After Ctrl+C on the verify, the human has taken over: no feedback.
+	if verdict && res.Feedback != "" && !v.stopped {
 		if h.turn != nil {
 			// Nothing enters a running turn: it waits, and a newer cut of
 			// that turn drops it (D5).
@@ -497,16 +506,19 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) tea.Cmd {
 	c := h.chat.get()
 	if c == nil {
+		if len(queued) > 0 {
+			_, send := h.submitQueued(queued) // never lost with the feedback
+			return send
+		}
 		return nil
 	}
-	h.turn = &chatTurn{frozen: f, queued: queued, oge: true}
+	first, _, _ := strings.Cut(text, "\n")
+	h.turn = &chatTurn{text: first, frozen: f, queued: queued, oge: true}
 	ctx := h.ctx
-	send := func() tea.Msg {
+	return func() tea.Msg {
 		ch, err := c.SendFeedback(ctx, text)
 		return chatSentMsg{events: ch, err: err}
 	}
-	first, _, _ := strings.Cut(text, "\n")
-	return tea.Sequence(h.println(h.st.dim("Öge → agent: "+clean(first))), send)
 }
 
 // chatKey takes a key during a turn. Esc interrupts the turn; so does

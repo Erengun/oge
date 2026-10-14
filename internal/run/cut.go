@@ -94,7 +94,7 @@ type cutEntry struct {
 	// chain's verify and send-back cycles, this cut's Check included.
 	refers           bool
 	heldOutViewed    int
-	verifies, sendBk int
+	verifies, sendBk int               // over the Task's turns
 	tamper           []json.RawMessage // the Task's turns' TamperEvent records, verbatim
 	prep             chatPrep
 	dir              string // the Chat's directory: the control's blobs are there
@@ -234,9 +234,20 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	}
 	e.heldOutViewed = len(viewed)
 	c.mu.Lock()
+	// The Task's cycles (D6): its cuts that reached a Verdict, this one
+	// included, and the feedback turns sent among its turns.
+	e.verifies = 1
+	for _, t := range c.verdictCuts {
+		if t > e.delivered {
+			e.verifies++
+		}
+	}
 	var msgs []string
 	for i, m := range c.msgs[e.delivered:to] {
 		n := e.delivered + i + 1
+		if c.oge[n] && !c.unsent[n] {
+			e.sendBk++
+		}
 		if c.unsent[n] || c.oge[n] {
 			continue // it never reached the agent, or it is Öge's (D7)
 		}
@@ -248,8 +259,10 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 		// over-discloses, and the Task is never filled in (ADR-0016).
 		e.refers = e.refers || n > 1
 	}
-	e.verifies, e.sendBk = c.verifies+1, c.feedbacks
 	c.mu.Unlock()
+	if len(msgs) == 0 {
+		return nil, ErrNothingToCut // only Öge's turns: no Task to verify
+	}
 	// Closing the Chat, or its context ending, cancels the cut.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -277,7 +290,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	}
 	if verdict {
 		c.mu.Lock()
-		c.verifies++
+		c.verdictCuts = append(c.verdictCuts, to)
 		c.mu.Unlock()
 	}
 	if res.Outcome == Refused && c.prep.setup != nil && !c.prep.setup.Pass {

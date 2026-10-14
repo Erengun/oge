@@ -61,7 +61,7 @@ func NewWithTests(mode pipeline.Mode, globs ...string) *Builder {
 // implementer works (#195): its Preflight is observed by Preflight, after
 // the first Attempt, not at 0.4s.
 func NewWithSetup(mode pipeline.Mode) *Builder {
-	return startRun(mode, nil)
+	return startRun(mode, nil, nil)
 }
 
 // Preflight observes a setup command that passed on the Snapshot, after
@@ -72,28 +72,26 @@ func (b *Builder) Preflight(d time.Duration, setup string) {
 }
 
 func newRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakening) *Builder {
-	b := startRun(mode, globs, weakening...)
+	b := startRun(mode, globs, nil, weakening...)
 	b.Add(400*time.Millisecond, run.RecPreflightObserved, map[string]any{"checks": []string{"submodules"}})
 	return b
 }
 
 // startRun is a Run up to Oracle v0, before its Preflight.
-func startRun(mode pipeline.Mode, globs []string, weakening ...pipeline.Weakening) *Builder {
+func startRun(mode pipeline.Mode, globs []string, cut map[string]any, weakening ...pipeline.Weakening) *Builder {
 	b := &Builder{blobs: map[string][]byte{}, changed: map[string][]string{}, files: map[string][]byte{}, Manifests: map[int]string{}}
 	f := pipeline.Frozen{Mode: mode, TrustWeakening: weakening}
 	f.Project.TestGlobs = globs
 	frozen, _ := json.Marshal(f)
-	b.Add(0, run.RecRunStarted, b.runStarted(mode, frozen))
+	b.Add(0, run.RecRunStarted, b.runStarted(mode, frozen, cut))
 	b.Add(100*time.Millisecond, run.RecSnapshotTaken, map[string]any{"commit": Snapshot, "head": "84ca1bd0e1f2", "branch": "main", "modified": 0, "untracked": 1})
 	b.Oracle(150*time.Millisecond, 0, "", nil, 0)
 	return b
 }
 
-// Cut, when set before New, makes the Run a Chat's cut: these are added
-// to its RunStarted (the chat, task_turns and disclosures).
-var cut map[string]any
-
-func (b *Builder) runStarted(mode pipeline.Mode, frozen []byte) map[string]any {
+// runStarted is the Run's RunStarted, with cut's fields added for a
+// Chat's cut (the chat, task_turns and disclosures).
+func (b *Builder) runStarted(mode pipeline.Mode, frozen []byte, cut map[string]any) map[string]any {
 	d := map[string]any{"run": RunID, "oge_version": "test", "created": T0, "source": "/repo",
 		"task": b.Blob([]byte("fix Add\n\nAdd returns 0 for every input.\n")), "frozen": b.Blob(frozen), "mode": mode}
 	for k, v := range cut {
@@ -104,9 +102,9 @@ func (b *Builder) runStarted(mode pipeline.Mode, frozen []byte) map[string]any {
 
 // NewCut is New for a Chat's cut whose RunStarted adds fields.
 func NewCut(mode pipeline.Mode, fields map[string]any) *Builder {
-	cut = fields
-	defer func() { cut = nil }()
-	return New(mode)
+	b := startRun(mode, nil, fields)
+	b.Add(400*time.Millisecond, run.RecPreflightObserved, map[string]any{"checks": []string{"submodules"}})
+	return b
 }
 
 // Blob stores data and returns its id.

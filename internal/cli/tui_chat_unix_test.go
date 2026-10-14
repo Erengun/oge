@@ -207,6 +207,9 @@ func TestHomeChatFeedbackBudget(t *testing.T) {
 	}
 	// A 4th feedback turn would find no turn left to serve it.
 	s.expectAfter("  try 3", "oge › ✗ still failing after 3 tries; your call")
+	if n := strings.Count(s.out.String(), "Öge → agent: "); n != 3 {
+		t.Errorf("%d feedback lines, want 3: a spent budget sends none", n)
+	}
 	s.quitChat(f)
 }
 
@@ -229,13 +232,34 @@ func TestHomeChatFeedbackQueuesAndDrops(t *testing.T) {
 	s.type_("vet it\r")
 	s.expect("Allow Bash?")
 	s.expect("oge › ✗ Failed · 1 file") // the first cut fails while this turn waits
-	if out := s.out.String(); strings.Contains(out, "Öge → agent") {
-		t.Fatalf("the feedback entered a running turn:\n%s", out)
-	}
 	s.type_("n")
 	s.expect("denied: Bash touch c.go")
 	s.expect("Öge → agent: Öge's Check failed on your last change")
 	s.expectAfter("  on it", "[ctrl+e] editor")
+	// The Chat log: the feedback turn started only after the user's turn
+	// in flight had ended.
+	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
+	if len(logs) != 1 {
+		t.Fatalf("Chat logs %v", logs)
+	}
+	recs, err := ledger.Replay(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, r := range recs {
+		var d struct {
+			Turn int
+			By   string
+		}
+		_ = json.Unmarshal(r.Data, &d)
+		if r.Type == run.RecTurnStarted || r.Type == run.RecAttemptEnded {
+			order = append(order, fmt.Sprintf("%s %d %s", r.Type, d.Turn, d.By))
+		}
+	}
+	if want := "TurnStarted 2 ,AttemptEnded 2 ,TurnStarted 3 oge"; !strings.Contains(strings.Join(order, ","), want) {
+		t.Errorf("Chat log order %v, want %q", order, want)
+	}
 
 	s.type_("change it again\r")
 	s.expect("  changed Add again")

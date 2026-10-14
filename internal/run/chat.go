@@ -156,9 +156,12 @@ type Chat struct {
 	unsent map[int]bool // the turns whose message never reached the agent
 	// oge are the turns Öge sent (feedback turns, D5): never the Task's.
 	oge map[int]bool
-	// The chain of cuts since the user's last turn: its feedback turns
-	// sent and its cuts verified (D5, D6).
-	feedbacks, verifies int
+	// feedbacks are the feedback turns sent since the user's last turn:
+	// the chain's budget (D5).
+	feedbacks int
+	// verdictCuts are the last turns of the cuts that reached a Verdict,
+	// for the Receipt's cycle count (D6).
+	verdictCuts []int
 	// rebrief is set when the Session was reopened: its first turn gets
 	// the re-brief.
 	rebrief bool
@@ -417,7 +420,9 @@ var ErrFeedbackBudget = errors.New("the chain's feedback turns are spent")
 // SendFeedback sends a failing cut's feedback turn (Result.Feedback), as
 // Send does: Öge's turn, recorded as one (TurnStarted's by is "oge"),
 // never part of a Task (D7). It queues behind a turn in flight, and
-// returns ErrFeedbackBudget once the chain has had FeedbackBudget.
+// returns ErrFeedbackBudget once the chain has had FeedbackBudget. The
+// caller owns staleness: it drops a cut's feedback once a newer cut
+// exists or a turn since has changed something.
 func (c *Chat) SendFeedback(ctx context.Context, text string) (<-chan agent.Event, error) {
 	return c.send(ctx, text, true)
 }
@@ -441,12 +446,10 @@ func (c *Chat) send(ctx context.Context, text string, oge bool) (<-chan agent.Ev
 		return nil, err
 	}
 	if !oge {
-		c.feedbacks, c.verifies = 0, 0 // the user's own turn starts a chain
+		c.feedbacks = 0 // the user's own turn starts a chain
 	} else if c.feedbacks >= FeedbackBudget {
 		c.mu.Unlock()
 		return nil, ErrFeedbackBudget
-	} else {
-		c.feedbacks++
 	}
 	if c.cur != nil {
 		c.queue = append(c.queue, queuedTurn{text, out, oge})
@@ -569,6 +572,9 @@ func (c *Chat) start(text string, out *turnOut, oge bool) error {
 		ran = true
 	} else {
 		c.sending = nil
+	}
+	if err == nil && oge {
+		c.feedbacks++ // it reached the agent: only then does it count
 	}
 	c.mu.Unlock()
 	if last != nil {
