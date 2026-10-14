@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -353,16 +354,20 @@ func TestFileChangeApprovalJoinsItsItem(t *testing.T) {
 			request = b
 		}
 	}
+	// The recorded Workspace becomes a real path on this platform.
+	dir := filepath.Join(t.TempDir(), "ws")
+	quoted, _ := json.Marshal(dir)
+	started = bytes.ReplaceAll(started, []byte(ws), quoted[1:len(quoted)-1])
 	for _, c := range []struct {
 		name    string
 		spec    agent.LaunchSpec
 		started bool
 		want    string
 	}{
-		{"contained", agent.LaunchSpec{Workspace: ws}, true, "accept"},
-		{"private", agent.LaunchSpec{Workspace: ws, DenyRead: []string{ws + "/README.md"}}, true, "decline"},
-		{"outside", agent.LaunchSpec{Workspace: "/elsewhere"}, true, "decline"},
-		{"unknown item", agent.LaunchSpec{Workspace: ws}, false, "decline"},
+		{"contained", agent.LaunchSpec{Workspace: dir}, true, "accept"},
+		{"private", agent.LaunchSpec{Workspace: dir, DenyRead: []string{filepath.Join(dir, "README.md")}}, true, "decline"},
+		{"outside", agent.LaunchSpec{Workspace: filepath.Join(t.TempDir(), "elsewhere")}, true, "decline"},
+		{"unknown item", agent.LaunchSpec{Workspace: dir}, false, "decline"},
 	} {
 		s, out := bare(c.spec)
 		s.thread = "01a1082c-8e7a-7500-862d-a89838d92417"
@@ -409,9 +414,10 @@ func TestInterruptOnlyAKnownRunningTurn(t *testing.T) {
 }
 
 func TestProfileTOML(t *testing.T) {
-	p := newProfile(agent.LaunchSpec{Workspace: ws, DenyRead: []string{"/state/private"}, Network: "off"})
+	priv := filepath.Join(t.TempDir(), "private")
+	p := newProfile(agent.LaunchSpec{Workspace: ws, DenyRead: []string{priv}, Network: "off"})
 	got := toml(p.perm)
-	for _, want := range []string{`"extends"=":workspace"`, `"/state/private"="deny"`, `":workspace_roots"={".git"="read"}`} {
+	for _, want := range []string{`"extends"=":workspace"`, strconv.Quote(priv) + `="deny"`, `":workspace_roots"={".git"="read"}`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("toml = %s, missing %s", got, want)
 		}
