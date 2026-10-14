@@ -157,6 +157,10 @@ type Frozen struct {
 	Graph           Graph
 	Hash            string
 	TrustWeakening  []Weakening
+	// Limitations are what a bound agent can't guarantee, by Stage, such
+	// as Codex's implementer shell seeing credentials (ADR-0018). They
+	// are reported, never Degraded.
+	Limitations []string `json:",omitempty"`
 	// Notices are what the resolution changed from what was asked.
 	Notices []string
 }
@@ -439,12 +443,25 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 		f.TrustWeakening = append(f.TrustWeakening, Weakening{"implement network = on", FromProject, ""})
 	}
 
+	f.Limitations = limitations(f.Stages)
+
 	if len(probs) > 0 {
 		return nil, probs
 	}
 	f.Graph = Compile(f.Mode, f.ResultGate)
 	f.Hash = f.Graph.Hash(f.Limits)
 	return f, nil
+}
+
+// limitations are the bound agents' known limitations (ADR-0018).
+func limitations(stages []Stage) []string {
+	var out []string
+	for _, s := range stages {
+		if s.Agent == "codex" && s.Role == "implementer" {
+			out = append(out, s.Name+" (codex): shell commands can see your environment's credentials; Codex's shell snapshot ignores its environment policy")
+		}
+	}
+	return out
 }
 
 func inFile(path string) string {

@@ -1053,7 +1053,7 @@ func TestExitOf(t *testing.T) {
 		"": "done", "Fixed it.": "done", "Fixed.\nExit: done": "done", "Can't.\n**Exit: infeasible**": "infeasible",
 		"exit: infeasible.": "infeasible", "Exit: bogus": "done",
 	} {
-		if got := exitOf(in, "implementer"); got != want {
+		if got := agent.ExitOf(in, "implementer"); got != want {
 			t.Errorf("exitOf(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -1061,7 +1061,7 @@ func TestExitOf(t *testing.T) {
 		"": "", "Added tests.\nExit: extended": "extended", "Exit: no_additions": "no_additions",
 		"Exit: conflicts_with_oracle": "conflicts_with_oracle", "Exit: done": "",
 	} {
-		if got := exitOf(in, "verifier"); got != want {
+		if got := agent.ExitOf(in, "verifier"); got != want {
 			t.Errorf("verifier exitOf(%q) = %q, want %q", in, got, want)
 		}
 	}

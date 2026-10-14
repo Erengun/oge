@@ -2,7 +2,10 @@ package receipt
 
 import (
 	"errors"
+	"slices"
 	"testing"
+
+	"github.com/erengun/oge/internal/pipeline"
 )
 
 // showSource serves files per commit; a path in fail errors on read.
@@ -47,5 +50,13 @@ func TestNewTestsCountsEveryDeliveredTestFile(t *testing.T) {
 	}
 	if got := newTests(src, "snap", "cand", changed, nil); got != 0 {
 		t.Errorf("no test globs: newTests = %d, want 0", got)
+	}
+}
+
+func TestReceiptListsAgentLimitations(t *testing.T) {
+	r := &Receipt{}
+	r.notCovered(&pipeline.Frozen{Limitations: []string{"implement (codex): shell commands can see credentials"}}, nil)
+	if !slices.Contains(r.NotCovered, "Agent limitation: implement (codex): shell commands can see credentials") {
+		t.Errorf("not covered = %q", r.NotCovered)
 	}
 }

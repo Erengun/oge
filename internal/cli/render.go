@@ -136,6 +136,13 @@ func renderDryRun(w io.Writer, t task.Task, f *pipeline.Frozen, hasProjectConfig
 		p("")
 		p("! %s", n)
 	}
+	if len(f.Limitations) > 0 {
+		p("")
+		p("! Agent limitations")
+		for _, l := range f.Limitations {
+			p("!   %s", l)
+		}
+	}
 	if len(f.TrustWeakening) > 0 {
 		p("")
 		p("! Trust-weakening options in effect")

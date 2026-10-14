@@ -1206,6 +1206,9 @@ func (r *Receipt) notCovered(f *pipeline.Frozen, setup *oracle.Execution) {
 			}
 			nc = append(nc, fmt.Sprintf("trust-weakening option in effect: %s (from %s)", val(clean(w.Option)), val(clean(src))))
 		}
+		for _, l := range f.Limitations {
+			nc = append(nc, "Agent limitation: "+clean(l))
+		}
 	}
 	for _, d := range r.Scope.Degraded {
 		nc = append(nc, "Degraded: "+d)
