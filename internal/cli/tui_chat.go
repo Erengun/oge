@@ -13,6 +13,7 @@ import (
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
+	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/gate"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/receipt"
@@ -398,15 +399,23 @@ func (h *home) turnEnded() (tea.Model, tea.Cmd) {
 // startCut starts the turn's cut, in the Pipeline it resolved for the
 // turn, and makes it the one verifying.
 func (h *home) startCut() tea.Cmd {
-	ctx, cancel := context.WithCancel(context.Background())
 	if v := h.verify; v != nil {
 		// Its turns are this cut's: so are its changes, at least.
 		h.turn.changed = max(h.turn.changed, v.changed)
 	}
+	return h.cutWith(h.turn.frozen, h.turn.changed)
+}
+
+// cutWith starts a cut in f's Pipeline, covering changed files at least.
+// A delivery waiting on the cut it supersedes goes with it.
+func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
 	h.cuts++
 	h.unchecked = false
-	h.verify = &chatVerify{seq: h.cuts, changed: h.turn.changed, cancel: cancel}
-	hc, f, seq := h.chat, h.turn.frozen, h.cuts
+	h.cutGate, h.gateFor = nil, nil
+	h.cutFrozen = f
+	h.verify = &chatVerify{seq: h.cuts, changed: changed, cancel: cancel}
+	hc, seq := h.chat, h.cuts
 	c := hc.get()
 	reqs, done := make(chan chatGateMsg), make(chan chatCutMsg, 1)
 	go func() {
@@ -435,8 +444,9 @@ func (h *home) cutGated(g chatGateMsg) tea.Cmd {
 		return g.next // superseded: its wait is cancelled
 	}
 	v.gate = &g
-	if h.cutGate != nil {
-		// The delivery's Gate decided: the next one opens in its place.
+	if h.gateFor != nil && h.gateFor.seq == g.seq && h.turn == nil {
+		// The delivery's Gate was decided and the same cut reached the
+		// next one: it opens at once, for the same delivery.
 		h.cutGate = &gateState{req: g.req, reply: g.reply}
 		return g.next
 	}
@@ -453,7 +463,7 @@ func (h *home) cutGated(g chatGateMsg) tea.Cmd {
 func (h *home) openCutGate(key, arg string) tea.Cmd {
 	g := h.verify.gate
 	h.cutGate = &gateState{req: g.req, reply: g.reply}
-	h.gateFor = &staleAsk{key: key, arg: arg}
+	h.gateFor = &staleAsk{key: key, arg: arg, seq: g.seq}
 	return nil
 }
 
@@ -489,6 +499,10 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 		if g.recording {
 			// Decided: the cut goes on in the background, as any does.
 			h.cutGate, h.verify.gate = nil, nil
+			switch g.choice.Word {
+			case "reject", "quit":
+				h.gateFor = nil // the delivery ends here
+			}
 			return h.println(h.ogeLine(h.st.dim(g.choice.Word + " recorded · verifying again…")))
 		}
 	default:
@@ -564,6 +578,7 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	verdict := msg.err == nil && res != nil && res.Check != nil &&
 		(res.Outcome == run.Accepted || res.Outcome == run.Failed || res.Outcome == run.Parked)
 	var line string
+	var diff tea.Cmd
 	switch {
 	case errors.Is(msg.err, run.ErrNothingToCut), errors.Is(msg.err, run.ErrSuperseded):
 		return nil
@@ -578,23 +593,30 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		l, h.last = h.chat.verdict(res, v.changed)
 		line = h.ogeLine(l)
 		if res.Outcome == run.Accepted || res.Outcome == run.Failed {
-			line += h.inlineDiff()
+			diff = h.inlineDiff()
 		}
 	}
 	// The action row acts on h.last: never on a cut the human hasn't
 	// seen yet.
 	h.actions = false
-	if deliver != nil && h.last != nil && res != nil && res.Outcome == run.Accepted {
-		// Through its Gate: the delivery /apply or /branch asked for.
-		return tea.Sequence(h.println(line), h.actNow(deliver.key, deliver.arg))
+	if deliver != nil && deliver.seq == msg.seq && h.last != nil && res != nil && res.Outcome == run.Accepted {
+		// Through its Gate: the delivery /apply or /branch asked for, of
+		// this very cut, and never under a turn.
+		if h.turn != nil {
+			return h.println(line + "\n" + h.ogeLine(h.st.dim("ready to "+deliver.verb()+" · /"+deliver.verb())))
+		}
+		return tea.Sequence(h.println(line), diff, h.actNow(deliver.key, deliver.arg))
 	}
-	return h.println(line)
+	return tea.Sequence(h.println(line), diff)
 }
 
 // staleAsk is /apply or /branch while newer edits than the verified cut
 // are unchecked: a cut still verifying, or an interrupted turn's changes.
 type staleAsk struct {
 	key, arg string // the action's key, and a branch's name
+	// last is the verified cut when it was asked: [a] delivers that one.
+	last *lastRun
+	seq  int // a Gate's delivery: the cut whose Gate was decided
 }
 
 func (s *staleAsk) verb() string {
@@ -611,8 +633,9 @@ func (h *home) staleKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
 	case "a":
 		h.stale = nil
-		if h.last == nil {
-			return nil // the verified cut is gone meanwhile (/new)
+		if h.last == nil || h.last != s.last {
+			// /new, or a newer Verdict came in meanwhile: ask again.
+			return h.println(h.ogeLine(h.st.dim("the verified cut changed; nothing delivered")))
 		}
 		return h.actNow(s.key, s.arg)
 	case "w", "esc", "ctrl+c":
@@ -625,24 +648,35 @@ func (h *home) staleKey(k tea.KeyPressMsg) tea.Cmd {
 // inlineMax is the most diff lines the Chat shows under a Verdict.
 const inlineMax = 20
 
-// inlineDiff is h.last's diff under its Verdict line, dim and indented,
-// when it is inlineMax lines or fewer; "" otherwise. It is the agent's
-// content: cleaned, every line.
-func (h *home) inlineDiff() string {
+// inlineDiff prints h.last's diff under its Verdict line, dim, indented
+// and cut to the width, when it is inlineMax lines or fewer; nothing
+// otherwise. Like the Verdict's file count, it is the Candidate's change
+// since the Chat's Snapshot. It is the agent's content: cleaned, every
+// line. The diff is read off the update loop.
+func (h *home) inlineDiff() tea.Cmd {
 	if h.last == nil || h.last.patch == nil {
-		return ""
+		return nil
 	}
-	patch, err := h.last.patch()
-	text := strings.TrimRight(string(patch), "\n")
-	if err != nil || text == "" || strings.Count(text, "\n")+1 > inlineMax {
-		return ""
+	patch, width := h.last.patch, h.width
+	if width <= 0 {
+		width = 80
 	}
-	var b strings.Builder
-	for _, l := range strings.Split(cleanLines(text), "\n") {
-		b.WriteString("\n" + h.st.dim("    "+l))
+	return func() tea.Msg {
+		b, err := patch()
+		text := strings.TrimRight(string(b), "\n")
+		if err != nil || text == "" || strings.Count(text, "\n")+1 > inlineMax {
+			return nil
+		}
+		lines := strings.Split(cleanLines(text), "\n")
+		for i, l := range lines {
+			lines[i] = ansi.Truncate("    "+l, max(width-1, 8), "…")
+		}
+		return chatDiffMsg(lines)
 	}
-	return b.String()
 }
+
+// chatDiffMsg is a Verdict's inline diff, ready to print.
+type chatDiffMsg []string
 
 // chatKey takes a key during a turn. Esc interrupts the turn; so does
 // Ctrl+C, and a second Ctrl+C quits. y or n answers a
@@ -693,6 +727,12 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return h, h.println(h.ogeLine(h.st.dim("answered: " + clean(text))))
 			}
 			return h, h.answer(a, agent.Answer{Allow: true, Answers: h.turn.answers})
+		}
+		if word, _, _, ok := parseSlash(text); ok {
+			// A command is never the agent's message: it waits, in the
+			// composer, for the turn to end.
+			h.comp.set(text)
+			return h, h.println(h.ogeLine(h.st.dim(clean(word) + ": wait for the turn to finish")))
 		}
 		t.queued = append(t.queued, text)
 		return h, nil
@@ -774,46 +814,77 @@ func (h *home) turnView() string {
 	return strings.Join(lines, "\n")
 }
 
-// chatDelivered is what /apply or /branch of the cut res shows: once it
-// is delivered the Chat marks it, so the next cut's Task starts after its
-// turns (D7), and an apply is summed up in three lines (the outcome, the
-// files, the checks) with the Receipt behind /receipt. A refusal shows
-// as the command printed it; the Chat goes on either way.
-func (h *home) chatDelivered(c *run.Chat, res *run.Result, changed int, how, out string, code int) string {
+// chatDelivered is what /branch of the cut res shows: once it is
+// delivered the Chat marks it, so the next cut's Task starts after its
+// turns (D7). A refusal shows as the command printed it.
+func (h *home) chatDelivered(c *run.Chat, res *run.Result, how, out string, code int) string {
+	out = strings.TrimSuffix(out, "\n")
 	if code != ExitOK || c == nil {
 		return out
 	}
-	var note string
-	if err := c.Delivered(res.ID, how); err != nil {
-		note = "\n" + h.ogeLine("✗ marking the delivery: "+clean(err.Error()))
+	if err := c.Delivered(res.ID, how, res.Candidate); err != nil {
+		out += "\n" + h.ogeLine("✗ marking the delivery: "+clean(err.Error()))
 	}
-	if how != "apply" {
-		return strings.TrimSuffix(out, "\n") + note
+	return out
+}
+
+// chatApply is /apply of the cut res: summed up in three lines (the
+// outcome, the files written, the checks) with the Receipt behind
+// /receipt, and marked delivered (D7). After the Chat's first apply it
+// merges on the commit last applied, not the Snapshot: the working tree
+// holds that one already (#261). A cut whose turns have a Tamper event
+// it never carried is refused, and cut again. The Chat goes on.
+func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) string {
+	r, err := delivery.Load(res.Dir)
+	if err != nil {
+		return "oge: " + clean(err.Error())
 	}
-	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
-	files := []string{}
-	if a := res.Attempt; a != nil {
-		files = a.Changed
+	base := ""
+	if c != nil {
+		if err := c.Deliverable(res.ID, res.Dir); err != nil {
+			if errors.Is(err, run.ErrTamperAfterCut) {
+				h.recut = true
+			}
+			return h.ogeLine("✗ not applied: " + clean(err.Error()))
+		}
+		base = c.Applied()
 	}
-	shown := files
-	if len(shown) > 5 {
-		shown = shown[:5]
+	var b strings.Builder
+	q := env
+	q.Stdout, q.Stderr = &b, &b
+	code, a := applyOnto(q, r, root, delivery.Choice{}, base)
+	if code != ExitOK || a == nil {
+		return strings.TrimSuffix(b.String(), "\n")
 	}
-	what := plural(max(len(files), changed), "file")
-	if len(shown) > 0 {
-		what += ": " + clean(strings.Join(shown, ", "))
+	p := a.Plan
+	var first, note string
+	switch {
+	case p.Writes() == 0 && p.Already == 0:
+		return h.ogeLine("✗ nothing applied: everything " + clean(res.ID) + " changes is held back") + heldLines(a.Held)
+	case p.Writes() == 0:
+		first = "✓ " + clean(res.ID) + " is already in your working tree; nothing to change"
+	case p.Merged > 0:
+		first = fmt.Sprintf("✓ Applied %s, merged with your edits in %s · nothing committed or staged · /receipt", clean(res.ID), plural(p.Merged, "file"))
+	default:
+		first = "✓ Applied " + clean(res.ID) + " to your working tree · nothing committed or staged · /receipt"
+	}
+	if c != nil {
+		if err := c.Delivered(res.ID, "apply", a.Held.Rev); err != nil {
+			note = "\n" + h.ogeLine("✗ marking the delivery: "+clean(err.Error()))
+		}
+	}
+	files := p.Paths()
+	what := "no files written"
+	if len(files) > 0 {
+		shown := files[:min(len(files), 5)]
+		what = plural(len(files), "file") + ": " + clean(strings.Join(shown, ", "))
 		if len(files) > len(shown) {
 			what += fmt.Sprintf(", +%d more", len(files)-len(shown))
 		}
 	}
-	sum := []string{
-		h.ogeLine("✓ Applied " + clean(res.ID) + " to your working tree · nothing committed or staged · /receipt"),
-		"  " + what,
-		"  checks: " + checkSummary(res),
-	}
+	sum := []string{h.ogeLine(first), "  " + what, "  checks: " + checkSummary(res)}
 	// What a hold-back left out is never dropped from the summary.
-	sum = append(sum, lines[1:]...)
-	return strings.Join(sum, "\n") + note
+	return strings.Join(sum, "\n") + heldLines(a.Held) + note
 }
 
 // checkSummary is a cut's Check in a few words: how many tests passed.

@@ -361,10 +361,17 @@ func banner(w io.Writer, r *delivery.Run) {
 }
 
 func applyCommand(env Env, r *delivery.Run, root string, c delivery.Choice) int {
+	code, _ := applyOnto(env, r, root, c, "")
+	return code
+}
+
+// applyOnto is applyCommand merging on base ("" is the Snapshot), and
+// what it applied.
+func applyOnto(env Env, r *delivery.Run, root string, c delivery.Choice, base string) (int, *delivery.Applied) {
 	if code := authorize(env, r, c, "apply"); code != ExitOK {
-		return code
+		return code, nil
 	}
-	a, err := delivery.Apply(r, root, c)
+	a, err := delivery.ApplyOnto(r, root, c, base)
 	var conflict *delivery.ConflictError
 	switch {
 	case errors.As(err, &conflict):
@@ -373,12 +380,12 @@ func applyCommand(env Env, r *delivery.Run, root string, c delivery.Choice) int 
 			fmt.Fprintf(env.Stderr, "  %s\n", clean(c))
 		}
 		fmt.Fprintf(env.Stderr, "Commit, stash or undo those edits and run oge apply %s again, or take it as a branch: oge branch %s\n", r.ID, r.ID)
-		return ExitRefused
+		return ExitRefused, nil
 	case err != nil:
-		return deliveryFailed(env, err)
+		return deliveryFailed(env, err), nil
 	}
 	fmt.Fprintln(env.Stdout, appliedLine(r, a))
-	return ExitOK
+	return ExitOK, a
 }
 
 // authorize refuses a delivery the Run's outcome doesn't allow, or one

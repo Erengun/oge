@@ -439,6 +439,10 @@ type home struct {
 	// gateFor is that delivery, made once the cut is Accepted.
 	cutGate *gateState
 	gateFor *staleAsk
+	// cutFrozen is the newest cut's Pipeline; recut: a delivery refused
+	// for a late Tamper event asks for the cut again.
+	cutFrozen *pipeline.Frozen
+	recut     bool
 	// resetting: /new is closing the old Chat.
 	resetting bool
 }
@@ -588,6 +592,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatGateMsg:
 		return h, h.cutGated(m)
+	case chatDiffMsg:
+		lines := []string(m)
+		for i, l := range lines {
+			lines[i] = h.st.dim(l)
+		}
+		return h, h.println(strings.Join(lines, "\n"))
 	case chatClosedMsg:
 		h.resetting = false
 		return h, nil
@@ -1039,10 +1049,16 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // and says so when a newer one is.
 // TODO(#261): ask apply verified / wait.
 func (h *home) act(key, arg string) tea.Cmd {
-	if (key == "a" || key == "b") && h.last != nil && (h.verify != nil || h.unchecked) {
-		// Newer edits than the verified cut: delivering it is a choice.
-		h.stale = &staleAsk{key: key, arg: arg}
-		return nil
+	if key == "a" || key == "b" {
+		if v := h.verify; v != nil && v.gate != nil {
+			// The newest cut waits at its Gate: delivered only through it.
+			return h.openCutGate(key, arg)
+		}
+		if h.last != nil && (h.verify != nil || h.unchecked) {
+			// Newer edits than the verified cut: delivering it is a choice.
+			h.stale = &staleAsk{key: key, arg: arg, last: h.last}
+			return nil
+		}
 	}
 	return h.actNow(key, arg)
 }
@@ -1059,7 +1075,15 @@ func (h *home) actNow(key, arg string) tea.Cmd {
 	if key == "d" && h.last != nil && h.openDiff(h.last.id) {
 		return notice // the viewer; the pager is its fallback
 	}
-	return tea.Sequence(notice, h.last.act(key, arg, h.fit))
+	cmd := h.last.act(key, arg, h.fit)
+	if h.recut {
+		// Refused for a late Tamper event: its turns are cut again.
+		h.recut = false
+		if h.chat != nil && h.cutFrozen != nil && h.turn == nil {
+			cmd = tea.Sequence(cmd, h.cutWith(h.cutFrozen, 0))
+		}
+	}
+	return tea.Sequence(notice, cmd)
 }
 
 // onEnded prints the Run's summary above the program (its stages are
@@ -1639,8 +1663,9 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 				return line + "\noge: reading the Run for delivery: " + clean(err.Error()), nil
 			}
 			c := hc.get()
+			l.apply = func() string { return h.chatApply(env, root, c, res) }
 			l.delivered = func(how, out string, code int) string {
-				return h.chatDelivered(c, res, changed, how, out, code)
+				return h.chatDelivered(c, res, how, out, code)
 			}
 			return line, l
 		}
