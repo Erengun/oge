@@ -486,6 +486,11 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 	case "enter":
 		g.enter(h.height)
+		if g.recording {
+			// Decided: the cut goes on in the background, as any does.
+			h.cutGate, h.verify.gate = nil, nil
+			return h.println(h.ogeLine(h.st.dim(g.choice.Word + " recorded · verifying again…")))
+		}
 	default:
 		if k.Text != "" {
 			g.input += clean(k.Text)
