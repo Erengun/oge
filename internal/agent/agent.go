@@ -138,6 +138,19 @@ type Event struct {
 	// human (Host.Decision "ask"): the turn waits for its Reply. Never
 	// written to the stream or Ledger.
 	Ask *Ask `json:"-"`
+	// Scope is a Chat turn's scope result, on its TurnSettled event: set by
+	// the Chat, never by an adapter, and never written to the stream.
+	Scope *TurnScope `json:"-"`
+}
+
+// TurnScope is what a Chat turn changed in the Workspace, as a judged role
+// would see it (ADR-0009): the paths it changed, Promoted, Ambiguous or
+// Excluded against the Snapshot, and the protected paths it wrote, which
+// were reverted and recorded as Tamper events.
+type TurnScope struct {
+	Turn                          int
+	Promoted, Ambiguous, Excluded []string
+	Tamper                        []string
 }
 
 // Ask is a permission prompt waiting for the host's answer.

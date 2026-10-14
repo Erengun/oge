@@ -1,13 +1,16 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,7 @@ import (
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/pipeline"
+	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/task"
 	"github.com/erengun/oge/internal/workspace"
 )
@@ -24,8 +28,21 @@ import (
 // A Chat is bare oge's conversation (docs/ux/chat-first.md, slice 4): one
 // Snapshot, one implementer Workspace and one long-lived implementer
 // Session, with one Send per turn. Nothing cuts, checks or records a Chat
-// log yet (slices 5 and 6), and nothing opens one but tests until the
-// home is wired to it (slice 7).
+// Its Chat log, in its private directory, is a Ledger written ahead
+// (slice 5). After each turn the same scope check an implementer Attempt
+// gets reverts and records protected writes; nothing cuts yet (slice 6),
+// and nothing opens a Chat but tests until the home is wired to it (slice
+// 7).
+
+// Chat log records (docs/ux/chat-first.md, "Ledger and Receipt"). A turn's
+// scope check writes ScopeObserved, ScopeReverted and TamperEvent, as an
+// Attempt's does, each with the turn.
+const (
+	RecChatStarted     = "ChatStarted"
+	RecTurnStarted     = "TurnStarted"
+	RecSessionReopened = "SessionReopened"
+	RecHeldOutViewed   = "HeldOutViewed"
+)
 
 // ChatFlag is the hidden environment flag a Chat opens behind: "1" opens
 // one. TODO(#256-decision): slice 7 flips it when the home is wired.
@@ -66,22 +83,42 @@ type Chat struct {
 	Workspace string
 	Snapshot  string
 
-	role    string
-	work    string // its disposable directory, the Workspace's parent
-	brief   string
-	instr   string
-	deny    []string
-	l       *ledger.Ledger
-	sess    agent.Session
-	idle    time.Duration
-	pumped  chan struct{} // closed when the Session's events end
-	stop    chan struct{} // closed by Close: events go undelivered
-	closing sync.Once
-	unctx   func() bool // stops the parent context closing the Chat
+	role      string
+	work      string // its disposable directory, the Workspace's parent
+	brief     string
+	instr     string
+	deny      []string
+	checks    []string
+	frozen    *pipeline.Frozen
+	repo      *workspace.RunRepo
+	blobs     *ledger.Blobs
+	protected func(string) string // the implementer's protected set
+	adapter   agent.Adapter
+	spec      agent.LaunchSpec
+	ctx       context.Context // the parent context, for a reopened Session
+	idle      time.Duration
+	stop      chan struct{} // closed by Close: events go undelivered
+	closing   sync.Once
+	unctx     func() bool // stops the parent context closing the Chat
+	reopening sync.Mutex  // one Session reopens at a time
 
-	mu    sync.Mutex
-	turns int
-	cur   *turnOut // the turn in flight's events
+	logMu sync.Mutex // the Chat log takes one record at a time
+	l     *ledger.Ledger
+
+	// last is the commit of the Workspace after the last turn's scope
+	// check: the Snapshot at first. Only the pump touches it.
+	last string
+
+	mu     sync.Mutex
+	sess   agent.Session
+	pumped chan struct{} // closed when the Session's events end
+	turns  int
+	msgs   []string // the user's turns, verbatim
+	// rebrief is set when the Session was reopened: its first turn gets
+	// the re-brief.
+	rebrief bool
+	closed  bool
+	cur     *turnOut // the turn in flight's events
 	// sending is the turn whose message is being written: if the Session
 	// ends meanwhile, the write's outcome labels it, not drop.
 	sending *turnOut
@@ -96,14 +133,31 @@ type queuedTurn struct {
 }
 
 // turnOut is one turn's event channel. Only its methods send on it or
-// close it, so a late event can't reach a closed channel.
+// close it, so a late event can't reach a closed channel. Its record
+// fields are the pump's.
 type turnOut struct {
 	mu     sync.Mutex
 	ch     chan agent.Event
 	closed bool
+
+	n      int          // the turn's number
+	stream bytes.Buffer // its events, for the AttemptEnded blob
+	reply  []string     // what it said
+	usage  *agent.Event // its last Usage
 }
 
 func newTurnOut() *turnOut { return &turnOut{ch: make(chan agent.Event, 64)} }
+
+// record keeps ev for the turn's AttemptEnded.
+func (t *turnOut) record(ev agent.Event) {
+	_ = json.NewEncoder(&t.stream).Encode(ev)
+	switch {
+	case ev.Kind == agent.Claim && ev.Tool == "":
+		t.reply = append(t.reply, ev.Text)
+	case ev.Kind == agent.Usage:
+		t.usage = &ev
+	}
+}
 
 // send delivers ev unless the turn has ended or stop is closed.
 func (t *turnOut) send(ev agent.Event, stop <-chan struct{}) {
@@ -180,7 +234,8 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 		return nil, fmt.Errorf("refused: %s", strings.Join(why, "; "))
 	}
 
-	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{})}
+	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
+		frozen: p.Frozen, adapter: adapter, ctx: ctx}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -200,23 +255,49 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	if c.l, err = ledger.Create(c.Dir); err != nil {
 		return nil, err
 	}
+	if c.blobs, err = ledger.OpenBlobs(c.Dir); err != nil {
+		return nil, err
+	}
+	frozenJSON, err := json.Marshal(p.Frozen)
+	if err != nil {
+		return nil, err
+	}
+	frozenBlob, err := c.blobs.Put(frozenJSON)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.log(RecChatStarted, map[string]any{"chat": c.ID, "created": time.Now().UTC(), "source": p.Repo,
+		"frozen": frozenBlob, "graph_hash": p.Frozen.Hash, "mode": p.Frozen.Mode, "role": role}); err != nil {
+		return nil, err
+	}
 	repo, err := workspace.InitRunRepo(filepath.Join(c.Dir, "repo.git"))
 	if err != nil {
 		return nil, err
 	}
+	c.repo = repo
 	c.Workspace = filepath.Join(c.work, "implement")
 	snap, info, err := repo.TakeSnapshot(p.Repo, c.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	c.Snapshot = snap
+	c.Snapshot, c.last = snap, snap
 	if err := repo.InitWorkspaceGit(c.Workspace); err != nil {
 		return nil, err
 	}
-	if err := c.l.Append(RecSnapshotTaken, map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
+	if err := c.log(RecSnapshotTaken, map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
 		"modified": info.Modified, "untracked": info.Untracked}); err != nil {
 		return nil, err
 	}
+	// Each turn is held to the Oracle version and the config frozen here,
+	// as an implementer Attempt is.
+	m, mBlob, err := oracle.NewV0(repo, snap, p.Frozen, c.blobs)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.log(RecOracleVersion, map[string]any{"version": m.Version, "manifest": mBlob, "tests": len(m.Tests)}); err != nil {
+		return nil, err
+	}
+	c.protected = implementerScope(m, p.Frozen)
 	if c.instr, err = repoInstructions(repo, snap); err != nil {
 		return nil, err
 	}
@@ -224,6 +305,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	for _, ch := range p.Frozen.Checks {
 		checks = append(checks, ch.Run)
 	}
+	c.checks = checks
 	c.brief = briefing.Chat(checks)
 	cache := filepath.Join(c.work, "cache", stage.Name)
 	if err := os.MkdirAll(cache, 0o700); err != nil {
@@ -232,17 +314,17 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	// Öge's private state and QA's directory, where held-out tests are
 	// written: the hard denies on top of the auto mode.
 	c.deny = []string{p.State.Private, filepath.Join(c.work, qaDir)}
-	spec := agent.LaunchSpec{
+	c.spec = agent.LaunchSpec{
 		Role: role, Model: stage.Model, Effort: stage.Effort, Profile: stage.Profile, Workspace: c.Workspace,
 		Network: stage.Network, RunID: c.ID, RepoInstructions: c.instr, CheckCommands: checks,
 		DenyRead: c.deny, Cache: cache, Permissions: agent.AutoPermissions,
 		StateRoots: []string{p.State.Dir, p.State.Private, p.State.Work},
 	}
-	if c.sess, err = adapter.Open(ctx, spec); err != nil {
+	if c.sess, err = adapter.Open(ctx, c.spec); err != nil {
 		return nil, err
 	}
 	proc := c.sess.Process()
-	if err := c.l.Append(RecProcessStarted, map[string]any{"chat": c.ID, "pid": proc.PID, "pgid": proc.PGID,
+	if err := c.log(RecProcessStarted, map[string]any{"chat": c.ID, "pid": proc.PID, "pgid": proc.PGID,
 		"launch_profile": launchProfile(stage), "permissions": agent.AutoPermissions}); err != nil {
 		c.sess.Close()
 		return nil, err
@@ -250,7 +332,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	c.mu.Lock()
 	c.timer = time.AfterFunc(c.idle, c.idleOut)
 	c.mu.Unlock()
-	go c.pump()
+	go c.pump(c.sess, c.pumped)
 	// The Chat lives no longer than its parent context.
 	c.mu.Lock()
 	c.unctx = context.AfterFunc(ctx, func() { c.Close() })
@@ -258,17 +340,33 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	return c, nil
 }
 
+// log appends one record to the Chat log.
+func (c *Chat) log(typ string, data any) error {
+	c.logMu.Lock()
+	defer c.logMu.Unlock()
+	return c.l.Append(typ, data)
+}
+
 // Send sends one user turn and returns its events, which end with the
-// turn's TurnSettled and are then closed. A turn sent while another is in
-// flight queues: nothing enters a running turn. The caller must drain the
-// channel, and answers an Ask (an event with Ask set) for the turn to go
-// on.
+// turn's TurnSettled and are then closed; the TurnSettled carries the
+// turn's scope result. A turn sent while another is in flight queues:
+// nothing enters a running turn. After an idle timeout or a crash, Send
+// first reopens a fresh Session in the same Workspace, which the turn
+// re-briefs (#185). The caller must drain the channel, and answers an Ask
+// (an event with Ask set) for the turn to go on.
 func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := newTurnOut()
 	c.mu.Lock()
+	if !c.closed && (errors.Is(c.err, ErrChatIdle) || errors.Is(c.err, ErrChatLost)) {
+		c.mu.Unlock()
+		if err := c.reopen(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+	}
+	out := newTurnOut()
 	if c.err != nil {
 		err := c.err
 		c.mu.Unlock()
@@ -283,83 +381,327 @@ func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error
 	return out.ch, err
 }
 
-// start begins a turn with c.mu held, and releases it.
+// reopen opens a fresh implementer Session in the same Workspace once the
+// last one has ended (the spec's fallback after an idle timeout or a
+// crash). The work survives; the conversation's memory doesn't.
+func (c *Chat) reopen(ctx context.Context) error {
+	c.reopening.Lock()
+	defer c.reopening.Unlock()
+	c.mu.Lock()
+	why, pumped := c.err, c.pumped
+	c.mu.Unlock()
+	if !errors.Is(why, ErrChatIdle) && !errors.Is(why, ErrChatLost) {
+		return nil // reopened meanwhile, or never ended
+	}
+	select {
+	case <-pumped:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	sess, err := c.adapter.Open(c.ctx, c.spec)
+	if err != nil {
+		return fmt.Errorf("reopening the chat Session: %w", err)
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		_ = sess.Close()
+		return ErrChatClosed
+	}
+	c.sess, c.pumped, c.err, c.rebrief = sess, make(chan struct{}), nil, true
+	pumped, next := c.pumped, c.turns+1
+	c.mu.Unlock()
+	reason := "lost"
+	if errors.Is(why, ErrChatIdle) {
+		reason = "idle"
+	}
+	proc := sess.Process()
+	err = c.log(RecSessionReopened, map[string]any{"chat": c.ID, "reason": reason, "turn": next,
+		"pid": proc.PID, "pgid": proc.PGID, "permissions": agent.AutoPermissions})
+	go c.pump(sess, pumped)
+	return err
+}
+
+// start begins a turn with c.mu held, and releases it. TurnStarted and
+// the turn's manifest are written ahead of the message.
 func (c *Chat) start(text string, out *turnOut) error {
 	c.turns++
 	n := c.turns
+	out.n = n
+	c.msgs = append(c.msgs, text)
+	msgs := append([]string(nil), c.msgs...)
+	fresh := n == 1 || c.rebrief
+	c.rebrief = false
+	sess := c.sess
 	c.cur, c.sending = out, out
 	c.timer.Stop()
 	c.mu.Unlock()
 	sent := text
-	if n == 1 {
+	switch {
+	case n == 1:
 		sent = text + c.brief
+	case fresh:
+		sent = briefing.ChatReopened(task.Task{Text: msgs[0], FollowUps: msgs[1:]}, c.checks)
 	}
 	var err error
-	if n > 1 {
+	if !fresh {
 		err = reuse(c.role) // D1, again at the point of reuse
 	}
 	if err == nil {
-		// The manifest is written ahead of the turn (ADR-0009 as amended).
-		err = c.l.Append(RecBriefingManifest, c.manifest(n, text, sent))
+		err = c.log(RecTurnStarted, map[string]any{"chat": c.ID, "turn": n, "message": sha256Hex(text)})
 	}
 	if err == nil {
-		err = c.sess.Send(agent.Turn{Text: sent})
+		// The manifest is written ahead of the turn (ADR-0009 as amended).
+		err = c.log(RecBriefingManifest, c.manifest(n, fresh, msgs, sent))
+	}
+	if err == nil {
+		err = sess.Send(agent.Turn{Text: sent})
 	}
 	c.mu.Lock()
-	c.sending = nil
-	ended := err != nil || c.err != nil
+	var last *agent.Event
 	if err != nil {
-		out.end(&agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()})
+		last = &agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()}
 	} else if c.err != nil {
-		out.end(&agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()})
+		last = &agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()}
+	} else {
+		c.sending = nil
 	}
 	c.mu.Unlock()
-	if ended {
+	if last != nil {
+		ev := c.finish(out, *last, false)
+		c.mu.Lock()
+		c.sending = nil
+		out.end(&ev)
+		c.mu.Unlock()
 		c.settled(out)
 	}
 	return err
 }
 
-// manifest is a turn's Briefing-manifest entry. The first turn carries the
-// chat Briefing in a fresh Session; every later one is the user's message
-// verbatim, in the same Session (D1, disclosed).
-func (c *Chat) manifest(n int, msg, sent string) map[string]any {
-	sum := func(s string) string {
-		h := sha256.Sum256([]byte(s))
-		return hex.EncodeToString(h[:])
-	}
-	if n == 1 {
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+// manifest is a turn's Briefing-manifest entry. A fresh Session's first
+// turn carries the chat Briefing (after a reopen, the re-brief with the
+// user's turns so far); every later one is the user's message verbatim,
+// in the same Session (D1, disclosed).
+func (c *Chat) manifest(n int, fresh bool, msgs []string, sent string) map[string]any {
+	if fresh {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: "implementer"}
-		m := briefingManifest(Params{Task: task.Task{Text: msg}}, a, attemptSpec{start: c.Snapshot}, sent, c.instr, c.deny)
+		t := task.Task{Text: msgs[0], FollowUps: msgs[1:]}
+		m := briefingManifest(Params{Task: t}, a, attemptSpec{start: c.Snapshot}, sent, c.instr, c.deny)
 		m["chat"], m["turn"], m["session_reused"] = c.ID, n, false
 		return m
 	}
 	return map[string]any{"chat": c.ID, "turn": n, "attempt": fmt.Sprintf("chat#%d", n), "role": "implementer",
-		"items":   []map[string]string{{"item": "turn", "source": "the user's message, verbatim", "sha256": sum(msg)}},
+		"items":   []map[string]string{{"item": "turn", "source": "the user's message, verbatim", "sha256": sha256Hex(msgs[n-1])}},
 		"session": "reused", "session_reused": true}
 }
 
-// pump routes the Session's events to the turn in flight.
-func (c *Chat) pump() {
-	defer close(c.pumped)
-	for ev := range c.sess.Events() {
+// pump routes the Session's events to the turn in flight. A settled turn
+// gets its scope check before its TurnSettled is delivered.
+func (c *Chat) pump(sess agent.Session, pumped chan struct{}) {
+	defer close(pumped)
+	for ev := range sess.Events() {
 		c.mu.Lock()
 		out := c.cur
 		c.mu.Unlock()
 		if out == nil {
 			continue
 		}
-		out.send(ev, c.stop)
+		out.record(ev)
 		if ev.Kind == agent.TurnSettled {
+			ev = c.finish(out, ev, true)
+			out.send(ev, c.stop)
 			c.settled(out)
+			continue
 		}
+		out.send(ev, c.stop)
 	}
 	c.mu.Lock()
 	if c.err == nil {
 		c.err = ErrChatLost
 	}
+	cur, sending, why := c.cur, c.sending, c.err
+	c.mu.Unlock()
+	if cur != nil && cur != sending {
+		// The agent ran in this turn: its writes are checked too.
+		ev := c.finish(cur, agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + why.Error()}, true)
+		cur.end(&ev)
+	}
+	c.mu.Lock()
 	c.drop()
 	c.mu.Unlock()
+}
+
+// finish writes a turn's end to the Chat log: when the agent ran, the
+// scope check (ADR-0012: planned, then reverted, then each Tamper event),
+// then AttemptEnded. It returns ev with the turn's scope result. A record
+// the log can't take ends the Chat.
+func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
+	a := &Attempt{ID: fmt.Sprintf("chat#%d", out.n), Role: c.role}
+	err := func() error {
+		var changes map[string]any
+		if ran {
+			ts, ch, err := c.checkScope(a, out.n)
+			if err != nil {
+				return err
+			}
+			ev.Scope, changes = ts, ch
+		}
+		blob, err := c.blobs.Put(redact.Redact(out.stream.Bytes()))
+		if err != nil {
+			return err
+		}
+		ev.Failure = failAttempt(ev.Failure, a.Failure)
+		ended := map[string]any{"chat": c.ID, "turn": out.n, "attempt": a.ID, "events": blob,
+			"reply":   string(redact.Redact([]byte(strings.Join(out.reply, "\n")))),
+			"failure": string(redact.Redact([]byte(ev.Failure)))}
+		if ev.Stop != "" {
+			ended["stop"] = string(redact.Redact([]byte(ev.Stop)))
+		}
+		if u := out.usage; u != nil {
+			ended["usage"] = map[string]any{"cost_usd": u.CostUSD, "tokens": u.Tokens}
+		}
+		if changes != nil {
+			ended["changes"] = changes
+		}
+		return c.log(RecAttemptEnded, ended)
+	}()
+	if err != nil {
+		ev.Failure = failAttempt(ev.Failure, "chat_log_failed: "+err.Error())
+		c.mu.Lock()
+		if c.err == nil {
+			c.err = fmt.Errorf("the chat log failed: %w", err)
+		}
+		c.mu.Unlock()
+	}
+	return ev
+}
+
+// checkScope is a turn's scope check: the one an implementer Attempt gets
+// (enforceScope), with the turn recorded, while the Session lives on.
+// Protected writes are reverted silently and each is a Tamper event; an
+// edit that only adds to an Oracle test is kept (#117). The reverted
+// Workspace is then committed as the turn's commit, whose changes since
+// the last turn's are classified. A comparison or revert the Workspace
+// defeats fails the turn (a.Failure); err is a Chat log failure.
+func (c *Chat) checkScope(a *Attempt, n int) (*agent.TurnScope, map[string]any, error) {
+	turn := map[string]any{"chat": c.ID, "turn": n}
+	added := map[string][]string{}
+	s, err := c.repo.CheckScope(c.Workspace, c.Snapshot, scopeRules(a.Role, c.protected, c.blobs.Put, added))
+	if err != nil {
+		a.Failure = failAttempt(a.Failure, "scope_check_failed: "+err.Error())
+		return nil, nil, nil
+	}
+	kept := []KeptTest{}
+	for p, oid := range s.Kept {
+		kept = append(kept, KeptTest{Path: p, Class: ClassOracleTestAddition, OID: oid, Added: added[p]})
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].Path < kept[j].Path })
+	if err := c.log(RecScopeObserved, map[string]any{
+		"chat": c.ID, "turn": n, "attempt": a.ID, "role": a.Role, "state": "planned", "compared": s.Compared,
+		"reverted": nonNil(s.Reverts), "kept": kept, "tamper": s.Tamper(), "enforcement": workspace.RevertOnly,
+	}); err != nil {
+		return nil, nil, err
+	}
+	applyErr := s.Apply()
+	done := map[string]any{"chat": c.ID, "turn": n, "attempt": a.ID, "reverted": applyErr == nil}
+	if applyErr != nil {
+		done["error"] = applyErr.Error()
+	}
+	if err := c.log(RecScopeReverted, done); err != nil {
+		return nil, nil, err
+	}
+	c.logMu.Lock()
+	err = recordTamper(c.l, a, s.Reverts, applyErr == nil, false, turn)
+	c.logMu.Unlock()
+	if err != nil {
+		return nil, nil, err
+	}
+	a.Reverted = s.Reverts
+	if applyErr != nil {
+		a.Failure = failAttempt(a.Failure, "revert_failed: "+applyErr.Error())
+		return nil, nil, nil
+	}
+	commit, late, err := c.repo.CommitScoped(c.Workspace, c.last, c.Snapshot, fmt.Sprintf("Chat %s turn %d", c.ID, n), c.protected, s.Links, s.Kept)
+	var addErr *workspace.AddError
+	if errors.As(err, &addErr) {
+		a.Failure = failAttempt(a.Failure, "turn_commit_failed: "+addErr.Error())
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(late) > 0 {
+		if err := c.log(RecScopeObserved, map[string]any{
+			"chat": c.ID, "turn": n, "attempt": a.ID, "role": a.Role, "state": "late", "reverted": late,
+			"tamper": countTamper(late), "enforcement": workspace.RevertOnly,
+		}); err != nil {
+			return nil, nil, err
+		}
+		c.logMu.Lock()
+		err = recordTamper(c.l, a, late, true, true, turn)
+		c.logMu.Unlock()
+		if err != nil {
+			return nil, nil, err
+		}
+		a.Reverted = append(a.Reverted, late...)
+	}
+	if err := c.repo.SetRef(fmt.Sprintf("refs/oge/chat/turns/%d", n), commit); err != nil {
+		return nil, nil, err
+	}
+	changed, err := c.repo.ChangedFiles(c.last, commit)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, withheld, err := c.repo.Classify(c.Snapshot, commit, c.promotedNew)
+	if err != nil {
+		return nil, nil, err
+	}
+	class := map[string]string{}
+	for _, w := range withheld {
+		class[w.Path] = w.Class
+	}
+	ts := &agent.TurnScope{Turn: n, Promoted: []string{}, Ambiguous: []string{}, Excluded: []string{}, Tamper: []string{}}
+	for _, p := range changed {
+		switch {
+		case class[p] == workspace.ClassAmbiguous:
+			ts.Ambiguous = append(ts.Ambiguous, p)
+		case class[p] == workspace.ClassExcluded, workspace.Excluded(p) && !c.promotedNew(p):
+			ts.Excluded = append(ts.Excluded, p)
+		default:
+			ts.Promoted = append(ts.Promoted, p)
+		}
+	}
+	for _, r := range a.Reverted {
+		if r.Tamper {
+			ts.Tamper = append(ts.Tamper, r.Path)
+		}
+	}
+	c.last = commit
+	return ts, map[string]any{"commit": commit, "promoted": ts.Promoted, "ambiguous": ts.Ambiguous, "excluded": ts.Excluded}, nil
+}
+
+// promotedNew is walk.promotedNew without a human's promotions, which a
+// Chat has none of yet.
+func (c *Chat) promotedNew(p string) bool {
+	pr := c.frozen.Project
+	if workspace.Excluded(p) {
+		return DeclaredAgentConfig(pr.OutputGlobs, p)
+	}
+	return oracle.MatchAny(pr.OutputGlobs, p) || oracle.MatchAny(pr.TestGlobs, p)
+}
+
+// HeldOutViewed records that the user viewed held-out tests during the
+// Chat, for the Receipt's disclosure. what says which.
+func (c *Chat) HeldOutViewed(what string) error {
+	c.mu.Lock()
+	n := c.turns
+	c.mu.Unlock()
+	return c.log(RecHeldOutViewed, map[string]any{"chat": c.ID, "turn": n, "what": what})
 }
 
 // settled ends turn t and starts the next queued one, or starts the
@@ -408,51 +750,59 @@ func (c *Chat) idleOut() {
 		return
 	}
 	c.err = ErrChatIdle
+	sess := c.sess
 	c.mu.Unlock()
-	_ = c.sess.Close()
+	_ = sess.Close()
 }
 
 // Interrupt ends the turn in flight without ending the Session; queued
 // turns then run. Idle, it does nothing.
 func (c *Chat) Interrupt() error {
 	c.mu.Lock()
-	busy := c.cur != nil
+	busy, sess := c.cur != nil, c.sess
 	c.mu.Unlock()
 	if !busy {
 		return nil
 	}
-	return c.sess.Interrupt()
+	return sess.Interrupt()
 }
 
-// Err is why the Chat takes no more turns: ErrChatIdle after the idle
-// timeout, ErrChatClosed after Close, ErrChatLost when the Session ended
-// on its own. nil while it is open.
+// Err is why the Chat takes no more turns in its current Session:
+// ErrChatIdle after the idle timeout and ErrChatLost when the Session
+// ended on its own, until the next Send reopens one; ErrChatClosed after
+// Close. nil while it is open.
 func (c *Chat) Err() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.err
 }
 
-// Done is closed once the Session has ended.
-func (c *Chat) Done() <-chan struct{} { return c.pumped }
+// Done is closed once the current Session has ended.
+func (c *Chat) Done() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pumped
+}
 
 // Close ends the Session and removes the Workspace, which is disposable.
 func (c *Chat) Close() error {
 	c.closing.Do(func() {
+		c.reopening.Lock()
+		defer c.reopening.Unlock()
 		c.mu.Lock()
-		if c.err == nil {
-			c.err = ErrChatClosed
-		}
+		c.closed, c.err = true, ErrChatClosed
 		c.timer.Stop()
-		unctx := c.unctx
+		unctx, sess, pumped := c.unctx, c.sess, c.pumped
 		c.mu.Unlock()
 		if unctx != nil {
 			unctx()
 		}
 		close(c.stop)
-		_ = c.sess.Close()
-		<-c.pumped
+		_ = sess.Close()
+		<-pumped
+		c.logMu.Lock()
 		c.l.Close()
+		c.logMu.Unlock()
 		oracle.RemoveAll(c.work)
 	})
 	return nil
