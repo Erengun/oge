@@ -259,15 +259,22 @@ func (p profile) settings(spec agent.LaunchSpec, parent []string) (string, error
 		// repositories included, and reopens only the Workspace, the
 		// cache and the toolchain (sandbox.filesystem.allowRead, claude
 		// 2.1.296). Credential paths stay denied inside what it reopens.
+		// Öge's state roots are denied wherever they live, so a state dir
+		// outside $HOME still hides other Runs and Chats.
 		get := parentGetenv(parent)
+		for _, d := range spec.StateRoots {
+			if filepath.IsAbs(d) {
+				reads = append(reads, withReal(d)...)
+			}
+		}
 		if home := get("HOME"); filepath.IsAbs(home) {
 			reads = append(reads, withReal(home)...)
-			allow := withReal(spec.Workspace)
-			if spec.Cache != "" {
-				allow = append(allow, spec.Cache)
-			}
-			fs["allowRead"] = append(allow, toolchain(get)...)
 		}
+		allow := withReal(spec.Workspace)
+		if spec.Cache != "" {
+			allow = append(allow, spec.Cache)
+		}
+		fs["allowRead"] = append(allow, toolchain(get)...)
 	}
 	if len(reads) > 0 {
 		fs["denyRead"] = reads

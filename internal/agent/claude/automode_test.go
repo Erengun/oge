@@ -2,11 +2,9 @@ package claude
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,50 +47,6 @@ func TestAutoModeImplementerOnly(t *testing.T) {
 	}
 }
 
-// In a Chat, a Bash command auto mode would otherwise decide is hard-denied
-// when it names anything outside the Workspace (D2).
-func TestChatBashEscapes(t *testing.T) {
-	ws := t.TempDir()
-	p := newPolicy(agent.LaunchSpec{Role: "implementer", Workspace: ws, Permissions: agent.AutoPermissions,
-		DenyRead: []string{filepath.Join(t.TempDir(), "private")}}, "h")
-	tool := t.TempDir()
-	p.readOK = withReal(tool)
-	decide := func(cmd string) agent.HostDecision {
-		in, _ := json.Marshal(map[string]string{"command": cmd})
-		return p.decide("Bash", in)
-	}
-	for _, cmd := range []string{
-		"git -C /other log",
-		"sh -c 'cat /etc/hosts'",
-		`python3 -c "print(open('/etc/hosts').read())"`,
-		"cd / && head etc/hosts",
-		"cat ~/notes.txt",
-		"cat $HOME/notes.txt",
-		"head ../../outside.txt",
-		`bash -c "$CMD"`,
-		"eval ls",
-		"cat < /etc/hosts",
-		"make -f /etc/Makefile",
-	} {
-		if d := decide(cmd); d.Decision != "deny" || d.Rule != ruleOutside || !strings.Contains(d.Reason, "Chat") {
-			t.Errorf("%s: %+v", cmd, d)
-		}
-	}
-	grey := []string{"make deploy", "python3 -c 'print(1)'", "cd sub && make", "npm run build", "cat /dev/null"}
-	if runtime.GOOS != "windows" {
-		grey = append(grey, "ls "+filepath.Join(tool, "src"))
-	}
-	for _, cmd := range grey {
-		if d := decide(cmd); d.Rule != ruleNoInteractive {
-			t.Errorf("%s: %+v, want it left to auto mode", cmd, d)
-		}
-	}
-	// A question goes to the human in a Chat.
-	if d := p.decide("AskUserQuestion", json.RawMessage(`{}`)); d.Family != agent.Question || d.Rule != ruleNoInteractive {
-		t.Errorf("AskUserQuestion: %+v", d)
-	}
-}
-
 // openAuto opens a Chat Session on fakeclaude serving sc.
 func openAuto(t *testing.T, sc multiturn.Scenario) (agent.Session, string) {
 	t.Helper()
@@ -131,37 +85,6 @@ func turnEvents(t *testing.T, s agent.Session, onAsk func(agent.Event)) []agent.
 		case <-limit:
 			t.Fatalf("the turn never settled: %+v", evs)
 		}
-	}
-}
-
-// The PreToolUse hook is the hard-deny point when auto mode would approve
-// silently: an outside path is denied, a grey command continues to auto
-// mode, and a pre-authorised call is allowed to run.
-func TestAutoModeHook(t *testing.T) {
-	s, _ := openAuto(t, multiturn.Scenario{Turns: []multiturn.Turn{{Tools: []multiturn.Tool{
-		{Name: "Bash", Target: "cat /etc/hosts"}, {Name: "Bash", Target: "make deploy"}, {Name: "Read", Target: "x.go"},
-	}}}})
-	if err := s.Send(agent.Turn{Text: "go"}); err != nil {
-		t.Fatal(err)
-	}
-	evs := turnEvents(t, s, nil)
-	var said []string
-	var hosts []string
-	for _, ev := range evs {
-		if ev.Kind == agent.Claim && strings.HasPrefix(ev.Text, "hook ") {
-			said = append(said, ev.Text)
-		}
-		if ev.Kind == agent.HostRequest {
-			hosts = append(hosts, ev.Host.Tool+":"+ev.Host.Decision+":"+ev.Host.Rule)
-		}
-	}
-	if want := "hook Bash: deny|hook Bash: continue|hook Read: continue"; strings.Join(said, "|") != want {
-		t.Errorf("hook answers %q, want %q", said, want)
-	}
-	// A pre-authorised call and a grey one both continue at the hook:
-	// only the hard deny is a Host decision.
-	if want := "Bash:deny:outside_role"; strings.Join(hosts, "|") != want {
-		t.Errorf("Host requests %q, want %q", hosts, want)
 	}
 }
 

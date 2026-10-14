@@ -47,6 +47,10 @@ type LaunchSpec struct {
 	// hard denies, with its asks routed to the host (Chat, D2 in
 	// docs/ux/chat-first.md).
 	Permissions string
+	// StateRoots are Öge's state directories (the state dir, its private
+	// and work roots), wherever they are. Under AutoPermissions the
+	// sandbox denies reading them, reopening only the Workspace and cache.
+	StateRoots []string
 }
 
 // AutoPermissions is LaunchSpec.Permissions for the agent's auto mode.

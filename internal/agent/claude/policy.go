@@ -153,8 +153,10 @@ func (p *policy) decide(tool string, input json.RawMessage) agent.HostDecision {
 		v := p.bash(cmd)
 		if p.chat && v != vOK {
 			// Auto mode decides what Öge doesn't pre-authorise; Öge only
-			// hard-denies what leaves the Workspace and the toolchain, and
-			// anything touching a .git.
+			// hard-denies what leaves the Workspace and the toolchain. A
+			// command naming a .git keeps bash's verdict: a pre-authorised
+			// shape writing under .git stays denied, a grey one goes to
+			// auto mode.
 			switch {
 			case p.escapes(cmd):
 				v = vOutside

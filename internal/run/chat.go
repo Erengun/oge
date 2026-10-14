@@ -82,9 +82,12 @@ type Chat struct {
 	mu    sync.Mutex
 	turns int
 	cur   *turnOut // the turn in flight's events
-	queue []queuedTurn
-	err   error // why the Chat takes no more turns
-	timer *time.Timer
+	// sending is the turn whose message is being written: if the Session
+	// ends meanwhile, the write's outcome labels it, not drop.
+	sending *turnOut
+	queue   []queuedTurn
+	err     error // why the Chat takes no more turns
+	timer   *time.Timer
 }
 
 type queuedTurn struct {
@@ -233,6 +236,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 		Role: role, Model: stage.Model, Effort: stage.Effort, Profile: stage.Profile, Workspace: c.Workspace,
 		Network: stage.Network, RunID: c.ID, RepoInstructions: c.instr, CheckCommands: checks,
 		DenyRead: c.deny, Cache: cache, Permissions: agent.AutoPermissions,
+		StateRoots: []string{p.State.Dir, p.State.Private, p.State.Work},
 	}
 	if c.sess, err = adapter.Open(ctx, spec); err != nil {
 		return nil, err
@@ -283,7 +287,7 @@ func (c *Chat) Send(ctx context.Context, text string) (<-chan agent.Event, error
 func (c *Chat) start(text string, out *turnOut) error {
 	c.turns++
 	n := c.turns
-	c.cur = out
+	c.cur, c.sending = out, out
 	c.timer.Stop()
 	c.mu.Unlock()
 	sent := text
@@ -301,8 +305,16 @@ func (c *Chat) start(text string, out *turnOut) error {
 	if err == nil {
 		err = c.sess.Send(agent.Turn{Text: sent})
 	}
+	c.mu.Lock()
+	c.sending = nil
+	ended := err != nil || c.err != nil
 	if err != nil {
 		out.end(&agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()})
+	} else if c.err != nil {
+		out.end(&agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()})
+	}
+	c.mu.Unlock()
+	if ended {
 		c.settled(out)
 	}
 	return err
@@ -379,10 +391,10 @@ func (c *Chat) settled(t *turnOut) {
 // c.mu held and c.err set.
 func (c *Chat) drop() {
 	last := &agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()}
-	if c.cur != nil {
+	if c.cur != nil && c.cur != c.sending {
 		c.cur.end(last)
-		c.cur = nil
 	}
+	c.cur = nil
 	for _, q := range c.queue {
 		q.out.end(last)
 	}
