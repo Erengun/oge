@@ -100,6 +100,10 @@ _Avoid_: Conversation, thread, chat session (a Session is one agent conversation
 One user message in a Chat: one `Send` to the implementer Session, which ends when the agent's reply settles. Messages sent during a turn queue; Esc interrupts it without ending the Session.
 _Avoid_: Round, exchange, Attempt (one-shot)
 
+**Cut**:
+What happens when a Chat's turns since the last cut changed something Promoted or Ambiguous: the newest turn commit becomes an immutable Candidate, and a Run of its own takes it through the Pipeline frozen at that moment, from QA (ADR-0007, as amended).
+_Avoid_: Checkpoint, snapshot (the Snapshot is the Chat's starting point)
+
 **Check**:
 A node of a Pipeline where Öge runs Oracle commands on a Candidate and derives a Verdict from the resulting Evidence.
 _Avoid_: Test stage, validation step

@@ -706,6 +706,16 @@ type ControlRecord struct {
 	Error      string  `json:"error,omitempty"`
 }
 
+// Done is closed once the control has finished: always, for no control.
+func (c *Control) Done() <-chan struct{} {
+	if c == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return c.done
+}
+
 // Consulted returns the control's record the first time it is called
 // after a Check consulted it, so it is recorded once.
 func (c *Control) Consulted() (ControlRecord, bool) {

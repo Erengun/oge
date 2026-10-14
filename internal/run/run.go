@@ -100,6 +100,10 @@ type Params struct {
 	// only there may a turn that changed nothing end Replied (#254).
 	// oge "task", oge run and oge resume leave it false.
 	Interactive bool
+	// cut, when set, makes this a Chat's cut (cut.go): the Run takes the
+	// Chat's Snapshot and Preflight, and its Candidate enters the walk at
+	// QA in place of an implementer Attempt.
+	cut *cutEntry
 }
 
 // FollowUp is the Run a follow-up continues.
@@ -310,18 +314,24 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		p.Observe = func(Event) {}
 	}
 	// Preflight's repository checks write nothing, so a refusal leaves no
-	// Run behind.
-	why, err := workspace.Preflight(p.Repo)
-	if err != nil {
-		return nil, err
-	}
-	if len(why) > 0 {
-		return &Result{Outcome: Refused, Why: why}, nil
+	// Run behind. A cut's ran when its Chat opened, and it reads only the
+	// Chat's commits.
+	if p.cut == nil {
+		why, err := workspace.Preflight(p.Repo)
+		if err != nil {
+			return nil, err
+		}
+		if len(why) > 0 {
+			return &Result{Outcome: Refused, Why: why}, nil
+		}
 	}
 
 	res := &Result{ID: newID(), Started: time.Now()}
 	res.Dir = filepath.Join(p.State.Private, "runs", res.ID)
 	workDir := filepath.Join(p.State.Work, res.ID)
+	if p.cut != nil {
+		workDir = filepath.Join(p.cut.work, res.ID)
+	}
 	if err := os.MkdirAll(res.Dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -383,6 +393,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		"task": taskBlob, "frozen": frozenBlob, "graph_hash": f.Hash, "mode": f.Mode,
 	}
 	addFollows(begun, p)
+	p.cut.addTo(begun)
 	if err := l.Append(RecRunStarted, begun); err != nil {
 		return nil, err
 	}
@@ -393,15 +404,23 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	ws := filepath.Join(workDir, "implement")
-	snap, info, err := repo.TakeSnapshot(p.Repo, ws)
-	if err != nil {
-		return nil, err
+	var snap string
+	var info workspace.SnapshotInfo
+	if cut := p.cut; cut != nil {
+		snap, info = cut.snap, cut.info
+		if err := cut.enter(repo); err != nil {
+			return nil, err
+		}
+	} else {
+		if snap, info, err = repo.TakeSnapshot(p.Repo, ws); err != nil {
+			return nil, err
+		}
+		// The agent's git diff and git status see the Snapshot as HEAD.
+		if err := repo.InitWorkspaceGit(ws); err != nil {
+			return nil, err
+		}
 	}
 	res.Snapshot, res.Source = snap, info
-	// The agent's git diff and git status see the Snapshot as HEAD.
-	if err := repo.InitWorkspaceGit(ws); err != nil {
-		return nil, err
-	}
 	if err := l.Append(RecSnapshotTaken, map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
 		"modified": info.Modified, "untracked": info.Untracked}); err != nil {
 		return nil, err
@@ -496,16 +515,22 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		err     error
 	}
 	prepared := make(chan preflight, 1)
-	go func() {
-		var pf preflight
-		pf.seed, pf.setup, pf.err = runner.NewSeed(seedCtx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
-		if pf.err != nil || (pf.setup != nil && !pf.setup.Pass) {
-			cancelAttempt(errSetupFailed)
-		} else {
-			pf.control = startControl(seedCtx, runner, pf.seed, repo, m, snap, f.Setup.Run, res.Dir)
-		}
-		prepared <- pf
-	}()
+	if cut := p.cut; cut != nil {
+		// The Chat's, finished before the cut: the Chat owns the seed and
+		// the control.
+		prepared <- preflight{seed: cut.prep.seed, setup: cut.prep.setup, control: cut.prep.control, err: cut.prep.err}
+	} else {
+		go func() {
+			var pf preflight
+			pf.seed, pf.setup, pf.err = runner.NewSeed(seedCtx, repo, snap, f.Setup.Run, filepath.Join(res.Dir, "cache-seed"))
+			if pf.err != nil || (pf.setup != nil && !pf.setup.Pass) {
+				cancelAttempt(errSetupFailed)
+			} else {
+				pf.control = startControl(seedCtx, runner, pf.seed, repo, m, snap, f.Setup.Run, res.Dir)
+			}
+			prepared <- pf
+		}()
+	}
 	var (
 		seed    *oracle.Seed
 		control *oracle.Control
@@ -517,8 +542,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			pf := <-prepared
 			seed, control = pf.seed, pf.control
 		}
-		control.Stop()
-		seed.Close()
+		if p.cut == nil {
+			control.Stop()
+			seed.Close()
+		}
 	}()
 	// join waits for setup, the seed and the control. stop is true when
 	// the Run ends here: Öge failed (err), or setup was interrupted or
@@ -573,6 +600,34 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	// resume is where an Ambiguous-file review sends the walk: "verify" or
 	// "check", from the resolved Candidate, with no implementer Attempt.
 	resume := ""
+	if p.cut != nil {
+		// A cut's Candidate is the turn commit: no implementer Attempt runs,
+		// and the walk starts at QA, after Preflight. Every Tamper event of
+		// its turns stays unacknowledged for the Run (ADR-0019 #2).
+		if stop, r, err := join(); stop {
+			return r, err
+		}
+		if qa != nil {
+			qa.seed = seed
+		}
+		w.attempts++
+		if a, err = p.cut.attempt(l, w, repo, impl); err != nil {
+			return nil, err
+		}
+		res.Attempt, res.Candidate = a, a.Candidate
+		p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
+		if err := recordTripwires(l, repo, res, a); err != nil {
+			return nil, err
+		}
+		// The Snapshot control has finished, and is the Chat's: each cut
+		// records it.
+		if control != nil {
+			if err := l.Append(RecControlEnded, control.Stop()); err != nil {
+				return nil, err
+			}
+		}
+		resume = "verify"
+	}
 	for check := 1; ; check++ {
 		if resume == "" {
 			w.attempts++
@@ -713,7 +768,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// TODO(#73-decision): the Snapshot control is recorded once a Check
 		// has consulted it; one no Verdict needed is stopped unrecorded at
 		// the end of the Run.
-		if rec, ok := control.Consulted(); ok {
+		if rec, ok := control.Consulted(); ok && p.cut == nil {
 			if err := l.Append(RecControlEnded, rec); err != nil {
 				return nil, err
 			}

@@ -19,6 +19,7 @@ status: accepted
 - Held-out tests never sit in the Workspace that agents see. The Oracle lives outside it.
 - Each Attempt uses exactly one Session. A Session belongs to one Stage and continues across Attempts only where reuse is explicitly allowed. Fresh-context Role kinds (verifier, reviewer) get a new Session on each Attempt by default.
 - The Run freezes the resolved Pipeline at start, so a resumed Run replays the same graph.
+  - *Amendment, 2026-10-14 ([#258](https://github.com/Erengun/oge/issues/258)):* in a Chat the freeze moves from Run start to the **cut**, and a Chat hosts many Runs. When a turn settles with Promoted or Ambiguous changes against the last cut (or the Snapshot), Öge cuts: the newest turn commit becomes an immutable Candidate, and the Pipeline, the config and the current Shift+Tab mode are frozen into that cut's own Run, which enters the same graph at QA. The Candidate is built from the turn commits, never from the live Workspace. Every Tamper event of the cut's turns is copied into its Run, so its Gate and Receipt see them. A cut fails closed until the Preflight and the Snapshot control, started when the Chat opens, have finished. `oge "task"`, `oge run` and `oge resume` still freeze at Run start.
 
 ## What would reverse this
 
