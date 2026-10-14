@@ -242,3 +242,63 @@ func TestQueuedCommandHoldsTheMessages(t *testing.T) {
 		t.Errorf("composer %q, want %q", got, want)
 	}
 }
+
+// Esc in vim INSERT with text in the box is vim's, never the advice's.
+func TestAdviceEscInVimInsertIsVims(t *testing.T) {
+	h := &home{st: newStyles(false), comp: newComposer(), vim: true,
+		adv: &adviseState{shown: true, cancel: func() {}, advice: &run.Advice{ID: "c1", Text: "x"}}}
+	h.comp.set("typing")
+	if _, ok := h.adviceKey(tea.KeyPressMsg{Code: tea.KeyEscape}); ok || h.adv == nil {
+		t.Errorf("Esc dismissed the advice from vim INSERT")
+	}
+	h.comp.set("")
+	if _, ok := h.adviceKey(tea.KeyPressMsg{Code: tea.KeyEscape}); !ok || h.adv != nil {
+		t.Errorf("Esc on an empty box didn't dismiss it")
+	}
+}
+
+// Advice for a Chat that has gone is never sent.
+func TestAdviceSendAfterTheChatClosed(t *testing.T) {
+	h := &home{st: newStyles(false), comp: newComposer(), chat: &homeChat{},
+		adv: &adviseState{shown: true, chat: &run.Chat{}, advice: &run.Advice{ID: "c1", Text: "x"}}}
+	if cmd := h.sendAdvice(); cmd != nil || h.adv != nil || h.turn != nil || len(h.msg) == 0 {
+		t.Errorf("cmd %v adv %v turn %v msg %v", cmd != nil, h.adv, h.turn, h.msg)
+	}
+}
+
+// A cut with nothing to cut against, after changes, says they are not
+// checked, and the next cut covers them.
+func TestCutNothingToCutAfterChangesIsUnchecked(t *testing.T) {
+	h := &home{st: newStyles(false), comp: newComposer(), verify: &chatVerify{seq: 1, changed: 2, cancel: func() {}}}
+	h.cutEnded(chatCutMsg{seq: 1, err: run.ErrNothingToCut})
+	if !h.unchecked || !strings.Contains(strings.Join(h.scroll, "\n"), "not checked") {
+		t.Errorf("unchecked %v, printed %q", h.unchecked, h.scroll)
+	}
+	h = &home{st: newStyles(false), comp: newComposer(), verify: &chatVerify{seq: 1, cancel: func() {}}}
+	h.cutEnded(chatCutMsg{seq: 1, err: run.ErrNothingToCut})
+	if h.unchecked || len(h.scroll) != 0 {
+		t.Errorf("a cut of nothing said %q", h.scroll)
+	}
+}
+
+// /advise typed while a question waits runs as a command: it is never
+// the question's answer, and its refusal leaves the text in the box.
+func TestAdviseDuringAQuestionIsNotTheAnswer(t *testing.T) {
+	var got []agent.Answer
+	a := agent.NewAsk("AskUserQuestion", "q", "Which?", func(ans agent.Answer) error {
+		got = append(got, ans)
+		return nil
+	})
+	a.Questions = []agent.AskQuestion{{Text: "Which?", Options: []string{"red"}}}
+	h := &home{width: 80, height: 24, st: newStyles(false), comp: newComposer(), turn: &chatTurn{}}
+	h.turn.asks = []*agent.Ask{a}
+	h.showAsk()
+	h.comp.set("/advise should I?")
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(got) != 0 || len(h.turn.answers) != 0 || h.ask() != a {
+		t.Errorf("the command answered the question: %+v %v", got, h.turn.answers)
+	}
+	if len(h.msg) == 0 || h.comp.text() != "/advise should I?" {
+		t.Errorf("msg %v, box %q", h.msg, h.comp.text())
+	}
+}

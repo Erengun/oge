@@ -279,3 +279,82 @@ func TestHomeChatAdviseIsNeverTheTask(t *testing.T) {
 		t.Errorf("%d cuts found, want 2 (the advice turn's change is cut)", cuts)
 	}
 }
+
+// Emptying the box after e drops the edit: the next, unrelated message
+// is a plain turn with no AdviceSent. Sent as it was, the advice is still
+// Öge's verbatim turn.
+func TestHomeChatAdviseEditFlagDoesNotOutliveItsText(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "first reply"},
+		{Reply: "unrelated answer"},
+	}}, adviceScript)
+	s.composer()
+	s.type_("yo\r")
+	s.expect("  first reply")
+	s.composer()
+	s.type_("/advise how?\r")
+	s.expect("send to agent")
+	s.type_("e")
+	s.expect("Inject a Clock.")
+	s.type_("\x15") // empty the box
+	s.type_("something else\r")
+	s.expect("  unrelated answer")
+	s.composer()
+	s.quitChat(f)
+	if n := len(chatRecords(t, f, run.RecAdviceSent)); n != 0 {
+		t.Errorf("%d AdviceSent for an unrelated message", n)
+	}
+}
+
+func TestHomeChatAdviseEditedButUnchangedIsVerbatim(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "first reply"},
+		{Reply: "took it"},
+	}}, adviceScript)
+	s.composer()
+	s.type_("yo\r")
+	s.expect("  first reply")
+	s.composer()
+	s.type_("/advise how?\r")
+	s.expect("send to agent")
+	s.type_("e")
+	s.expect("Inject a Clock.")
+	s.type_("\r")
+	s.expect("Öge → agent: An advisor suggests")
+	s.expect("  took it")
+	s.composer()
+	s.quitChat(f)
+	sent := chatRecords(t, f, run.RecAdviceSent)
+	if len(sent) != 1 || sent[0]["how"] != "verbatim" || sent[0]["by"] != "oge" {
+		t.Errorf("AdviceSent %v", sent)
+	}
+}
+
+// The user's own turn drops the advice shown: no ↵ or e binding is left,
+// and nothing was sent to the agent.
+func TestHomeChatAdviseOwnTurnDismisses(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "first reply"},
+		{Reply: "second reply"},
+	}}, adviceScript)
+	s.composer()
+	s.type_("yo\r")
+	s.expect("  first reply")
+	s.composer()
+	s.type_("/advise how?\r")
+	s.expect("send to agent")
+	s.type_("my own message\r")
+	s.expect("advice dismissed")
+	s.expect("  second reply")
+	s.composer()
+	if out := s.out.String()[s.mark:]; strings.Contains(out, "send to agent") {
+		t.Errorf("the advice keys outlived the user's turn:\n%s", out)
+	}
+	s.quitChat(f)
+	if n := len(chatRecords(t, f, run.RecAdviceSent)); n != 0 {
+		t.Errorf("%d AdviceSent", n)
+	}
+}

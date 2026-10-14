@@ -433,7 +433,7 @@ type home struct {
 	// from.
 	adv        *adviseState
 	advSeq     int
-	adviceEdit string
+	adviceEdit *adviceEditState
 	turn       *chatTurn
 	verify     *chatVerify
 	cuts       int // the cuts started, each one's seq
@@ -578,6 +578,9 @@ func (h *home) Init() tea.Cmd {
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
+	if h.adviceEdit != nil && h.comp != nil && h.comp.empty() {
+		h.adviceEdit = nil // emptied: what is typed next isn't the advice
+	}
 	if flush := h.flushAdvice(); flush != nil {
 		cmd = tea.Sequence(cmd, flush) // after whatever this update prints
 	}
@@ -816,7 +819,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.cleared = h.comp.expanded()
 			h.comp.set("")
-			h.adviceEdit = ""
+			h.adviceEdit = nil
 			h.navigating = false
 			h.visual = 0
 		case actSubmit:
@@ -911,6 +914,14 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.cleared, h.queuedText = "", ""
+	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
+		// Sent as it was: still the advice turn, outside the Task.
+		h.adviceEdit = nil
+		if cmd := h.sendAdviceTurn(e.chat, e.id, e.text); cmd != nil {
+			return h, cmd
+		}
+		return h, nil
+	}
 	if h.ctx != nil && h.ctx.Err() != nil {
 		h.quit = true
 		return h, tea.Quit
@@ -948,6 +959,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 // empty box it brings the stash back. With both a draft and a stash it
 // swaps them, so neither is lost.
 func (h *home) stashDraft() {
+	h.adviceEdit = nil
 	h.navigating, h.visual = false, 0
 	draft := h.comp.expanded()
 	if draft == "" && h.stash == "" {
@@ -973,6 +985,7 @@ func (h *home) endNavigation() {
 // one never changes the history. Past the newest entry the box gets back
 // what was in it before the first ↑.
 func (h *home) recall(dir int) bool {
+	h.adviceEdit = nil // history replaces the box
 	n := h.hist.len()
 	if dir < 0 {
 		if h.cleared != "" && h.comp.empty() && !h.navigating {

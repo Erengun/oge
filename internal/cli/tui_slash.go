@@ -95,6 +95,7 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		h.msg = []string{word + ": unknown command · " + strings.Join(names, " ")}
 		return nil, true
 	}
+	h.adviceEdit = nil // a command replaced what the box held
 	cmd, problem := c.run(h, args)
 	if problem != "" {
 		h.msg = []string{problem}
@@ -151,7 +152,7 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		h.adv.cancel()
 		h.adv = nil
 	}
-	h.adviceEdit = ""
+	h.adviceEdit = nil
 	cmd := h.chat.reset()
 	h.resetting = cmd != nil
 	return cmd, ""

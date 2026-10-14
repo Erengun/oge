@@ -31,7 +31,8 @@ type adviseState struct {
 	seq     int
 	cancel  context.CancelFunc
 	started time.Time
-	agent   string // "claude opus"
+	agent   string    // "claude opus"
+	chat    *run.Chat // the Chat it advises: another Chat's advice is never sent
 	running bool
 	advice  *run.Advice // landed
 	shown   bool        // its block is printed: ↵ e esc act on it
@@ -67,6 +68,8 @@ func (h *home) adviseCmd(args []string) (tea.Cmd, string) {
 		return nil, "/advise: no Chat yet; send a task first"
 	case h.adv != nil && h.adv.running:
 		return nil, "/advise: already advising"
+	case h.adv != nil && h.turn != nil:
+		return nil, "/advise: an advice is already waiting"
 	case h.adv != nil:
 		return nil, "/advise: the advice above waits for ↵, e or esc"
 	}
@@ -81,7 +84,7 @@ func (h *home) adviseCmd(args []string) (tea.Cmd, string) {
 	ctx, cancel := context.WithCancel(parent)
 	h.advSeq++
 	seq := h.advSeq
-	h.adv = &adviseState{seq: seq, cancel: cancel, started: h.clock(), running: true,
+	h.adv = &adviseState{chat: c, seq: seq, cancel: cancel, started: h.clock(), running: true,
 		agent: strings.TrimSpace(agentName + " " + model)}
 	consult := func() tea.Msg {
 		a, err := c.Consult(ctx, question)
@@ -180,6 +183,9 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return nil, false
 	}
 	key := k.String()
+	if key == "esc" && h.vim && !h.normal && !h.comp.empty() {
+		return nil, false // vim's INSERT Esc, with text in the box
+	}
 	switch {
 	case key == "esc" && a.running:
 		a.cancel()
@@ -194,7 +200,7 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return h.sendAdvice(), true
 	case key == "e":
 		h.comp.set(a.advice.Text)
-		h.adviceEdit = a.advice.ID
+		h.adviceEdit = &adviceEditState{id: a.advice.ID, text: a.advice.Text, chat: a.chat}
 		h.adv = nil
 		return nil, true
 	}
@@ -205,21 +211,26 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 // (Chat.SendAdvice): dim, outside the Task and the feedback budget. The
 // turn is cut like any turn that changed something.
 func (h *home) sendAdvice() tea.Cmd {
-	adv := h.adv.advice
-	var c *run.Chat
-	if h.chat != nil {
-		c = h.chat.get()
+	a := h.adv
+	if h.chat == nil || h.chat.get() != a.chat {
+		h.adv = nil // a Consultation of a Chat that has gone
+		h.msg = []string{"oge: that advice was for a Chat that has ended; nothing was sent"}
+		return nil
 	}
+	h.adv = nil
+	return h.sendAdviceTurn(a.chat, a.advice.ID, a.advice.Text)
+}
+
+// sendAdviceTurn sends text as the advice turn of Consultation id.
+func (h *home) sendAdviceTurn(c *run.Chat, id, text string) tea.Cmd {
+	adv := &run.Advice{ID: id, Text: text}
 	res, problem := h.resolve(h.sel)
 	switch {
-	case c == nil:
-		h.msg = []string{"oge: the Chat has ended; /new starts another"}
-		return nil
 	case problem != nil:
 		h.msg = problem
 		return nil
 	}
-	h.adv = nil
+	h.comp = h.composer()
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
 	ctx := h.ctx
@@ -230,6 +241,15 @@ func (h *home) sendAdvice() tea.Cmd {
 		ch, err := c.SendAdvice(ctx, adv.ID, adv.Text)
 		return chatSentMsg{events: ch, err: err}
 	}
+}
+
+// adviceEditState is the advice the composer holds after e: a send of
+// exactly this text is the advice turn, verbatim; any other is the
+// user's, edited. It is dropped whenever the box is emptied or replaced
+// by anything but typing.
+type adviceEditState struct {
+	id, text string
+	chat     *run.Chat
 }
 
 // ogeAdviceLine is the dim line an advice turn shows when it is sent,

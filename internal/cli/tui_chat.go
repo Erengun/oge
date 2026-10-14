@@ -130,6 +130,8 @@ type chatTurn struct {
 	// advice turn (docs/ux/advisor.md).
 	oge    bool
 	advice bool
+	// edited: the advice the text was edited from, kept for a retry.
+	edited *adviceEditState
 	// feedback is a failing cut's feedback turn, held until this turn
 	// ends: sent then, unless this turn cuts anew or was interrupted.
 	feedback string
@@ -235,7 +237,14 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
 	h.comp = h.composer()
 	edited := h.adviceEdit
-	h.adviceEdit = ""
+	h.adviceEdit = nil
+	h.turn.edited = edited
+	var dismissed tea.Cmd
+	if h.adv != nil && h.adv.shown {
+		// The user's own turn: the advice shown no longer takes ↵ or e.
+		h.adv = nil
+		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
+	}
 	hc, ctx := h.chat, h.ctx
 	send := func() tea.Msg {
 		hc.mu.Lock()
@@ -249,15 +258,15 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		}
 		c := hc.c
 		hc.mu.Unlock()
-		if edited != "" {
-			ch, err := c.SendEdited(ctx, edited, text) // the user's turn, from an advisor's text
+		if edited != nil && edited.chat == c {
+			ch, err := c.SendEdited(ctx, edited.id, text) // the user's turn, from an advisor's text
 			return chatSentMsg{events: ch, err: err}
 		}
 		ch, err := c.Send(ctx, text)
 		return chatSentMsg{events: ch, err: err}
 	}
 	echo := h.println(h.userBar("> " + task.Parse(text).Title))
-	return h, tea.Sequence(echo, send)
+	return h, tea.Sequence(echo, dismissed, send)
 }
 
 // nextEvent waits for the turn's next event.
@@ -284,8 +293,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.nextTurn(h.println(line))
 		}
 		if msg.err != nil {
-			text, held := h.turn.text, h.turn.feedback != ""
+			text, held, ed := h.turn.text, h.turn.feedback != "", h.turn.edited
 			queued := h.endTurn()
+			defer func() { h.adviceEdit = ed }() // kept for the retry
 			// Kept, to send again, with what was queued and typed since.
 			h.comp.set(strings.TrimSpace(strings.Join(append(append([]string{text}, queued...), h.comp.text()), "\n\n")))
 			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
@@ -688,6 +698,11 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	var line string
 	var diff tea.Cmd
 	switch {
+	case errors.Is(msg.err, run.ErrNothingToCut) && v.changed > 0:
+		// What changed has nothing to cut against (a delivery took it
+		// meanwhile, say): it is not checked, and the next cut will.
+		h.unchecked = true
+		return h.println(h.ogeLine(h.st.dim(files(v.changed) + " changed, not checked yet · the next turn's cut checks them")))
 	case errors.Is(msg.err, run.ErrNothingToCut), errors.Is(msg.err, run.ErrSuperseded):
 		return nil
 	case v.stopped && !verdict:
@@ -825,6 +840,7 @@ type chatDiffMsg []string
 // for when the turn has ended.
 func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	t := h.turn
+	h.msg = nil
 	switch k.String() {
 	case "ctrl+c":
 		if t.stopped {
@@ -857,6 +873,15 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		full := strings.TrimSpace(h.comp.expanded()) // a paste, whole
 		h.comp = h.composer()
+		if word, _, _, ok := parseSlash(full); ok && word == "/advise" {
+			// It runs alongside the turn, and is never a question's
+			// answer: the point of asking now.
+			cmd, _ := h.slash(full)
+			if h.msg != nil {
+				h.comp.set(full) // the text stays in the box
+			}
+			return h, cmd
+		}
 		if a != nil {
 			// One question at a time, each with its own numbers.
 			q := a.Questions[len(h.turn.answers)]
@@ -868,15 +893,6 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return h, h.println(h.ogeLine(h.st.dim("answered: " + clean(text))))
 			}
 			return h, h.answer(a, agent.Answer{Allow: true, Answers: h.turn.answers})
-		}
-		if word, _, _, ok := parseSlash(full); ok && word == "/advise" {
-			// It runs alongside the turn: the point of asking now.
-			h.msg = nil
-			cmd, _ := h.slash(full)
-			if h.msg != nil {
-				h.comp.set(full) // the text stays in the box
-			}
-			return h, cmd
 		}
 		h.enqueue(full)
 		return h, nil
