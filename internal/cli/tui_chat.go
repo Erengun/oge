@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
@@ -103,6 +104,7 @@ type chatTurn struct {
 	frozen  *pipeline.Frozen
 	events  <-chan agent.Event
 	asks    []*agent.Ask // the prompts waiting, one shown at a time
+	answers []string     // the shown question ask's answers so far
 	changed int          // Promoted and Ambiguous paths the turn changed
 	cutting bool
 	cancel  context.CancelFunc // cancels the cut
@@ -217,23 +219,40 @@ func (h *home) ask() *agent.Ask {
 	return h.turn.asks[0]
 }
 
-// askRows is a's Detail wrapped to the frame's width, every row of it.
+// askRows is a's Detail wrapped to the frame's width by display width,
+// every row of it. Detail is shown as it is: it is already visible
+// (agent.Visible) and is never cleaned, which would redact it.
 func (h *home) askRows(a *agent.Ask) []string {
 	width := h.width
 	if width <= 0 {
 		width = 80
 	}
-	width = max(width-6, 10)
+	width = max(width-4, 4)
 	var rows []string
 	for _, l := range strings.Split(a.Detail, "\n") {
-		r := []rune(l)
-		for len(r) > width {
-			rows = append(rows, string(r[:width]))
-			r = r[width:]
-		}
-		rows = append(rows, string(r))
+		rows = append(rows, strings.Split(ansi.Hardwrap(l, width, true), "\n")...)
 	}
 	return rows
+}
+
+// askFits reports whether a's whole Detail shows in the frame now: at
+// most agent.AskMaxLines rows, with the prompt's two other lines.
+func (h *home) askFits(a *agent.Ask) bool {
+	n := len(h.askRows(a))
+	return n <= agent.AskMaxLines && (h.height <= 0 || n+3 <= h.height)
+}
+
+// showAsk readies the prompt now shown: a question takes the composer, so
+// what was typed there before it appeared is queued, never sent as its
+// answer.
+func (h *home) showAsk() {
+	h.turn.answers = nil
+	if a := h.ask(); a != nil && a.Questions != nil {
+		if text := strings.TrimSpace(h.comp.text()); text != "" {
+			h.turn.queued = append(h.turn.queued, text)
+			h.comp = h.composer()
+		}
+	}
 }
 
 // chatEvent prints what a turn's event shows: the reply's words, a tool's
@@ -254,17 +273,29 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 			return h.println(h.st.dim("  " + s))
 		}
 	case agent.HostRequest:
+		if hd := ev.Host; hd != nil && hd.Decision == "cancel" && hd.By == "agent" {
+			// The agent withdrew that ask: only it goes.
+			for i, a := range h.turn.asks {
+				if a == ev.Ask {
+					h.turn.asks = append(h.turn.asks[:i:i], h.turn.asks[i+1:]...)
+					if i == 0 {
+						h.showAsk()
+					}
+					break
+				}
+			}
+			return nil
+		}
 		if a := ev.Ask; a != nil {
-			if a.Questions == nil && len(h.askRows(a)) > agent.AskMaxLines {
+			if a.Questions == nil && !h.askFits(a) {
 				// Consent to what the prompt can't show isn't consent.
 				_ = a.Answer(agent.Answer{Reason: fmt.Sprintf("Öge denied this: it is too long to show the user for approval (more than %d lines). Run it as shorter commands.", agent.AskMaxLines)})
 				return h.println(h.ogeLine(h.st.dim("denied " + clean(a.Tool) + ": too long to show for approval")))
 			}
 			h.turn.asks = append(h.turn.asks, a)
-			return nil
-		}
-		if hd := ev.Host; hd != nil && hd.Decision == "cancel" && hd.By == "agent" {
-			h.turn.asks = nil // the agent withdrew what it asked
+			if len(h.turn.asks) == 1 {
+				h.showAsk()
+			}
 			return nil
 		}
 		if ev.Host != nil && ev.Host.By == "human" {
@@ -328,8 +359,15 @@ func (h *home) endTurn() []string {
 // nextTurn ends the turn, printing print first, and sends the next message
 // typed during it, if any.
 func (h *home) nextTurn(print tea.Cmd) (tea.Model, tea.Cmd) {
+	stopped := h.turn.stopped
 	queued := h.endTurn()
 	if len(queued) == 0 {
+		return h, print
+	}
+	if stopped {
+		// After Esc nothing is sent on its own: what was queued is back in
+		// the composer, for the human to send or change.
+		h.comp.set(strings.TrimSpace(strings.Join(append(queued, h.comp.text()), "\n")))
 		return h, print
 	}
 	draft := h.comp.text()
@@ -400,8 +438,13 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	a := h.ask()
 	if a != nil && a.Questions == nil {
 		switch k.String() {
-		case "y", "n":
-			return h, h.answer(a, agent.Answer{Allow: k.String() == "y"})
+		case "y":
+			if !h.askFits(a) {
+				return h, nil // what isn't shown can't be approved
+			}
+			return h, h.answer(a, agent.Answer{Allow: true})
+		case "n":
+			return h, h.answer(a, agent.Answer{})
 		}
 		return h, nil
 	}
@@ -412,10 +455,16 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		h.comp = h.composer()
 		if a != nil {
-			if n, err := strconv.Atoi(text); err == nil && len(a.Questions) > 0 && n >= 1 && n <= len(a.Questions[0].Options) {
-				text = a.Questions[0].Options[n-1]
+			// One question at a time, each with its own numbers.
+			q := a.Questions[len(h.turn.answers)]
+			if n, err := strconv.Atoi(text); err == nil && n >= 1 && n <= len(q.Options) {
+				text = q.Options[n-1]
 			}
-			return h, h.answer(a, agent.Answer{Allow: true, Text: text})
+			h.turn.answers = append(h.turn.answers, text)
+			if len(h.turn.answers) < len(a.Questions) {
+				return h, h.println(h.ogeLine(h.st.dim("answered: " + clean(text))))
+			}
+			return h, h.answer(a, agent.Answer{Allow: true, Answers: h.turn.answers})
 		}
 		t.queued = append(t.queued, text)
 		return h, nil
@@ -443,6 +492,8 @@ func (h *home) stop() {
 // answer answers the prompt shown and prints what was answered.
 func (h *home) answer(a *agent.Ask, ans agent.Answer) tea.Cmd {
 	h.turn.asks = h.turn.asks[1:]
+	h.showAsk()
+	// What is printed is redacted and short (Target), never the Detail.
 	what := clean(strings.TrimSpace(a.Tool + " " + a.Target))
 	err := a.Answer(ans)
 	switch {
@@ -450,8 +501,8 @@ func (h *home) answer(a *agent.Ask, ans agent.Answer) tea.Cmd {
 		return h.println(h.ogeLine(h.st.dim("that question was withdrawn")))
 	case err != nil:
 		return h.println(h.ogeLine("✗ answering: " + clean(err.Error())))
-	case ans.Text != "":
-		return h.println(h.ogeLine(h.st.dim("answered: " + clean(ans.Text))))
+	case len(ans.Answers) > 0:
+		return h.println(h.ogeLine(h.st.dim("answered: " + clean(ans.Answers[len(ans.Answers)-1]))))
 	case ans.Allow:
 		return h.println(h.ogeLine(h.st.dim("allowed: " + what)))
 	}
@@ -466,15 +517,20 @@ func (h *home) turnView() string {
 	a := h.ask()
 	switch {
 	case a != nil && a.Questions != nil:
-		for _, q := range a.Questions {
-			lines = append(lines, h.ogeLine(clean(q.Text)))
-			for i, o := range q.Options {
-				lines = append(lines, fmt.Sprintf("    %d. %s", i+1, clean(o)))
-			}
+		// The question is the agent's text: indented, never after the
+		// marker.
+		q := a.Questions[len(t.answers)]
+		lines = append(lines, agentLines(cleanLines(q.Text)))
+		for i, o := range q.Options {
+			lines = append(lines, fmt.Sprintf("    %d. %s", i+1, clean(o)))
 		}
-		lines = append(lines, h.st.dim("    type an answer or an option's number · enter"))
+		lines = append(lines, h.ogeLine(h.st.dim("type an answer or an option's number · enter")))
 	case a != nil:
 		lines = append(lines, h.ogeLine("Allow "+clean(a.Tool)+"?"))
+		if !h.askFits(a) {
+			lines = append(lines, "    "+h.st.bold("too long to show at this width; [n] to deny or widen the terminal"))
+			break
+		}
 		for _, r := range h.askRows(a) {
 			lines = append(lines, "    "+r)
 		}

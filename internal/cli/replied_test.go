@@ -68,8 +68,10 @@ func TestHomeRepliedSkipsQAAndCheck(t *testing.T) {
 	}
 	s.type_("yo\r")
 	s.expect(repliedLine)
-	s.mark = len(s.out.String())
-	s.composer() // the composer is ready again: the home isn't waiting
+	// The composer is ready again, drawn after the line: the home isn't
+	// waiting. It may come in the same write as the line.
+	s.mark = strings.LastIndex(s.out.String(), repliedLine)
+	s.composer()
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())

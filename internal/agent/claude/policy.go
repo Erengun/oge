@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -360,25 +361,31 @@ func under(path string, roots []string) bool {
 	return false
 }
 
-// askDetail is a tool call's whole target for an Ask: target's text with
-// every line of a command kept and nothing clipped, each line redacted
-// and without control characters.
-func askDetail(tool string, in map[string]any, ws []string) string {
-	str := func(k string) string { s, _ := in[k].(string); return s }
+// askDetail is what an Ask about a tool call shows the human, exactly as
+// "yes" would approve it: a Bash command raw and whole, a file tool's
+// path or pattern, a question's text, and any other tool's whole input
+// as compact JSON. It is never redacted or shortened, only made visible
+// (agent.Visible); it is shown live and never logged.
+func askDetail(tool string, in map[string]any, input json.RawMessage, ws []string) string {
 	var t string
 	switch tool {
 	case "Bash":
-		t = shortenWorkspace(strings.TrimSpace(str("command")), ws)
-	case "AskUserQuestion":
-		return ""
-	default:
+		t, _ = in["command"].(string)
+	case "Read", "Edit", "Write", "NotebookEdit", "Glob", "Grep":
 		t = fullTarget(tool, in, ws)
+	case "AskUserQuestion":
+		var qs []string
+		for _, q := range questions(in) {
+			qs = append(qs, q.Text)
+		}
+		t = strings.Join(qs, "\n")
+	default:
+		var b bytes.Buffer
+		if json.Compact(&b, input) == nil {
+			t = b.String()
+		}
 	}
-	lines := strings.Split(string(redact.Redact([]byte(t))), "\n")
-	for i, l := range lines {
-		lines[i] = noControl(l)
-	}
-	return strings.Join(lines, "\n")
+	return agent.Visible(t)
 }
 
 // questions are an AskUserQuestion's questions and their options' labels.

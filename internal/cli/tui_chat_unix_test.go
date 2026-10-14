@@ -153,8 +153,8 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 	s.quitChat(f)
 }
 
-// Esc interrupts the turn in flight; a message typed during it is sent
-// next, and the composer comes back.
+// Esc interrupts the turn in flight; a message typed during it waits in
+// the composer, unsent, for the human to send.
 func TestHomeChatEscInterrupts(t *testing.T) {
 	t.Parallel()
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
@@ -164,10 +164,17 @@ func TestHomeChatEscInterrupts(t *testing.T) {
 	s.composer()
 	s.type_("long job\r")
 	s.expect("working on it")
-	s.type_("go on\r") // typed ahead: sent once the turn has ended
+	s.type_("go on\r") // typed ahead during the turn
 	time.Sleep(100 * time.Millisecond)
 	s.type_("\x1b")
 	s.expect("interrupted")
+	s.composer()
+	time.Sleep(300 * time.Millisecond)
+	if out := s.out.String()[s.mark:]; strings.Contains(out, "> go on") {
+		t.Fatalf("a queued message was sent after Esc:\n%s", out)
+	}
+	s.type_("\r") // it waits in the composer: the human sends it
+	s.expect("> go on")
 	s.expect("next turn")
 	s.composer()
 	s.quitChat(f)
@@ -231,6 +238,25 @@ func TestHomeChatAnswersAQuestion(t *testing.T) {
 	s.expect("Which name?")
 	s.type_("Ada\r")
 	s.expect("answered: Ada")
+	s.composer()
+	s.quitChat(f)
+}
+
+// An ask shows hidden characters as escapes, never dropped.
+func TestHomeChatAskShowsHiddenCharacters(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "tab", Ask: &multiturn.Ask{Tool: "Bash", Target: "rm\t-rf x"}},
+		{Reply: "bidi", Ask: &multiturn.Ask{Tool: "Bash", Target: "echo a\u202eb"}},
+	}}, nil)
+	s.composer()
+	s.type_("one\r")
+	s.expect(`rm\t-rf x`)
+	s.type_("n")
+	s.composer()
+	s.type_("two\r")
+	s.expect(`echo a\u{202e}b`)
+	s.type_("n")
 	s.composer()
 	s.quitChat(f)
 }

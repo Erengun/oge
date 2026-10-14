@@ -6,6 +6,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
 )
 
 // Adapter opens Sessions for one agent.
@@ -150,8 +153,9 @@ type Event struct {
 	// "TodoWrite"): display only, never written to the stream or Ledger.
 	Todos []Todo `json:"-"`
 	// Ask is set on a Host request the agent's auto mode raised for the
-	// human (Host.Decision "ask"): the turn waits for its Reply. Never
-	// written to the stream or Ledger.
+	// human (Host.Decision "ask"): the turn waits for its Reply. On a Host
+	// request with Decision "cancel" it is the Ask the agent withdrew.
+	// Never written to the stream or Ledger.
 	Ask *Ask `json:"-"`
 	// Scope is a Chat turn's scope result, on its TurnSettled event: set by
 	// the Chat, never by an adapter, and never written to the stream.
@@ -171,12 +175,14 @@ type TurnScope struct {
 // Ask is a permission prompt waiting for the host's answer.
 type Ask struct {
 	Tool, Target string
-	// Detail is the whole of what is asked about, as the human must see
-	// it to answer: every line of a command, never a clipped one. An
-	// adapter denies, without asking, what is too long to show
-	// (AskMaxLines).
+	// Detail is the whole of what is asked about, exactly as "yes" would
+	// approve it: the raw input, never redacted or clipped, made visible
+	// by Visible. It is shown live and never printed or logged. An
+	// adapter denies, without asking, what is empty or longer than
+	// AskMaxLines lines.
 	Detail string
-	// Questions are an AskUserQuestion's questions, answered with text.
+	// Questions are an AskUserQuestion's questions, answered with text,
+	// one answer per question.
 	Questions []AskQuestion
 	reply     func(Answer) error
 }
@@ -192,11 +198,42 @@ type AskQuestion struct {
 	Options []string
 }
 
-// Answer is the host's answer to an Ask. Text answers a question; Reason
-// is why a denial was made, for the agent.
+// Answer is the host's answer to an Ask. Answers answer its Questions,
+// in order; Reason is why a denial was made, for the agent.
 type Answer struct {
-	Allow        bool
-	Text, Reason string
+	Allow   bool
+	Answers []string
+	Reason  string
+}
+
+// Visible makes every character of s show: newlines stay, a tab is \t, a
+// carriage return \r, another control character \x.., and a bidi
+// override or isolate or a zero-width character \u{...}. Nothing is
+// dropped, so what is shown is what was sent.
+func Visible(s string) string {
+	var b strings.Builder
+	for len(s) > 0 {
+		r, n := utf8.DecodeRuneInString(s)
+		raw := s[:n]
+		s = s[n:]
+		switch {
+		case r == utf8.RuneError && n == 1:
+			fmt.Fprintf(&b, `\x%02x`, raw[0]) // a byte that isn't UTF-8
+		case r == '\n':
+			b.WriteRune(r)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || (r >= 0x200b && r <= 0x200f) || r == 0xfeff || r == 0x2028 || r == 0x2029:
+			fmt.Fprintf(&b, `\u{%x}`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // NewAsk returns an Ask that reply answers; adapters build it.

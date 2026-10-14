@@ -353,3 +353,49 @@ func TestCutClosedInFlight(t *testing.T) {
 		t.Fatal("Close hung")
 	}
 }
+
+// A cancelled cut verified nothing: it doesn't move the last cut, so the
+// next cut, after a turn that changed nothing, still covers its changes.
+func TestCancelledCutIsCutAgain(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "checking")
+	f := cutFrozen(t, "")
+	// Only the first Check on hold.go holds; the next one runs through.
+	f.Checks[0].Run = "if [ -f hold.go ] && [ ! -f '" + mark + "' ]; then touch '" + mark + "'; while :; do sleep 0.1; done; fi; " + f.Checks[0].Run
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "held", Writes: []multiturn.File{{Path: "hold.go", Content: "package fx\n"}}},
+		{Reply: "nothing changed"}}}), 0, f,
+		map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	t.Cleanup(func() { c.Close() })
+	drain(t, send(t, c, "hold"), nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Cut(ctx, CutParams{})
+		done <- err
+	}()
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(mark); err == nil {
+			break
+		}
+		if time.Since(start) > time.Minute {
+			t.Fatal("the Check never started")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(40 * time.Second):
+		t.Fatal("the cut didn't end when it was cancelled")
+	}
+	drain(t, send(t, c, "and now?"), nil)
+	res, err := c.Cut(t.Context(), CutParams{})
+	if errors.Is(err, ErrNothingToCut) {
+		t.Fatal("the cancelled cut's changes were never cut again")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Candidate == "" {
+		t.Errorf("the second cut has no Candidate: %+v", res)
+	}
+}

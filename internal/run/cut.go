@@ -213,7 +213,11 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	if res.Outcome == Refused && c.prep.setup != nil && !c.prep.setup.Pass {
 		c.refused = res
 	}
-	if res.Outcome != Refused && res.Candidate != "" {
+	// A cut that was cancelled, stopped or refused verified nothing: the
+	// next cut covers its turns again.
+	switch {
+	case ctx.Err() != nil, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
+	default:
 		c.lastCut = &cutMark{run: res.ID, commit: head, turn: to}
 	}
 	return res, nil
