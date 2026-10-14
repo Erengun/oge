@@ -74,6 +74,9 @@ type ChatParams struct {
 	Role string
 	// IdleTimeout is DefaultIdleTimeout when zero.
 	IdleTimeout time.Duration
+	// Config is the .oge/oge.toml Frozen was resolved from, or nil: every
+	// cut's.
+	Config []byte
 	// CacheSeedTemplate is a build cache the Chat's seed starts from. Only
 	// tests set it; see Params.CacheSeedTemplate.
 	CacheSeedTemplate string
@@ -94,6 +97,8 @@ type Chat struct {
 	checks    []string
 	frozen    *pipeline.Frozen
 	source    string // the user's repository
+	config    []byte
+	v0        string // Oracle v0's manifest blob
 	info      workspace.SnapshotInfo
 	state     *ledger.StateRoot
 	agents    map[string]agent.Adapter
@@ -130,12 +135,14 @@ type Chat struct {
 
 	cutMu   sync.Mutex // one cut at a time
 	lastCut *cutMark   // the last cut that reached a Run's walk
+	refused *Result    // the cut setup's failure refused
 
 	mu     sync.Mutex
 	sess   agent.Session
 	pumped chan struct{} // closed when the Session's events end
 	turns  int
-	msgs   []string // the user's turns, verbatim
+	msgs   []string     // the user's turns, verbatim
+	unsent map[int]bool // the turns whose message never reached the agent
 	// rebrief is set when the Session was reopened: its first turn gets
 	// the re-brief.
 	rebrief bool
@@ -261,7 +268,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
 		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
-		source: p.Repo, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate}
+		source: p.Repo, config: p.Config, unsent: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -323,6 +330,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	if err := c.log(RecOracleVersion, map[string]any{"version": m.Version, "manifest": mBlob, "tests": len(m.Tests)}); err != nil {
 		return nil, err
 	}
+	c.v0 = mBlob
 	c.protected = implementerScope(m, p.Frozen)
 	if c.instr, err = repoInstructions(repo, snap); err != nil {
 		return nil, err
@@ -503,6 +511,7 @@ func (c *Chat) start(text string, out *turnOut) error {
 	// its Session ended, so the turn gets its scope check.
 	ran := false
 	if err != nil {
+		c.unsent[n] = true
 		last = &agent.Event{Kind: agent.TurnSettled, Failure: "send_failed: " + err.Error()}
 	} else if c.err != nil {
 		last = &agent.Event{Kind: agent.TurnSettled, Failure: "chat_ended: " + c.err.Error()}

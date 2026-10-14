@@ -47,6 +47,9 @@ const (
 	// no Promoted or Ambiguous change against the revision the Run started
 	// from. There is no QA, Check or Verdict, and nothing to deliver.
 	Replied Outcome = "Replied"
+	// Failed is a Chat cut whose Check failed: it ends with that Verdict,
+	// and the Chat goes on (#262 sends it back in the Session).
+	Failed Outcome = "Failed"
 )
 
 // Ledger record types, in the order a Run writes them.
@@ -421,8 +424,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		}
 	}
 	res.Snapshot, res.Source = snap, info
-	if err := l.Append(RecSnapshotTaken, map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
-		"modified": info.Modified, "untracked": info.Untracked}); err != nil {
+	taken := map[string]any{"commit": snap, "head": info.Head, "branch": info.Branch,
+		"modified": info.Modified, "untracked": info.Untracked}
+	if p.cut != nil {
+		taken["from_chat"] = true // the Chat's, taken when it opened
+	}
+	if err := l.Append(RecSnapshotTaken, taken); err != nil {
 		return nil, err
 	}
 	p.Observe(Event{Kind: EvStarted, Result: res})
@@ -469,6 +476,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	if inSnap != (p.Config != nil) || !bytes.Equal(got, p.Config) {
+		if p.cut != nil {
+			return end(Refused, pipeline.ConfigPath+" isn't the Chat's Snapshot's; start a new Chat")
+		}
 		return end(Refused, pipeline.ConfigPath+" changed while the Run was starting; run oge again")
 	}
 
@@ -619,13 +629,6 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := recordTripwires(l, repo, res, a); err != nil {
 			return nil, err
 		}
-		// The Snapshot control has finished, and is the Chat's: each cut
-		// records it.
-		if control != nil {
-			if err := l.Append(RecControlEnded, control.Stop()); err != nil {
-				return nil, err
-			}
-		}
 		resume = "verify"
 	}
 	for check := 1; ; check++ {
@@ -768,7 +771,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// TODO(#73-decision): the Snapshot control is recorded once a Check
 		// has consulted it; one no Verdict needed is stopped unrecorded at
 		// the end of the Run.
-		if rec, ok := control.Consulted(); ok && p.cut == nil {
+		rec, ok := control.Consulted()
+		if p.cut != nil {
+			// The Chat's control, shared by its cuts: this cut's consults.
+			rec, ok = p.cut.control(control)
+		}
+		if ok {
 			if err := l.Append(RecControlEnded, rec); err != nil {
 				return nil, err
 			}
@@ -804,6 +812,12 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// human has promoted. Accepted needs none (ADR-0013).
 		if err := w.classify(a.Candidate); err != nil {
 			return nil, err
+		}
+		if p.cut != nil && verdict == "fail" {
+			// TODO(#262): a Chat sends a failing cut back as a feedback turn
+			// in its live Session. Until then the cut ends with its Verdict:
+			// no fresh implementer.
+			return end(Failed, "the Check failed on the cut")
 		}
 		// TODO(#47): failing own tests become a condition here.
 		holds := func(c string) bool {

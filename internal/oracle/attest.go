@@ -656,6 +656,7 @@ type Control struct {
 	consulted bool
 	recorded  bool
 	waited    time.Duration
+	waits     int
 }
 
 // StartControl starts the Snapshot control for m under root. r should
@@ -685,6 +686,7 @@ func (c *Control) Wait() (*Result, error) {
 	c.mu.Lock()
 	c.consulted = true
 	c.waited += time.Since(start)
+	c.waits++
 	c.mu.Unlock()
 	if c.err == nil && c.res == nil {
 		return nil, errors.New("no result")
@@ -714,6 +716,18 @@ func (c *Control) Done() <-chan struct{} {
 		return done
 	}
 	return c.done
+}
+
+// Waits is how many times a Check has consulted the control so far, and
+// how long they waited in all: a control shared by many Runs (a Chat's
+// cuts) is recorded per Run from the difference.
+func (c *Control) Waits() (int, time.Duration) {
+	if c == nil {
+		return 0, 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.waits, c.waited
 }
 
 // Consulted returns the control's record the first time it is called

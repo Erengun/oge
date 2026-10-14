@@ -185,8 +185,13 @@ func TestCutFailsClosedOnPreflight(t *testing.T) {
 	t.Run("failed", func(t *testing.T) {
 		c := openCut(t, "exit 3", w)
 		drain(t, send(t, c, "doc Add"), nil)
-		if res := cut(t, c); res.Outcome != Refused || len(runRecords(t, res.Dir, RecVerdict)) != 0 {
+		res := cut(t, c)
+		if res.Outcome != Refused || len(runRecords(t, res.Dir, RecVerdict)) != 0 {
 			t.Errorf("outcome %s %v", res.Outcome, res.Why)
+		}
+		// The refusal is kept: a later cut makes no new Run.
+		if again := cut(t, c); again.Outcome != Refused || again.ID != res.ID {
+			t.Errorf("a later cut %s %s, want the refusal of %s", again.Outcome, again.ID, res.ID)
 		}
 	})
 	t.Run("unfinished", func(t *testing.T) {
@@ -200,4 +205,136 @@ func TestCutFailsClosedOnPreflight(t *testing.T) {
 			t.Errorf("cut %+v, %v", res, err)
 		}
 	})
+}
+
+// A cut that parked on a Tamper event leaves it unacknowledged: the next
+// cut carries it, and gates on it too.
+func TestCutParkedTamperGatesTheNext(t *testing.T) {
+	edited := strings.Replace(cutAddTest, "Add(2, 3) != 5", "false", 1)
+	c := openCut(t, "",
+		multiturn.Turn{Reply: "fixed", Writes: []multiturn.File{{Path: "add_test.go", Content: edited}, {Path: "add.go", Content: cutAdd + "\n// Add sums.\n"}}},
+		multiturn.Turn{Reply: "and mul", Writes: []multiturn.File{{Path: "mul.go", Content: "package fx\n\nfunc Mul(a, b int) int { return a * b }\n"}}})
+	drain(t, send(t, c, "fix it"), nil)
+	if first := cut(t, c); first.Outcome != Parked {
+		t.Fatalf("first cut %s %v", first.Outcome, first.Why)
+	}
+	drain(t, send(t, c, "now Mul"), nil)
+	second := cut(t, c)
+	tamper := runRecords(t, second.Dir, RecTamperEvent)
+	if second.Outcome != Parked || len(tamper) != 1 || tamper[0]["id"] != "chat#1/tamper-1" {
+		t.Errorf("second cut %s, TamperEvent %v", second.Outcome, tamper)
+	}
+}
+
+// A late Tamper event on a turn already cut, caught once the Session
+// ends, reaches the next cut's Gate.
+func TestCutLateTamperOnACutTurn(t *testing.T) {
+	sub := cutAdd + "\nfunc Sub(a, b int) int { return a - b }\n"
+	c := openCut(t, "", multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: sub}}})
+	drain(t, send(t, c, "add Sub"), nil)
+	if first := cut(t, c); first.Outcome != Accepted {
+		t.Fatalf("first cut %s %v", first.Outcome, first.Why)
+	}
+	writeIn(t, c.Workspace, "add_test.go", "package fx\n")
+	c.mu.Lock()
+	sess := c.sess
+	c.mu.Unlock()
+	_ = sess.Close()
+	select {
+	case <-c.Done():
+	case <-time.After(20 * time.Second):
+		t.Fatal("the Session never ended")
+	}
+	if late := recordsOf(t, c, RecTamperEvent); len(late) != 1 || late[0]["late"] != true || late[0]["turn"] != float64(1) {
+		t.Fatalf("late TamperEvent %v", late)
+	}
+	// The reopened Session's turn; the Workspace change stands for its work.
+	writeIn(t, c.Workspace, "mul.go", "package fx\n\nfunc Mul(a, b int) int { return a * b }\n")
+	drain(t, send(t, c, "now Mul"), nil)
+	second := cut(t, c)
+	tamper := runRecords(t, second.Dir, RecTamperEvent)
+	if second.Outcome != Parked || len(tamper) != 1 || tamper[0]["id"] != "chat#1/tamper-1" || tamper[0]["late"] != true {
+		t.Errorf("second cut %s %v, TamperEvent %v", second.Outcome, second.Why, tamper)
+	}
+}
+
+// A cut whose Check fails is never sent back (#262 does that in the
+// Session): it ends Failed with its Verdict, and the next cut follows it.
+func TestCutFailingCheckFails(t *testing.T) {
+	c := openCut(t, "", multiturn.Turn{Reply: "oops", Writes: []multiturn.File{{Path: "add.go", Content: strings.Replace(cutAdd, "a + b", "a - b", 1)}}})
+	drain(t, send(t, c, "break it"), nil)
+	res := cut(t, c)
+	if res.Outcome != Failed {
+		t.Fatalf("outcome %s %v", res.Outcome, res.Why)
+	}
+	if v := runRecords(t, res.Dir, RecVerdict); len(v) != 1 || v[0]["verdict"] != "fail" {
+		t.Errorf("Verdict %v", v)
+	}
+	if a := runRecords(t, res.Dir, RecAttemptStarting); len(a) != 0 {
+		t.Errorf("an implementer Attempt started: %v", a)
+	}
+	if _, err := c.Cut(t.Context(), CutParams{}); !errors.Is(err, ErrNothingToCut) {
+		t.Errorf("after a failed cut: %v", err)
+	}
+}
+
+// Only the mode may change at a cut: a Pipeline that changes the Chat's
+// Oracle or setup is refused, with no Run.
+func TestCutRefusesAnotherOracle(t *testing.T) {
+	c := openCut(t, "", multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\n// Add sums.\n"}}})
+	drain(t, send(t, c, "doc Add"), nil)
+	for name, change := range map[string]func(*pipeline.Frozen){
+		"test globs": func(f *pipeline.Frozen) { f.Project.TestGlobs = []string{"none/*_test.go"} },
+		"setup":      func(f *pipeline.Frozen) { f.Setup.Run = "true" },
+	} {
+		f := cutFrozen(t, "")
+		change(f)
+		res, err := c.Cut(t.Context(), CutParams{Frozen: f})
+		if err != nil || res.Outcome != Refused || res.ID != "" {
+			t.Errorf("%s: cut %+v, %v", name, res, err)
+		}
+	}
+	if res := cut(t, c); res.Outcome != Accepted {
+		t.Errorf("the Chat's own Pipeline: %s %v", res.Outcome, res.Why)
+	}
+}
+
+// Closing the Chat cancels a cut in flight: its Check stops, and neither
+// the cut nor Close hangs.
+func TestCutClosedInFlight(t *testing.T) {
+	slow := "package fx\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestSlow(t *testing.T) { time.Sleep(time.Minute) }\n"
+	c := openCut(t, "", multiturn.Turn{Reply: "slow", Writes: []multiturn.File{{Path: "slow_test.go", Content: slow}}})
+	drain(t, send(t, c, "add a slow test"), nil)
+	closed := make(chan struct{})
+	observe := func(ev Event) {
+		if ev.Kind == EvAttempt {
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				c.Close()
+				close(closed)
+			}()
+		}
+	}
+	type out struct {
+		res *Result
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		res, err := c.Cut(t.Context(), CutParams{Observe: observe})
+		done <- out{res, err}
+	}()
+	select {
+	case o := <-done:
+		if o.err == nil && o.res.Outcome == Accepted {
+			t.Errorf("a cancelled cut was accepted")
+		}
+	case <-time.After(40 * time.Second):
+		t.Fatal("the cut didn't end when the Chat closed")
+	}
+	select {
+	case <-closed:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Close hung")
+	}
 }
