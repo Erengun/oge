@@ -30,10 +30,19 @@ func feedbackTurn(cr *oracle.Result, blobs *ledger.Blobs, m *oracle.Manifest, ca
 
 // feedbackSummary is a feedback turn's first line: how many Oracle tests
 // didn't pass, and the acceptance criteria the failing held-out ones
-// name. Only a count and ids: Missing names held-out tests too.
+// name. Only a count and ids: the tests' names include held-out ones.
 func feedbackSummary(cr *oracle.Result, hf *heldOutFilter) string {
 	s := "Öge's Check failed on your last change"
-	if n := len(cr.Missing); n > 0 {
+	n := len(cr.Missing)
+	if len(cr.Tests) > 0 {
+		n = 0 // the attested tests, as the Receipt counts them
+		for _, t := range cr.Tests {
+			if t.Attested != "pass" && t.Attested != "skip" && t.Excluded == "" {
+				n++
+			}
+		}
+	}
+	if n > 0 {
 		s += fmt.Sprintf(": %d failing", n)
 	}
 	seen := map[string]bool{}

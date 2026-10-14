@@ -186,7 +186,7 @@ func TestHomeChatFeedbackTurn(t *testing.T) {
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("oge › ✗ Failed · 1 file")
-	s.expect("Öge → agent: Öge's Check failed on your last change")
+	s.expect("Öge → agent: Öge's Check failed on your last change: 1 failing.")
 	s.expect("  fixed Add")
 	s.expect("oge › ✓ Accepted · 1 file · ")
 	s.quitChat(f)
