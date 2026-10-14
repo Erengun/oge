@@ -726,8 +726,8 @@ func TestHomeChatSecondApplyMergesOnTheLast(t *testing.T) {
 	s.quitChat(f)
 }
 
-// A slash command typed during a turn never reaches the agent: it waits
-// in the composer for the turn to end.
+// A slash command typed during a turn never reaches the agent: it queues,
+// and Esc puts it back in the composer.
 func TestHomeChatSlashWaitsForTheTurn(t *testing.T) {
 	t.Parallel()
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
@@ -737,7 +737,7 @@ func TestHomeChatSlashWaitsForTheTurn(t *testing.T) {
 	s.type_("long job\r")
 	s.expect("working on it")
 	s.type_("/apply\r")
-	s.expect("/apply: wait for the turn to finish")
+	s.expect("queued › /apply")
 	s.type_("\x1b")
 	s.expect("interrupted")
 	s.composer()

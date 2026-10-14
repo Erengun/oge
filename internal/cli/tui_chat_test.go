@@ -164,3 +164,52 @@ func TestFeedbackTurnShowsWorking(t *testing.T) {
 		t.Errorf("the feedback turn's live area:\n%s", v)
 	}
 }
+
+func turnQueueHome() *home {
+	h := &home{width: 80, height: 24, st: newStyles(false), turn: &chatTurn{},
+		hist:    &history{},
+		resolve: func(*setupState) (*resolved, []string) { return &resolved{frozen: &pipeline.Frozen{}}, nil },
+		chat:    &homeChat{}}
+	h.comp = h.composer()
+	return h
+}
+
+// During a turn the box stays, with each queued message dim above it, and
+// Up on an empty box takes the last one back to edit.
+func TestQueuedMessagesStayVisible(t *testing.T) {
+	h := turnQueueHome()
+	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
+	for _, m := range []string{"first", "/diff", "second"} {
+		h.comp.set(m)
+		h.chatKey(enter)
+	}
+	v := h.turnView()
+	for _, want := range []string{"working…", "queued › first", "queued › /diff", "queued › second", "╭─", "Type to queue a message"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view lacks %q:\n%s", want, v)
+		}
+	}
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.comp.text() != "second" || len(h.turn.queued) != 2 {
+		t.Fatalf("up: composer %q, queued %q", h.comp.text(), h.turn.queued)
+	}
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyUp}) // the box isn't empty: no pull
+	if len(h.turn.queued) != 2 {
+		t.Errorf("up on a filled box pulled: %q", h.turn.queued)
+	}
+}
+
+// Everything queued is one turn, in order with a blank line between; a
+// queued command runs and never reaches the agent.
+func TestQueuedMessagesAreOneTurn(t *testing.T) {
+	h := turnQueueHome()
+	h.turn.queued = []string{"first", "/nosuch", "second"}
+	queued := h.endTurn()
+	h.submitQueued(queued)
+	if h.turn == nil || h.turn.text != "first\n\nsecond" {
+		t.Fatalf("turn %+v", h.turn)
+	}
+	if !strings.Contains(strings.Join(h.msg, "\n"), "/nosuch") {
+		t.Errorf("the command didn't run: %q", h.msg)
+	}
+}
