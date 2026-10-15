@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/task"
 )
@@ -39,6 +40,34 @@ func frame(h *home) string { s, _, _ := h.render(); return s }
 
 func TestHomeEmptyComposer(t *testing.T) {
 	golden(t, "home-empty", frame(testHome(70)))
+}
+
+func TestHomeChatComposer(t *testing.T) {
+	h := testHome(70)
+	h.chat = &homeChat{}
+	golden(t, "home-chat", frame(h))
+}
+
+func TestHomeNarrowComposerKeepsItsFrame(t *testing.T) {
+	h := testHome(32)
+	h.title = "oge · a-long-repository-name · feature/a-long-branch"
+	h.comp.insert("Refine the terminal experience")
+	got := frame(h)
+	golden(t, "home-narrow", got)
+	for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+		if ansi.StringWidth(line) > h.width {
+			t.Fatalf("line exceeds terminal width: %q", line)
+		}
+	}
+	first, _, _ := strings.Cut(got, "\n")
+	if !strings.HasSuffix(first, "╮") {
+		t.Fatalf("composer lost its right corner: %q", first)
+	}
+	h.comp.set("")
+	h.chat = &homeChat{}
+	if row := strings.Split(frame(h), "\n")[1]; !strings.HasSuffix(row, "│") {
+		t.Fatalf("chat placeholder lost the composer's edge: %q", row)
+	}
 }
 
 func TestHomeComposerWithTextAndSetupBar(t *testing.T) {
@@ -230,7 +259,7 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 // keys.
 func (s *homeSession) composer() {
 	s.t.Helper()
-	const hint = "[ctrl+e] editor"
+	const hint = "[tab] setup  /help"
 	before := vtScreen(s.out.String()[:s.mark])
 	last, since := "", time.Now()
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -423,7 +452,7 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	// Leaving the composer takes its frame off the screen.
 	var end vt
 	end.write([]byte(s.out.String()))
-	if strings.Contains(end.String(), "Describe the task") {
+	if strings.Contains(end.String(), "Ask a question or describe a change") {
 		t.Errorf("the composer's frame stayed after quitting:\n%s", end.String())
 	}
 }

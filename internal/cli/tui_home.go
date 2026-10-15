@@ -438,8 +438,9 @@ type home struct {
 	verify     *chatVerify
 	cuts       int // the cuts started, each one's seq
 	// unchecked: a turn changed something no cut covers yet (it was
-	// interrupted); the next cut does.
-	unchecked bool
+	// interrupted or continued by queued messages); the next cut does.
+	unchecked        bool
+	uncheckedChanged int // largest known deferred or cancelled change count
 	// stale is the delivery waiting on its stale-edit choice.
 	stale *staleAsk
 	// cutGate is the newest cut's Gate, open at /apply or /branch;
@@ -1241,6 +1242,9 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
 		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
 	}
+	// Keep both corners intact when the repository or branch is long.
+	// The composer, rather than its metadata, owns the terminal width.
+	title = ansi.Truncate(title, max(width-4, 0), "…")
 	lines = append(lines, st.border("╭─")+st.bold(title)+st.border(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
 	for i, r := range rows {
 		body := r
@@ -1250,6 +1254,7 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 				body = st.dim("running… (ctrl+c to stop)")
 			}
 		}
+		body = ansi.Truncate(body, inner, "…")
 		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(body)), 0))
 		lines = append(lines, st.border("│")+" "+body+pad+" "+st.border("│"))
 	}
@@ -1294,7 +1299,11 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, s)
 		top++
 	}
-	box, cr, cc := h.boxLines(width, st.dim("Describe the task"))
+	placeholder := "Describe the task"
+	if h.chat != nil {
+		placeholder = "Ask a question or describe a change"
+	}
+	box, cr, cc := h.boxLines(width, st.dim(placeholder))
 	lines = append(lines, box...)
 	if h.vim {
 		mode := "-- INSERT --"
@@ -1368,12 +1377,29 @@ func (h *home) render() (string, int, int) {
 	if h.panel == nil && h.keys == nil {
 		_, shell := shellLine(h.comp.expanded())
 		for i, l := range h.setup {
+			if i == 0 && h.chat != nil {
+				l = strings.Replace(l, "implement ", "", 1)
+			}
+			// Commands belong in setup; keep deliberate edits visible until
+			// the next task so changing a Check never becomes silent.
+			if strings.HasPrefix(l, "Checks:") && !strings.Contains(l, "(from setup)") {
+				continue
+			}
 			if i == len(h.setup)-1 && strings.HasPrefix(l, "[tab]") {
+				submit := keyBinding{act: "composer.submit"}.label(h.kb)
+				action := "run"
+				if h.chat != nil {
+					action = "send"
+				}
+				l = "[" + submit + "] " + action + "  [tab] setup  /help"
+				if width < 40 {
+					l = submit + " " + action + " · tab setup"
+				}
 				switch {
 				case h.job != nil:
 					l = "running… ctrl+c stop"
 				case shell:
-					l = "[enter] run shell  [ctrl+j] newline"
+					l = "[" + submit + "] run shell  [ctrl+j] newline"
 				}
 			}
 			lines = append(lines, " "+st.dim(l))

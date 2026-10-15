@@ -52,17 +52,42 @@ func TestParseSlash(t *testing.T) {
 	}
 }
 
-func TestSlashHelpListsEveryCommand(t *testing.T) {
-	got := helpText(nil)
+func TestSlashHelpKeepsAdvancedControlsSeparate(t *testing.T) {
+	got, advanced := helpText(nil), advancedHelpText(nil)
 	for _, c := range slashCommands() {
-		if !strings.Contains(got, c.usage) {
-			t.Errorf("/help lacks %q", c.usage)
+		if c.unavailable {
+			if strings.Contains(got, c.name) || strings.Contains(advanced, c.name) {
+				t.Errorf("advertised unavailable command %s", c.name)
+			}
+			continue
+		}
+		target := got
+		if c.advanced {
+			target = advanced
+			if strings.Contains(got, c.name+" ") {
+				t.Errorf("everyday help advertises %s", c.name)
+			}
+		}
+		if !strings.Contains(target, c.usage) {
+			t.Errorf("help lacks %q", c.usage)
 		}
 	}
-	if !strings.Contains(got, "not built yet (#55)") {
-		t.Error("/help doesn't say /resume isn't built")
-	}
 	golden(t, "slash-help", got+"\n")
+}
+
+func TestSlashMenuHidesUnavailableCommands(t *testing.T) {
+	h := testHome(80)
+	typeText(h, "/")
+	for _, item := range h.menu.Items() {
+		if c := item.(slashItem).cmd; c.advanced || c.unavailable {
+			t.Errorf("everyday menu advertises %s", c.name)
+		}
+	}
+	h.comp.set("/res")
+	h.syncMenu()
+	if h.menu != nil {
+		t.Fatal("unavailable /resume is suggested")
+	}
 }
 
 func TestSlashMenuGolden(t *testing.T) {
@@ -116,7 +141,7 @@ func TestSlashMenuKeys(t *testing.T) {
 	typeText(h, "/re")
 	h.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	h.Update(tab())
-	if h.comp.text() != "/resume" {
+	if h.comp.text() != "/receipt" {
 		t.Fatalf("down then Tab: %q", h.comp.text())
 	}
 	h.comp.set("/re")
@@ -329,7 +354,7 @@ func TestBareOgeSlashCommandsEndToEnd(t *testing.T) {
 	}
 }
 
-func TestSlashMenuYieldsToHistoryAndHintsAtMore(t *testing.T) {
+func TestSlashMenuYieldsToHistoryAndFitsEverydayCommands(t *testing.T) {
 	h := testHome(80)
 	h.hist = &history{entries: []string{"older", "/diff"}}
 	h.Update(tea.KeyPressMsg{Code: tea.KeyUp})
@@ -342,7 +367,7 @@ func TestSlashMenuYieldsToHistoryAndHintsAtMore(t *testing.T) {
 	}
 	h = testHome(80)
 	typeText(h, "/")
-	if !strings.Contains(frame(h), "more · ↓") {
-		t.Errorf("no hint of the commands below:\n%s", frame(h))
+	if strings.Contains(frame(h), "more · ↓") {
+		t.Errorf("everyday commands should fit without scrolling:\n%s", frame(h))
 	}
 }

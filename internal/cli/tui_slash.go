@@ -29,6 +29,8 @@ var slashPrefix = regexp.MustCompile(`^/[a-z-]*$`)
 // (the text stays in the box).
 type slashCmd struct {
 	name, usage, desc string
+	advanced          bool
+	unavailable       bool
 	guard             bool // delivers: a completion is armed before Enter runs it
 	args              bool // takes arguments it needs: Enter on the bare name completes it
 	run               func(h *home, args []string) (tea.Cmd, string)
@@ -36,26 +38,26 @@ type slashCmd struct {
 
 func slashCommands() []slashCmd {
 	return []slashCmd{
-		{name: "/help", usage: "/help", desc: "keys and commands", run: (*home).helpCmd},
-		{name: "/setup", usage: "/setup", desc: "open setup (same as tab)", run: (*home).setupCmd},
-		{name: "/mode", usage: "/mode fast|standard", desc: "the mode of the next Runs (from setup)", args: true, run: (*home).modeCmd},
-		{name: "/agent", usage: "/agent <stage> <agent[@profile]>", desc: "bind a Stage's agent (from setup)", args: true, run: (*home).agentCmd},
-		{name: "/model", usage: "/model <stage> <model>", desc: "a Stage's model (from setup)", args: true, run: (*home).modelCmd},
-		{name: "/effort", usage: "/effort <stage> <level>", desc: "a Stage's effort, Claude only (from setup)", args: true, run: (*home).effortCmd},
-		{name: "/advise", usage: "/advise <question>", desc: "ask a fresh advisor for a second opinion", args: true, run: (*home).adviseCmd},
-		{name: "/runs", usage: "/runs", desc: "recent Runs in this repo", run: (*home).runsCmd},
-		{name: "/receipt", usage: "/receipt [run]", desc: "the Receipt of a Run", run: deliverSlash("r", "receipt")},
-		{name: "/diff", usage: "/diff [run]", desc: "a Run's Candidate: files, then each diff", run: (*home).diffCmd},
-		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply a Run's Candidate to your tree", run: deliverSlash("a", "apply")},
-		{name: "/branch", guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
-		{name: "/label", usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
-		{name: "/export", usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
-		{name: "/copy", usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
+		{name: "/help", usage: "/help [advanced]", desc: "keys and commands", run: (*home).helpCmd},
+		{name: "/setup", advanced: true, usage: "/setup", desc: "open setup (same as tab)", run: (*home).setupCmd},
+		{name: "/mode", advanced: true, usage: "/mode fast|standard", desc: "the mode of the next Runs (from setup)", args: true, run: (*home).modeCmd},
+		{name: "/agent", advanced: true, usage: "/agent <stage> <agent[@profile]>", desc: "bind a Stage's agent (from setup)", args: true, run: (*home).agentCmd},
+		{name: "/model", advanced: true, usage: "/model <stage> <model>", desc: "a Stage's model (from setup)", args: true, run: (*home).modelCmd},
+		{name: "/effort", advanced: true, usage: "/effort <stage> <level>", desc: "a Stage's effort, Claude only (from setup)", args: true, run: (*home).effortCmd},
+		{name: "/advise", advanced: true, usage: "/advise <question>", desc: "ask a fresh advisor for a second opinion", args: true, run: (*home).adviseCmd},
+		{name: "/runs", advanced: true, usage: "/runs", desc: "recent Runs in this repo", run: (*home).runsCmd},
+		{name: "/receipt", usage: "/receipt [run]", desc: "show the result and checks", run: deliverSlash("r", "receipt")},
+		{name: "/diff", usage: "/diff [run]", desc: "review changes", run: (*home).diffCmd},
+		{name: "/apply", guard: true, usage: "/apply [run]", desc: "apply changes to your working tree", run: deliverSlash("a", "apply")},
+		{name: "/branch", advanced: true, guard: true, usage: "/branch [run] [name]", desc: "a Run's Candidate as a branch", run: deliverSlash("b", "branch")},
+		{name: "/label", advanced: true, usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
+		{name: "/export", advanced: true, usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
+		{name: "/copy", advanced: true, usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
 		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
-		{name: "/clear", usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
-		{name: "/notify", usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
-		{name: "/terminal", usage: "/terminal", desc: "hints for this terminal (Shift+Enter, Alt keys, tmux)", run: (*home).terminalCmd},
-		{name: "/resume", usage: "/resume", desc: "not built yet (#55)", run: func(*home, []string) (tea.Cmd, string) {
+		{name: "/clear", advanced: true, usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
+		{name: "/notify", advanced: true, usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
+		{name: "/terminal", advanced: true, usage: "/terminal", desc: "hints for this terminal (Shift+Enter, Alt keys, tmux)", run: (*home).terminalCmd},
+		{name: "/resume", unavailable: true, usage: "/resume", desc: "not built yet (#55)", run: func(*home, []string) (tea.Cmd, string) {
 			return nil, "/resume: not built yet (#55)"
 		}},
 		{name: "/quit", usage: "/quit", desc: "leave", run: (*home).quitCmd},
@@ -88,11 +90,7 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		return nil, false
 	}
 	if c == nil {
-		var names []string
-		for _, c := range slashCommands() {
-			names = append(names, c.name)
-		}
-		h.msg = []string{word + ": unknown command · " + strings.Join(names, " ")}
+		h.msg = []string{word + ": unknown command · /help lists commands"}
 		return nil, true
 	}
 	h.adviceEdit = nil // a command replaced what the box held
@@ -116,6 +114,9 @@ func usageOf(name string) string {
 }
 
 func (h *home) helpCmd(args []string) (tea.Cmd, string) {
+	if len(args) == 1 && args[0] == "advanced" {
+		return h.println(advancedHelpText(h.kb)), ""
+	}
 	if len(args) > 0 {
 		return nil, usageOf("/help")
 	}
@@ -125,13 +126,34 @@ func (h *home) helpCmd(args []string) (tea.Cmd, string) {
 // helpText is /help: the keys (from the key table the ? panel shows too),
 // then the commands from the command table.
 func helpText(kb *keyMap) string {
-	lines := append([]string{"Keys"}, keyLines(kb)...)
+	lines := []string{"Write a message to work with your agent. Follow up in the same conversation.", "", "Keys"}
+	submit := (keyBinding{act: "composer.submit"}).label(kb)
+	keys := (keyBinding{act: "composer.keysPanel"}).label(kb)
+	lines = append(lines, fmt.Sprintf("  %-18s send message", submit), "  ctrl+c             stop work, clear the draft, or leave", fmt.Sprintf("  %-18s commands, files, and keyboard shortcuts (on an empty composer)", keys))
 	if n := kb.note(); n != "" {
 		lines = append(lines, "  "+n)
 	}
 	lines = append(lines, "Commands")
 	for _, c := range slashCommands() {
+		if c.advanced || c.unavailable {
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("  %-34s %s", c.usage, c.desc))
+	}
+	lines = append(lines, "", "More controls: /help advanced")
+	return strings.Join(lines, "\n")
+}
+
+func advancedHelpText(kb *keyMap) string {
+	lines := append([]string{"Keys"}, keyLines(kb)...)
+	if n := kb.note(); n != "" {
+		lines = append(lines, "  "+n)
+	}
+	lines = append(lines, "Advanced commands")
+	for _, c := range slashCommands() {
+		if c.advanced && !c.unavailable {
+			lines = append(lines, fmt.Sprintf("  %-34s %s", c.usage, c.desc))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -141,6 +163,7 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/new")
 	}
 	h.last, h.thread = nil, nil
+	h.unchecked, h.uncheckedChanged = false, 0
 	// A fresh task is a fresh Chat: the next message opens a new Session,
 	// and the old one's cut in flight ends unshown.
 	if v := h.verify; v != nil {
@@ -539,7 +562,7 @@ func (h *home) syncMenu() {
 	}
 	var items []list.Item
 	for _, c := range slashCommands() {
-		if strings.HasPrefix(c.name, text) {
+		if !c.unavailable && (text != "/" || !c.advanced) && strings.HasPrefix(c.name, text) {
 			items = append(items, slashItem{c})
 		}
 	}

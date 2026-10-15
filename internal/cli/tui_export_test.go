@@ -81,7 +81,7 @@ func TestCopyWithoutReceipt(t *testing.T) {
 
 func TestHelpListsExportAndCopy(t *testing.T) {
 	for _, c := range []string{"/export", "/copy"} {
-		if !strings.Contains(helpText(nil), c) {
+		if !strings.Contains(advancedHelpText(nil), c) {
 			t.Errorf("/help lacks %s", c)
 		}
 	}

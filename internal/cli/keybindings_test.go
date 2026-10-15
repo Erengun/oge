@@ -60,9 +60,19 @@ func TestKeybindingsOverrideResolve(t *testing.T) {
 	}
 }
 
+func TestEverydayHelpShowsRemappedKeys(t *testing.T) {
+	kb, _ := withKeys(t, "[composer]\nsubmit = \"ctrl+q\"\nkeysPanel = \"f1\"\n")
+	got := helpText(kb)
+	for _, want := range []string{"ctrl+q", "f1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("everyday help lacks %s", want)
+		}
+	}
+}
+
 func TestKeybindingsShowInHelpAndPanel(t *testing.T) {
 	kb, _ := withKeys(t, validKeys)
-	help := helpText(kb)
+	help := advancedHelpText(kb)
 	for _, want := range []string{"ctrl+g", `ctrl+j · \+enter`, "ctrl+t"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("/help lacks %q", want)
@@ -282,7 +292,7 @@ func TestKeybindingsPanelMarksOverrides(t *testing.T) {
 	if strings.Contains(frame(func() *home { h := testHome(80); typeText(h, "?"); return h }()), " *") {
 		t.Error("the default panel marks a key")
 	}
-	if !strings.Contains(helpText(kb), "* keys from ~/.config/oge/keybindings.toml") {
+	if !strings.Contains(advancedHelpText(kb), "* keys from ~/.config/oge/keybindings.toml") {
 		t.Error("/help lacks the note")
 	}
 	checkPanelWidth(t, got)

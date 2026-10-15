@@ -25,8 +25,8 @@ import (
 // slice 7): Enter sends the message as a turn, whose reply and dim tool
 // one-liners are printed as they come. A turn that changes nothing ends
 // there: no stages, no Receipt, no action row. A turn with Promoted or
-// Ambiguous changes is cut into a Run at once (D4), verified in the
-// background while the composer stays live (D3), then summed up on one
+// Ambiguous changes is cut into a Run after queued follow-ups settle (D4),
+// verified in the background while the composer stays live (D3), then summed up on one
 // Verdict line, with its diff when that is small; a newer cut supersedes
 // it. /apply, /diff and /receipt act on the newest cut whose Verdict is
 // in (slice 9): with newer edits unchecked, /apply and /branch ask
@@ -449,17 +449,28 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 // the background: the cut supersedes one still verifying, and covers its
 // turns.
 func (h *home) turnEnded() (tea.Model, tea.Cmd) {
-	if fb := h.turn.feedback; fb != "" && h.turn.changed == 0 && !h.turn.stopped {
+	if fb := h.turn.feedback; fb != "" && h.turn.changed == 0 && !h.unchecked && !h.turn.stopped {
 		// The feedback turn waited for this one, which cut nothing newer:
 		// it goes first, before the messages queued meanwhile.
 		f := h.turn.fbFrozen
 		queued := h.endTurn()
 		return h, h.feedbackSubmit(fb, f, queued)
 	}
-	if h.turn.changed == 0 || h.turn.stopped {
-		// An interrupted turn's changes wait for the next turn's cut.
+	// Messages already queued will immediately continue the implementer's
+	// work. Avoid launching a verifier for the intermediate tree. Commands
+	// are different: they may request delivery and do not send a turn.
+	followUp := len(h.turn.queued) > 0
+	for _, q := range h.turn.queued {
+		followUp = followUp && !queuedCommand(q)
+	}
+	if (h.turn.changed == 0 && !h.unchecked) || h.turn.stopped || followUp {
+		// Deferred and interrupted changes wait for the next settled turn.
 		h.unchecked = h.unchecked || h.turn.changed > 0
+		h.uncheckedChanged = max(h.uncheckedChanged, h.turn.changed)
 		return h.nextTurn(nil)
+	}
+	if h.unchecked {
+		h.turn.changed = max(h.turn.changed, h.uncheckedChanged)
 	}
 	cut := h.startCut()
 	m, next := h.nextTurn(nil)
@@ -482,6 +493,7 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cuts++
 	h.unchecked = false
+	h.uncheckedChanged = 0
 	h.cutGate, h.gateFor = nil, nil
 	h.cutFrozen = f
 	h.verify = &chatVerify{seq: h.cuts, changed: changed, frozen: f, cancel: cancel}
@@ -729,6 +741,15 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 			return h.println(line + "\n" + h.ogeLine(h.st.dim("ready to "+deliver.verb()+" · /"+deliver.verb())))
 		}
 		return tea.Sequence(h.println(line), diff, h.actNow(deliver.key, deliver.arg))
+	}
+	// The setup's saved apply preference authorizes delivery, not Gate
+	// decisions or stale edits. Use the same checked-Candidate path as
+	// /apply, including conflict and late-Tamper refusals. Cancelled cuts
+	// and an active turn never deliver on their own.
+	if h.sel != nil && h.sel.apply && verdict && res.Outcome == run.Accepted &&
+		res.Check.Pass && !v.stopped && h.last != nil && h.last.apply != nil &&
+		h.turn == nil && !h.unchecked && h.job == nil && h.stale == nil {
+		return tea.Sequence(h.println(line), diff, h.actNow("a", ""))
 	}
 	// After Ctrl+C on the verify, the human has taken over: no feedback.
 	if verdict && res.Feedback != "" && !v.stopped {

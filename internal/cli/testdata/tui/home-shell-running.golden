@@ -2,5 +2,4 @@
 │ running… (ctrl+c to stop)                                          │
 ╰────────────────────────────────────────────────────────────────────╯
  Standard · implement claude:sonnet · verify codex
- Checks: go test -json ./...
  running… ctrl+c stop

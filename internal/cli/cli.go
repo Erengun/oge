@@ -113,6 +113,23 @@ var notYet = map[string]bool{
 }
 
 const usage = `Usage:
+  oge                         start a conversation with your agent
+  oge "<task>" [flags]         run a task
+  oge diff [<run>]             review changes
+  oge receipt [<run>]          show the result and checks
+  oge apply [<run>]            apply accepted changes to your working tree
+
+Flags:
+  --task-file <path|->         read the task from a file or stdin
+  --check <command>           add a check for this task
+  --apply                     apply changes when accepted (never commits)
+  --plain                     print plain output
+  --version                   show the version
+
+More controls: oge help advanced
+`
+
+const advancedUsage = `Advanced usage:
   oge                           on a terminal: write a Task in the composer and run it
   oge "<task>" [flags]          run a Task (same as oge run)
   oge run [<task>] [flags]
@@ -126,9 +143,8 @@ Run flags:
   --dry-run                show what a Run would do, without starting any agent
                            (a first-run config proposal is still saved on yes)
   --task-file <path|->     read the Task from a file, or stdin with -
-  --fast | --standard | --blind
-                           mode: Fast (no verifier), Standard (the default) or Blind
-                           (verifier first); beats the mode in your user config
+  --fast | --standard     skip independent review, or use the default review mode
+                           configured checks run in both modes
   --require <guarantee>    refuse unless the mode gives it (e.g. held-out)
   --confirm                stop at the Result gate before accepting
   --apply                  apply the Candidate to your working tree if Accepted
@@ -161,7 +177,11 @@ func Main(env Env, args []string) int {
 			fmt.Fprintf(env.Stdout, "oge %s\n", env.Version)
 			return ExitOK
 		case a == "--help" || a == "-help" || a == "-h" || a == "help":
-			fmt.Fprint(env.Stdout, usage)
+			if len(args) == 2 && args[1] == "advanced" {
+				fmt.Fprint(env.Stdout, advancedUsage)
+			} else {
+				fmt.Fprint(env.Stdout, usage)
+			}
 			return ExitOK
 		case a == "run":
 			args = args[1:]

@@ -7,5 +7,4 @@
    README.md
  tab or enter insert the path · esc close
  Standard · implement claude:sonnet · verify codex
- Checks: go test -json ./...
- [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+ [enter] run  [tab] setup  /help

@@ -21,8 +21,7 @@ Ledger        head X · identifies this Receipt; not tamper-proof
 Nothing was written to your repository.
 
 ╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
-│ Describe the task                                                            │
+│ Ask a question or describe a change                                          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Standard · implement fake · verify fake
- Checks: go test -json ./...
- [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+ Standard · fake · verify fake
+ [enter] send  [tab] setup  /help

@@ -2,5 +2,4 @@
 │ !git status                                                        │
 ╰────────────────────────────────────────────────────────────────────╯
  Standard · implement claude:sonnet · verify codex
- Checks: go test -json ./...
  [enter] run shell  [ctrl+j] newline
