@@ -229,7 +229,7 @@ func TestSetupPicksAProfileRunsAndSaves(t *testing.T) {
 
 	// A new session: the setup bar shows the saved profile.
 	s2 := startHomeSessionWith(t, f, withClaude, "--fast")
-	s2.expect("implement claude@z")
+	s2.expect("claude@z · no verifier")
 	s2.type_("\x03")
 	if code := s2.wait(); code != ExitOK {
 		t.Fatalf("second session exit %d\n%s", code, s2.errOut.String())
