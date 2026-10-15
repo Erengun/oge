@@ -358,9 +358,13 @@ func TestEffortIsClaudeOnlyAndInherited(t *testing.T) {
 	if probs := defaultBindings(got, nil); len(probs) != 0 || got[1].Effort != "low" {
 		t.Errorf("own effort lost: %+v %v", got[1], probs)
 	}
+	got = stages("agy", "high")
+	if probs := defaultBindings(got, nil); len(probs) != 0 || got[1].Effort != "high" || got[1].Source != FromInherited {
+		t.Errorf("agy verifier = %+v, problems %v", got[1], probs)
+	}
 	for _, agent := range []string{"codex", "fake"} {
 		probs := defaultBindings(stages(agent, "high"), nil)
-		if len(probs) == 0 || !strings.Contains(probs[0].Msg, "claude only") {
+		if len(probs) == 0 || !strings.Contains(probs[0].Msg, "claude and agy only") {
 			t.Errorf("%s: effort accepted: %v", agent, probs)
 		}
 	}
