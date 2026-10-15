@@ -183,7 +183,7 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 // in flight, Öge's feedback turn too, shows "working…" there.
 func (s *homeSession) composerAfter(anchor string) {
 	s.t.Helper()
-	const hint = "[ctrl+e] editor"
+	const hint = "[tab] setup  /help"
 	last, since := "", time.Now()
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		out := s.out.String()

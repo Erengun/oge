@@ -27,7 +27,7 @@ Bare `oge` opens a **Chat**. A Chat owns:
 
 Each message is a **turn**, one `Send` to the implementer Session, recorded as a Chat Attempt.
 
-When a turn settles with Promoted or Ambiguous changes (against the last cut, or against the Snapshot if there is none), Öge **cuts** an immutable Candidate. A **Run** is that cut taken through the frozen Pipeline to a Verdict. A Chat hosts many Runs.
+When a turn settles with Promoted or Ambiguous changes (against the last cut, or against the Snapshot if there is none), and no ordinary follow-up is already queued, Öge **cuts** an immutable Candidate. A **Run** is that cut taken through the frozen Pipeline to a Verdict. A Chat hosts many Runs.
 
 One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 
@@ -36,7 +36,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 - **"yo":** the reply streams in within about 1 to 2 seconds. There are no stages, no Receipt and no action row.
 - **A question:** tool steps show as dim one-liners, and the answer stays in the transcript. Follow-ups reach the same Session, so it remembers.
 - **A fix:** the reply, then `1 file changed · verifying…`, and the composer stays live. When the Verdict lands: `✓ Accepted · 1 file · 412 passed · /apply /diff`. A diff of 20 lines or fewer shows inline.
-- **Multi-file work:** every turn with changes re-cuts, and only the newest cut is verified. A superseded Check is cancelled: it yields no Verdict and doesn't count as a Recheck. A failing Verdict prints `✗ 2 criteria failing`, followed by a dim `Öge → agent: …` feedback turn. Esc interrupts the running turn.
+- **Multi-file work:** queued follow-up messages continue work before cutting; their changes are verified when the conversation settles. A newer cut cancels background verification, and only the newest cut is verified. A superseded Check is cancelled: it yields no Verdict and doesn't count as a Recheck. A failing Verdict prints `✗ 2 criteria failing`, followed by a dim `Öge → agent: …` feedback turn. Esc interrupts the running turn.
 - **Delivery:** `/apply` and `/branch` deliver the newest *verified* cut.
   - If newer, unchecked edits exist, Öge asks `newer edits, unchecked: apply verified / wait`.
   - A three-line summary prints, and the full Receipt is behind `/receipt`.
@@ -101,8 +101,8 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 | Scope | The redesign blocks M1; #114 is re-run on the Chat UX. |
 | D1 | **Implementer Session reuse** is the default in bare `oge`. It is disclosed in the manifest and the Receipt. Reusing a verifier or QA Session is a hard error. `oge "task"` stays fresh. |
 | D2 | **Permissions** use Claude Code's auto mode, with Öge's hard denies on top. Other agents fall back to read-only commands plus the Check commands. |
-| D3 | **Verification runs in the background:** a newer cut cancels the Check of an older one, and Verdicts are cached. |
-| D4 | **Cuts are automatic:** Öge cuts every turn that settles with Promoted or Ambiguous changes. |
+| D3 | **Verification runs in the background:** a newer cut cancels stale verification, and Verdicts are cached. |
+| D4 | **Cuts are automatic:** Öge cuts settled Promoted or Ambiguous changes once queued ordinary follow-ups finish, including when the final follow-up changes nothing. |
 | D5 | **A failed Check** gets an automatic feedback turn (a count plus ids), with a budget of 3 per chain. |
 | D6 | **Held-out sampling** is disclosed (`held_out_viewed` and the cycle count), with no cap yet. |
 | D7 | **The Task** is the user's turns since the last delivery, verbatim and hashed. It is never summarized by the agent. |

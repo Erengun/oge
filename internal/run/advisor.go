@@ -31,6 +31,9 @@ import (
 const (
 	RecConsultationStarted = "ConsultationStarted"
 	RecConsultationEnded   = "ConsultationEnded"
+	// RecAdviceSent: a Consultation's advice became a turn, verbatim
+	// (Öge's) or edited (the user's).
+	RecAdviceSent = "AdviceSent"
 )
 
 // Consultation outcomes, on ConsultationEnded.
@@ -415,4 +418,11 @@ func (c *Chat) diff(from, to string) ([]byte, error) {
 		out.Write(patch)
 	}
 	return out.Bytes(), nil
+}
+
+// Advisor is who a Consultation would ask: the agent and model, for the
+// status line shown while it runs.
+func (c *Chat) Advisor() (agentName, model string, err error) {
+	_, st, err := c.advisorFor()
+	return st.Agent, st.Model, err
 }

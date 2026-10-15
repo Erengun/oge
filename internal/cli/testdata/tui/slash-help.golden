@@ -1,81 +1,15 @@
+Write a message to work with your agent. Follow up in the same conversation.
+
 Keys
-Composer
-  enter                run the task
-  ctrl+j · \+enter     newline
-  ctrl+e · ctrl+g      write the task in $EDITOR
-  ctrl+s               stash the draft (again on an empty box restores)
-  ctrl+c               clear the draft (↑ restores), then leave
-  ctrl+l               redraw
-  tab                  open setup
-  shift+tab            switch Standard / Fast (this session)
-  alt+m                open setup at the implement model
-  !                    shell mode, one line (ctrl+c stops · \! is a Task)
-  / · @ · ?            commands · files · this panel (on an empty box)
-  ← → · ctrl+b ctrl+f  move
-  home · end · ctrl+a  line start · end
-  alt+b alt+f          move by word
-  backspace · delete   delete back · forward
-  ctrl+k · ctrl+u      kill to line end · start
-  ctrl+w · alt+d       kill word back · forward
-  ctrl+y               yank what was killed
-  ctrl+_ · ctrl+z      undo
-History
-  ↑ ↓ · ctrl+p ctrl+n  earlier · later tasks (↑ on the first line)
-  ctrl+r               search history (again: older)
-  enter · esc          in a search: use the match · cancel
-Menus & pickers
-  ↑ ↓                  move in the slash menu or the @ picker
-  tab · enter          complete a command · insert a path
-  esc                  close it
-  / · esc              in the Run picker: filter · clear it
-  enter · d            in the Run picker: receipt · diff of a Run
-  a · b                in the Run picker: apply · branch (confirm by typing)
-  l                    in the Run picker: label the Run
-Run
-  ctrl+o               expand or collapse the progress
-  ↑ ↓ · pgup pgdown    scroll it, expanded
-  / · n N              expanded: search · next · previous match (enter jumps)
-  { · }                expanded: previous · next Attempt
-  esc                  close the search, then collapse
-  type · enter         the next Task; enter queues it, never sent to the Run
-  ctrl+x               cancel the queued Task
-  ctrl+c               clear the queued Task, else cancel the Run
-Delivery
-  ↓ on an empty box    the actions of the last Run
-  a · b · d · r        apply · branch · diff · receipt (each ↓ allows one)
-Setup
-  tab · esc            close setup
-  ↑ ↓ · enter          move · change the row
-  s · w                save as default · write the project Checks
-  d · x                remove the row
-Vim (when enabled)
-  esc · i a I A o O    NORMAL · INSERT (enter runs in both)
-  h j k l              left · down · up · right (k, j at the edge: history)
-  w e b                next word · word end · previous (NORMAL)
-  0 ^ $                line start · first char · end (NORMAL)
-  d c y                operator + motion or iw i" i( · dd cc yy (NORMAL)
-  x · D                delete the character · to the line end (NORMAL)
-  p · P                put after · before (the kill ring)
-  v · V                select · select lines (then d x c y p; esc)
-  u · .                undo · repeat the last change
+  enter              send message
+  ctrl+c             stop work, clear the draft, or leave
+  / · @ · ?          commands, files, and keyboard shortcuts (on an empty composer)
 Commands
-  /help                              keys and commands
-  /setup                             open setup (same as tab)
-  /mode fast|standard                the mode of the next Runs (from setup)
-  /agent <stage> <agent[@profile]>   bind a Stage's agent (from setup)
-  /model <stage> <model>             a Stage's model (from setup)
-  /effort <stage> <level>            a Stage's effort, Claude only (from setup)
-  /runs                              recent Runs in this repo
-  /receipt [run]                     the Receipt of a Run
-  /diff [run]                        a Run's Candidate: files, then each diff
-  /apply [run]                       apply a Run's Candidate to your tree
-  /branch [run] [name]               a Run's Candidate as a branch
-  /label [run] <text>                name a Run (yours; not Evidence); no text clears
-  /export                            write this session's transcript to a file (redacted)
-  /copy                              copy the last Receipt to the clipboard (redacted)
+  /help [advanced]                   keys and commands
+  /receipt [run]                     show the result and checks
+  /diff [run]                        review changes
+  /apply [run]                       apply changes to your working tree
   /new                               start a fresh task
-  /clear                             start a fresh task
-  /notify on|off                     alerts for this session
-  /terminal                          hints for this terminal (Shift+Enter, Alt keys, tmux)
-  /resume                            not built yet (#55)
   /quit                              leave
+
+More controls: /help advanced

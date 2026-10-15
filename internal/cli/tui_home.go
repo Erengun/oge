@@ -426,13 +426,21 @@ type home struct {
 	// runs each message as a one-shot Run (an agent without auto mode, or
 	// OGE_CHAT=0). turn is the turn in flight; verify is the newest cut
 	// verifying in the background, while turns go on.
-	chat   *homeChat
-	turn   *chatTurn
-	verify *chatVerify
-	cuts   int // the cuts started, each one's seq
+	chat *homeChat
+	// adv is the session's Consultation (/advise); adviceEdit is the
+	// Consultation whose advice the composer holds, edited: the next
+	// message is the user's turn, and its AdviceSent says where it came
+	// from.
+	adv        *adviseState
+	advSeq     int
+	adviceEdit *adviceEditState
+	turn       *chatTurn
+	verify     *chatVerify
+	cuts       int // the cuts started, each one's seq
 	// unchecked: a turn changed something no cut covers yet (it was
-	// interrupted); the next cut does.
-	unchecked bool
+	// interrupted or continued by queued messages); the next cut does.
+	unchecked        bool
+	uncheckedChanged int // largest known deferred or cancelled change count
 	// stale is the delivery waiting on its stale-edit choice.
 	stale *staleAsk
 	// cutGate is the newest cut's Gate, open at /apply or /branch;
@@ -571,6 +579,12 @@ func (h *home) Init() tea.Cmd {
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
+	if h.adviceEdit != nil && h.comp != nil && h.comp.empty() {
+		h.adviceEdit = nil // emptied: what is typed next isn't the advice
+	}
+	if flush := h.flushAdvice(); flush != nil {
+		cmd = tea.Sequence(cmd, flush) // after whatever this update prints
+	}
 	h.syncMenu()
 	h.syncAt()
 	h.dropRecordingInOverlay()
@@ -600,6 +614,13 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.println(strings.Join(lines, "\n"))
 	case chatClosedMsg:
 		h.resetting = false
+		return h, nil
+	case adviceMsg:
+		return h, h.adviceLanded(m)
+	case adviceTickMsg:
+		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
+			return h, adviceTick(m.seq)
+		}
 		return h, nil
 	}
 	if h.turn != nil {
@@ -752,6 +773,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.at.list != nil && h.atKey(msg) {
 			return h, nil
 		}
+		if cmd, ok := h.adviceKey(msg); ok {
+			return h, cmd
+		}
 		if h.vim && !h.normal && !h.replay && h.escapeSeq(msg) {
 			return h, nil
 		}
@@ -796,6 +820,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.cleared = h.comp.expanded()
 			h.comp.set("")
+			h.adviceEdit = nil
 			h.navigating = false
 			h.visual = 0
 		case actSubmit:
@@ -890,6 +915,14 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.cleared, h.queuedText = "", ""
+	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
+		// Sent as it was: still the advice turn, outside the Task.
+		h.adviceEdit = nil
+		if cmd := h.sendAdviceTurn(e.chat, e.id, e.text); cmd != nil {
+			return h, cmd
+		}
+		return h, nil
+	}
 	if h.ctx != nil && h.ctx.Err() != nil {
 		h.quit = true
 		return h, tea.Quit
@@ -927,6 +960,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 // empty box it brings the stash back. With both a draft and a stash it
 // swaps them, so neither is lost.
 func (h *home) stashDraft() {
+	h.adviceEdit = nil
 	h.navigating, h.visual = false, 0
 	draft := h.comp.expanded()
 	if draft == "" && h.stash == "" {
@@ -952,6 +986,7 @@ func (h *home) endNavigation() {
 // one never changes the history. Past the newest entry the box gets back
 // what was in it before the first ↑.
 func (h *home) recall(dir int) bool {
+	h.adviceEdit = nil // history replaces the box
 	n := h.hist.len()
 	if dir < 0 {
 		if h.cleared != "" && h.comp.empty() && !h.navigating {
@@ -1207,6 +1242,9 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
 		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
 	}
+	// Keep both corners intact when the repository or branch is long.
+	// The composer, rather than its metadata, owns the terminal width.
+	title = ansi.Truncate(title, max(width-4, 0), "…")
 	lines = append(lines, st.border("╭─")+st.bold(title)+st.border(strings.Repeat("─", max(width-3-ansi.StringWidth(title), 0))+"╮"))
 	for i, r := range rows {
 		body := r
@@ -1216,6 +1254,7 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 				body = st.dim("running… (ctrl+c to stop)")
 			}
 		}
+		body = ansi.Truncate(body, inner, "…")
 		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(body)), 0))
 		lines = append(lines, st.border("│")+" "+body+pad+" "+st.border("│"))
 	}
@@ -1252,7 +1291,19 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, " "+st.dim("↓ actions · /apply /diff /receipt /branch · /new"))
 		top++
 	}
-	box, cr, cc := h.boxLines(width, st.dim("Describe the task"))
+	if s := h.adviseStatus(); s != "" {
+		lines = append(lines, s)
+		top++
+	}
+	if s := h.adviceKeys(); s != "" {
+		lines = append(lines, s)
+		top++
+	}
+	placeholder := "Describe the task"
+	if h.chat != nil {
+		placeholder = "Ask a question or describe a change"
+	}
+	box, cr, cc := h.boxLines(width, st.dim(placeholder))
 	lines = append(lines, box...)
 	if h.vim {
 		mode := "-- INSERT --"
@@ -1326,12 +1377,29 @@ func (h *home) render() (string, int, int) {
 	if h.panel == nil && h.keys == nil {
 		_, shell := shellLine(h.comp.expanded())
 		for i, l := range h.setup {
+			if i == 0 && h.chat != nil {
+				l = strings.Replace(l, "implement ", "", 1)
+			}
+			// Commands belong in setup; keep deliberate edits visible until
+			// the next task so changing a Check never becomes silent.
+			if strings.HasPrefix(l, "Checks:") && !strings.Contains(l, "(from setup)") {
+				continue
+			}
 			if i == len(h.setup)-1 && strings.HasPrefix(l, "[tab]") {
+				submit := keyBinding{act: "composer.submit"}.label(h.kb)
+				action := "run"
+				if h.chat != nil {
+					action = "send"
+				}
+				l = "[" + submit + "] " + action + "  [tab] setup  /help"
+				if width < 40 {
+					l = submit + " " + action + " · tab setup"
+				}
 				switch {
 				case h.job != nil:
 					l = "running… ctrl+c stop"
 				case shell:
-					l = "[enter] run shell  [ctrl+j] newline"
+					l = "[" + submit + "] run shell  [ctrl+j] newline"
 				}
 			}
 			lines = append(lines, " "+st.dim(l))

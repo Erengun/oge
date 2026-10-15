@@ -6,5 +6,4 @@
    20261012T080000-aaaaaa  Parked      2026-10-12 08:00Z  [old [31mlogging try]…
  / filter · ⏎ receipt · d diff · a apply · b branch · l label · r resume · esc
  Standard · implement claude:sonnet · verify codex
- Checks: go test -json ./...
- [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+ [enter] run  [tab] setup  /help

@@ -838,6 +838,10 @@ func (m *model) activity(used int) []string {
 			out = append(out, st.bold(prefix+s))
 			continue
 		}
+		if !m.expanded && i == len(steps)-1 {
+			out = append(out, prefix+s)
+			continue
+		}
 		out = append(out, st.dim(prefix+s))
 	}
 	switch {

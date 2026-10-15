@@ -25,8 +25,8 @@ import (
 // slice 7): Enter sends the message as a turn, whose reply and dim tool
 // one-liners are printed as they come. A turn that changes nothing ends
 // there: no stages, no Receipt, no action row. A turn with Promoted or
-// Ambiguous changes is cut into a Run at once (D4), verified in the
-// background while the composer stays live (D3), then summed up on one
+// Ambiguous changes is cut into a Run after queued follow-ups settle (D4),
+// verified in the background while the composer stays live (D3), then summed up on one
 // Verdict line, with its diff when that is small; a newer cut supersedes
 // it. /apply, /diff and /receipt act on the newest cut whose Verdict is
 // in (slice 9): with newer edits unchecked, /apply and /branch ask
@@ -126,8 +126,12 @@ type chatTurn struct {
 	// quits.
 	stopped bool
 	queued  []string // messages typed and sent during the turn
-	// oge: the turn is Öge's feedback turn (D5).
-	oge bool
+	// oge: the turn is Öge's, a feedback turn (D5) or, with advice, an
+	// advice turn (docs/ux/advisor.md).
+	oge    bool
+	advice bool
+	// edited: the advice the text was edited from, kept for a retry.
+	edited *adviceEditState
 	// feedback is a failing cut's feedback turn, held until this turn
 	// ends: sent then, unless this turn cuts anew or was interrupted.
 	feedback string
@@ -232,6 +236,15 @@ func agentLines(text string) string {
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
 	h.comp = h.composer()
+	edited := h.adviceEdit
+	h.adviceEdit = nil
+	h.turn.edited = edited
+	var dismissed tea.Cmd
+	if h.adv != nil && h.adv.shown {
+		// The user's own turn: the advice shown no longer takes ↵ or e.
+		h.adv = nil
+		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
+	}
 	hc, ctx := h.chat, h.ctx
 	send := func() tea.Msg {
 		hc.mu.Lock()
@@ -245,11 +258,15 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		}
 		c := hc.c
 		hc.mu.Unlock()
+		if edited != nil && edited.chat == c {
+			ch, err := c.SendEdited(ctx, edited.id, text) // the user's turn, from an advisor's text
+			return chatSentMsg{events: ch, err: err}
+		}
 		ch, err := c.Send(ctx, text)
 		return chatSentMsg{events: ch, err: err}
 	}
 	echo := h.println(h.userBar("> " + task.Parse(text).Title))
-	return h, tea.Sequence(echo, send)
+	return h, tea.Sequence(echo, dismissed, send)
 }
 
 // nextEvent waits for the turn's next event.
@@ -267,14 +284,18 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && h.turn.oge {
 			// The composer holds the human's draft, never the feedback.
 			line := h.ogeLine("✗ sending the feedback turn: " + clean(msg.err.Error()))
+			if h.turn.advice {
+				line = h.ogeLine("✗ sending the advice: " + clean(msg.err.Error()))
+			}
 			if errors.Is(msg.err, run.ErrFeedbackBudget) {
 				line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
 			}
 			return h.nextTurn(h.println(line))
 		}
 		if msg.err != nil {
-			text, held := h.turn.text, h.turn.feedback != ""
+			text, held, ed := h.turn.text, h.turn.feedback != "", h.turn.edited
 			queued := h.endTurn()
+			defer func() { h.adviceEdit = ed }() // kept for the retry
 			// Kept, to send again, with what was queued and typed since.
 			h.comp.set(strings.TrimSpace(strings.Join(append(append([]string{text}, queued...), h.comp.text()), "\n\n")))
 			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
@@ -287,7 +308,7 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.turn.events = msg.events
 		if h.turn.oge {
 			// Shown once it is sent: a spent budget prints no such line.
-			return h, tea.Sequence(h.println(h.st.dim("Öge → agent: "+clean(h.turn.text))), nextEvent(msg.events))
+			return h, tea.Sequence(h.println(h.ogeAdviceLine(h.turn.text)), nextEvent(msg.events))
 		}
 		return h, nextEvent(msg.events)
 	case chatEvMsg:
@@ -428,17 +449,28 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 // the background: the cut supersedes one still verifying, and covers its
 // turns.
 func (h *home) turnEnded() (tea.Model, tea.Cmd) {
-	if fb := h.turn.feedback; fb != "" && h.turn.changed == 0 && !h.turn.stopped {
+	if fb := h.turn.feedback; fb != "" && h.turn.changed == 0 && !h.unchecked && !h.turn.stopped {
 		// The feedback turn waited for this one, which cut nothing newer:
 		// it goes first, before the messages queued meanwhile.
 		f := h.turn.fbFrozen
 		queued := h.endTurn()
 		return h, h.feedbackSubmit(fb, f, queued)
 	}
-	if h.turn.changed == 0 || h.turn.stopped {
-		// An interrupted turn's changes wait for the next turn's cut.
+	// Messages already queued will immediately continue the implementer's
+	// work. Avoid launching a verifier for the intermediate tree. Commands
+	// are different: they may request delivery and do not send a turn.
+	followUp := len(h.turn.queued) > 0
+	for _, q := range h.turn.queued {
+		followUp = followUp && !queuedCommand(q)
+	}
+	if (h.turn.changed == 0 && !h.unchecked) || h.turn.stopped || followUp {
+		// Deferred and interrupted changes wait for the next settled turn.
 		h.unchecked = h.unchecked || h.turn.changed > 0
+		h.uncheckedChanged = max(h.uncheckedChanged, h.turn.changed)
 		return h.nextTurn(nil)
+	}
+	if h.unchecked {
+		h.turn.changed = max(h.turn.changed, h.uncheckedChanged)
 	}
 	cut := h.startCut()
 	m, next := h.nextTurn(nil)
@@ -461,6 +493,7 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cuts++
 	h.unchecked = false
+	h.uncheckedChanged = 0
 	h.cutGate, h.gateFor = nil, nil
 	h.cutFrozen = f
 	h.verify = &chatVerify{seq: h.cuts, changed: changed, frozen: f, cancel: cancel}
@@ -677,6 +710,11 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	var line string
 	var diff tea.Cmd
 	switch {
+	case errors.Is(msg.err, run.ErrNothingToCut) && v.changed > 0:
+		// What changed has nothing to cut against (a delivery took it
+		// meanwhile, say): it is not checked, and the next cut will.
+		h.unchecked = true
+		return h.println(h.ogeLine(h.st.dim(files(v.changed) + " changed, not checked yet · the next turn's cut checks them")))
 	case errors.Is(msg.err, run.ErrNothingToCut), errors.Is(msg.err, run.ErrSuperseded):
 		return nil
 	case v.stopped && !verdict:
@@ -703,6 +741,15 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 			return h.println(line + "\n" + h.ogeLine(h.st.dim("ready to "+deliver.verb()+" · /"+deliver.verb())))
 		}
 		return tea.Sequence(h.println(line), diff, h.actNow(deliver.key, deliver.arg))
+	}
+	// The setup's saved apply preference authorizes delivery, not Gate
+	// decisions or stale edits. Use the same checked-Candidate path as
+	// /apply, including conflict and late-Tamper refusals. Cancelled cuts
+	// and an active turn never deliver on their own.
+	if h.sel != nil && h.sel.apply && verdict && res.Outcome == run.Accepted &&
+		res.Check.Pass && !v.stopped && h.last != nil && h.last.apply != nil &&
+		h.turn == nil && !h.unchecked && h.job == nil && h.stale == nil {
+		return tea.Sequence(h.println(line), diff, h.actNow("a", ""))
 	}
 	// After Ctrl+C on the verify, the human has taken over: no feedback.
 	if verdict && res.Feedback != "" && !v.stopped {
@@ -814,6 +861,7 @@ type chatDiffMsg []string
 // for when the turn has ended.
 func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	t := h.turn
+	h.msg = nil
 	switch k.String() {
 	case "ctrl+c":
 		if t.stopped {
@@ -846,6 +894,15 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		full := strings.TrimSpace(h.comp.expanded()) // a paste, whole
 		h.comp = h.composer()
+		if word, _, _, ok := parseSlash(full); ok && word == "/advise" {
+			// It runs alongside the turn, and is never a question's
+			// answer: the point of asking now.
+			cmd, _ := h.slash(full)
+			if h.msg != nil {
+				h.comp.set(full) // the text stays in the box
+			}
+			return h, cmd
+		}
 		if a != nil {
 			// One question at a time, each with its own numbers.
 			q := a.Questions[len(h.turn.answers)]
@@ -946,6 +1003,9 @@ func (h *home) turnView() string {
 	default:
 		lines = append(lines, h.ogeLine(h.st.dim("working… · esc to interrupt")))
 	}
+	if s := h.adviseStatus(); s != "" {
+		lines = append(lines, s)
+	}
 	if a == nil || a.Questions != nil {
 		for _, q := range t.queued {
 			lines = append(lines, h.st.dim(ansi.Truncate(" queued › "+clean(strings.ReplaceAll(q, "\n", " ⏎ ")), width, "…")))
@@ -956,6 +1016,9 @@ func (h *home) turnView() string {
 		}
 		box, _, _ := h.boxLines(width, blank)
 		lines = append(lines, box...)
+		for _, l := range h.msg {
+			lines = append(lines, " "+h.st.bad(l))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

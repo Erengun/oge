@@ -176,7 +176,7 @@ func TestShortcutPanelGolden(t *testing.T) {
 
 // /help and the panel are the same table: every line of it is in both.
 func TestHelpAndPanelAgree(t *testing.T) {
-	help := helpText(nil)
+	help := advancedHelpText(nil)
 	h := testHome(80)
 	h.height = 0 // unwindowed: the whole table
 	typeText(h, "?")

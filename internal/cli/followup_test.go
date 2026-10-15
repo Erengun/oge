@@ -275,7 +275,10 @@ func TestBareOgeFollowUpRefusesAConflictingChange(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "add.go"), []byte("package fx\n\nfunc Add(a, b int) int { return b + a }\n"))
 	s.type_("add Sub too\r")
 	s.expect("in a way that conflicts with its result; /new for a fresh task")
-	s.expect("(/new for a fresh task)\n")
+	s.composer()
+	if screen := s.settledScreen(); !strings.Contains(screen, "continuing Run ") || !strings.Contains(screen, "(/new for a fresh task)") {
+		t.Errorf("refused follow-up lost its continuation hint:\n%s", screen)
+	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(f.repo), "out", "implementer-2.turn")); err == nil {
 		t.Error("an implementer started on the refused follow-up")
 	}

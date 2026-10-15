@@ -33,6 +33,8 @@ agent = "claude@work"
 
 `mode`, the Stage bindings, `[profiles]`, `unattended` (as `--unattended`) and `apply` (as `--apply`) take effect on a Run. A typed flag beats them. The TUI setup (Tab on the home) sets the same keys for the session, with the source `tui` (it beats this file, like a flag), and offers once to save them here.
 
+In Chat, `apply = true` also applies each newest Accepted, checked cut to your working tree automatically. Turn on **apply on accept** in the setup panel and explicitly save once to keep it for this repo. It is off by default. Pending Gates still require your decision through `/apply`; unchecked newer edits and cancelled verification never auto-apply. Conflicts and late Tamper events use the same refusal path as `/apply`.
+
 **Writing:** `pipeline.SaveRepoDefaults` is the only writer and runs only on an explicit save. It writes atomically (0600 file in a 0700 directory, through a symlinked config), keeps other repos' sections and `[profiles]`, and refuses to overwrite an invalid file. Comments are not preserved.
 
 **Notifications.** The live view rings the terminal bell and sends a desktop notification (OSC 9) when a Run needs you (a Gate opens) and when it ends. The texts are fixed ("oge: waiting for you", "oge: Run accepted", "oge: Run ended: <outcome>"), never agent text. The `[notify]` table is global, not per repo, and every key defaults to on:
