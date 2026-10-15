@@ -34,3 +34,7 @@ func groupGone(pgid int) bool {
 func termGroup(cmd *exec.Cmd) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 }
+
+func interruptGroup(cmd *exec.Cmd) error {
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+}

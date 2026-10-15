@@ -4,11 +4,11 @@
 
 Öge is the supervision layer for coding agents. Give it a task: it runs your coding agent, checks the work, and brings you in when your judgment is needed.
 
-> **Status: pre-alpha.** Claude Code runs, interactive chat, independent QA, repair loops, Receipts, and local delivery are implemented. The CLI currently ships with the Claude adapter; Codex integration is still in progress. Follow [milestone M1](https://github.com/Erengun/oge/milestone/1) for the first usable release.
+> **Status: pre-alpha.** Claude Code, Codex, and Google Antigravity (`agy`) runs, interactive chat, independent QA, repair loops, Receipts, and local delivery are implemented. Follow [milestone M1](https://github.com/Erengun/oge/milestone/1) for the first usable release.
 
 ## Build from source
 
-Requires Go 1.27 and Git. To run tasks, use macOS or Linux with Claude Code installed and logged in. Windows supports `--dry-run`, but cannot run tasks yet.
+Requires Go 1.27 and Git. To run tasks, use macOS or Linux with a supported coding agent installed and logged in (Claude Code, Codex, or Google Antigravity `agy`). Windows supports `--dry-run`, but cannot run tasks yet.
 
 ```sh
 git clone https://github.com/Erengun/oge.git
@@ -17,7 +17,7 @@ CGO_ENABLED=0 go build -o oge ./cmd/oge
 ./oge --version
 ```
 
-Put the binary on your `PATH`, then open the Git repository you want to work on. Öge uses your existing Claude Code login; it never asks for, reads, or stores provider credentials.
+Put the binary on your `PATH`, then open the Git repository you want to work on. Öge uses your existing agent login (Claude Code, Codex, or `agy` OS keyring session); it never asks for, reads, or stores provider credentials.
 
 ## Quick start
 
@@ -74,6 +74,12 @@ oge --task-file task.md
 ```sh
 # Preview the configuration and stages without starting an agent
 oge "fix the payment retry bug" --dry-run
+
+# Run with Google Antigravity (agy)
+oge "fix the payment retry bug" --agent agy
+
+# Set reasoning effort for agy (low, medium, high, xhigh, max)
+oge "fix the payment retry bug" --agent agy --effort high
 
 # Select a discovered Claude profile
 oge "fix the payment retry bug" --agent claude@work

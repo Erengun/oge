@@ -73,3 +73,25 @@ func TestTerminateEndsTheGroup(t *testing.T) {
 		t.Fatal("Terminate didn't end the command")
 	}
 }
+
+// Interrupt signals the whole group with SIGINT.
+func TestInterruptEndsTheGroup(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "sleep 30 & wait")
+	if err := Start(cmd); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- Wait(cmd) }()
+	time.Sleep(100 * time.Millisecond)
+	if err := Interrupt(cmd); err != nil {
+		t.Fatalf("Interrupt failed: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("the command exited cleanly")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Interrupt didn't end the command")
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"github.com/erengun/oge/internal/agent/agy"
 	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/pipeline"
@@ -389,14 +390,14 @@ func (h *home) effortCmd(args []string) (tea.Cmd, string) {
 	if problem != "" {
 		return nil, problem
 	}
+	if a := h.sel.stageAgent(st); a != claude.Name && a != agy.Name {
+		return nil, "/effort: effort is Claude's or agy's"
+	}
 	level := args[1]
 	if level == "default" {
 		level = ""
 	} else if !slices.Contains(claude.Efforts, level) {
 		return nil, "/effort: the level is default, " + strings.Join(claude.Efforts, ", ")
-	}
-	if h.sel.stageAgent(st) != claude.Name {
-		return nil, "/effort: effort is Claude's"
 	}
 	h.setupEdit(args[0]+" effort "+args[1], func(s *setupState) {
 		if st == &s.ver && st.agent == "" {

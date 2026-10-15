@@ -285,7 +285,7 @@ var roleKinds = map[string]bool{
 }
 
 // KnownAgents are the agent names a Stage may bind.
-var KnownAgents = []string{"claude", "codex"}
+var KnownAgents = []string{"claude", "codex", "agy"}
 
 // SplitAgent splits a binding's agent into the agent and its profile:
 // "claude@work" is ("claude", "work"). Whether the profile exists is

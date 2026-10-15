@@ -453,12 +453,15 @@ func Resolve(cfg *Config, o Overrides, installed []string, registered ...string)
 	return f, nil
 }
 
-// limitations are the bound agents' known limitations (ADR-0018).
+// limitations are the bound agents' known limitations (ADR-0018, ADR-0023).
 func limitations(stages []Stage) []string {
 	var out []string
 	for _, s := range stages {
 		if s.Agent == "codex" && s.Role == "implementer" {
 			out = append(out, s.Name+" (codex): shell commands can see your environment's credentials; Codex's shell snapshot ignores its environment policy")
+		}
+		if s.Agent == "agy" && s.Role == "implementer" {
+			out = append(out, s.Name+" (agy): headless runs operate under --dangerously-skip-permissions; in-band interactive approvals are not supported by the agy CLI")
 		}
 	}
 	return out
@@ -708,12 +711,12 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 			}
 		}
 	}
-	// Effort is Claude's alone: refuse it rather than show or record a
-	// level no launch applies (#179).
+	// Effort is supported for claude and agy: refuse it rather than show
+	// or record a level no launch applies (#179, ADR-0023).
 	var probs []Problem
 	for _, s := range stages {
-		if s.Effort != "" && s.Agent != "claude" {
-			probs = append(probs, Problem{"stages." + s.Name + ".effort", "effort is supported for claude only"})
+		if s.Effort != "" && s.Agent != "claude" && s.Agent != "agy" {
+			probs = append(probs, Problem{"stages." + s.Name + ".effort", "effort is supported for claude and agy only"})
 		}
 	}
 	return probs

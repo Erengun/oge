@@ -88,3 +88,12 @@ func Terminate(cmd *exec.Cmd) {
 		termGroup(cmd)
 	}
 }
+
+// Interrupt sends SIGINT to cmd's process group, so its processes can handle
+// interruption cleanly; where groups aren't supported it signals the process.
+func Interrupt(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	return interruptGroup(cmd)
+}
