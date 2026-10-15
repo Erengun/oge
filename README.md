@@ -29,9 +29,9 @@ oge
 
 On first use in a Go project, Öge proposes test commands and file patterns. Review the setup and the config diff before saving `.oge/oge.toml`. Other projects need explicit configuration; automatic setup currently recognises Go only.
 
-Ask a question or describe a change. Replies stream into the terminal, and follow-ups stay in the same agent conversation. A turn with no changes skips QA and test execution. When a turn changes files, Öge checks an immutable copy in the background while the composer stays available.
+Ask a question or describe a change. Replies stream into the terminal, and follow-ups stay in the same agent conversation. A conversation with no pending changes skips QA and test execution. When files change, Öge lets already queued follow-ups finish, then checks an immutable copy in the background while the composer stays available.
 
-Use `/diff` to inspect the latest checked change, `/apply` to bring it into your working tree, and `/receipt` to see the evidence. Applying keeps the chat open. `/help` lists commands and shortcuts; Tab opens setup for modes, agents, models, and checks.
+Use `/diff` to inspect the latest checked change, `/apply` to bring it into your working tree, and `/receipt` to see the evidence. Applying keeps the chat open. To apply successful changes automatically, enable **apply on accept** in setup (Tab) and save it for this repo. Decisions and conflicts still need your attention. `/help` lists everyday commands; `/help advanced` shows additional controls.
 
 For a single task with a fresh agent session:
 
@@ -54,7 +54,6 @@ The result becomes **Accepted** only on the evidence Öge collects. Each complet
 | --- | --- |
 | Standard (default) | Implement, then independent QA and checks. |
 | `--fast` | Implement and run checks, without independent QA or held-out tests. |
-| `--blind` | Independent QA writes tests before implementation, then checks run. |
 
 For a task with specific acceptance criteria, write Markdown and pass it with `--task-file`:
 
@@ -92,7 +91,7 @@ Configure the project before running unattended. `--unattended` never answers a 
 
 Öge is designed to catch ordinary agent mistakes, test manipulation, and straightforward attempts to bypass verification. Checks currently run unsandboxed, with network access, under your OS privileges. The MVP does not claim isolation against deliberately hostile code. Each Receipt states its coverage limits; Fast mode explicitly discloses the absence of independent tests.
 
-Standard and Blind modes need checks with structured reports (`go-test-json` or `junit`). Project checks and protected test patterns live in `.oge/oge.toml`; agents cannot change them during a Run. `resume`, `status`, `cancel`, `init`, and `doctor` are not implemented yet.
+Standard mode needs checks with structured reports (`go-test-json` or `junit`). Project checks and protected test patterns live in `.oge/oge.toml`; agents cannot change them during a Run. Blind mode and `resume`, `status`, `cancel`, `init`, and `doctor` are not implemented yet.
 
 ## Contributing
 

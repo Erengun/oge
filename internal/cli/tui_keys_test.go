@@ -294,7 +294,7 @@ func TestBareOgeCtrlCThenUpRestoresTheTask(t *testing.T) {
 	s.type_("fix Add")
 	s.expectScreen("fix Add")
 	s.type_("\x03")
-	s.expectScreen("Describe the task")
+	s.expectScreen("Ask a question or describe a change")
 	s.type_("\x1b[A")
 	s.expectScreen("fix Add")
 	s.type_("\x03\x03") // clear it, then leave

@@ -44,7 +44,7 @@ func TestMouseWheelPicker(t *testing.T) {
 
 func TestMouseWheelSlashMenu(t *testing.T) {
 	h := testHome(80)
-	typeText(h, "/re")
+	typeText(h, "/")
 	if h.menu == nil || h.View().MouseMode == tea.MouseModeNone {
 		t.Fatal("menu open but mouse off")
 	}
@@ -53,7 +53,7 @@ func TestMouseWheelSlashMenu(t *testing.T) {
 	if h.menu.Index() != before+1 {
 		t.Fatalf("wheel down: %d -> %d", before, h.menu.Index())
 	}
-	if h.comp.text() != "/re" {
+	if h.comp.text() != "/" {
 		t.Fatalf("wheel edited the composer: %q", h.comp.text())
 	}
 }

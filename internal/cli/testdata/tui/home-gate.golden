@@ -26,9 +26,8 @@ Nothing was written to your repository.
 
  ↓ actions · /apply /diff /receipt /branch · /new
 ╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
-│ Describe the task                                                            │
+│ Ask a question or describe a change                                          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Fast · implement fake · no verifier
- Checks: go test -json ./...
- [tab] setup  [enter] run  [ctrl+j] newline  [ctrl+e] editor
+ Fast · fake · no verifier
+ [enter] send  [tab] setup  /help
  continuing Run X (/new for a fresh task)
