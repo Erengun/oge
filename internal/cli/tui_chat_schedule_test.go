@@ -18,7 +18,7 @@ func TestQueuedFollowUpDefersVerificationUntilSettled(t *testing.T) {
 		t.Fatalf("intermediate tree verified or lost: verify=%v unchecked=%v turn=%v", h.verify, h.unchecked, h.turn)
 	}
 	done := make(chan struct{})
-	h.chat.cut = func(context.Context, *run.Chat, *pipeline.Frozen, gate.Port) (*run.Result, error) {
+	h.chat.cut = func(context.Context, *run.Chat, *pipeline.Frozen, gate.Port, func(run.Event)) (*run.Result, error) {
 		close(done)
 		return nil, run.ErrNothingToCut
 	}
@@ -47,7 +47,7 @@ func TestQueuedCommandDoesNotDeferVerification(t *testing.T) {
 	h.turn.changed = 1
 	h.turn.queued = []string{"/diff"}
 	done := make(chan struct{})
-	h.chat.cut = func(context.Context, *run.Chat, *pipeline.Frozen, gate.Port) (*run.Result, error) {
+	h.chat.cut = func(context.Context, *run.Chat, *pipeline.Frozen, gate.Port, func(run.Event)) (*run.Result, error) {
 		close(done)
 		return nil, run.ErrNothingToCut
 	}
@@ -72,7 +72,7 @@ func TestDeferredChangesKeepExistingVerificationTracked(t *testing.T) {
 		t.Fatal("deferral discarded existing verification or unchecked edits")
 	}
 	done := make(chan struct{})
-	h.chat.cut = func(context.Context, *run.Chat, *pipeline.Frozen, gate.Port) (*run.Result, error) {
+	h.chat.cut = func(context.Context, *run.Chat, *pipeline.Frozen, gate.Port, func(run.Event)) (*run.Result, error) {
 		close(done)
 		return nil, run.ErrNothingToCut
 	}

@@ -166,6 +166,7 @@ const (
 	EvDecided                    // a Gate decision is recorded
 	EvNotice                     // something the user is told once, in Notice
 	EvResolved                   // the Ambiguous-file review resolved every file; Next is where the walk goes
+	EvStage                      // a wait or a stage of the walk began; Step names it
 )
 
 // Event is one progress event.
@@ -190,6 +191,10 @@ type Event struct {
 	Conflicts []string
 	// EvResolved: "verify" or "check".
 	Next string
+	// EvStage: "preparing" while a cut waits on the Chat's Preflight and
+	// Snapshot control, "verify" when a verifier Attempt starts (Attempt
+	// is set), "checks" when a Check's own execution starts.
+	Step string
 	// EvPreflight: why setup failed on the Snapshot; empty when Preflight
 	// passed. Only a Run with setup sends it, at the join, before it ends.
 	Why string
@@ -776,6 +781,10 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		if err := l.Append(RecCheckStarted, started); err != nil {
 			return nil, err
 		}
+		if hit == nil {
+			// A Check's execution can run minutes: name it while it does.
+			p.Observe(Event{Kind: EvStage, Result: res, Step: "checks"})
+		}
 		var cr *oracle.Result
 		if hit != nil {
 			if err := l.Append(RecVerdictReused, map[string]any{"check": check, "run": hit.run, "run_check": hit.check,
@@ -999,6 +1008,11 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	// agent is about to be given and denied (ADR-0009).
 	if err := l.Append(RecBriefingManifest, briefingManifest(p, a, at, brief, instructions, spec.DenyRead)); err != nil {
 		return nil, err
+	}
+	if a.Role == "verifier" {
+		// A verifier Attempt runs quiet in a Chat's cut: name it while it
+		// writes its held-out tests (#296).
+		p.Observe(Event{Kind: EvStage, Attempt: a, Step: "verify"})
 	}
 	launched := time.Now()
 	sess, err := adapter.Open(ctx, spec)
