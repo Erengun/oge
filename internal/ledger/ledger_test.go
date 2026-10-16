@@ -66,6 +66,109 @@ func TestReplayDetectsAnEditedRecord(t *testing.T) {
 	}
 }
 
+// A crash mid-Append leaves a partial last line: the records before it
+// still verify, and the failure is marked ErrTornTail so readers can
+// tell it from real corruption.
+func TestReplayMarksATornTail(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := Create(dir)
+	for _, typ := range []string{"A", "B", "C"} {
+		l.Append(typ, map[string]int{"n": 1})
+	}
+	l.Close()
+	_, goodHead, err := ReplayHead(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, LedgerFile)
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"format":1,"seq":3,"pre`)
+	f.Close()
+
+	recs, head, err := ReplayHead(dir)
+	if !errors.Is(err, ErrTornTail) {
+		t.Fatalf("got %v, want ErrTornTail", err)
+	}
+	if len(recs) != 3 || head != goodHead {
+		t.Fatalf("torn tail should keep the verified prefix: %d recs, head %q", len(recs), head)
+	}
+}
+
+// A tear can land on a '}' boundary: the partial line parses as JSON but
+// fails the seq/prev check. That is still a torn tail, not an edited
+// record — the difference is that the file is unterminated.
+func TestReplayMarksATornTailOnAClosingBrace(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := Create(dir)
+	l.Append("A", map[string]int{"n": 1})
+	l.Close()
+	path := filepath.Join(dir, LedgerFile)
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"format":1,"seq":9}`)
+	f.Close()
+
+	if _, _, err := ReplayHead(dir); !errors.Is(err, ErrTornTail) {
+		t.Fatalf("got %v, want ErrTornTail", err)
+	}
+}
+
+// A bad line that isn't the file's last — or any failure in a
+// newline-terminated file — is real corruption, not a torn write.
+func TestReplayKeepsMidFileCorruptionAHardError(t *testing.T) {
+	for name, mutate := range map[string]func(b []byte) []byte{
+		"mid-file":         func(b []byte) []byte { return bytes.Replace(b, []byte(`"n":1`), []byte(`"n":9`), 1) },
+		"terminated-bad":   func(b []byte) []byte { return append(b, []byte("garbage line\n")...) },
+		"terminated-chain": func(b []byte) []byte { return append(b, []byte(`{"format":1,"seq":9}`+"\n")...) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			l, _ := Create(dir)
+			for _, typ := range []string{"A", "B", "C"} {
+				l.Append(typ, map[string]int{"n": 1})
+			}
+			l.Close()
+			path := filepath.Join(dir, LedgerFile)
+			b, _ := os.ReadFile(path)
+			os.WriteFile(path, mutate(b), 0o600)
+			if _, _, err := ReplayHead(dir); err == nil || errors.Is(err, ErrTornTail) {
+				t.Fatalf("got %v, want a non-torn error", err)
+			}
+		})
+	}
+}
+
+// Open refuses a torn Ledger: appending after the partial line would
+// splice it into a mid-file garbage record.
+func TestOpenRefusesATornLedger(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := Create(dir)
+	l.Append("A", map[string]int{"n": 1})
+	l.Close()
+	f, _ := os.OpenFile(filepath.Join(dir, LedgerFile), os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"format":1,"seq":1,"pre`)
+	f.Close()
+	if _, err := Open(dir); !errors.Is(err, ErrTornTail) {
+		t.Fatalf("got %v, want ErrTornTail", err)
+	}
+}
+
+// A complete, valid last record that merely lacks the trailing newline
+// still verifies; it isn't a torn record (Open refuses to append to it).
+func TestReplayKeepsAnUnterminatedValidRecord(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := Create(dir)
+	l.Append("A", map[string]int{"n": 1})
+	l.Close()
+	path := filepath.Join(dir, LedgerFile)
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, bytes.TrimSuffix(b, []byte("\n")), 0o600)
+
+	recs, _, err := ReplayHead(dir)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("got %d recs, %v", len(recs), err)
+	}
+}
+
 func TestBlobsAreContentAddressed(t *testing.T) {
 	s, err := OpenBlobs(t.TempDir())
 	if err != nil {

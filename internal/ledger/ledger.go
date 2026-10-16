@@ -80,6 +80,17 @@ func (l *Ledger) Close() error { return l.f.Close() }
 // ErrBrokenChain means a record doesn't follow the one before it.
 var ErrBrokenChain = errors.New("ledger hash chain is broken")
 
+// ErrTornTail marks a failure on the Ledger's last line in a file that
+// doesn't end in a newline: a record whose Write died partway through.
+// The verified records before it are still returned. Any failure in a
+// newline-terminated file is corruption, not a torn write.
+//
+// The mark is positional, not causal: a Ledger tampered with and then
+// stripped of its final newline reports the same. Either way the
+// records before the failure verified, and callers that tolerate it say
+// so rather than treating them as trusted.
+var ErrTornTail = errors.New("the Ledger's last record is torn")
+
 // Replay reads every record of runDir's Ledger, verifying the chain and the
 // format version.
 func Replay(runDir string) ([]Record, error) {
@@ -97,24 +108,47 @@ func ReplayHead(runDir string) ([]Record, string, error) {
 	}
 	var recs []Record
 	prev := ""
+	lines := bytes.Count(b, []byte{'\n'})
+	unterminated := len(b) > 0 && b[len(b)-1] != '\n'
+	if unterminated {
+		lines++
+	}
+	// torn reports whether a failure on record i is the unterminated last
+	// line: a record its Write never finished, not edited records.
+	torn := func(i int) bool { return unterminated && i == lines-1 }
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(nil, 64<<20)
 	for sc.Scan() {
 		line := append(sc.Bytes(), '\n')
 		var r Record
 		if err := json.Unmarshal(line, &r); err != nil {
+			if torn(len(recs)) {
+				return recs, prev, fmt.Errorf("record %d: %w: %w", len(recs), ErrTornTail, err)
+			}
 			return recs, prev, fmt.Errorf("record %d: %w", len(recs), err)
 		}
 		if r.Format > Format {
+			if torn(len(recs)) {
+				return recs, prev, fmt.Errorf("record %d: %w: has format %d, newer than this oge reads (%d)", len(recs), ErrTornTail, r.Format, Format)
+			}
 			return recs, prev, fmt.Errorf("record %d has format %d, newer than this oge reads (%d)", len(recs), r.Format, Format)
 		}
 		if r.Seq != len(recs) || r.Prev != prev {
+			if torn(len(recs)) {
+				return recs, prev, fmt.Errorf("record %d: %w: %w", len(recs), ErrTornTail, ErrBrokenChain)
+			}
 			return recs, prev, fmt.Errorf("record %d: %w", len(recs), ErrBrokenChain)
 		}
 		recs = append(recs, r)
 		prev = hashHex(line)
 	}
-	return recs, prev, sc.Err()
+	if err := sc.Err(); err != nil {
+		if torn(len(recs)) {
+			return recs, prev, fmt.Errorf("record %d: %w: %w", len(recs), ErrTornTail, err)
+		}
+		return recs, prev, err
+	}
+	return recs, prev, nil
 }
 
 func hashHex(b []byte) string {

@@ -388,7 +388,7 @@ func (c *Chat) chatRecords(typ string, from, to int) ([]json.RawMessage, error) 
 	c.logMu.Lock()
 	recs, err := ledger.Replay(c.Dir)
 	c.logMu.Unlock()
-	if err != nil {
+	if err != nil && !errors.Is(err, ledger.ErrTornTail) {
 		return nil, err
 	}
 	var out []json.RawMessage

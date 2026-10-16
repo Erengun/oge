@@ -68,7 +68,7 @@ func (c *Chat) Deliverable(run, dir string) error {
 	}
 	carried := map[string]bool{}
 	rl, err := ledger.Replay(dir)
-	if err != nil {
+	if err != nil && !errors.Is(err, ledger.ErrTornTail) {
 		return err
 	}
 	for _, r := range rl {

@@ -63,7 +63,11 @@ func runLine(r *delivery.Run) string {
 	if r.Label != "" {
 		line += "[" + clean(r.Label) + "] "
 	}
-	return line + clean(r.Title)
+	line += clean(r.Title)
+	if r.Torn {
+		line += "  (ledger torn)"
+	}
+	return line
 }
 
 func padRight(s string, n int) string {

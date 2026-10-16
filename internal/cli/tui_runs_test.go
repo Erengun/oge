@@ -70,6 +70,18 @@ func TestRunPickerKeys(t *testing.T) {
 	}
 }
 
+// A Run whose Ledger ends in a torn record is marked, not hidden.
+func TestRunPickerMarksATornRun(t *testing.T) {
+	h := testHome(80)
+	h.runs = func(int) ([]*delivery.Run, string) {
+		return []*delivery.Run{{ID: "20261013T101010-abcdef", Title: "fix Add", Outcome: run.Accepted, Torn: true}}, ""
+	}
+	submit(h, "/runs")
+	if f := frame(h); !strings.Contains(f, "ledger torn") {
+		t.Errorf("torn run unmarked:\n%s", f)
+	}
+}
+
 func TestRunPickerFilter(t *testing.T) {
 	h, _ := pickerHome(t)
 	key(h, "/")

@@ -29,13 +29,14 @@ func fakeRun(t *testing.T, private, id, source string) string {
 }
 
 // With no Run id, a newest Run of this repository that can't be read is
-// refused, never skipped for an older one.
+// refused, never skipped for an older one. (A merely torn last line is
+// still readable; this is corruption past the tail.)
 func TestFindRefusesAnUnreadableNewestRun(t *testing.T) {
 	private, repo := t.TempDir(), t.TempDir()
 	fakeRun(t, private, "20261005T090000-aaaaaa", repo)
 	newest := fakeRun(t, private, "20261005T100000-bbbbbb", repo)
 	f, _ := os.OpenFile(filepath.Join(newest, ledger.LedgerFile), os.O_WRONLY|os.O_APPEND, 0o600)
-	f.WriteString(`{"torn`)
+	f.WriteString("{corrupt\n")
 	f.Close()
 
 	r, err := Find(private, repo, "")
