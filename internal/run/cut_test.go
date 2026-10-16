@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -133,6 +134,93 @@ func TestCutPromotedChangeIsARun(t *testing.T) {
 	}
 	if _, err := c.Cut(t.Context(), CutParams{}); !errors.Is(err, ErrNothingToCut) {
 		t.Errorf("a second cut with no new turn: %v", err)
+	}
+}
+
+// A cut reports where its verification is: a wait on the Chat's Preflight
+// and Snapshot control is "preparing", and the Check's own execution is
+// "checks" — named as they start, so a live composer can say what it waits
+// on (#296).
+func TestCutReportsItsStages(t *testing.T) {
+	// A slow setup keeps prepared open past the Cut's start: the wait on
+	// it is the "preparing" step.
+	c := openCut(t, "sleep 3",
+		multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\nfunc Sub(a, b int) int { return a - b }\n"}}})
+	drain(t, send(t, c, "add Sub"), nil)
+	var mu sync.Mutex
+	var steps []string
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	res, err := c.Cut(ctx, CutParams{Observe: func(ev Event) {
+		if ev.Kind == EvStage {
+			mu.Lock()
+			steps = append(steps, ev.Step)
+			mu.Unlock()
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != Accepted {
+		t.Fatalf("outcome %s %v", res.Outcome, res.Why)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(steps) == 0 || steps[0] != "preparing" {
+		t.Errorf("steps %v, want preparing first", steps)
+	}
+	if !slices.Contains(steps, "checks") {
+		t.Errorf("no checks step in %v", steps)
+	}
+}
+
+// In a mode with a verifier the Attempt's start is a step too ("verify"),
+// before the Check's ("checks").
+func TestCutReportsAVerifierStage(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "qa.sh")
+	if err := os.WriteFile(script, []byte("cat > /dev/null\nprintf 'package fx\n' > zq_test.go\necho 'exit: no_additions'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(fast bool) *pipeline.Frozen {
+		f, probs := pipeline.Resolve(nil, pipeline.Overrides{Fast: fast, Checks: []string{"go test -json ./..."},
+			Tests: []string{"**/*_test.go"}, Outputs: []string{"**/*.go"}}, []string{"claude"})
+		if len(probs) > 0 {
+			t.Fatalf("resolve: %v", probs)
+		}
+		return f
+	}
+	fast, standard := resolve(true), resolve(false)
+	for i := range standard.Stages {
+		if standard.Stages[i].Role == "verifier" {
+			standard.Stages[i].Agent = fake.Name
+		}
+	}
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\nfunc Sub(a, b int) int { return a - b }\n"}}},
+	}}), 0, fast, map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	c.agents["fake"] = &fake.Adapter{Script: script}
+	drain(t, send(t, c, "add Sub"), nil)
+	var mu sync.Mutex
+	var steps []string
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	res, err := c.Cut(ctx, CutParams{Frozen: standard, Observe: func(ev Event) {
+		if ev.Kind == EvStage {
+			mu.Lock()
+			steps = append(steps, ev.Step)
+			mu.Unlock()
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != Accepted {
+		t.Fatalf("outcome %s %v", res.Outcome, res.Why)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if slices.Index(steps, "verify") < 0 || slices.Index(steps, "verify") > slices.Index(steps, "checks") {
+		t.Errorf("steps %v, want verify before checks", steps)
 	}
 }
 

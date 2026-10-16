@@ -358,18 +358,41 @@ func TestHomeChatCtrlCCancelsTheCut(t *testing.T) {
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "fixed Add", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"}}},
 	}}, func(f *runFixture) {
-		// A Check that holds: the cut waits on it.
+		// A Check that holds: the baseline control takes it too, so the
+		// first cut waits on the preparation, named while it does (#296).
 		writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte("schema = 1\n[project]\ntest_globs = [\"**/*_test.go\"]\n[[check.commands]]\nrun = \"sleep 30\"\n"))
 	})
 	s.composer()
 	s.type_("fix Add\r")
-	s.expect("verifying…")
+	s.expectScreen("preparing the baseline")
 	s.type_("\x03")
 	s.expect("verification cancelled")
 	s.composer()
 	if out := s.out.String(); strings.Contains(out, "Accepted") {
 		t.Errorf("a cancelled cut was Accepted:\n%s", out)
 	}
+	s.quitChat(f)
+}
+
+// A Check whose own execution takes a while names it, with the elapsed
+// time; when it ends the Verdict line is the final state (#296).
+func TestHomeChatShowsACheckStepThenAccepts(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "fixed Add", Writes: []multiturn.File{
+			{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"},
+			{Path: "slow.go", Content: "package fx\n"},
+		}},
+	}}, func(f *runFixture) {
+		// slow.go is the change's, so the baseline passes instantly and
+		// only the Candidate's Check sleeps.
+		writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte("schema = 1\n[project]\ntest_globs = [\"**/*_test.go\"]\noutput_globs = [\"**/*.go\"]\n[[check.commands]]\nrun = 'if [ -f slow.go ]; then sleep 3; fi; go test -json ./...'\nreport = \"go-test-json\"\n"))
+	})
+	s.composer()
+	s.type_("fix Add\r")
+	s.expectScreen("running the Checks")
+	s.expect("✓ Accepted")
+	s.composer()
 	s.quitChat(f)
 }
 
@@ -453,7 +476,7 @@ func TestHomeChatVerifiesInTheBackground(t *testing.T) {
 	})
 	s.composer()
 	s.type_("fix Add\r")
-	s.expect("verifying…")
+	s.expectScreen("running the Checks")
 	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
 		if _, err := os.Stat(mark); err == nil {
 			break
@@ -472,7 +495,9 @@ func TestHomeChatVerifiesInTheBackground(t *testing.T) {
 	}
 	s.type_("wait\r")
 	s.expect("  waiting")
-	s.expect("verifying…")
+	// The step text was on screen from the earlier cut's Check; the file
+	// count makes this cut's line distinct.
+	s.expectScreen("1 file changed · running the Checks")
 	s.composer()
 	s.type_("/apply\r")
 	s.expect("newer edits, unchecked: [a] apply verified  [w] wait")
@@ -517,7 +542,7 @@ func heldChatSession(t *testing.T) (*homeSession, *runFixture, string) {
 	})
 	s.composer()
 	s.type_("hold\r")
-	s.expect("verifying…")
+	s.expectScreen("running the Checks")
 	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) {
 		if b, _ := os.ReadFile(pids); len(b) > 0 {
 			break
