@@ -170,3 +170,16 @@ func TestAskAdviceStaleTickDoesNotRearm(t *testing.T) {
 		t.Error("the current tick did not re-arm")
 	}
 }
+
+// A cancelled consult 1 landing after consult 2 began (Esc, then the key
+// again) leaves consult 2's state alone.
+func TestAskAdviceStaleLandingKeepsNewerConsult(t *testing.T) {
+	var got []agent.Answer
+	h, a := askHome(&got)
+	cancelled := false
+	h.turn.askAdv = &askAdvice{ask: a, seq: 2, cancel: func() { cancelled = true }, running: true}
+	h.askAdviceLanded(askAdviceMsg{ask: a, seq: 1, err: context.Canceled})
+	if h.turn.askAdv == nil || !h.turn.askAdv.running || h.turn.askAdv.seq != 2 || cancelled {
+		t.Errorf("consult 2 lost: %+v", h.turn.askAdv)
+	}
+}

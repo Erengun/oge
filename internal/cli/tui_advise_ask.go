@@ -52,6 +52,7 @@ func askAdviceTick(a *agent.Ask, q, seq int) tea.Cmd {
 type askAdviceMsg struct {
 	ask    *agent.Ask
 	q      int
+	seq    int // the consult it ends: an earlier one lands after a newer began
 	advice *run.Advice
 	err    error
 }
@@ -128,7 +129,7 @@ func (h *home) askAdviceKey(a *agent.Ask) (cmd tea.Cmd, ok bool) {
 	question := askAdviceQuestion(a.Questions[q])
 	consult := func() tea.Msg {
 		adv, err := c.ConsultAsk(ctx, question)
-		return askAdviceMsg{ask: a, q: q, advice: adv, err: err}
+		return askAdviceMsg{ask: a, q: q, seq: seq, advice: adv, err: err}
 	}
 	return tea.Batch(consult, askAdviceTick(a, q, seq)), true
 }
@@ -137,7 +138,7 @@ func (h *home) askAdviceKey(a *agent.Ask) (cmd tea.Cmd, ok bool) {
 // is no longer the one shown, or its question no longer the current one.
 func (h *home) askAdviceLanded(m askAdviceMsg) tea.Cmd {
 	t := h.turn
-	if t == nil || t.askAdv == nil || !t.askAdv.running || t.askAdv.ask != m.ask || t.askAdv.q != m.q ||
+	if t == nil || t.askAdv == nil || !t.askAdv.running || t.askAdv.ask != m.ask || t.askAdv.q != m.q || t.askAdv.seq != m.seq ||
 		h.ask() != m.ask || len(t.answers) != m.q {
 		return nil
 	}

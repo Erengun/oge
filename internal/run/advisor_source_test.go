@@ -10,7 +10,7 @@ import (
 func TestAdviceQuestionSourceByTrigger(t *testing.T) {
 	for trigger, want := range map[string]string{
 		"user":                "the user's question",
-		"ask":                 "in Öge's template, agent text (a Claim)",
+		TriggerAsk:            "in Öge's template, agent text (a Claim)",
 		TriggerFeedbackBudget: "Öge's question",
 	} {
 		c := &Chat{}

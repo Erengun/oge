@@ -430,7 +430,7 @@ func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage
 // triggered the Consultation. The agent's text is a Claim (ADR-0009).
 func questionSource(trigger string) string {
 	switch trigger {
-	case "ask":
+	case TriggerAsk:
 		return "the agent's AskUserQuestion in Öge's template, agent text (a Claim)"
 	case TriggerFeedbackBudget:
 		return "Öge's question about the failing chain (templated trigger)"
