@@ -74,7 +74,7 @@ func (c *ChatCut) dismissedLines() []Line {
 		if i == 0 {
 			label = "Dismissed"
 		}
-		out := map[string]string{"advised": "advice not sent", "cancelled": "cancelled", "failed": "failed"}[d.Outcome]
+		out := map[string]string{"advised": "not sent by this cut", "cancelled": "cancelled", "failed": "failed"}[d.Outcome]
 		if out == "" {
 			out = val(d.Outcome)
 		}

@@ -77,7 +77,7 @@ Claims stay separate. Agent diffs, tool results, Exits, reviewer findings and Pl
   - implementer-authored results, labelled;
   - the uncontained warning;
   - the Briefing manifests;
-  - advice that reached the agent in a Chat cut's turns, labelled a Claim. The Consultation records are Evidence that a Consultation happened; the advice inside them is a Claim, never Evidence and never part of the Task. Dismissed Consultations are in the full Receipt only.
+  - advice that reached the agent in the Task's turns since the last delivery, labelled a Claim. The Consultation records are Evidence that a Consultation happened; the advice inside them is a Claim, never Evidence and never part of the Task. Dismissed Consultations are in the full Receipt only.
 
 ## What would reverse this
 
