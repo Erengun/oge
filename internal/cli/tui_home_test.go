@@ -192,6 +192,29 @@ func TestHomeTitleAndSetupAreEscaped(t *testing.T) {
 // homeNorm hides what differs between runs: ids, hashes and durations.
 var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|(\d+m)?\d+(\.\d+)?m?s\b`)
 
+// clippedAttention is the Time line cut at the 80-column screen edge: a slow
+// run lengthens the durations until the last "s" falls off, leaving a bare
+// number after "your attention" (#312). Only that position is masked, so a
+// real count elsewhere stays visible.
+var clippedAttention = regexp.MustCompile(`(?m)(your attention )\d+(\.\d+)?$`)
+
+// normHome is homeNorm plus the clipped attention time.
+func normHome(s string) string {
+	return clippedAttention.ReplaceAllString(homeNorm.ReplaceAllString(s, "X"), "${1}X")
+}
+
+func TestNormHomeMasksAClippedAttentionTime(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{"Time  1.2s · your attention 0s", "Time  1.2s · your attention 0", "Time  1.2s · your attention 12.5"} {
+		if got, want := normHome(in), "Time  X · your attention X"; got != want {
+			t.Errorf("normHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := normHome("Handled  0 operations\nTime  1s · your attention 0"); got != "Handled  0 operations\nTime  X · your attention X" {
+		t.Errorf("a count outside the attention time was masked: %q", got)
+	}
+}
+
 // homeScript fixes Add, and on a follow-up turn, which starts from the fixed
 // file, adds a comment: a turn that changes nothing ends Replied (#254), and
 // these sessions' later turns are meant to be Runs.
@@ -437,7 +460,7 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	s.ended()
 	// The whole scrollback now, on an 80x24 terminal (the pipe reports no
 	// size): the transcript of the Run, and the composer back, empty.
-	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
+	got := normHome(s.settledScreen())
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
@@ -602,7 +625,7 @@ func TestBareOgeGateInTheTranscript(t *testing.T) {
 	s.expect("Result gate")
 	s.type_("t\r")
 	s.ended()
-	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
+	got := normHome(s.settledScreen())
 	s.type_("\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
