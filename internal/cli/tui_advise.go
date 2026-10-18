@@ -72,7 +72,7 @@ func (h *home) adviseCmd(args []string) (tea.Cmd, string) {
 	switch {
 	case c == nil:
 		return nil, "/advise: no Chat yet; send a task first"
-	case h.adv != nil && h.adv.running:
+	case h.adv != nil && h.adv.running, h.turn != nil && h.turn.askAdv != nil && h.turn.askAdv.running:
 		return nil, "/advise: already advising"
 	case h.adv != nil && h.turn != nil:
 		return nil, "/advise: an advice is already waiting"

@@ -770,6 +770,7 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		s.mu.Unlock()
 		got := ask
 		got.By, got.Rule, got.Decision = "human", ruleHumanAnswer, "deny"
+		got.AdvisedBy = ans.AdvisedBy
 		got.Reason = "The user denied this."
 		if ans.Reason != "" {
 			got.Reason = ans.Reason
