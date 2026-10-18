@@ -26,6 +26,9 @@ type AdviceSent struct {
 	Agent  string `json:"agent,omitempty"`
 	Model  string `json:"model,omitempty"`
 	Advice string `json:"advice,omitempty"` // the advice blob's id
+	// Trigger is why it ran ("user", "feedback_budget", "ask"); the Receipt
+	// says an automatic one was.
+	Trigger string `json:"trigger,omitempty"`
 }
 
 // Dismissed is a Consultation that ended without its advice being sent.
@@ -36,6 +39,7 @@ type Dismissed struct {
 	Model        string `json:"model,omitempty"`
 	// Outcome is the Consultation's: advised (and not sent), cancelled or failed.
 	Outcome string `json:"outcome"`
+	Trigger string `json:"trigger,omitempty"`
 }
 
 func (a CutAdvice) empty() bool { return len(a.Sent) == 0 && len(a.Dismissed) == 0 }
@@ -46,6 +50,7 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 	type consult struct {
 		turn            int
 		agent, model    string
+		trigger         string
 		outcome, advice string
 		sent            bool
 	}
@@ -65,6 +70,7 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 			How          string `json:"how"`
 			Outcome      string `json:"outcome"`
 			Advice       string `json:"advice"`
+			Trigger      string `json:"trigger"`
 			Advisor      struct{ Agent, Model string }
 		}
 		if json.Unmarshal(rec.Data, &d) != nil || d.Consultation == "" || (d.Chat != "" && d.Chat != chat) {
@@ -75,7 +81,7 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 			if byID[d.Consultation] == nil {
 				order = append(order, d.Consultation)
 			}
-			byID[d.Consultation] = &consult{turn: d.Turn, agent: d.Advisor.Agent, model: d.Advisor.Model}
+			byID[d.Consultation] = &consult{turn: d.Turn, agent: d.Advisor.Agent, model: d.Advisor.Model, trigger: d.Trigger}
 		case RecConsultationEnded:
 			if c := byID[d.Consultation]; c != nil {
 				c.outcome, c.advice = d.Outcome, d.Advice
@@ -92,13 +98,13 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 	var out CutAdvice
 	for _, s := range sends {
 		if c := byID[s.Consultation]; c != nil {
-			s.Agent, s.Model, s.Advice = c.agent, c.model, c.advice
+			s.Agent, s.Model, s.Advice, s.Trigger = c.agent, c.model, c.advice, c.trigger
 		}
 		out.Sent = append(out.Sent, s)
 	}
 	for _, id := range order {
 		if c := byID[id]; !c.sent && c.outcome != "" && c.turn >= from && c.turn <= to {
-			out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: c.outcome})
+			out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: c.outcome, Trigger: c.trigger})
 		}
 	}
 	return out

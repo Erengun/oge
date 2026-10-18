@@ -25,7 +25,8 @@
         "how": "verbatim",
         "agent": "claude",
         "model": "opus",
-        "advice": "sha256:bb"
+        "advice": "sha256:bb",
+        "trigger": "feedback_budget"
       }
     ],
     "dismissed_consultations": [
@@ -111,5 +112,5 @@
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "15acca89059c4d574b5eabf9596bcd50cac975a7a500bc7d539e996407a106f2"
+  "ledger_head": "55de8a9918684b8af7f81e42047255616437273a402f39223331fdd0feead2c5"
 }

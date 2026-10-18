@@ -418,7 +418,7 @@ func Scenarios() []Scenario {
 				"advice": run.CutAdvice{
 					Sent: []run.AdviceSent{
 						{Consultation: "k-1", Turn: 3, How: "edited", Agent: "claude", Model: "opus", Advice: "sha256:aa"},
-						{Consultation: "k-2", Turn: 4, How: "verbatim", Agent: "claude", Model: "opus", Advice: "sha256:bb"},
+						{Consultation: "k-2", Turn: 4, How: "verbatim", Agent: "claude", Model: "opus", Advice: "sha256:bb", Trigger: "feedback_budget"},
 					},
 					Dismissed: []run.Dismissed{{Consultation: "k-3", Turn: 4, Agent: "claude", Model: "opus", Outcome: "cancelled"}},
 				}})

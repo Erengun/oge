@@ -926,7 +926,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
 		// Sent as it was: still the advice turn, outside the Task.
 		h.adviceEdit = nil
-		if cmd := h.sendAdviceTurn(e.chat, e.id, e.text); cmd != nil {
+		if cmd := h.sendAdviceTurn(e.chat, &run.Advice{ID: e.id, Text: e.text}, false); cmd != nil {
 			return h, cmd
 		}
 		return h, nil

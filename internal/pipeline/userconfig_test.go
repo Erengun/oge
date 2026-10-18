@@ -407,6 +407,14 @@ func TestLoadUserConfigAdvisor(t *testing.T) {
 	if _, probs := LoadUserConfig([]byte("schema = 1\n[advisor]\nmodel = \"sk-" + "abc\"\n")); len(probs) != 1 || probs[0].Key != "advisor.model" {
 		t.Errorf("a credential-like model gave %v", probs)
 	}
+	for _, v := range []string{"on", "ask", "off"} {
+		if c, probs := LoadUserConfig([]byte("schema = 1\n[advisor]\nauto = \"" + v + "\"\n")); len(probs) != 0 || c.AdvisorConfig().Auto != v {
+			t.Errorf("auto %q: %+v, %v", v, c.AdvisorConfig(), probs)
+		}
+	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\n[advisor]\nauto = \"sometimes\"\n")); len(probs) != 1 || probs[0].Key != "advisor.auto" {
+		t.Errorf("a bad auto gave %v", probs)
+	}
 	if (*UserConfig)(nil).AdvisorConfig() != (AdvisorConfig{}) {
 		t.Error("a nil config has an advisor")
 	}

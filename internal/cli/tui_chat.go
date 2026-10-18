@@ -291,8 +291,20 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h.turn.advice {
 				line = h.ogeLine("✗ sending the advice: " + clean(msg.err.Error()))
 			}
+			if errors.Is(msg.err, run.ErrChainEnded) {
+				line = h.ogeLine(h.st.dim("the advice wasn't sent: you've sent a turn since"))
+			}
 			if errors.Is(msg.err, run.ErrFeedbackBudget) {
-				line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
+				// Instead of stopping at the user's call, Öge consults once
+				// (D-A3), unless [advisor] auto is off.
+				consult, ok := h.autoConsult()
+				if ok {
+					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; asking the advisor", run.FeedbackBudget))
+				} else {
+					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
+				}
+				m, cmd := h.nextTurn(h.println(line))
+				return m, tea.Batch(cmd, consult)
 			}
 			return h.nextTurn(h.println(line))
 		}

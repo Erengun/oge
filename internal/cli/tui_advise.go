@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -36,6 +37,11 @@ type adviseState struct {
 	running bool
 	advice  *run.Advice // landed
 	shown   bool        // its block is printed: ↵ e esc act on it
+	// auto: the chain's automatic Consultation (feedback budget spent,
+	// D-A3). With mode "on" its advice is sent when it lands; with "ask"
+	// it waits for ↵ like any other.
+	auto bool
+	mode string
 }
 
 type (
@@ -131,6 +137,13 @@ func (h *home) adviceLanded(m adviceMsg) tea.Cmd {
 	case errors.Is(m.err, context.Canceled):
 		h.adv = nil
 		return nil
+	case errors.Is(m.err, run.ErrChainEnded):
+		h.adv = nil // the user has moved on: nothing to say
+		return nil
+	case m.err != nil && a.auto:
+		// A cut that fails stops the chain as it did before: nothing sent.
+		h.adv = nil
+		return h.println(h.ogeLine("✗ still failing · your call (" + clean(m.err.Error()) + ")"))
 	case m.err != nil:
 		h.adv = nil
 		return h.println(h.ogeLine("✗ " + clean(m.err.Error())))
@@ -147,7 +160,50 @@ func (h *home) flushAdvice() tea.Cmd {
 		return nil
 	}
 	a.shown = true
-	return h.println(h.adviceBlock(a.advice))
+	block := h.println(h.adviceBlock(a.advice))
+	if a.auto && a.mode == pipeline.AdvisorAutoOn {
+		// Automatic (D-A3): printed, then sent as Öge's advice turn.
+		return tea.Sequence(block, h.sendAdvice())
+	}
+	return block
+}
+
+// autoConsult runs the chain's one automatic Consultation after the
+// feedback budget is spent (D-A3, D-A5a), per [advisor] auto: "off" runs
+// nothing. It reports whether one started, and its Cmd.
+func (h *home) autoConsult() (tea.Cmd, bool) {
+	var c *run.Chat
+	if h.chat != nil {
+		c = h.chat.get()
+	}
+	if c == nil || h.adv != nil || c.AdvisorAuto() == pipeline.AdvisorAutoOff {
+		return nil, false
+	}
+	if h.turn != nil && len(h.turn.queued) > 0 {
+		return nil, false // the user's next turn supersedes it: a new chain
+	}
+	chain, used := c.AutoState()
+	if used {
+		return nil, false // the chain's one is spent: the user's call
+	}
+	agentName, model, err := c.Advisor()
+	if err != nil {
+		return nil, false
+	}
+	parent := h.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	h.advSeq++
+	seq := h.advSeq
+	h.adv = &adviseState{chat: c, seq: seq, cancel: cancel, started: h.clock(), running: true, auto: true,
+		mode: c.AdvisorAuto(), agent: strings.TrimSpace(agentName + " " + model)}
+	consult := func() tea.Msg {
+		a, err := c.ConsultAuto(ctx, chain)
+		return adviceMsg{seq: seq, advice: a, err: err}
+	}
+	return tea.Batch(consult, adviceTick(seq)), true
 }
 
 // adviceBlock is the advice as a block: a header with who, how long and
@@ -218,19 +274,22 @@ func (h *home) sendAdvice() tea.Cmd {
 		return nil
 	}
 	h.adv = nil
-	return h.sendAdviceTurn(a.chat, a.advice.ID, a.advice.Text)
+	return h.sendAdviceTurn(a.chat, a.advice, a.auto)
 }
 
-// sendAdviceTurn sends text as the advice turn of Consultation id.
-func (h *home) sendAdviceTurn(c *run.Chat, id, text string) tea.Cmd {
-	adv := &run.Advice{ID: id, Text: text}
+// sendAdviceTurn sends adv as the advice turn of its Consultation. An
+// automatic one is refused if the user has turned since (a new chain).
+func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 	res, problem := h.resolve(h.sel)
 	switch {
 	case problem != nil:
 		h.msg = problem
 		return nil
 	}
-	h.comp = h.composer()
+	if !auto {
+		// An automatic send keeps what the user is typing meanwhile.
+		h.comp = h.composer()
+	}
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
 	ctx := h.ctx
@@ -238,6 +297,10 @@ func (h *home) sendAdviceTurn(c *run.Chat, id, text string) tea.Cmd {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
+		if auto {
+			ch, err := c.SendAutoAdvice(ctx, adv)
+			return chatSentMsg{events: ch, err: err}
+		}
 		ch, err := c.SendAdvice(ctx, adv.ID, adv.Text)
 		return chatSentMsg{events: ch, err: err}
 	}

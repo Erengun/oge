@@ -62,7 +62,9 @@ type Advice struct {
 	ID   string // the Consultation's
 	Text string
 	// Turn is the turn whose commit the Advisor read; 0 for the Snapshot.
-	Turn                 int
+	Turn int
+	// Chain is the chain an automatic Consultation belongs to (ConsultAuto).
+	Chain                int
 	Agent, Model, Effort string
 	CostUSD              *float64
 	Duration             time.Duration
@@ -122,17 +124,84 @@ func (c *Chat) advisorFor() (agent.Adapter, pipeline.Stage, error) {
 // Session is denied without reaching the human. Cancelling ctx cancels
 // the Consultation; its records stay in the Chat log either way.
 func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
-	return c.consult(ctx, question, "user", "user")
+	return c.consult(ctx, question, consultTrigger{trigger: "user", by: "user"})
 }
 
 // ConsultAsk is a Consultation on an AskUserQuestion the agent put to the
 // human (trigger ask, requested by the agent's question). Its advice is
 // still a Claim: the human answers.
 func (c *Chat) ConsultAsk(ctx context.Context, question string) (*Advice, error) {
-	return c.consult(ctx, question, "ask", "agent")
+	return c.consult(ctx, question, consultTrigger{trigger: "ask", by: "agent"})
 }
 
-func (c *Chat) consult(ctx context.Context, question, trigger, requestedBy string) (*Advice, error) {
+// ErrAutoConsulted is why no automatic Consultation ran: the chain's one
+// (D-A3's per-chain cap) was already used.
+var ErrAutoConsulted = errors.New("the chain's automatic consultation is used")
+
+// AutoCap is the automatic Consultations a chain may have.
+const AutoCap = 1
+
+// TriggerFeedbackBudget is the Consultation trigger of a spent feedback
+// budget, the automatic one.
+const TriggerFeedbackBudget = "feedback_budget"
+
+// AutoState is the chain now and whether its automatic Consultation is
+// used, read together so a caller can pass the chain to ConsultAuto.
+func (c *Chat) AutoState() (chain int, used bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.chain, c.autos >= AutoCap
+}
+
+// AdvisorAuto is [advisor] auto: "on" (the default, D-A3) sends the advice
+// when the feedback budget is spent, "ask" shows it first, "off" never
+// consults on its own.
+func (c *Chat) AdvisorAuto() string {
+	switch c.advisor.Auto {
+	case pipeline.AdvisorAutoAsk, pipeline.AdvisorAutoOff:
+		return c.advisor.Auto
+	}
+	return pipeline.AdvisorAutoOn
+}
+
+// ConsultAuto is the Consultation Öge asks for when a chain's feedback
+// budget is spent (D-A3, D-A5a), once per chain: a second call before the
+// user's next turn returns ErrAutoConsulted, and a call with a chain the
+// user's turn has since ended returns ErrChainEnded, starting nothing. A failed or cancelled one
+// still uses the chain's cap. Its advice is a Claim like any other: the
+// caller sends it with SendAutoAdvice (or shows it first, with auto =
+// "ask"), and a cancelled, failed or empty Consultation returns an error,
+// never advice.
+func (c *Chat) ConsultAuto(ctx context.Context, chain int) (*Advice, error) {
+	c.mu.Lock()
+	switch {
+	case c.chain != chain:
+		c.mu.Unlock()
+		return nil, ErrChainEnded
+	case c.autos >= AutoCap:
+		c.mu.Unlock()
+		return nil, ErrAutoConsulted
+	}
+	c.autos++
+	used, tries := c.autos, c.feedbacks
+	c.mu.Unlock()
+	q := fmt.Sprintf("The Check still fails after %d feedback turns. What is the root cause, and what should the implementer change?", tries)
+	a, err := c.consult(ctx, q, consultTrigger{trigger: TriggerFeedbackBudget, by: "oge", chain: chain, auto: true, used: used})
+	if a != nil {
+		a.Chain = chain
+	}
+	return a, err
+}
+
+// consultTrigger is why a Consultation ran, for its record.
+type consultTrigger struct {
+	trigger, by string
+	chain       int
+	auto        bool // the chain's automatic one: the cap is recorded
+	used        int  // automatic Consultations this chain, this one included
+}
+
+func (c *Chat) consult(ctx context.Context, question string, tr consultTrigger) (*Advice, error) {
 	// Close waits for every Consultation it lets start, and refuses the
 	// rest, so ConsultationEnded never lands on a closed log.
 	c.mu.Lock()
@@ -160,7 +229,7 @@ func (c *Chat) consult(ctx context.Context, question, trigger, requestedBy strin
 	}()
 
 	id := newID()
-	brief, items, commit, n := c.adviceBriefing(question)
+	brief, items, commit, n := c.adviceBriefing(question, tr.trigger)
 	dir := filepath.Join(c.work, "advice", id)
 	defer oracle.RemoveAll(dir)
 	ws := filepath.Join(dir, "repo")
@@ -202,10 +271,15 @@ func (c *Chat) consult(ctx context.Context, question, trigger, requestedBy strin
 	// TODO(#287-decision): the auth source is known only from the
 	// Session's system/init, after the Briefing is sent, so it is on
 	// ConsultationEnded, not here.
-	if err := c.log(RecConsultationStarted, map[string]any{"chat": c.ID, "consultation": id,
-		"trigger": trigger, "requested_by": requestedBy, "turn": last, "read_turn": n, "commit": commit,
+	startedRec := map[string]any{"chat": c.ID, "consultation": id,
+		"trigger": tr.trigger, "requested_by": tr.by, "turn": last, "read_turn": n, "commit": commit,
 		"question": sha256Hex(question), "manifest": mBlob, "briefing": bBlob,
-		"advisor": launchProfile(st), "permissions": "launch_profile", "read_only": readOnly}); err != nil {
+		"advisor": launchProfile(st), "permissions": "launch_profile", "read_only": readOnly}
+	if tr.auto {
+		// The per-chain cap, as used by this one (D-A3).
+		startedRec["auto_cap"], startedRec["auto_used"], startedRec["chain"] = AutoCap, tr.used, tr.chain
+	}
+	if err := c.log(RecConsultationStarted, startedRec); err != nil {
 		return nil, err
 	}
 	end := func(outcome, why string, rec *adviceRecord) error {
@@ -231,6 +305,9 @@ func (c *Chat) consult(ctx context.Context, question, trigger, requestedBy strin
 	defer sess.Close()
 	rec := &adviceRecord{}
 	text, outcome, why := c.advise(ctx, sess, st, id, brief, rec)
+	if outcome == ConsultAdvised && strings.TrimSpace(text) == "" {
+		outcome, why = ConsultFailed, "the advisor gave no advice"
+	}
 	if err := end(outcome, why, rec); err != nil {
 		return nil, err
 	}
@@ -345,10 +422,22 @@ func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage
 	}
 }
 
+// questionSource is the manifest source of a Briefing's question, by what
+// triggered the Consultation. The agent's text is a Claim (ADR-0009).
+func questionSource(trigger string) string {
+	switch trigger {
+	case "ask":
+		return "the agent's AskUserQuestion, verbatim, agent text (a Claim)"
+	case TriggerFeedbackBudget:
+		return "Öge's question about the failing chain (templated trigger)"
+	}
+	return "the user's question, verbatim"
+}
+
 // adviceBriefing is an Advisor's Briefing and its manifest items, and the
 // commit its directory is cloned from: the newest settled turn's (n),
 // never the Workspace a turn may be writing to.
-func (c *Chat) adviceBriefing(question string) (string, []map[string]any, string, int) {
+func (c *Chat) adviceBriefing(question, trigger string) (string, []map[string]any, string, int) {
 	c.scopeMu.Lock()
 	commit, n := c.last, c.lastTurn
 	c.scopeMu.Unlock()
@@ -369,7 +458,7 @@ func (c *Chat) adviceBriefing(question string) (string, []map[string]any, string
 	c.mu.Unlock()
 
 	a := briefing.Advice{Question: question, Turn: n}
-	items := []map[string]any{{"item": "question", "source": "the user's question, verbatim", "sha256": sha256Hex(question)}}
+	items := []map[string]any{{"item": "question", "source": questionSource(trigger), "sha256": sha256Hex(question)}}
 	if len(msgs) > 0 {
 		a.Task = task.Task{Text: msgs[0], FollowUps: msgs[1:]}
 		items = append(items, map[string]any{"item": "task", "source": "the user's turns since the last delivery, verbatim (D7)",

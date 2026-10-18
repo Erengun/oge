@@ -176,6 +176,11 @@ type Chat struct {
 	// feedbacks are the feedback turns sent since the user's last turn:
 	// the chain's budget (D5).
 	feedbacks int
+	// chain counts the user's turns, so an advice that lands after one is
+	// known stale; autoUsed is the chain's one automatic Consultation
+	// (D-A3): both reset by the user's turn, as feedbacks does.
+	chain int
+	autos int // automatic Consultations this chain
 	// verdictCuts are the last turns of the cuts that reached a Verdict,
 	// for the Receipt's cycle count (D6).
 	verdictCuts []int
@@ -467,6 +472,13 @@ func (c *Chat) SendAdvice(ctx context.Context, consultation, text string) (<-cha
 	return c.send(ctx, AdvicePrefix+text, turnAdvice, consultation)
 }
 
+// SendAutoAdvice sends an automatic Consultation's advice (ConsultAuto) as
+// SendAdvice does, unless the user has turned since it began: their turn
+// started a new chain, and advice on the old one is stale, so ErrChainEnded.
+func (c *Chat) SendAutoAdvice(ctx context.Context, a *Advice) (<-chan agent.Event, error) {
+	return c.sendIn(ctx, AdvicePrefix+a.Text, turnAdvice, a.ID, a.Chain)
+}
+
 // SendEdited sends text the user made of a Consultation's advice, edited
 // first. It is the user's turn (D-A4): it enters the Task and starts a
 // chain, as any of theirs does, and only its AdviceSent says where it
@@ -479,6 +491,10 @@ func (c *Chat) SendEdited(ctx context.Context, consultation, text string) (<-cha
 // has had FeedbackBudget of them (D5). The user's call.
 var ErrFeedbackBudget = errors.New("the chain's feedback turns are spent")
 
+// ErrChainEnded is why an automatic advice wasn't sent: the user's own turn
+// started a new chain while it was being made.
+var ErrChainEnded = errors.New("the user's turn began a new chain")
+
 // SendFeedback sends a failing cut's feedback turn (Result.Feedback), as
 // Send does: Öge's turn, recorded as one (TurnStarted's by is "oge"),
 // never part of a Task (D7). It queues behind a turn in flight, and
@@ -490,6 +506,12 @@ func (c *Chat) SendFeedback(ctx context.Context, text string) (<-chan agent.Even
 }
 
 func (c *Chat) send(ctx context.Context, text string, kind turnKind, advice string) (<-chan agent.Event, error) {
+	return c.sendIn(ctx, text, kind, advice, -1)
+}
+
+// sendIn is send for a turn that belongs to chain (-1: any): it is refused
+// with ErrChainEnded once the user's turn has started another.
+func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice string, chain int) (<-chan agent.Event, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -507,9 +529,15 @@ func (c *Chat) send(ctx context.Context, text string, kind turnKind, advice stri
 		c.mu.Unlock()
 		return nil, err
 	}
+	if chain >= 0 && chain != c.chain {
+		c.mu.Unlock()
+		return nil, ErrChainEnded
+	}
 	switch {
 	case kind == turnUser:
 		c.feedbacks = 0 // the user's own turn starts a chain
+		c.chain++
+		c.autos = 0
 	case kind == turnFeedback && c.feedbacks >= FeedbackBudget:
 		c.mu.Unlock()
 		return nil, ErrFeedbackBudget
