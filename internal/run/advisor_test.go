@@ -291,3 +291,101 @@ func TestSendAdviceIsOutsideTheTaskAndTheBudget(t *testing.T) {
 		t.Errorf("after the user's edited turn: %v", err)
 	}
 }
+
+// A spent feedback budget consults once per chain (D-A3): the record says
+// it was Öge's automatic trigger and that the cap of 1 was used; a second
+// try is refused; the advice goes as an advice turn that neither checks
+// nor counts against the budget; and the user's turn starts a new chain,
+// with its own automatic Consultation, and makes an old advice stale.
+func TestConsultAutoOncePerChain(t *testing.T) {
+	var turns []multiturn.Turn
+	for range FeedbackBudget + 4 {
+		turns = append(turns, multiturn.Turn{Reply: "ok"})
+	}
+	c := openCut(t, "", turns...)
+	drain(t, send(t, c, "yo"), nil)
+	for range FeedbackBudget {
+		ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		drain(t, ch, nil)
+	}
+	if _, err := c.SendFeedback(t.Context(), "again"); !errors.Is(err, ErrFeedbackBudget) {
+		t.Fatalf("budget not spent: %v", err)
+	}
+	withAdvisor(c, advisorScript(t, "echo 'Inject a Clock.'\n"))
+	adv, err := c.ConsultAuto(t.Context())
+	if err != nil || !strings.Contains(adv.Text, "Inject a Clock") {
+		t.Fatalf("ConsultAuto: %v %+v", err, adv)
+	}
+	if _, err := c.ConsultAuto(t.Context()); !errors.Is(err, ErrAutoConsulted) {
+		t.Errorf("a second automatic Consultation in the chain: %v", err)
+	}
+	started := recordsOf(t, c, RecConsultationStarted)
+	if len(started) != 1 || started[0]["trigger"] != "feedback_budget" || started[0]["requested_by"] != "oge" ||
+		started[0]["auto_cap"] != float64(AutoCap) || started[0]["auto_used"] != float64(1) {
+		t.Errorf("ConsultationStarted %v", started)
+	}
+	ch, err := c.SendAutoAdvice(t.Context(), adv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	c.mu.Lock()
+	n, fb := c.turns, c.feedbacks
+	isOge := c.oge[n]
+	c.mu.Unlock()
+	if !isOge || fb != FeedbackBudget {
+		t.Errorf("the advice turn: oge=%v feedbacks=%d", isOge, fb)
+	}
+	if sent := recordsOf(t, c, RecAdviceSent); len(sent) != 1 || sent[0]["by"] != "oge" || sent[0]["how"] != "verbatim" {
+		t.Errorf("AdviceSent %v", sent)
+	}
+	// The user's turn: a new chain.
+	drain(t, send(t, c, "and another thing"), nil)
+	if _, err := c.SendAutoAdvice(t.Context(), adv); !errors.Is(err, ErrChainEnded) {
+		t.Errorf("stale automatic advice: %v", err)
+	}
+	if _, err := c.ConsultAuto(t.Context()); err != nil {
+		t.Errorf("the new chain's automatic Consultation: %v", err)
+	}
+}
+
+// An empty or cancelled automatic Consultation yields no advice to send,
+// and still uses the chain's cap.
+func TestConsultAutoEmptyAndCancelled(t *testing.T) {
+	c := openChat(t, multiturn.Scenario{}, 0)
+	withAdvisor(c, advisorScript(t, "true\n"))
+	if a, err := c.ConsultAuto(t.Context()); err == nil || a != nil {
+		t.Fatalf("empty advice: %v %v", a, err)
+	}
+	ended := recordsOf(t, c, RecConsultationEnded)
+	if len(ended) != 1 || ended[0]["outcome"] != ConsultFailed {
+		t.Errorf("ConsultationEnded %v", ended)
+	}
+	if _, err := c.ConsultAuto(t.Context()); !errors.Is(err, ErrAutoConsulted) {
+		t.Errorf("a failed one left the cap free: %v", err)
+	}
+	if got := recordsOf(t, c, RecAdviceSent); len(got) != 0 {
+		t.Errorf("AdviceSent %v", got)
+	}
+
+	c = openChat(t, multiturn.Scenario{}, 0)
+	withAdvisor(c, advisorScript(t, "sleep 30\n"))
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if a, err := c.ConsultAuto(ctx); err == nil || a != nil {
+		t.Fatalf("cancelled: %v %v", a, err)
+	}
+}
+
+// [advisor] auto defaults to on and takes on, ask and off.
+func TestAdvisorAutoSetting(t *testing.T) {
+	for in, want := range map[string]string{"": "on", "on": "on", "ask": "ask", "off": "off", "bogus": "on"} {
+		c := &Chat{advisor: pipeline.AdvisorConfig{Auto: in}}
+		if got := c.AdvisorAuto(); got != want {
+			t.Errorf("auto %q: %q, want %q", in, got, want)
+		}
+	}
+}

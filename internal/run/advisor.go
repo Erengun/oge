@@ -62,7 +62,9 @@ type Advice struct {
 	ID   string // the Consultation's
 	Text string
 	// Turn is the turn whose commit the Advisor read; 0 for the Snapshot.
-	Turn                 int
+	Turn int
+	// Chain is the chain an automatic Consultation belongs to (ConsultAuto).
+	Chain                int
 	Agent, Model, Effort string
 	CostUSD              *float64
 	Duration             time.Duration
@@ -122,6 +124,59 @@ func (c *Chat) advisorFor() (agent.Adapter, pipeline.Stage, error) {
 // Session is denied without reaching the human. Cancelling ctx cancels
 // the Consultation; its records stay in the Chat log either way.
 func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
+	return c.consult(ctx, question, consultTrigger{trigger: "user", by: "user"})
+}
+
+// ErrAutoConsulted is why no automatic Consultation ran: the chain's one
+// (D-A3's per-chain cap) was already used.
+var ErrAutoConsulted = errors.New("the chain's automatic consultation is used")
+
+// AutoCap is the automatic Consultations a chain may have.
+const AutoCap = 1
+
+// AdvisorAuto is [advisor] auto: "on" (the default, D-A3) sends the advice
+// when the feedback budget is spent, "ask" shows it first, "off" never
+// consults on its own.
+func (c *Chat) AdvisorAuto() string {
+	switch c.advisor.Auto {
+	case pipeline.AdvisorAutoAsk, pipeline.AdvisorAutoOff:
+		return c.advisor.Auto
+	}
+	return pipeline.AdvisorAutoOn
+}
+
+// ConsultAuto is the Consultation Öge asks for when a chain's feedback
+// budget is spent (D-A3, D-A5a), once per chain: a second call before the
+// user's next turn returns ErrAutoConsulted. A failed or cancelled one
+// still uses the chain's cap. Its advice is a Claim like any other: the
+// caller sends it with SendAutoAdvice (or shows it first, with auto =
+// "ask"), and a cancelled, failed or empty Consultation returns an error,
+// never advice.
+func (c *Chat) ConsultAuto(ctx context.Context) (*Advice, error) {
+	c.mu.Lock()
+	if c.autoUsed {
+		c.mu.Unlock()
+		return nil, ErrAutoConsulted
+	}
+	c.autoUsed = true
+	chain, tries := c.chain, c.feedbacks
+	c.mu.Unlock()
+	q := fmt.Sprintf("The Check still fails after %d feedback turns. What is the root cause, and what should the implementer change?", tries)
+	a, err := c.consult(ctx, q, consultTrigger{trigger: "feedback_budget", by: "oge", chain: chain, auto: true})
+	if a != nil {
+		a.Chain = chain
+	}
+	return a, err
+}
+
+// consultTrigger is why a Consultation ran, for its record.
+type consultTrigger struct {
+	trigger, by string
+	chain       int
+	auto        bool // the chain's automatic one: the cap is recorded
+}
+
+func (c *Chat) consult(ctx context.Context, question string, tr consultTrigger) (*Advice, error) {
 	// Close waits for every Consultation it lets start, and refuses the
 	// rest, so ConsultationEnded never lands on a closed log.
 	c.mu.Lock()
@@ -191,10 +246,15 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 	// TODO(#287-decision): the auth source is known only from the
 	// Session's system/init, after the Briefing is sent, so it is on
 	// ConsultationEnded, not here.
-	if err := c.log(RecConsultationStarted, map[string]any{"chat": c.ID, "consultation": id,
-		"trigger": "user", "requested_by": "user", "turn": last, "read_turn": n, "commit": commit,
+	startedRec := map[string]any{"chat": c.ID, "consultation": id,
+		"trigger": tr.trigger, "requested_by": tr.by, "turn": last, "read_turn": n, "commit": commit,
 		"question": sha256Hex(question), "manifest": mBlob, "briefing": bBlob,
-		"advisor": launchProfile(st), "permissions": "launch_profile", "read_only": readOnly}); err != nil {
+		"advisor": launchProfile(st), "permissions": "launch_profile", "read_only": readOnly}
+	if tr.auto {
+		// The per-chain cap, as used by this one (D-A3).
+		startedRec["auto_cap"], startedRec["auto_used"], startedRec["chain"] = AutoCap, 1, tr.chain
+	}
+	if err := c.log(RecConsultationStarted, startedRec); err != nil {
 		return nil, err
 	}
 	end := func(outcome, why string, rec *adviceRecord) error {
@@ -220,6 +280,9 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 	defer sess.Close()
 	rec := &adviceRecord{}
 	text, outcome, why := c.advise(ctx, sess, st, id, brief, rec)
+	if outcome == ConsultAdvised && strings.TrimSpace(text) == "" {
+		outcome, why = ConsultFailed, "the advisor gave no advice"
+	}
 	if err := end(outcome, why, rec); err != nil {
 		return nil, err
 	}

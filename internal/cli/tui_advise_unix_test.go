@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/erengun/oge/internal/agent/fake"
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -38,9 +40,12 @@ func (a advisedAdapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.
 
 // startAdvisedSession is startChatSession with a fake advisor running
 // script.
-func startAdvisedSession(t *testing.T, sc multiturn.Scenario, script string) (*homeSession, *runFixture) {
+func startAdvisedSession(t *testing.T, sc multiturn.Scenario, script string, setup ...func(*runFixture)) (*homeSession, *runFixture) {
 	t.Helper()
 	f := newRunFixture(t)
+	for _, fn := range setup {
+		fn(f)
+	}
 	scen := filepath.Join(t.TempDir(), "scenario.json")
 	if err := sc.Save(scen); err != nil {
 		t.Fatal(err)
@@ -356,5 +361,89 @@ func TestHomeChatAdviseOwnTurnDismisses(t *testing.T) {
 	s.quitChat(f)
 	if n := len(chatRecords(t, f, run.RecAdviceSent)); n != 0 {
 		t.Errorf("%d AdviceSent", n)
+	}
+}
+
+// advisorAuto writes a user config with [advisor] auto = mode, in a config
+// home of this fixture's own.
+func advisorAuto(t *testing.T, f *runFixture, mode string) {
+	t.Helper()
+	f.setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := pipeline.UserConfigPath(f.getenv())
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("schema = 1\n[advisor]\nauto = \""+mode+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// autoScenario fails the user's turn and each of the budget's feedback
+// turns, then answers an advice turn.
+func autoScenario() multiturn.Scenario {
+	var turns []multiturn.Turn
+	for i := range run.FeedbackBudget + 1 {
+		turns = append(turns, multiturn.Turn{Reply: fmt.Sprintf("try %d", i), Writes: []multiturn.File{addGo(fmt.Sprintf("a - b - %d", i))}})
+	}
+	return multiturn.Scenario{Turns: append(turns, multiturn.Turn{Reply: "took the advice"})}
+}
+
+// With the feedback budget spent, Öge consults once and sends the advice
+// as its own dim turn (D-A3), recorded as the automatic trigger with the
+// cap used and as an AdviceSent by oge.
+func TestHomeChatAutoConsultSendsAdvice(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, autoScenario(), adviceScript)
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("still failing after 3 tries; asking the advisor")
+	s.expect("a Claim, not checked")
+	s.expect("Inject a Clock.")
+	s.expect("Öge → agent: An advisor suggests (a second opinion, not checked): ")
+	s.expect("  took the advice")
+	s.composerAfter("  took the advice")
+	s.quitChat(f)
+	started := chatRecords(t, f, run.RecConsultationStarted)
+	if len(started) != 1 || started[0]["trigger"] != "feedback_budget" || started[0]["requested_by"] != "oge" || started[0]["auto_cap"] != float64(1) {
+		t.Errorf("ConsultationStarted %v", started)
+	}
+	if sent := chatRecords(t, f, run.RecAdviceSent); len(sent) != 1 || sent[0]["by"] != "oge" || sent[0]["how"] != "verbatim" {
+		t.Errorf("AdviceSent %v", sent)
+	}
+}
+
+// With auto = "ask" the advice waits for the same key as /advise's: nothing
+// reaches the agent until the user confirms.
+func TestHomeChatAutoConsultAskWaitsForTheUser(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, autoScenario(), adviceScript, func(f *runFixture) { advisorAuto(t, f, "ask") })
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("Inject a Clock.")
+	s.expect("send to agent")
+	if got := chatRecords(t, f, run.RecAdviceSent); len(got) != 0 {
+		t.Fatalf("sent before the user confirmed: %v", got)
+	}
+	s.type_("\r")
+	s.expect("Öge → agent: An advisor suggests (a second opinion, not checked): ")
+	s.expect("  took the advice")
+	s.composerAfter("  took the advice")
+	s.quitChat(f)
+	if sent := chatRecords(t, f, run.RecAdviceSent); len(sent) != 1 || sent[0]["by"] != "oge" {
+		t.Errorf("AdviceSent %v", sent)
+	}
+}
+
+// An advisor that gives nothing sends nothing: the chain stops as it did.
+func TestHomeChatAutoConsultEmptyStopsTheChain(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, autoScenario(), "true\n")
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("still failing · your call")
+	s.composer()
+	s.quitChat(f)
+	if got := chatRecords(t, f, run.RecAdviceSent); len(got) != 0 {
+		t.Errorf("AdviceSent %v", got)
 	}
 }
