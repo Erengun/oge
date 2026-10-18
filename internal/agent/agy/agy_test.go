@@ -457,3 +457,23 @@ func TestNestedPayloadParsing(t *testing.T) {
 		t.Fatalf("expected Exit 'done', got %v", settled.Exit)
 	}
 }
+
+// A result that arrives while Send is still writing must not overtake
+// TurnAccepted (flaked under -race, #307).
+func TestSettleHeldBehindTurnAccepted(t *testing.T) {
+	t.Parallel()
+	s := &session{events: make(chan agent.Event, 8), inFlight: true, accepting: true}
+	s.settle(agent.Event{})
+	select {
+	case ev := <-s.events:
+		t.Fatalf("event before TurnAccepted: %+v", ev)
+	default:
+	}
+	s.endAccept(nil)
+	if k := (<-s.events).Kind; k != agent.TurnAccepted {
+		t.Fatalf("first = %v, want TurnAccepted", k)
+	}
+	if k := (<-s.events).Kind; k != agent.TurnSettled {
+		t.Fatalf("second = %v, want TurnSettled", k)
+	}
+}
