@@ -140,9 +140,13 @@ type Chat struct {
 
 	// The Preflight and the Snapshot control, started when the Chat opens
 	// (cut.go): prepared is closed once both have finished.
+	// A retake of the Snapshot (chat_refresh.go) replaces them under
+	// cutMu and prepMu; Close sets prepClosed so none starts after it.
 	prepared   chan struct{}
 	prep       chatPrep
 	cancelPrep context.CancelFunc
+	prepMu     sync.Mutex
+	prepClosed bool
 
 	cutMu   sync.Mutex // one cut at a time
 	lastCut *cutMark   // the last cut that reached a Run's walk; written under supersedeMu too
@@ -158,6 +162,7 @@ type Chat struct {
 	// delivered is the last turn delivered (D7), and applied the commit
 	// last applied to the user's tree.
 	cuts       map[string]*cutMark
+	refreshDue bool // a retake of the Snapshot waits on a cut in flight
 	delivered  int
 	applied    string
 	appliedRun string // the directory of the Run applied
@@ -720,7 +725,7 @@ func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kin
 	if fresh {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: "implementer"}
 		t := task.Task{Text: msgs[0], FollowUps: msgs[1:]}
-		m := briefingManifest(Params{Task: t}, a, attemptSpec{start: c.Snapshot}, sent, c.instr, c.deny)
+		m := briefingManifest(Params{Task: t}, a, attemptSpec{start: c.snapshot()}, sent, c.instr, c.deny)
 		m["chat"], m["turn"], m["session_reused"] = c.ID, n, false
 		return m
 	}
@@ -1187,8 +1192,11 @@ func (c *Chat) Close() error {
 		_ = sess.Close()
 		<-pumped
 		c.consults.Wait()
+		c.prepMu.Lock()
+		c.prepClosed = true
 		c.cancelPrep()
 		<-c.prepared
+		c.prepMu.Unlock()
 		c.cutMu.Lock() // a cut in flight still uses the seed and the control
 		defer c.cutMu.Unlock()
 		c.prep.control.Stop()

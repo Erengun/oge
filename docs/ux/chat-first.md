@@ -73,7 +73,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
   - it is budgeted at 3 per chain of cuts;
   - it is dropped if a newer cut exists, and queues behind a user turn in flight.
 - **QA** always starts fresh, and its text is never streamed. The transcript is never agent context.
-- **Snapshot refresh:** Öge retakes the Snapshot, with a Ledger record, after an apply and whenever the Workspace has no unchecked edits. Otherwise it shows one line, `repo changed outside Öge; not merged`. It never merges silently.
+- **Snapshot refresh:** Öge retakes the Snapshot, with a Ledger record, after an apply and whenever the Workspace has no unchecked edits. "Clean" means the repo is exactly what the Chat delivered (the tree of the commit applied): the Workspace holds none of the user's own edits, so any other tree is an outside change, committed or not. Then Oracle v0, the protected set, the Preflight and the Snapshot control are recomputed on the new base. A cut in flight keeps its old base, and the retake waits for it. An outside change shows one line, `repo changed outside Öge; not merged`, and never merges silently. A retake doesn't end the chain (D5): only the user's turn does.
 
 ## Ledger and Receipt
 

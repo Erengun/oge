@@ -420,7 +420,7 @@ func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage
 // never the Workspace a turn may be writing to.
 func (c *Chat) adviceBriefing(question string) (string, []map[string]any, string, int) {
 	c.scopeMu.Lock()
-	commit, n := c.last, c.lastTurn
+	commit, n, snapshot := c.last, c.lastTurn, c.Snapshot
 	c.scopeMu.Unlock()
 	c.supersedeMu.Lock()
 	delivered := c.delivered
@@ -446,13 +446,13 @@ func (c *Chat) adviceBriefing(question string) (string, []map[string]any, string
 			"turns": turns, "sha256": sha256Hex(strings.Join(msgs, "\n"))})
 	}
 	if n > 0 {
-		if d, err := c.diff(c.Snapshot, commit); err == nil && len(d) > 0 {
+		if d, err := c.diff(snapshot, commit); err == nil && len(d) > 0 {
 			a.Diff = string(d)
 			if len(a.Diff) > maxAdviceDiff {
 				a.Diff = a.Diff[:maxAdviceDiff] + "\n… (cut short: read the rest in the current directory)"
 			}
 			items = append(items, map[string]any{"item": "diff", "source": "the newest turn's commit against the Snapshot",
-				"from": c.Snapshot, "to": commit, "turn": n, "sha256": sha256Hex(a.Diff)})
+				"from": snapshot, "to": commit, "turn": n, "sha256": sha256Hex(a.Diff)})
 		}
 	}
 	if verdict != nil {

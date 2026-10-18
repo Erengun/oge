@@ -222,6 +222,20 @@ func InitRunRepo(dir string) (*RunRepo, error) {
 // dir (which becomes the implementer's Workspace) and commits it to the Run
 // repository as the Snapshot. After it returns, nothing reads root again.
 func (r *RunRepo) TakeSnapshot(root, dir string) (commit string, info SnapshotInfo, err error) {
+	commit, info, err = r.RetakeSnapshot(root, dir)
+	if err != nil {
+		return "", info, err
+	}
+	if _, err := r.git("", "", nil, "update-ref", SnapshotRef, commit); err != nil {
+		return "", info, err
+	}
+	return commit, info, nil
+}
+
+// RetakeSnapshot copies root as TakeSnapshot does into the scratch
+// directory dir, but moves no ref: the caller compares the commit's tree
+// with what it expects, and sets SnapshotRef only if it adopts it.
+func (r *RunRepo) RetakeSnapshot(root, dir string) (commit string, info SnapshotInfo, err error) {
 	paths, err := snapshotPaths(root)
 	if err != nil {
 		return "", info, err
@@ -240,9 +254,6 @@ func (r *RunRepo) TakeSnapshot(root, dir string) (commit string, info SnapshotIn
 	}
 	commit, err = r.commitDir(dir, "", "Snapshot "+info.String(), true, nil)
 	if err != nil {
-		return "", info, err
-	}
-	if _, err := r.git("", "", nil, "update-ref", SnapshotRef, commit); err != nil {
 		return "", info, err
 	}
 	if err := os.WriteFile(filepath.Join(dir, ledger.WorkspaceMarker), nil, 0o600); err != nil {

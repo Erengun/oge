@@ -730,6 +730,41 @@ func TestHomeChatSecondApplyMergesOnTheLast(t *testing.T) {
 	s.quitChat(f)
 }
 
+// D10: a clean apply retakes the Snapshot without a word; an apply into a
+// repo that changed outside Öge says so in one line and merges nothing.
+func TestHomeChatApplyNotesAnOutsideChange(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "fixed", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// one\n"}}},
+		{Reply: "again", Writes: []multiturn.File{{Path: "add.go", Content: fixed + "\n// two\n"}}},
+	}}, nil)
+	s.composer()
+	s.type_("fix Add\r")
+	s.expect("oge › ✓ Accepted")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("oge › ✓ Applied ")
+	s.composer()
+	if out := s.out.String(); strings.Contains(out, "changed outside") {
+		t.Errorf("a clean apply noted an outside change:\n%s", out)
+	}
+	writeFile(t, filepath.Join(f.repo, "mine.txt"), []byte("mine\n"))
+	s.type_("again\r")
+	s.expect("oge › ✓ Accepted")
+	s.composer()
+	s.type_("/apply\r")
+	s.expect("repo changed outside Öge; not merged")
+	s.composer()
+	if n := strings.Count(s.out.String(), "repo changed outside Öge; not merged"); n != 1 {
+		t.Errorf("the note shows %d times, want once", n)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.repo, "mine.txt")); string(b) != "mine\n" {
+		t.Errorf("mine.txt is %q", b)
+	}
+	s.quitChat(f)
+}
+
 // A slash command typed during a turn never reaches the agent: it queues,
 // and Esc puts it back in the composer.
 func TestHomeChatSlashWaitsForTheTurn(t *testing.T) {
