@@ -131,7 +131,7 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 // human (trigger ask, requested by the agent's question). Its advice is
 // still a Claim: the human answers.
 func (c *Chat) ConsultAsk(ctx context.Context, question string) (*Advice, error) {
-	return c.consult(ctx, question, consultTrigger{trigger: "ask", by: "agent"})
+	return c.consult(ctx, question, consultTrigger{trigger: TriggerAsk, by: "agent"})
 }
 
 // ErrAutoConsulted is why no automatic Consultation ran: the chain's one
@@ -144,6 +144,10 @@ const AutoCap = 1
 // TriggerFeedbackBudget is the Consultation trigger of a spent feedback
 // budget, the automatic one.
 const TriggerFeedbackBudget = "feedback_budget"
+
+// TriggerAsk is the Consultation trigger of the human's a+Enter on the
+// agent's question: its advice is shown to them, never sent.
+const TriggerAsk = "ask"
 
 // AutoState is the chain now and whether its automatic Consultation is
 // used, read together so a caller can pass the chain to ConsultAuto.
