@@ -56,6 +56,11 @@ type ChatCut struct {
 	HeldOutViewed     int    `json:"held_out_viewed"`
 	VerifyCycles      int    `json:"verify_cycles"`
 	SendBackCycles    int    `json:"send_back_cycles"`
+	// Advice is the Consultations whose advice reached the agent in this
+	// cut's turns: a Claim, never Evidence (docs/ux/advisor.md).
+	Advice []AdviceSent `json:"advice,omitempty"`
+	// Dismissed are the ones asked in them that ended without it.
+	Dismissed []Dismissed `json:"dismissed_consultations,omitempty"`
 }
 
 // Receipt is the model every rendering reads. Its JSON form is schema 1.
@@ -87,6 +92,8 @@ type Receipt struct {
 	// LedgerUnreadable says where the Ledger stopped being readable, when a
 	// torn last line cut it short; the Receipt is of the records before.
 	LedgerUnreadable string `json:"ledger_unreadable,omitempty"`
+	// full adds the lines only the full Receipt shows (FullText).
+	full bool
 	// WaitingAt is the Gate a parked Run waits at.
 	WaitingAt string     `json:"waiting_at,omitempty"`
 	Candidate *Candidate `json:"candidate,omitempty"`
@@ -484,6 +491,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				Run, Task, Frozen, Mode, Follows, Chat string
 				TaskTurns                              []json.RawMessage `json:"task_turns"`
 				RefersToAgentText                      bool              `json:"refers_to_agent_text"`
+				Advice                                 run.CutAdvice     `json:"advice"`
 				HeldOutViewed                          int               `json:"held_out_viewed"`
 				Cycles                                 struct {
 					Verify   int `json:"verify"`
@@ -497,6 +505,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			if d.Chat != "" {
 				r.Chat = &ChatCut{ID: clean(d.Chat), TaskTurns: len(d.TaskTurns), RefersToAgentText: d.RefersToAgentText,
 					HeldOutViewed: d.HeldOutViewed, VerifyCycles: d.Cycles.Verify, SendBackCycles: d.Cycles.SendBack}
+				r.Chat.Advice, r.Chat.Dismissed = cutAdvice(d.Advice)
 			}
 			if b, err := src.Blob(d.Task); err == nil {
 				r.Task = clean(task.Parse(string(b)).Title)

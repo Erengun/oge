@@ -408,6 +408,25 @@ func Scenarios() []Scenario {
 			b.End(7300*ms, run.Failed, C1, "the Check failed on the cut")
 			return b
 		}},
+		{"chat-cut-advice", func() *Builder {
+			// A Chat's cut where a Consultation's advice reached the agent
+			// at turn 4, sent verbatim, and another was sent edited; a third
+			// was dismissed. The advice is a Claim: the Receipt says it was
+			// sent, not what it said. The cut's RunStarted holds all of it.
+			b := NewCut(pipeline.Fast, map[string]any{"chat": "c-1", "turns": map[string]int{"from": 3, "to": 4},
+				"task_turns": []map[string]any{{"turn": 1, "sha256": "aa"}},
+				"advice": run.CutAdvice{
+					Sent: []run.AdviceSent{
+						{Consultation: "k-1", Turn: 3, How: "edited", Agent: "claude", Model: "opus", Advice: "sha256:aa"},
+						{Consultation: "k-2", Turn: 4, How: "verbatim", Agent: "claude", Model: "opus", Advice: "sha256:bb"},
+					},
+					Dismissed: []run.Dismissed{{Consultation: "k-3", Turn: 4, Agent: "claude", Model: "opus", Outcome: "cancelled"}},
+				}})
+			b.Attempt(fastAttempt())
+			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
+			b.End(7300*ms, run.Accepted, C1)
+			return b
+		}},
 		{"accepted-setup", func() *Builder {
 			// Setup overlapped the implementer: its Preflight is observed
 			// after the Attempt ended, and the Receipt still lists it first.

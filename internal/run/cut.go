@@ -96,6 +96,7 @@ type cutEntry struct {
 	// chain's verify and send-back cycles, this cut's Check included.
 	refers           bool
 	heldOutViewed    int
+	advice           CutAdvice
 	verifies, sendBk int               // over the Task's turns
 	tamper           []json.RawMessage // the Task's turns' TamperEvent records, verbatim
 	prep             chatPrep
@@ -234,6 +235,11 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 		return nil, err
 	}
 	e.heldOutViewed = len(viewed)
+	// The Consultations of the Task's turns, as of this cut (the Tamper
+	// window): the Receipt reads them from the Ledger, not the Chat log.
+	if e.advice, err = c.chatAdvice(e.delivered+1, to); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	// The Task's cycles (D6): its cuts that reached a Verdict, this one
 	// included, and the feedback turns sent among its turns.
@@ -407,6 +413,9 @@ func (e *cutEntry) addTo(begun map[string]any) {
 	begun["base"], begun["task_turns"] = e.base, e.hashes
 	begun["refers_to_agent_text"], begun["held_out_viewed"] = e.refers, e.heldOutViewed
 	begun["cycles"] = map[string]int{"verify": e.verifies, "send_back": e.sendBk}
+	if !e.advice.empty() {
+		begun["advice"] = e.advice
+	}
 	if e.follows != "" {
 		begun["follows"] = e.follows
 	}
