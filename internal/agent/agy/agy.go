@@ -233,6 +233,13 @@ type session struct {
 	role       string
 	closeGrace time.Duration
 
+	// emu orders the reader's events behind TurnAccepted: while Send
+	// writes a turn, accepting holds them in held, so a fast result can't
+	// settle the turn before it is accepted. emu is not held during the write.
+	emu       sync.Mutex
+	accepting bool
+	held      []agent.Event
+
 	mu          sync.Mutex
 	inFlight    bool
 	interrupted bool
@@ -272,15 +279,42 @@ func (s *session) Send(t agent.Turn) error {
 		return err
 	}
 	b = append(b, '\n')
+	s.emu.Lock()
+	s.accepting = true
+	s.emu.Unlock()
 	_, err = s.stdin.Write(b)
+	s.endAccept(err)
+	return err
+}
+
+// endAccept emits TurnAccepted (when the write succeeded), then releases the
+// events the reader produced meanwhile.
+func (s *session) endAccept(err error) {
+	s.emu.Lock()
+	defer s.emu.Unlock()
+	s.accepting = false
 	if err != nil {
 		s.mu.Lock()
 		s.inFlight = false
 		s.mu.Unlock()
-		return err
+	} else {
+		s.events <- agent.Event{Kind: agent.TurnAccepted}
 	}
-	s.events <- agent.Event{Kind: agent.TurnAccepted}
-	return nil
+	for _, ev := range s.held {
+		s.events <- ev
+	}
+	s.held = nil
+}
+
+// emit sends a reader-side event, behind TurnAccepted while Send is writing.
+func (s *session) emit(ev agent.Event) {
+	s.emu.Lock()
+	defer s.emu.Unlock()
+	if s.accepting {
+		s.held = append(s.held, ev)
+		return
+	}
+	s.events <- ev
 }
 
 func (s *session) Interrupt() error {
@@ -322,7 +356,7 @@ func (s *session) stop(reason string) {
 	s.stopped = true
 	s.inFlight = false
 	s.mu.Unlock()
-	s.events <- agent.Event{Kind: agent.TurnSettled, Stop: reason}
+	s.emit(agent.Event{Kind: agent.TurnSettled, Stop: reason})
 	proc.Kill(s.cmd)
 }
 
@@ -335,7 +369,7 @@ func (s *session) settle(ev agent.Event) {
 	s.inFlight = false
 	s.mu.Unlock()
 	ev.Kind = agent.TurnSettled
-	s.events <- ev
+	s.emit(ev)
 }
 
 func (s *session) readStdout(r *bufio.Reader) {
@@ -391,18 +425,18 @@ func (s *session) handleStepUpdate(f map[string]any) {
 		}
 		params, _ := toolInfo["parameters"].(map[string]any)
 		targetStr := targetForTool(toolName, params, s.ws)
-		s.events <- agent.Event{
+		s.emit(agent.Event{
 			Kind:   agent.Claim,
 			Tool:   shorten(toolName, 32),
 			Target: targetStr,
-		}
+		})
 	}
 
 	if textDelta, ok := data["text_delta"].(string); ok && textDelta != "" {
-		s.events <- agent.Event{
+		s.emit(agent.Event{
 			Kind: agent.Claim,
 			Text: string(redact.Redact([]byte(textDelta))),
-		}
+		})
 	}
 
 	if u, ok := data["usage"].(map[string]any); ok {
