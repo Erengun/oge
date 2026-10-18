@@ -17,9 +17,14 @@ type AdviceSent = run.AdviceSent
 // It changed no work, so only the full Receipt lists it.
 type Dismissed = run.Dismissed
 
+// Shown is an ask Consultation whose advice reached you on the agent's
+// question, not the agent. Still a Claim; the compact Receipt lists it
+// because advice you saw before answering is worth one line.
+type Shown = run.Shown
+
 // cutAdvice reads the Consultations a cut's RunStarted recorded at cut
 // time, cleaned for display.
-func cutAdvice(a run.CutAdvice) (sent []AdviceSent, dismissed []Dismissed) {
+func cutAdvice(a run.CutAdvice) (sent []AdviceSent, dismissed []Dismissed, shown []Shown) {
 	for _, s := range a.Sent {
 		s.Consultation, s.How, s.Agent, s.Model = clean(s.Consultation), clean(s.How), clean(s.Agent), clean(s.Model)
 		sent = append(sent, s)
@@ -28,7 +33,11 @@ func cutAdvice(a run.CutAdvice) (sent []AdviceSent, dismissed []Dismissed) {
 		d.Consultation, d.Agent, d.Model, d.Outcome = clean(d.Consultation), clean(d.Agent), clean(d.Model), clean(d.Outcome)
 		dismissed = append(dismissed, d)
 	}
-	return sent, dismissed
+	for _, h := range a.Shown {
+		h.Consultation, h.Agent, h.Model = clean(h.Consultation), clean(h.Agent), clean(h.Model)
+		shown = append(shown, h)
+	}
+	return sent, dismissed, shown
 }
 
 // advisorName is the advisor's agent and model as one value.
@@ -43,7 +52,7 @@ func advisorName(agent, model string) string {
 // agent. Verbatim advice is a Claim, so it says so; edited advice is the
 // user's own turn (D-A4), so it says that.
 func (c *ChatCut) adviceLines() []Line {
-	if len(c.Advice) == 0 {
+	if len(c.Advice)+len(c.Shown) == 0 {
 		return nil
 	}
 	tail := func(a AdviceSent) string {
@@ -59,12 +68,19 @@ func (c *ChatCut) adviceLines() []Line {
 		}
 		return fmt.Sprintf("sent at turn %d (%s, %s)%s", a.Turn, advisorName(a.Agent, a.Model), fresh, tail(a))
 	}
-	if len(c.Advice) == 1 {
-		return []Line{{"Advice", "1 consultation " + one(c.Advice[0]), Plain}}
-	}
-	ls := []Line{{"Advice", fmt.Sprintf("%d consultations", len(c.Advice)), Plain}}
+	var items []string
 	for _, a := range c.Advice {
-		ls = append(ls, Line{"", one(a), Plain})
+		items = append(items, one(a))
+	}
+	for _, h := range c.Shown {
+		items = append(items, fmt.Sprintf("on the agent's question at turn %d (%s): shown to you · a Claim, not checked", h.Turn, advisorName(h.Agent, h.Model)))
+	}
+	if len(items) == 1 {
+		return []Line{{"Advice", "1 consultation " + items[0], Plain}}
+	}
+	ls := []Line{{"Advice", fmt.Sprintf("%d consultations", len(items)), Plain}}
+	for _, it := range items {
+		ls = append(ls, Line{"", it, Plain})
 	}
 	return ls
 }

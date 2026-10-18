@@ -103,8 +103,12 @@ This is not described as sandbox enforcement where it's only discard (ADR-0018's
 **Receipt.** A cut's Run already records its Chat turn range. The Receipt gains one disclosure when advice reached the agent inside that range:
 
 ```
-Advice: 1 consultation sent at turn 4 (claude opus, fresh) · a Claim, not checked
+Advice: 2 consultations
+        sent at turn 4 (claude opus, fresh, automatic) · a Claim, not checked
+        on the agent's question at turn 4 (claude opus): shown to you · a Claim, not checked
 ```
+
+", automatic" marks a `feedback_budget` Consultation. An ask Consultation (`a`+Enter on the agent's question) whose advice landed was shown to you, never sent to the agent, so the compact Receipt lists it as shown. A Consultation asked after a delivery belongs to the next cut.
 
 Dismissed Consultations don't change the work, so they stay out of the compact Receipt; `/receipt` lists them.
 

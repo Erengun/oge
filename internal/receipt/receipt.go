@@ -61,6 +61,8 @@ type ChatCut struct {
 	Advice []AdviceSent `json:"advice,omitempty"`
 	// Dismissed are the ones asked in them that ended without it.
 	Dismissed []Dismissed `json:"dismissed_consultations,omitempty"`
+	// Shown are ask Consultations whose advice reached you, not the agent.
+	Shown []Shown `json:"shown_consultations,omitempty"`
 }
 
 // Receipt is the model every rendering reads. Its JSON form is schema 1.
@@ -505,7 +507,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			if d.Chat != "" {
 				r.Chat = &ChatCut{ID: clean(d.Chat), TaskTurns: len(d.TaskTurns), RefersToAgentText: d.RefersToAgentText,
 					HeldOutViewed: d.HeldOutViewed, VerifyCycles: d.Cycles.Verify, SendBackCycles: d.Cycles.SendBack}
-				r.Chat.Advice, r.Chat.Dismissed = cutAdvice(d.Advice)
+				r.Chat.Advice, r.Chat.Dismissed, r.Chat.Shown = cutAdvice(d.Advice)
 			}
 			if b, err := src.Blob(d.Task); err == nil {
 				r.Task = clean(task.Parse(string(b)).Title)

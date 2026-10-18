@@ -15,7 +15,8 @@ func TestReceiptDisclosesAdviceFromTheCut(t *testing.T) {
 	r := scenario(t, "chat-cut-advice").Receipt()
 	compact, full := r.Text(receipt.Paint{}), r.FullText(receipt.Paint{})
 	for _, want := range []string{
-		"2 consultations",
+		"3 consultations",
+		"on the agent's question at turn 4 (claude opus): shown to you · a Claim, not checked",
 		"sent at turn 3 (claude opus, fresh) · edited by you, sent as your turn",
 		"sent at turn 4 (claude opus, fresh, automatic) · a Claim, not checked",
 	} {
