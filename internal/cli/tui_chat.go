@@ -1145,6 +1145,16 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 			note = "\n" + h.ogeLine("✗ marking the delivery: "+clean(err.Error()))
 		}
 	}
+	// D10: the Snapshot is retaken on what was delivered. A repo that
+	// changed outside Öge is never merged in: one line says so.
+	if c != nil {
+		switch r, err := c.RefreshSnapshot(); {
+		case err != nil:
+			note += "\n" + h.ogeLine("✗ retaking the Snapshot: "+clean(err.Error()))
+		case r == run.RefreshOutside:
+			note += "\n" + h.ogeLine(h.st.dim(run.OutsideNote))
+		}
+	}
 	files := p.Paths()
 	what := "no files written"
 	if len(files) > 0 {

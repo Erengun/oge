@@ -160,6 +160,7 @@ func (c *Chat) prepare(m *oracle.Manifest, snap string) {
 // that one returns ErrSuperseded, with its Run's Result if it had one.
 // Turns are never held up by a cut: Send doesn't wait on it.
 func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
+	defer c.retryRefresh() // runs after cutMu is released: a deferred retake (D10)
 	if err := c.Err(); errors.Is(err, ErrChatClosed) {
 		return nil, err
 	}
@@ -330,10 +331,10 @@ func (c *Chat) toCut(lc *cutMark) (*cutEntry, error) {
 	// The Candidate is a turn commit, never the live Workspace: the
 	// Session may be writing to it.
 	c.scopeMu.Lock()
-	head, to := c.last, c.lastTurn
+	head, to, snap, info := c.last, c.lastTurn, c.Snapshot, c.info
 	c.scopeMu.Unlock()
-	e := &cutEntry{chat: c.ID, chatRepo: c.repo.Dir, dir: c.Dir, work: filepath.Join(c.work, cutsDir), snap: c.Snapshot, info: c.info,
-		candidate: head, base: c.Snapshot, from: 1, to: to}
+	e := &cutEntry{chat: c.ID, chatRepo: c.repo.Dir, dir: c.Dir, work: filepath.Join(c.work, cutsDir), snap: snap, info: info,
+		candidate: head, base: snap, from: 1, to: to}
 	if lc != nil {
 		e.base, e.from, e.follows = lc.commit, lc.turn+1, lc.run
 	}
@@ -365,11 +366,14 @@ func (c *Chat) sameOracle(f *pipeline.Frozen) (string, error) {
 	if !reflect.DeepEqual(f.Project, c.frozen.Project) || !reflect.DeepEqual(f.Setup, c.frozen.Setup) || !reflect.DeepEqual(f.Checks, c.frozen.Checks) {
 		return why, nil
 	}
-	_, blob, err := oracle.NewV0(c.repo, c.Snapshot, f, c.blobs)
+	c.scopeMu.Lock() // a retake swaps both together (chat_refresh.go)
+	snap, v0 := c.Snapshot, c.v0
+	c.scopeMu.Unlock()
+	_, blob, err := oracle.NewV0(c.repo, snap, f, c.blobs)
 	if err != nil {
 		return "", err
 	}
-	if blob != c.v0 {
+	if blob != v0 {
 		return why, nil
 	}
 	return "", nil
