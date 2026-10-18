@@ -107,6 +107,44 @@ func TestAskAdviceFailuresAndLateAdvice(t *testing.T) {
 	}
 }
 
+// A settled turn closes its asks, and a consult for one goes with it.
+func TestAskAdviceDroppedWhenTheTurnSettles(t *testing.T) {
+	var got []agent.Answer
+	h, a := askHome(&got)
+	cancelled := false
+	h.turn.askAdv = &askAdvice{ask: a, cancel: func() { cancelled = true }, running: true}
+	h.chatEvent(agent.Event{Kind: agent.TurnSettled})
+	if !cancelled || h.turn.askAdv != nil {
+		t.Errorf("the consult outlived its turn")
+	}
+}
+
+// /advise is refused while the ask's consult runs: one Consultation at a time.
+func TestAdviseRefusedDuringAskConsult(t *testing.T) {
+	var got []agent.Answer
+	h, a := askHome(&got)
+	h.chat = &homeChat{}
+	h.turn.askAdv = &askAdvice{ask: a, cancel: func() {}, running: true}
+	if _, msg := h.adviseCmd([]string{"how?"}); !strings.Contains(msg, "already advising") && !strings.Contains(msg, "no Chat") {
+		t.Errorf("msg %q", msg)
+	}
+}
+
+// "always" is text at a question; only "a" and enter is the advisor key.
+func TestAskAdviceKeyIsAEnter(t *testing.T) {
+	var got []agent.Answer
+	h, _ := askHome(&got)
+	h.chatKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if h.comp.text() != "a" || h.turn.askAdv != nil {
+		t.Errorf("typing a: box %q askAdv %v", h.comp.text(), h.turn.askAdv)
+	}
+	h.comp.set("always")
+	h.chatKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(got) != 1 || got[0].Answers[0] != "always" || h.turn.askAdv != nil {
+		t.Errorf("answer %+v", got)
+	}
+}
+
 // Esc cancels a running consult and not the ask; the next Esc is the ask's.
 func TestAskAdviceEscCancelsTheConsult(t *testing.T) {
 	var got []agent.Answer

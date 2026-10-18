@@ -34,6 +34,16 @@ type askAdvice struct {
 	suggest int         // the 1-based option it suggests, 0 for none
 }
 
+// askAdviceTickMsg redraws the elapsed seconds of the consult on q of ask.
+type askAdviceTickMsg struct {
+	ask *agent.Ask
+	q   int
+}
+
+func askAdviceTick(a *agent.Ask, q int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return askAdviceTickMsg{a, q} })
+}
+
 // askAdviceMsg is the end of the Consultation on question q of ask.
 type askAdviceMsg struct {
 	ask    *agent.Ask
@@ -78,12 +88,12 @@ func suggestedOption(text string, options []string) int {
 }
 
 // askAdviceKey is `a` on a question: ok is true when the key was its own.
-// It is the key only on an empty box with no Consultation of this
-// question yet, so what is typed is never taken.
+// It is "a" and enter (the caller checks the box), with no Consultation
+// of this question yet, so typing "always" is still an answer.
 func (h *home) askAdviceKey(a *agent.Ask) (cmd tea.Cmd, ok bool) {
 	t := h.turn
 	q := len(t.answers)
-	if a == nil || a.Questions == nil || q >= len(a.Questions) || !h.comp.empty() ||
+	if a == nil || a.Questions == nil || q >= len(a.Questions) ||
 		(t.askAdv != nil && t.askAdv.q == q) {
 		return nil, false
 	}
@@ -110,10 +120,11 @@ func (h *home) askAdviceKey(a *agent.Ask) (cmd tea.Cmd, ok bool) {
 	ctx, cancel := context.WithCancel(parent)
 	t.askAdv = &askAdvice{ask: a, q: q, cancel: cancel, started: h.clock(), running: true}
 	question := askAdviceQuestion(a.Questions[q])
-	return func() tea.Msg {
+	consult := func() tea.Msg {
 		adv, err := c.ConsultAsk(ctx, question)
 		return askAdviceMsg{ask: a, q: q, advice: adv, err: err}
-	}, true
+	}
+	return tea.Batch(consult, askAdviceTick(a, q)), true
 }
 
 // askAdviceLanded takes a Consultation's end. It is discarded when its ask

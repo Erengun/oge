@@ -442,6 +442,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		}
 	case agent.TurnSettled:
 		h.turn.asks = nil
+		h.dropAskAdvice() // a consult for an ask that is gone costs money for nothing
 		var tamper tea.Cmd
 		if sc := ev.Scope; sc != nil {
 			h.turn.changed = len(sc.Promoted) + len(sc.Ambiguous)
@@ -896,11 +897,6 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 	}
 	a := h.ask()
-	if k.String() == "a" {
-		if cmd, ok := h.askAdviceKey(a); ok {
-			return h, cmd
-		}
-	}
 	if a != nil && a.Questions == nil {
 		switch k.String() {
 		case "y":
@@ -917,6 +913,15 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		text := strings.TrimSpace(h.comp.text())
 		if text == "" {
 			return h, nil
+		}
+		if text == "a" {
+			// "a" and enter is the advisor key; typing "a" is still text.
+			if cmd, ok := h.askAdviceKey(a); ok {
+				if h.msg == nil {
+					h.comp = h.composer()
+				}
+				return h, cmd
+			}
 		}
 		full := strings.TrimSpace(h.comp.expanded()) // a paste, whole
 		h.comp = h.composer()
@@ -1027,8 +1032,8 @@ func (h *home) turnView() string {
 			lines = append(lines, row)
 		}
 		hint := "type an answer or an option's number · enter"
-		if t.askAdv == nil && h.comp.empty() && h.adv == nil {
-			hint += " · a ask the advisor"
+		if t.askAdv == nil && h.adv == nil {
+			hint += " · a↵ ask the advisor"
 		}
 		lines = append(lines, h.ogeLine(h.st.dim(hint)))
 		lines = append(lines, h.askAdviceLines(len(t.answers))...)
