@@ -474,6 +474,9 @@ type lastRun struct {
 	branch  func(name string) string                // "" is the default name
 	diff    func(emit func(string) tea.Cmd) tea.Cmd // printed, or paged with $PAGER
 	receipt func() string
+	// full is /receipt's: the Receipt with its dismissed Consultations. Nil
+	// means receipt.
+	full func() string
 	// patch is the Candidate's diff from the Snapshot, for the Chat's
 	// inline diff.
 	patch func() ([]byte, error)
@@ -495,6 +498,9 @@ func (l *lastRun) act(key, arg string, emit func(string) tea.Cmd) tea.Cmd {
 	case "d":
 		return l.diff(emit)
 	case "r":
+		if l.full != nil {
+			return out(l.full())
+		}
 		return out(l.receipt())
 	}
 	return nil
@@ -1728,10 +1734,10 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			if res.Dir == "" {
 				return line, nil
 			}
-			receiptText := func() string {
+			receiptText := func(full bool) string {
 				var b strings.Builder
 				p := *u.plain
-				p.w = &b
+				p.w, p.full = &b, full
 				p.endScreen(res)
 				return b.String()
 			}
@@ -1806,14 +1812,14 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 // human takes, what can take it comes too. code is the Run's exit code.
 func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold func(bool)) (string, *lastRun, int) {
 	var buf strings.Builder
-	receiptText := func() string {
+	receiptText := func(full bool) string {
 		var b strings.Builder
 		p := *u.plain
-		p.w = &b
+		p.w, p.full = &b, full
 		p.endScreen(res)
 		return b.String()
 	}
-	buf.WriteString(receiptText())
+	buf.WriteString(receiptText(false))
 	if res.Outcome == run.Replied {
 		return buf.String(), nil, ExitOK
 	}
@@ -1838,7 +1844,7 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 
 // takeRun is what can take the Run res from the home: /apply, /branch,
 // /diff and /receipt. receiptText is its Receipt as the home prints it.
-func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText func() string) (*lastRun, error) {
+func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText func(full bool) string) (*lastRun, error) {
 	r, err := delivery.Load(res.Dir)
 	if err != nil {
 		return nil, err
@@ -1864,7 +1870,8 @@ func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText
 		branch: func(name string) string {
 			return deliver("branch", func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })
 		},
-		receipt: receiptText,
+		receipt: func() string { return receiptText(false) },
+		full:    func() string { return receiptText(true) },
 		patch:   func() ([]byte, error) { return delivery.Diff(r) },
 	}
 	s.diff = func(emit func(string) tea.Cmd) tea.Cmd {

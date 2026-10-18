@@ -46,7 +46,11 @@ func (r *renderer) endScreen(res *run.Result) {
 // configuration warning, and that nothing was written yet.
 func (r *renderer) receipt(rc *receipt.Receipt, res *run.Result) {
 	r.p("")
-	fmt.Fprint(r.w, rc.Text(r.paint))
+	if r.full {
+		fmt.Fprint(r.w, rc.FullText(r.paint))
+	} else {
+		fmt.Fprint(r.w, rc.Text(r.paint))
+	}
 	if r.warn != "" {
 		r.p("! %s", r.warn)
 	}
@@ -129,7 +133,7 @@ func receiptCommand(env Env, args []string) int {
 		if tty == nil {
 			tty = env.Interactive
 		}
-		fmt.Fprint(env.Stdout, rc.Text(receipt.Colors(tty() && colorAllowed(env.Getenv))))
+		fmt.Fprint(env.Stdout, rc.FullText(receipt.Colors(tty() && colorAllowed(env.Getenv))))
 	}
 	return ExitOK
 }

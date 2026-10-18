@@ -103,6 +103,10 @@ func (r *Receipt) Lines() []Line {
 			add("", "held out viewed during the Task's turns ("+plural(c.HeldOutViewed, "time", "times")+")", Plain)
 		}
 		add("", plural(c.VerifyCycles, "verify cycle", "verify cycles")+" · "+plural(c.SendBackCycles, "send-back", "send-backs")+" in this chain", Plain)
+		ls = append(ls, c.adviceLines()...)
+		if r.full {
+			ls = append(ls, c.dismissedLines()...)
+		}
 	}
 	if r.Label != "" {
 		add("Label", val(r.Label)+" (yours; not Evidence)", Plain)
@@ -492,6 +496,11 @@ func (r *Receipt) Markdown() string {
 		fmt.Fprintf(&b, "- Files changed: %s\n", mdText(vals(c.Files, ", "), false))
 		for _, l := range c.agentConfig(r.Deliveries) {
 			fmt.Fprintf(&b, "- %s\n", mdText(l, false))
+		}
+	}
+	if r.Chat != nil {
+		for _, l := range r.Chat.dismissedLines() {
+			fmt.Fprintf(&b, "- Dismissed: %s\n", mdText(l.Text, false))
 		}
 	}
 	fmt.Fprintf(&b, "- Ledger head %s (identifies this Receipt; not tamper-proof)\n", code(r.LedgerHead, false))
