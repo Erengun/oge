@@ -498,6 +498,11 @@ func (r *Receipt) Markdown() string {
 			fmt.Fprintf(&b, "- %s\n", mdText(l, false))
 		}
 	}
+	if r.Chat != nil {
+		for _, l := range r.Chat.dismissedLines() {
+			fmt.Fprintf(&b, "- Dismissed: %s\n", mdText(l.Text, false))
+		}
+	}
 	fmt.Fprintf(&b, "- Ledger head %s (identifies this Receipt; not tamper-proof)\n", code(r.LedgerHead, false))
 	b.WriteString("\n</details>\n")
 	return b.String()

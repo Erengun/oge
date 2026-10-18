@@ -7,14 +7,16 @@ Run 20261005T090000-a1b2c3 · Fast mode
 | **Task** | ` fix Add ` |
 | **Chat** | Task from 1 turn |
 | | 0 verify cycles · 0 send-backs in this chain |
-| **Advice** | 1 consultation sent at turn 4 (` claude ` ` opus `, fresh) · a Claim, not checked |
+| **Advice** | 2 consultations |
+| | sent at turn 3 (` claude opus `, fresh) · edited by you, sent as your turn |
+| | sent at turn 4 (` claude opus `, fresh) · a Claim, not checked |
 | **Candidate** | 6d1231d · 1 file changed · Oracle v0 |
 | **Checks** | ` Check #1 ` passed · 1 of 1 Oracle tests attested passing |
 | **Protected** | no test changes kept |
 | **Scope** | no out-of-scope changes |
 | **Handled** | 18 operations approved automatically · 2 denied · Human interruptions: 0 |
 | **Time** | 7.3s · preflight 400ms · implement 5.6s · Check 1s · your attention 0s |
-| **Ledger** | head a4ee0cb04acf · identifies this Receipt; not tamper-proof |
+| **Ledger** | head 15acca89059c · identifies this Receipt; not tamper-proof |
 
 **Not covered**
 
@@ -26,6 +28,7 @@ Run 20261005T090000-a1b2c3 · Fast mode
 - ` Check #1 ` on ` 6d1231d ` · Oracle v0 · pass · cache ` seeded-clone `
   - command · ` go test -json ./... ` · pass · 1s
 - Files changed: ` add.go `
-- Ledger head ` a4ee0cb04acf4f5c886013215137611a8bbcca2598b5d520ce4a61f6182148d0 ` (identifies this Receipt; not tamper-proof)
+- Dismissed: consultation asked at turn 4 (` claude opus `): cancelled
+- Ledger head ` 15acca89059c4d574b5eabf9596bcd50cac975a7a500bc7d539e996407a106f2 ` (identifies this Receipt; not tamper-proof)
 
 </details>

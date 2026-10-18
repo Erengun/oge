@@ -13,20 +13,28 @@
     "advice": [
       {
         "consultation": "k-1",
+        "turn": 3,
+        "how": "edited",
+        "agent": "claude",
+        "model": "opus",
+        "advice": "sha256:aa"
+      },
+      {
+        "consultation": "k-2",
         "turn": 4,
         "how": "verbatim",
         "agent": "claude",
         "model": "opus",
-        "advice": "sha256:aa"
+        "advice": "sha256:bb"
       }
     ],
     "dismissed_consultations": [
       {
-        "consultation": "k-2",
+        "consultation": "k-3",
         "turn": 4,
         "agent": "claude",
         "model": "opus",
-        "outcome": "advised"
+        "outcome": "cancelled"
       }
     ]
   },
@@ -103,5 +111,5 @@
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "a4ee0cb04acf4f5c886013215137611a8bbcca2598b5d520ce4a61f6182148d0"
+  "ledger_head": "15acca89059c4d574b5eabf9596bcd50cac975a7a500bc7d539e996407a106f2"
 }

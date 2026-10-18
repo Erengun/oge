@@ -345,14 +345,6 @@ func Build(runDir string) (*Receipt, error) {
 	src := runSource{blobs: blobs, repo: &workspace.RunRepo{Dir: filepath.Join(runDir, "repo.git")}}
 	r := FromRecords(recs, head, src)
 	r.Label = clean(run.ReadLabel(runDir))
-	if rg, ok := chatRangeOf(recs); ok {
-		// The Chat's log holds its Consultations; a cut's Ledger doesn't.
-		sent, dismissed, err := readChatAdvice(rg)
-		if err != nil {
-			r.NotCovered = append(r.NotCovered, "the Chat's log is unreadable, so advice sent in this cut's turns isn't disclosed")
-		}
-		r.WithAdvice(sent, dismissed)
-	}
 	if torn != "" {
 		r.LedgerUnreadable = clean(torn)
 		r.NotCovered = append([]string{r.LedgerUnreadable}, r.NotCovered...)
@@ -499,6 +491,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				Run, Task, Frozen, Mode, Follows, Chat string
 				TaskTurns                              []json.RawMessage `json:"task_turns"`
 				RefersToAgentText                      bool              `json:"refers_to_agent_text"`
+				Advice                                 run.CutAdvice     `json:"advice"`
 				HeldOutViewed                          int               `json:"held_out_viewed"`
 				Cycles                                 struct {
 					Verify   int `json:"verify"`
@@ -512,6 +505,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 			if d.Chat != "" {
 				r.Chat = &ChatCut{ID: clean(d.Chat), TaskTurns: len(d.TaskTurns), RefersToAgentText: d.RefersToAgentText,
 					HeldOutViewed: d.HeldOutViewed, VerifyCycles: d.Cycles.Verify, SendBackCycles: d.Cycles.SendBack}
+				r.Chat.Advice, r.Chat.Dismissed = cutAdvice(d.Advice)
 			}
 			if b, err := src.Blob(d.Task); err == nil {
 				r.Task = clean(task.Parse(string(b)).Title)

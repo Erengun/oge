@@ -43,25 +43,6 @@ type Builder struct {
 	// ReusedFrom, when set, is the Run whose Check the next Check reuses
 	// (a Chat's cut of a tree already checked, #260).
 	ReusedFrom string
-	chat       *chatLog
-}
-
-// chatLog is a Chat log the Receipt reads Consultations from.
-type chatLog struct {
-	id       string
-	from, to int
-	recs     []ledger.Record
-}
-
-// ChatLog gives the Run a Chat log: the Chat's id, the cut's turns, and a
-// Consultation record per call to ChatAdd.
-func (b *Builder) ChatLog(chat string, from, to int) { b.chat = &chatLog{id: chat, from: from, to: to} }
-
-// ChatAdd appends a record to the Chat log.
-func (b *Builder) ChatAdd(typ string, data map[string]any) {
-	data["chat"] = b.chat.id
-	raw, _ := json.Marshal(data)
-	b.chat.recs = append(b.chat.recs, ledger.Record{Format: ledger.Format, Seq: len(b.chat.recs), Type: typ, Data: raw})
 }
 
 // New starts a Run in mode with the Task "fix Add" and Oracle v0 (the
@@ -153,11 +134,7 @@ func (b *Builder) Head() string             { return b.prev }
 
 // Receipt builds the Receipt of the Ledger so far.
 func (b *Builder) Receipt() *receipt.Receipt {
-	r := receipt.FromRecords(b.Records(), b.Head(), source{b})
-	if c := b.chat; c != nil {
-		r.WithAdvice(receipt.ChatAdvice(c.recs, c.id, c.from, c.to))
-	}
-	return r
+	return receipt.FromRecords(b.Records(), b.Head(), source{b})
 }
 
 // Source reads the Builder's blobs and changed files.
@@ -433,17 +410,18 @@ func Scenarios() []Scenario {
 		}},
 		{"chat-cut-advice", func() *Builder {
 			// A Chat's cut where a Consultation's advice reached the agent
-			// at turn 4, sent verbatim; a second was dismissed. The advice
-			// is a Claim: the Receipt says it was sent, not what it said.
-			b := NewCut(pipeline.Fast, map[string]any{"chat": "c-1", "chat_dir": "/chats/c-1", "turns": map[string]int{"from": 3, "to": 4},
-				"task_turns": []map[string]any{{"turn": 1, "sha256": "aa"}}})
-			b.ChatLog("c-1", 3, 4)
-			adv := map[string]string{"agent": "claude", "model": "opus"}
-			b.ChatAdd(run.RecConsultationStarted, map[string]any{"consultation": "k-1", "turn": 3, "advisor": adv})
-			b.ChatAdd(run.RecConsultationEnded, map[string]any{"consultation": "k-1", "outcome": "advised", "advice": "sha256:aa"})
-			b.ChatAdd(run.RecAdviceSent, map[string]any{"consultation": "k-1", "turn": 4, "how": "verbatim", "by": "oge"})
-			b.ChatAdd(run.RecConsultationStarted, map[string]any{"consultation": "k-2", "turn": 4, "advisor": adv})
-			b.ChatAdd(run.RecConsultationEnded, map[string]any{"consultation": "k-2", "outcome": "advised", "advice": "sha256:bb"})
+			// at turn 4, sent verbatim, and another was sent edited; a third
+			// was dismissed. The advice is a Claim: the Receipt says it was
+			// sent, not what it said. The cut's RunStarted holds all of it.
+			b := NewCut(pipeline.Fast, map[string]any{"chat": "c-1", "turns": map[string]int{"from": 3, "to": 4},
+				"task_turns": []map[string]any{{"turn": 1, "sha256": "aa"}},
+				"advice": run.CutAdvice{
+					Sent: []run.AdviceSent{
+						{Consultation: "k-1", Turn: 3, How: "edited", Agent: "claude", Model: "opus", Advice: "sha256:aa"},
+						{Consultation: "k-2", Turn: 4, How: "verbatim", Agent: "claude", Model: "opus", Advice: "sha256:bb"},
+					},
+					Dismissed: []run.Dismissed{{Consultation: "k-3", Turn: 4, Agent: "claude", Model: "opus", Outcome: "cancelled"}},
+				}})
 			b.Attempt(fastAttempt())
 			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)
 			b.End(7300*ms, run.Accepted, C1)
