@@ -137,6 +137,9 @@ func (h *home) adviceLanded(m adviceMsg) tea.Cmd {
 	case errors.Is(m.err, context.Canceled):
 		h.adv = nil
 		return nil
+	case errors.Is(m.err, run.ErrChainEnded):
+		h.adv = nil // the user has moved on: nothing to say
+		return nil
 	case m.err != nil && a.auto:
 		// A cut that fails stops the chain as it did before: nothing sent.
 		h.adv = nil
@@ -176,6 +179,13 @@ func (h *home) autoConsult() (tea.Cmd, bool) {
 	if c == nil || h.adv != nil || c.AdvisorAuto() == pipeline.AdvisorAutoOff {
 		return nil, false
 	}
+	if h.turn != nil && len(h.turn.queued) > 0 {
+		return nil, false // the user's next turn supersedes it: a new chain
+	}
+	chain, used := c.AutoState()
+	if used {
+		return nil, false // the chain's one is spent: the user's call
+	}
 	agentName, model, err := c.Advisor()
 	if err != nil {
 		return nil, false
@@ -190,7 +200,7 @@ func (h *home) autoConsult() (tea.Cmd, bool) {
 	h.adv = &adviseState{chat: c, seq: seq, cancel: cancel, started: h.clock(), running: true, auto: true,
 		mode: c.AdvisorAuto(), agent: strings.TrimSpace(agentName + " " + model)}
 	consult := func() tea.Msg {
-		a, err := c.ConsultAuto(ctx)
+		a, err := c.ConsultAuto(ctx, chain)
 		return adviceMsg{seq: seq, advice: a, err: err}
 	}
 	return tea.Batch(consult, adviceTick(seq)), true
@@ -276,7 +286,10 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 		h.msg = problem
 		return nil
 	}
-	h.comp = h.composer()
+	if !auto {
+		// An automatic send keeps what the user is typing meanwhile.
+		h.comp = h.composer()
+	}
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
 	ctx := h.ctx

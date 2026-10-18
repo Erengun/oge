@@ -447,3 +447,43 @@ func TestHomeChatAutoConsultEmptyStopsTheChain(t *testing.T) {
 		t.Errorf("AdviceSent %v", got)
 	}
 }
+
+// What the user types while the advisor works survives the auto-send.
+func TestHomeChatAutoConsultKeepsTheDraft(t *testing.T) {
+	t.Parallel()
+	s, f := startAdvisedSession(t, autoScenario(), "sleep 2\n"+adviceScript)
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("still failing after 3 tries; asking the advisor")
+	s.type_("mydraftxyz")
+	s.expect("Öge → agent: An advisor suggests (a second opinion, not checked): ")
+	s.expect("  took the advice")
+	s.composerAfter("  took the advice")
+	if !strings.Contains(vtScreen(s.out.String()), "mydraftxyz") {
+		t.Errorf("the draft was wiped by the auto-send:\n%s", vtScreen(s.out.String()))
+	}
+	s.type_("\x15") // clear the box, so quitting is Ctrl+C alone
+	s.quitChat(f)
+}
+
+// When the cut after the advice fails too, the chain's one Consultation is
+// spent: it stops with a plain "your call", never asking a second time.
+func TestHomeChatAutoConsultSpentSaysYourCall(t *testing.T) {
+	t.Parallel()
+	sc := autoScenario()
+	sc.Turns[len(sc.Turns)-1] = multiturn.Turn{Reply: "took the advice", Writes: []multiturn.File{addGo("a - b - 9")}}
+	s, f := startAdvisedSession(t, sc, adviceScript)
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("  took the advice")
+	s.expectAfter("  took the advice", "still failing after 3 tries; your call")
+	s.composerAfter("still failing after 3 tries; your call")
+	out := s.out.String()
+	if n := strings.Count(out, "asking the advisor"); n != 1 {
+		t.Errorf("asked the advisor %d times, want 1", n)
+	}
+	if strings.Contains(out, "still failing · your call") || strings.Contains(out, "automatic consultation is used") {
+		t.Errorf("the spent chain printed the failed-consultation line:\n%s", out)
+	}
+	s.quitChat(f)
+}

@@ -134,6 +134,18 @@ var ErrAutoConsulted = errors.New("the chain's automatic consultation is used")
 // AutoCap is the automatic Consultations a chain may have.
 const AutoCap = 1
 
+// TriggerFeedbackBudget is the Consultation trigger of a spent feedback
+// budget, the automatic one.
+const TriggerFeedbackBudget = "feedback_budget"
+
+// AutoState is the chain now and whether its automatic Consultation is
+// used, read together so a caller can pass the chain to ConsultAuto.
+func (c *Chat) AutoState() (chain int, used bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.chain, c.autos >= AutoCap
+}
+
 // AdvisorAuto is [advisor] auto: "on" (the default, D-A3) sends the advice
 // when the feedback budget is spent, "ask" shows it first, "off" never
 // consults on its own.
@@ -147,22 +159,27 @@ func (c *Chat) AdvisorAuto() string {
 
 // ConsultAuto is the Consultation Öge asks for when a chain's feedback
 // budget is spent (D-A3, D-A5a), once per chain: a second call before the
-// user's next turn returns ErrAutoConsulted. A failed or cancelled one
+// user's next turn returns ErrAutoConsulted, and a call with a chain the
+// user's turn has since ended returns ErrChainEnded, starting nothing. A failed or cancelled one
 // still uses the chain's cap. Its advice is a Claim like any other: the
 // caller sends it with SendAutoAdvice (or shows it first, with auto =
 // "ask"), and a cancelled, failed or empty Consultation returns an error,
 // never advice.
-func (c *Chat) ConsultAuto(ctx context.Context) (*Advice, error) {
+func (c *Chat) ConsultAuto(ctx context.Context, chain int) (*Advice, error) {
 	c.mu.Lock()
-	if c.autoUsed {
+	switch {
+	case c.chain != chain:
+		c.mu.Unlock()
+		return nil, ErrChainEnded
+	case c.autos >= AutoCap:
 		c.mu.Unlock()
 		return nil, ErrAutoConsulted
 	}
-	c.autoUsed = true
-	chain, tries := c.chain, c.feedbacks
+	c.autos++
+	used, tries := c.autos, c.feedbacks
 	c.mu.Unlock()
 	q := fmt.Sprintf("The Check still fails after %d feedback turns. What is the root cause, and what should the implementer change?", tries)
-	a, err := c.consult(ctx, q, consultTrigger{trigger: "feedback_budget", by: "oge", chain: chain, auto: true})
+	a, err := c.consult(ctx, q, consultTrigger{trigger: TriggerFeedbackBudget, by: "oge", chain: chain, auto: true, used: used})
 	if a != nil {
 		a.Chain = chain
 	}
@@ -174,6 +191,7 @@ type consultTrigger struct {
 	trigger, by string
 	chain       int
 	auto        bool // the chain's automatic one: the cap is recorded
+	used        int  // automatic Consultations this chain, this one included
 }
 
 func (c *Chat) consult(ctx context.Context, question string, tr consultTrigger) (*Advice, error) {
@@ -252,7 +270,7 @@ func (c *Chat) consult(ctx context.Context, question string, tr consultTrigger) 
 		"advisor": launchProfile(st), "permissions": "launch_profile", "read_only": readOnly}
 	if tr.auto {
 		// The per-chain cap, as used by this one (D-A3).
-		startedRec["auto_cap"], startedRec["auto_used"], startedRec["chain"] = AutoCap, 1, tr.chain
+		startedRec["auto_cap"], startedRec["auto_used"], startedRec["chain"] = AutoCap, tr.used, tr.chain
 	}
 	if err := c.log(RecConsultationStarted, startedRec); err != nil {
 		return nil, err

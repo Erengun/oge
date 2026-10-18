@@ -315,11 +315,12 @@ func TestConsultAutoOncePerChain(t *testing.T) {
 		t.Fatalf("budget not spent: %v", err)
 	}
 	withAdvisor(c, advisorScript(t, "echo 'Inject a Clock.'\n"))
-	adv, err := c.ConsultAuto(t.Context())
+	chain, _ := c.AutoState()
+	adv, err := c.ConsultAuto(t.Context(), chain)
 	if err != nil || !strings.Contains(adv.Text, "Inject a Clock") {
 		t.Fatalf("ConsultAuto: %v %+v", err, adv)
 	}
-	if _, err := c.ConsultAuto(t.Context()); !errors.Is(err, ErrAutoConsulted) {
+	if _, err := c.ConsultAuto(t.Context(), chain); !errors.Is(err, ErrAutoConsulted) {
 		t.Errorf("a second automatic Consultation in the chain: %v", err)
 	}
 	started := recordsOf(t, c, RecConsultationStarted)
@@ -347,7 +348,19 @@ func TestConsultAutoOncePerChain(t *testing.T) {
 	if _, err := c.SendAutoAdvice(t.Context(), adv); !errors.Is(err, ErrChainEnded) {
 		t.Errorf("stale automatic advice: %v", err)
 	}
-	if _, err := c.ConsultAuto(t.Context()); err != nil {
+	// An auto-consult asked for the old chain is refused, and starts nothing.
+	before := len(recordsOf(t, c, RecConsultationStarted))
+	if _, err := c.ConsultAuto(t.Context(), chain); !errors.Is(err, ErrChainEnded) {
+		t.Errorf("a stale chain's Consultation: %v", err)
+	}
+	if n := len(recordsOf(t, c, RecConsultationStarted)); n != before {
+		t.Errorf("a stale chain recorded a ConsultationStarted")
+	}
+	chain, used := c.AutoState()
+	if used {
+		t.Error("the new chain's cap is already used")
+	}
+	if _, err := c.ConsultAuto(t.Context(), chain); err != nil {
 		t.Errorf("the new chain's automatic Consultation: %v", err)
 	}
 }
@@ -357,14 +370,15 @@ func TestConsultAutoOncePerChain(t *testing.T) {
 func TestConsultAutoEmptyAndCancelled(t *testing.T) {
 	c := openChat(t, multiturn.Scenario{}, 0)
 	withAdvisor(c, advisorScript(t, "true\n"))
-	if a, err := c.ConsultAuto(t.Context()); err == nil || a != nil {
+	chain, _ := c.AutoState()
+	if a, err := c.ConsultAuto(t.Context(), chain); err == nil || a != nil {
 		t.Fatalf("empty advice: %v %v", a, err)
 	}
 	ended := recordsOf(t, c, RecConsultationEnded)
 	if len(ended) != 1 || ended[0]["outcome"] != ConsultFailed {
 		t.Errorf("ConsultationEnded %v", ended)
 	}
-	if _, err := c.ConsultAuto(t.Context()); !errors.Is(err, ErrAutoConsulted) {
+	if _, err := c.ConsultAuto(t.Context(), chain); !errors.Is(err, ErrAutoConsulted) {
 		t.Errorf("a failed one left the cap free: %v", err)
 	}
 	if got := recordsOf(t, c, RecAdviceSent); len(got) != 0 {
@@ -373,9 +387,10 @@ func TestConsultAutoEmptyAndCancelled(t *testing.T) {
 
 	c = openChat(t, multiturn.Scenario{}, 0)
 	withAdvisor(c, advisorScript(t, "sleep 30\n"))
+	chain, _ = c.AutoState()
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
-	if a, err := c.ConsultAuto(ctx); err == nil || a != nil {
+	if a, err := c.ConsultAuto(ctx, chain); err == nil || a != nil {
 		t.Fatalf("cancelled: %v %v", a, err)
 	}
 }

@@ -179,8 +179,8 @@ type Chat struct {
 	// chain counts the user's turns, so an advice that lands after one is
 	// known stale; autoUsed is the chain's one automatic Consultation
 	// (D-A3): both reset by the user's turn, as feedbacks does.
-	chain    int
-	autoUsed bool
+	chain int
+	autos int // automatic Consultations this chain
 	// verdictCuts are the last turns of the cuts that reached a Verdict,
 	// for the Receipt's cycle count (D6).
 	verdictCuts []int
@@ -537,7 +537,7 @@ func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice st
 	case kind == turnUser:
 		c.feedbacks = 0 // the user's own turn starts a chain
 		c.chain++
-		c.autoUsed = false
+		c.autos = 0
 	case kind == turnFeedback && c.feedbacks >= FeedbackBudget:
 		c.mu.Unlock()
 		return nil, ErrFeedbackBudget
