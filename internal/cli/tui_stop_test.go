@@ -77,7 +77,7 @@ func TestBareOgeShowsAnInfrastructureStop(t *testing.T) {
 	// final frame once the Run has returned.
 	s.expect("ÖGE RECEIPT")
 	s.composer()
-	got := homeNorm.ReplaceAllString(s.settledScreen(), "X")
+	got := normHome(s.settledScreen())
 	s.type_("\x03")
 	s.wait()
 	for _, bad := range []string{"reviewing", "Nothing needs you"} {
