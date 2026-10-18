@@ -103,6 +103,10 @@ func (r *Receipt) Lines() []Line {
 			add("", "held out viewed during the Task's turns ("+plural(c.HeldOutViewed, "time", "times")+")", Plain)
 		}
 		add("", plural(c.VerifyCycles, "verify cycle", "verify cycles")+" · "+plural(c.SendBackCycles, "send-back", "send-backs")+" in this chain", Plain)
+		ls = append(ls, c.adviceLines()...)
+		if r.full {
+			ls = append(ls, c.dismissedLines()...)
+		}
 	}
 	if r.Label != "" {
 		add("Label", val(r.Label)+" (yours; not Evidence)", Plain)

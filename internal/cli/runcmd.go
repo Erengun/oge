@@ -365,6 +365,9 @@ type renderer struct {
 	// applying: --apply is about to take an Accepted Candidate into the
 	// working tree, so the end screen doesn't say nothing was written.
 	applying bool
+	// full prints the Receipt with the lines only the full one has (its
+	// dismissed Consultations): /receipt and oge receipt, not the end screen.
+	full bool
 	// paint colours the Receipt: only the live view sets it.
 	paint receipt.Paint
 }

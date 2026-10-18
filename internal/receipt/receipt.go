@@ -56,6 +56,11 @@ type ChatCut struct {
 	HeldOutViewed     int    `json:"held_out_viewed"`
 	VerifyCycles      int    `json:"verify_cycles"`
 	SendBackCycles    int    `json:"send_back_cycles"`
+	// Advice is the Consultations whose advice reached the agent in this
+	// cut's turns: a Claim, never Evidence (docs/ux/advisor.md).
+	Advice []AdviceSent `json:"advice,omitempty"`
+	// Dismissed are the ones asked in them that ended without it.
+	Dismissed []Dismissed `json:"dismissed_consultations,omitempty"`
 }
 
 // Receipt is the model every rendering reads. Its JSON form is schema 1.
@@ -87,6 +92,8 @@ type Receipt struct {
 	// LedgerUnreadable says where the Ledger stopped being readable, when a
 	// torn last line cut it short; the Receipt is of the records before.
 	LedgerUnreadable string `json:"ledger_unreadable,omitempty"`
+	// full adds the lines only the full Receipt shows (FullText).
+	full bool
 	// WaitingAt is the Gate a parked Run waits at.
 	WaitingAt string     `json:"waiting_at,omitempty"`
 	Candidate *Candidate `json:"candidate,omitempty"`
@@ -338,6 +345,14 @@ func Build(runDir string) (*Receipt, error) {
 	src := runSource{blobs: blobs, repo: &workspace.RunRepo{Dir: filepath.Join(runDir, "repo.git")}}
 	r := FromRecords(recs, head, src)
 	r.Label = clean(run.ReadLabel(runDir))
+	if rg, ok := chatRangeOf(recs); ok {
+		// The Chat's log holds its Consultations; a cut's Ledger doesn't.
+		sent, dismissed, err := readChatAdvice(rg)
+		if err != nil {
+			r.NotCovered = append(r.NotCovered, "the Chat's log is unreadable, so advice sent in this cut's turns isn't disclosed")
+		}
+		r.WithAdvice(sent, dismissed)
+	}
 	if torn != "" {
 		r.LedgerUnreadable = clean(torn)
 		r.NotCovered = append([]string{r.LedgerUnreadable}, r.NotCovered...)
