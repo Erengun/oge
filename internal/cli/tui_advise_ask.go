@@ -27,6 +27,7 @@ import (
 type askAdvice struct {
 	ask     *agent.Ask
 	q       int // the question's index within the ask
+	seq     int // the consult its tick chain belongs to
 	cancel  context.CancelFunc
 	started time.Time
 	running bool
@@ -35,13 +36,16 @@ type askAdvice struct {
 }
 
 // askAdviceTickMsg redraws the elapsed seconds of the consult on q of ask.
+// seq numbers the consult, so a tick of an earlier one (Esc, then the key
+// again on the same question) does not start a second chain.
 type askAdviceTickMsg struct {
 	ask *agent.Ask
 	q   int
+	seq int
 }
 
-func askAdviceTick(a *agent.Ask, q int) tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return askAdviceTickMsg{a, q} })
+func askAdviceTick(a *agent.Ask, q, seq int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return askAdviceTickMsg{a, q, seq} })
 }
 
 // askAdviceMsg is the end of the Consultation on question q of ask.
@@ -118,13 +122,15 @@ func (h *home) askAdviceKey(a *agent.Ask) (cmd tea.Cmd, ok bool) {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	t.askAdv = &askAdvice{ask: a, q: q, cancel: cancel, started: h.clock(), running: true}
+	h.advSeq++
+	seq := h.advSeq
+	t.askAdv = &askAdvice{ask: a, q: q, seq: seq, cancel: cancel, started: h.clock(), running: true}
 	question := askAdviceQuestion(a.Questions[q])
 	consult := func() tea.Msg {
 		adv, err := c.ConsultAsk(ctx, question)
 		return askAdviceMsg{ask: a, q: q, advice: adv, err: err}
 	}
-	return tea.Batch(consult, askAdviceTick(a, q)), true
+	return tea.Batch(consult, askAdviceTick(a, q, seq)), true
 }
 
 // askAdviceLanded takes a Consultation's end. It is discarded when its ask

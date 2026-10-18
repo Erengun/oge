@@ -251,7 +251,7 @@ A feature of an agent session (such as in-band approvals or non-terminal interru
 _Avoid_: Feature flag, agent version (as a proxy)
 
 **Host request**:
-A request from an agent that needs an answer from outside the agent, such as a permission to act or a question to the user, with a typed set of allowed responses; answered by the user or, later, a decider. Every answer records who gave it; an answer may also record `advised_by`, the Consultation whose advice the human saw. The advice never replaces who answered.
+A request from an agent that needs an answer from outside the agent, such as a permission to act or a question to the user, with a typed set of allowed responses; answered by the user or, later, a decider. Every answer records who gave it; an answer may also record `AdvisedBy`, the Consultation whose advice the human saw. The advice never replaces who answered.
 _Avoid_: Permission prompt (too narrow), approval (when a question is meant)
 
 **Supervision**:

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
@@ -191,7 +192,7 @@ func TestRefreshSkipsWithUndeliveredTurns(t *testing.T) {
 	for _, deferred := range []bool{false, true} {
 		c := openCut(t, "",
 			multiturn.Turn{Reply: "sub", Writes: []multiturn.File{{Path: "add.go", Content: refreshSub}, {Path: "sub_test.go", Content: refreshTest}}},
-			multiturn.Turn{Reply: "rewrote", Writes: []multiturn.File{{Path: "sub_test.go", Content: refreshTest + "\n// rewritten\n"}}},
+			multiturn.Turn{Reply: "rewrote", Writes: []multiturn.File{{Path: "sub_test.go", Content: strings.Replace(refreshTest, "!= 2", "!= 3", 1)}}},
 			multiturn.Turn{Reply: "mul", Writes: []multiturn.File{{Path: "mul.go", Content: refreshMul}}})
 		old := c.Snapshot
 		drain(t, send(t, c, "add Sub"), nil)
