@@ -53,7 +53,18 @@ type AdvisorConfig struct {
 	Agent  string `toml:"agent,omitempty"`
 	Model  string `toml:"model,omitempty"`
 	Effort string `toml:"effort,omitempty"`
+	// Auto is what happens when a chain's feedback budget is spent (D-A3):
+	// "on" consults and sends the advice, "ask" shows it first, "off" never
+	// consults. Empty is "on".
+	Auto string `toml:"auto,omitempty"`
 }
+
+// [advisor] auto values.
+const (
+	AdvisorAutoOn  = "on"
+	AdvisorAutoAsk = "ask"
+	AdvisorAutoOff = "off"
+)
 
 // DefaultAdvisorEffort is the Advisor's effort when none is configured.
 const DefaultAdvisorEffort = "high"
@@ -195,6 +206,9 @@ func (c *UserConfig) validate() []Problem {
 		}
 		if a.Effort != "" && !oneOf(a.Effort, KnownEfforts...) {
 			add("advisor.effort", "must be one of "+strings.Join(KnownEfforts, ", "))
+		}
+		if a.Auto != "" && !oneOf(a.Auto, AdvisorAutoOn, AdvisorAutoAsk, AdvisorAutoOff) {
+			add("advisor.auto", "must be one of on, ask, off")
 		}
 		for field, v := range map[string]string{"agent": a.Agent, "model": a.Model} {
 			if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {

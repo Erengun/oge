@@ -53,7 +53,11 @@ func (c *ChatCut) adviceLines() []Line {
 		return " · a Claim, not checked"
 	}
 	one := func(a AdviceSent) string {
-		return fmt.Sprintf("sent at turn %d (%s, fresh)%s", a.Turn, advisorName(a.Agent, a.Model), tail(a))
+		fresh := "fresh"
+		if a.Trigger == run.TriggerFeedbackBudget {
+			fresh += ", automatic"
+		}
+		return fmt.Sprintf("sent at turn %d (%s, %s)%s", a.Turn, advisorName(a.Agent, a.Model), fresh, tail(a))
 	}
 	if len(c.Advice) == 1 {
 		return []Line{{"Advice", "1 consultation " + one(c.Advice[0]), Plain}}
@@ -78,7 +82,11 @@ func (c *ChatCut) dismissedLines() []Line {
 		if out == "" {
 			out = val(d.Outcome)
 		}
-		ls = append(ls, Line{label, fmt.Sprintf("consultation asked at turn %d (%s): %s", d.Turn, advisorName(d.Agent, d.Model), out), Plain})
+		who := advisorName(d.Agent, d.Model)
+		if d.Trigger == run.TriggerFeedbackBudget {
+			who += ", automatic"
+		}
+		ls = append(ls, Line{label, fmt.Sprintf("consultation asked at turn %d (%s): %s", d.Turn, who, out), Plain})
 	}
 	return ls
 }

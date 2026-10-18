@@ -275,7 +275,7 @@ A Role kind with no Stage that gives advice when consulted; the advice is always
 _Avoid_: Consultant, expert, oracle
 
 **Consultation**:
-One request for an Advisor's advice, made by pipeline policy, the user or an agent, with or without a pending Host request. It is recorded in the Chat log. There are three triggers: the user asks, the feedback budget is spent, or the agent asks the human a question. It cannot create Evidence, choose an accepting edge or resolve a Gate.
+One request for an Advisor's advice, made by pipeline policy, the user or an agent, with or without a pending Host request. It is recorded in the Chat log. There are three triggers: the user asks, the feedback budget is spent, or the agent asks the human a question. The automatic one runs at most once per chain, and the Chat log records that cap (`[advisor] auto` = on, ask or off). It cannot create Evidence, choose an accepting edge or resolve a Gate.
 _Avoid_: Advisor request, second opinion
 
 **Advice turn**:

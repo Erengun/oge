@@ -234,14 +234,15 @@ func TestHomeChatFeedbackTurn(t *testing.T) {
 	s.quitChat(f)
 }
 
-// The chain gets 3 feedback turns; a 4th failing cut is the human's call.
+// The chain gets 3 feedback turns; a 4th failing cut is the human's call
+// (with [advisor] auto = "off": otherwise Öge consults once, D-A3).
 func TestHomeChatFeedbackBudget(t *testing.T) {
 	t.Parallel()
 	var turns []multiturn.Turn
 	for i := range 4 {
 		turns = append(turns, multiturn.Turn{Reply: fmt.Sprintf("try %d", i), Writes: []multiturn.File{addGo(fmt.Sprintf("a - b - %d", i))}})
 	}
-	s, f := startChatSession(t, multiturn.Scenario{Turns: turns}, nil)
+	s, f := startChatSession(t, multiturn.Scenario{Turns: turns}, func(f *runFixture) { advisorAuto(t, f, "off") })
 	s.composer()
 	s.type_("change Add\r")
 	for i := 1; i <= 3; i++ {
@@ -253,6 +254,9 @@ func TestHomeChatFeedbackBudget(t *testing.T) {
 		t.Errorf("%d feedback lines, want 3: a spent budget sends none", n)
 	}
 	s.quitChat(f)
+	if got := chatRecords(t, f, run.RecConsultationStarted); len(got) != 0 {
+		t.Errorf("auto = off consulted: %v", got)
+	}
 }
 
 // A feedback turn waits for the user's turn in flight, and goes after it

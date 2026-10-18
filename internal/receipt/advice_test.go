@@ -17,7 +17,7 @@ func TestReceiptDisclosesAdviceFromTheCut(t *testing.T) {
 	for _, want := range []string{
 		"2 consultations",
 		"sent at turn 3 (claude opus, fresh) · edited by you, sent as your turn",
-		"sent at turn 4 (claude opus, fresh) · a Claim, not checked",
+		"sent at turn 4 (claude opus, fresh, automatic) · a Claim, not checked",
 	} {
 		if !strings.Contains(compact, want) {
 			t.Errorf("the compact Receipt lacks %q:\n%s", want, compact)
