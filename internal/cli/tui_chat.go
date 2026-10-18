@@ -1148,7 +1148,10 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 	// D10: the Snapshot is retaken on what was delivered. A repo that
 	// changed outside Öge is never merged in: one line says so.
 	if c != nil {
-		if r, err := c.RefreshSnapshot(); err == nil && r == run.RefreshOutside {
+		switch r, err := c.RefreshSnapshot(); {
+		case err != nil:
+			note += "\n" + h.ogeLine("✗ retaking the Snapshot: "+clean(err.Error()))
+		case r == run.RefreshOutside:
 			note += "\n" + h.ogeLine(h.st.dim(run.OutsideNote))
 		}
 	}

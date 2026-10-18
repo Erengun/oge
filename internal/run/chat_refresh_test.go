@@ -183,3 +183,37 @@ func TestRefreshLeavesTheChainAlone(t *testing.T) {
 		t.Errorf("feedbacks %d autos %d chain %d, want 2 1 %d", c.feedbacks, c.autos, c.chain, chain)
 	}
 }
+
+// An undelivered turn after the applied cut leaves the Workspace unlike
+// the delivered tree: no retake, or its edit to a file the new base
+// protects would read as Tamper on the next turn.
+func TestRefreshSkipsWithUndeliveredTurns(t *testing.T) {
+	for _, deferred := range []bool{false, true} {
+		c := openCut(t, "",
+			multiturn.Turn{Reply: "sub", Writes: []multiturn.File{{Path: "add.go", Content: refreshSub}, {Path: "sub_test.go", Content: refreshTest}}},
+			multiturn.Turn{Reply: "rewrote", Writes: []multiturn.File{{Path: "sub_test.go", Content: refreshTest + "\n// rewritten\n"}}},
+			multiturn.Turn{Reply: "mul", Writes: []multiturn.File{{Path: "mul.go", Content: refreshMul}}})
+		old := c.Snapshot
+		drain(t, send(t, c, "add Sub"), nil)
+		first := cut(t, c)
+		drain(t, send(t, c, "touch the test"), nil)
+		applyTo(t, c, first, map[string]string{"add.go": refreshSub, "sub_test.go": refreshTest})
+		if deferred {
+			c.cutMu.Lock() // a cut is in flight at /apply
+			if got, _ := c.RefreshSnapshot(); got != RefreshDeferred {
+				t.Fatalf("got %v, want deferred", got)
+			}
+			c.cutMu.Unlock()
+			cut(t, c) // settles; the retry must not retake either
+		} else if got, err := c.RefreshSnapshot(); err != nil || got != RefreshNone {
+			t.Fatalf("refresh with an undelivered turn: %v %v, want none", got, err)
+		}
+		if c.snapshot() != old || len(refreshed(t, c)) != 0 {
+			t.Errorf("deferred=%v: the base moved with an undelivered turn", deferred)
+		}
+		drain(t, send(t, c, "now Mul"), nil)
+		if tam := runRecords(t, c.Dir, RecTamperEvent); len(tam) != 0 {
+			t.Errorf("deferred=%v: TamperEvents %v after a skipped retake", deferred, tam)
+		}
+	}
+}

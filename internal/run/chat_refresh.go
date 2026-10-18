@@ -58,7 +58,7 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 		return RefreshNone, nil
 	}
 	if why, err := workspace.Preflight(c.source); err != nil || len(why) > 0 {
-		return RefreshOutside, nil // a repo Öge wouldn't snapshot isn't one it delivered
+		return RefreshNone, nil // a repo Öge can't snapshot now: keep the base, say nothing
 	}
 	scratch := filepath.Join(c.work, "retake")
 	defer oracle.RemoveAll(scratch)
@@ -105,6 +105,25 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	if err != nil {
 		return RefreshNone, err
 	}
+	// The Preflight swap and the checks below are one step: no turn
+	// commits, and Close can't start, between them.
+	c.prepMu.Lock()
+	defer c.prepMu.Unlock()
+	if c.prepClosed {
+		return RefreshNone, ErrChatClosed
+	}
+	c.scopeMu.Lock()
+	defer c.scopeMu.Unlock()
+	// The Workspace must be what was delivered too: a turn after the cut,
+	// or a hold-back, leaves it different, and edits to a file the new
+	// base protects would read as Tamper. The next apply evens it out.
+	lastTree, err := c.repo.TreeOf(c.last)
+	if err != nil {
+		return RefreshNone, err
+	}
+	if lastTree != want {
+		return RefreshNone, nil
+	}
 	// Written ahead: the record says what the new base is before it is.
 	if err := c.log(RecSnapshotRefreshed, map[string]any{"commit": commit, "prev": cur, "applied": rev, "run": filepath.Base(runDir),
 		"head": info.Head, "branch": info.Branch, "modified": info.Modified, "untracked": info.Untracked,
@@ -114,21 +133,12 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	if err := c.repo.SetRef(workspace.SnapshotRef, commit); err != nil {
 		return RefreshNone, err
 	}
-	// The old Preflight is for the old base: stop it, then start the new
-	// one. Closing the Chat meanwhile leaves it stopped.
-	c.prepMu.Lock()
-	defer c.prepMu.Unlock()
-	if c.prepClosed {
-		return RefreshNone, ErrChatClosed
-	}
 	c.cancelPrep()
 	<-c.prepared
 	c.prep.control.Stop()
 	c.prep.seed.Close()
 	c.prep, c.refused = chatPrep{}, nil
-	c.scopeMu.Lock()
 	c.Snapshot, c.info, c.v0, c.protected = commit, info, mBlob, implementerScope(m, c.frozen)
-	c.scopeMu.Unlock()
 	c.prepare(m, commit)
 	return RefreshDone, nil
 }

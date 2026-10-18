@@ -749,6 +749,17 @@ func TestHomeChatApplyNotesAnOutsideChange(t *testing.T) {
 	if out := s.out.String(); strings.Contains(out, "changed outside") {
 		t.Errorf("a clean apply noted an outside change:\n%s", out)
 	}
+	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
+	recs, _ := ledger.Replay(logs[0])
+	refreshed := 0
+	for _, r := range recs {
+		if r.Type == run.RecSnapshotRefreshed {
+			refreshed++
+		}
+	}
+	if refreshed != 1 {
+		t.Errorf("%d SnapshotRefreshed records after a clean apply, want 1", refreshed)
+	}
 	writeFile(t, filepath.Join(f.repo, "mine.txt"), []byte("mine\n"))
 	s.type_("again\r")
 	s.expect("oge › ✓ Accepted")
