@@ -121,7 +121,11 @@ type chatTurn struct {
 	events  <-chan agent.Event
 	asks    []*agent.Ask // the prompts waiting, one shown at a time
 	answers []string     // the shown question ask's answers so far
-	changed int          // Promoted and Ambiguous paths the turn changed
+	// askAdv is the advisor key's Consultation on the question shown, and
+	// advisedBy the id of the advice that landed for this ask.
+	askAdv    *askAdvice
+	advisedBy string
+	changed   int // Promoted and Ambiguous paths the turn changed
 	// stopped: Esc or Ctrl+C interrupted the turn; a second Ctrl+C then
 	// quits.
 	stopped bool
@@ -377,6 +381,8 @@ func (h *home) askFits(a *agent.Ask) bool {
 // answer.
 func (h *home) showAsk() {
 	h.turn.answers = nil
+	h.dropAskAdvice()
+	h.turn.advisedBy = ""
 	if a := h.ask(); a != nil && a.Questions != nil {
 		if text := strings.TrimSpace(h.comp.expanded()); text != "" {
 			h.enqueue(text)
@@ -436,6 +442,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		}
 	case agent.TurnSettled:
 		h.turn.asks = nil
+		h.dropAskAdvice() // a consult for an ask that is gone costs money for nothing
 		var tamper tea.Cmd
 		if sc := ev.Scope; sc != nil {
 			h.turn.changed = len(sc.Promoted) + len(sc.Ambiguous)
@@ -883,6 +890,9 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.stop()
 		return h, nil
 	case "esc":
+		if cmd, ok := h.askAdviceEsc(); ok {
+			return h, cmd
+		}
 		h.stop()
 		return h, nil
 	}
@@ -904,6 +914,15 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return h, nil
 		}
+		if text == "a" {
+			// "a" and enter is the advisor key; typing "a" is still text.
+			if cmd, ok := h.askAdviceKey(a); ok {
+				if h.msg == nil {
+					h.comp = h.composer()
+				}
+				return h, cmd
+			}
+		}
 		full := strings.TrimSpace(h.comp.expanded()) // a paste, whole
 		h.comp = h.composer()
 		if word, _, _, ok := parseSlash(full); ok && word == "/advise" {
@@ -922,6 +941,7 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				text = q.Options[n-1]
 			}
 			h.turn.answers = append(h.turn.answers, text)
+			h.dropAskAdvice()
 			if len(h.turn.answers) < len(a.Questions) {
 				return h, h.println(h.ogeLine(h.st.dim("answered: " + clean(text))))
 			}
@@ -955,6 +975,7 @@ func (h *home) stop() {
 		return
 	}
 	t.stopped, t.asks = true, nil
+	h.dropAskAdvice()
 	if c := h.chat.get(); c != nil {
 		_ = c.Interrupt()
 	}
@@ -962,6 +983,9 @@ func (h *home) stop() {
 
 // answer answers the prompt shown and prints what was answered.
 func (h *home) answer(a *agent.Ask, ans agent.Answer) tea.Cmd {
+	if ans.Allow && len(ans.Answers) > 0 {
+		ans.AdvisedBy = h.advisedBy(a) // a Claim the human saw; By stays human
+	}
 	h.turn.asks = h.turn.asks[1:]
 	h.showAsk()
 	// What is printed is redacted and short (Target), never the Detail.
@@ -996,10 +1020,23 @@ func (h *home) turnView() string {
 		// marker.
 		q := a.Questions[len(t.answers)]
 		lines = append(lines, agentLines(cleanLines(q.Text)))
-		for i, o := range q.Options {
-			lines = append(lines, fmt.Sprintf("    %d. %s", i+1, clean(o)))
+		suggest := 0
+		if t.askAdv != nil && t.askAdv.q == len(t.answers) {
+			suggest = t.askAdv.suggest
 		}
-		lines = append(lines, h.ogeLine(h.st.dim("type an answer or an option's number · enter")))
+		for i, o := range q.Options {
+			row := fmt.Sprintf("    %d. %s", i+1, clean(o))
+			if i+1 == suggest {
+				row = h.st.accent(row + "   ← advisor suggests")
+			}
+			lines = append(lines, row)
+		}
+		hint := "type an answer or an option's number · enter"
+		if t.askAdv == nil && h.adv == nil {
+			hint += " · a↵ ask the advisor"
+		}
+		lines = append(lines, h.ogeLine(h.st.dim(hint)))
+		lines = append(lines, h.askAdviceLines(len(t.answers))...)
 	case a != nil:
 		lines = append(lines, h.ogeLine(h.st.ask("Allow "+clean(a.Tool)+"?")))
 		if !h.askFits(a) {

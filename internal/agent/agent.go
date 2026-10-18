@@ -220,6 +220,9 @@ type Answer struct {
 	Allow   bool
 	Answers []string
 	Reason  string
+	// AdvisedBy is the id of the Consultation whose advice the human saw
+	// before answering: recorded next to By, never instead of it.
+	AdvisedBy string
 }
 
 // Visible makes every character of s show: newlines stay, a tab is \t, a
@@ -338,6 +341,9 @@ type HostDecision struct {
 	Hint string `json:",omitempty"`
 	// By is who answered, e.g. "launch_profile:<hash>" or "policy".
 	By string
+	// AdvisedBy is the Consultation id an answer was advised by (the
+	// advice is a Claim; By still says who answered).
+	AdvisedBy string `json:",omitempty"`
 	// Rule names the policy rule that decided, e.g. "pre_authorised",
 	// "outside_role" or "no_interactive_approval".
 	Rule string
