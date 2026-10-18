@@ -122,6 +122,17 @@ func (c *Chat) advisorFor() (agent.Adapter, pipeline.Stage, error) {
 // Session is denied without reaching the human. Cancelling ctx cancels
 // the Consultation; its records stay in the Chat log either way.
 func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
+	return c.consult(ctx, question, "user", "user")
+}
+
+// ConsultAsk is a Consultation on an AskUserQuestion the agent put to the
+// human (trigger ask, requested by the agent's question). Its advice is
+// still a Claim: the human answers.
+func (c *Chat) ConsultAsk(ctx context.Context, question string) (*Advice, error) {
+	return c.consult(ctx, question, "ask", "agent")
+}
+
+func (c *Chat) consult(ctx context.Context, question, trigger, requestedBy string) (*Advice, error) {
 	// Close waits for every Consultation it lets start, and refuses the
 	// rest, so ConsultationEnded never lands on a closed log.
 	c.mu.Lock()
@@ -192,7 +203,7 @@ func (c *Chat) Consult(ctx context.Context, question string) (*Advice, error) {
 	// Session's system/init, after the Briefing is sent, so it is on
 	// ConsultationEnded, not here.
 	if err := c.log(RecConsultationStarted, map[string]any{"chat": c.ID, "consultation": id,
-		"trigger": "user", "requested_by": "user", "turn": last, "read_turn": n, "commit": commit,
+		"trigger": trigger, "requested_by": requestedBy, "turn": last, "read_turn": n, "commit": commit,
 		"question": sha256Hex(question), "manifest": mBlob, "briefing": bBlob,
 		"advisor": launchProfile(st), "permissions": "launch_profile", "read_only": readOnly}); err != nil {
 		return nil, err

@@ -623,6 +623,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 	case adviceMsg:
 		return h, h.adviceLanded(m)
+	case askAdviceMsg:
+		return h, h.askAdviceLanded(m)
 	case adviceTickMsg:
 		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
 			return h, adviceTick(m.seq)
