@@ -37,6 +37,15 @@
         "model": "opus",
         "outcome": "cancelled"
       }
+    ],
+    "shown_consultations": [
+      {
+        "consultation": "k-4",
+        "turn": 4,
+        "agent": "claude",
+        "model": "opus",
+        "advice": "sha256:cc"
+      }
     ]
   },
   "outcome": "Accepted",
@@ -112,5 +121,5 @@
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "55de8a9918684b8af7f81e42047255616437273a402f39223331fdd0feead2c5"
+  "ledger_head": "8f6169b3bd2c350bdc1ead1ec95ea4078049c7ca613d50644ee4cd5c53986af3"
 }

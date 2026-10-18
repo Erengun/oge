@@ -44,3 +44,44 @@ func TestConsultationsInIsASnapshotAtCutTime(t *testing.T) {
 		t.Errorf("the next cut: %+v", late)
 	}
 }
+
+// An ask Consultation's advice goes to the human, never the agent: landed,
+// it is Shown (not Dismissed); cancelled or failed it keeps its outcome.
+func TestConsultationsInShowsALandedAskConsultation(t *testing.T) {
+	adv := map[string]string{"agent": "claude", "model": "opus"}
+	ask := func(id, outcome string) []ledger.Record {
+		return []ledger.Record{
+			chatRec(RecConsultationStarted, map[string]any{"consultation": id, "turn": 2, "advisor": adv, "trigger": TriggerAsk}),
+			chatRec(RecConsultationEnded, map[string]any{"consultation": id, "outcome": outcome, "advice": "sha256:aa"}),
+		}
+	}
+	log := append(append(ask("k-1", ConsultAdvised), ask("k-2", ConsultCancelled)...), ask("k-3", ConsultFailed)...)
+	got := consultationsIn(log, "c-1", 1, 2)
+	if len(got.Shown) != 1 || got.Shown[0].Consultation != "k-1" || got.Shown[0].Advice != "sha256:aa" || got.Shown[0].Model != "opus" || len(got.Sent) != 0 {
+		t.Fatalf("shown: %+v", got)
+	}
+	if len(got.Dismissed) != 2 || got.Dismissed[0].Outcome != ConsultCancelled || got.Dismissed[1].Outcome != ConsultFailed {
+		t.Fatalf("dismissed: %+v", got.Dismissed)
+	}
+}
+
+// A Consultation asked after a delivery, before the next turn, records the
+// delivered turn: it belongs to the next cut. One from before the delivery
+// stays out of it.
+func TestConsultationsInAfterADeliveryBelongsToTheNextCut(t *testing.T) {
+	adv := map[string]string{"agent": "claude", "model": "opus"}
+	log := []ledger.Record{
+		chatRec(RecConsultationStarted, map[string]any{"consultation": "k-1", "turn": 2, "advisor": adv}),
+		chatRec(RecConsultationEnded, map[string]any{"consultation": "k-1", "outcome": "advised"}),
+		chatRec(RecDelivered, map[string]any{"run": "r-1", "turn": 2}),
+		chatRec(RecConsultationStarted, map[string]any{"consultation": "k-2", "turn": 2, "advisor": adv}),
+		chatRec(RecConsultationEnded, map[string]any{"consultation": "k-2", "outcome": "advised"}),
+	}
+	next := consultationsIn(log, "c-1", 3, 4)
+	if len(next.Dismissed) != 1 || next.Dismissed[0].Consultation != "k-2" || next.Dismissed[0].Turn != 3 {
+		t.Fatalf("next cut: %+v", next)
+	}
+	if prev := consultationsIn(log, "c-1", 1, 2); len(prev.Dismissed) != 1 || prev.Dismissed[0].Consultation != "k-1" {
+		t.Fatalf("the delivered cut: %+v", prev)
+	}
+}

@@ -421,6 +421,7 @@ func Scenarios() []Scenario {
 						{Consultation: "k-2", Turn: 4, How: "verbatim", Agent: "claude", Model: "opus", Advice: "sha256:bb", Trigger: "feedback_budget"},
 					},
 					Dismissed: []run.Dismissed{{Consultation: "k-3", Turn: 4, Agent: "claude", Model: "opus", Outcome: "cancelled"}},
+					Shown:     []run.Shown{{Consultation: "k-4", Turn: 4, Agent: "claude", Model: "opus", Advice: "sha256:cc"}},
 				}})
 			b.Attempt(fastAttempt())
 			b.Check(1, C1, 0, 6200*ms, 7200*ms, []Test{{"TestAdd", "pass", ""}}, nil)

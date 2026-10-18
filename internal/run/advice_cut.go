@@ -15,6 +15,19 @@ import (
 type CutAdvice struct {
 	Sent      []AdviceSent `json:"sent,omitempty"`
 	Dismissed []Dismissed  `json:"dismissed,omitempty"`
+	// Shown are ask Consultations whose advice reached the human, not the
+	// agent: no AdviceSent, so neither Sent nor Dismissed.
+	Shown []Shown `json:"shown,omitempty"`
+}
+
+// Shown is an ask Consultation (the agent's question, advice shown to the
+// human) that landed with advice. A Claim: the human may have followed it.
+type Shown struct {
+	Consultation string `json:"consultation"`
+	Turn         int    `json:"turn"`
+	Agent        string `json:"agent,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Advice       string `json:"advice,omitempty"` // the advice blob's id
 }
 
 // AdviceSent is a Consultation's advice that became a turn.
@@ -42,10 +55,15 @@ type Dismissed struct {
 	Trigger string `json:"trigger,omitempty"`
 }
 
-func (a CutAdvice) empty() bool { return len(a.Sent) == 0 && len(a.Dismissed) == 0 }
+func (a CutAdvice) empty() bool {
+	return len(a.Sent) == 0 && len(a.Dismissed) == 0 && len(a.Shown) == 0
+}
 
 // consultationsIn reads recs, a Chat log, for turns from to to. A
-// Consultation still running has no outcome yet, so it is neither.
+// Consultation still running has no outcome yet, so it is neither. One
+// whose ConsultationStarted follows a Delivered record at its own turn was
+// asked between the delivery and the next turn: it belongs to the next
+// cut's window (turn+1), or no cut would ever show it.
 func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice {
 	type consult struct {
 		turn            int
@@ -57,7 +75,15 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 	byID := map[string]*consult{}
 	var order []string
 	var sends []AdviceSent
+	delivered := 0
 	for _, rec := range recs {
+		if rec.Type == RecDelivered {
+			var d struct{ Turn int }
+			if json.Unmarshal(rec.Data, &d) == nil && d.Turn > delivered {
+				delivered = d.Turn
+			}
+			continue
+		}
 		switch rec.Type {
 		case RecConsultationStarted, RecConsultationEnded, RecAdviceSent:
 		default:
@@ -81,7 +107,11 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 			if byID[d.Consultation] == nil {
 				order = append(order, d.Consultation)
 			}
-			byID[d.Consultation] = &consult{turn: d.Turn, agent: d.Advisor.Agent, model: d.Advisor.Model, trigger: d.Trigger}
+			turn := d.Turn
+			if turn > 0 && turn <= delivered {
+				turn = delivered + 1
+			}
+			byID[d.Consultation] = &consult{turn: turn, agent: d.Advisor.Agent, model: d.Advisor.Model, trigger: d.Trigger}
 		case RecConsultationEnded:
 			if c := byID[d.Consultation]; c != nil {
 				c.outcome, c.advice = d.Outcome, d.Advice
@@ -103,9 +133,15 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 		out.Sent = append(out.Sent, s)
 	}
 	for _, id := range order {
-		if c := byID[id]; !c.sent && c.outcome != "" && c.turn >= from && c.turn <= to {
-			out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: c.outcome, Trigger: c.trigger})
+		c := byID[id]
+		if c.sent || c.outcome == "" || c.turn < from || c.turn > to {
+			continue
 		}
+		if c.trigger == TriggerAsk && c.outcome == ConsultAdvised {
+			out.Shown = append(out.Shown, Shown{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Advice: c.advice})
+			continue
+		}
+		out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: c.outcome, Trigger: c.trigger})
 	}
 	return out
 }
