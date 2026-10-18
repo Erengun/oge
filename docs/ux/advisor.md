@@ -52,7 +52,7 @@ A **Consultation** is one request for advice. It opens a **fresh, read-only advi
   Öge → agent: An advisor suggests (a second opinion, not checked): The failures…
 ```
 
-If that cut fails too, the chain stops as it does today: `✗ still failing · your call`. That's one automatic Consultation per chain.
+If that cut fails too, the chain stops as it does today: `✗ still failing after 3 tries; your call`. That's one automatic Consultation per chain.
 
 **The agent asks.** An AskUserQuestion already reaches the composer as a question (a Host request). It gains one key:
 
@@ -61,7 +61,7 @@ If that cut fails too, the chain stops as it does today: `✗ still failing · y
     1 Redis   2 in-memory   a ask the advisor   esc deny
 ```
 
-`a` runs a Consultation on that question and shows the advice under it, with its suggested option highlighted. **The human still answers.** The answer records `answered_by=human` and `advised_by=<consultation>`. Answering without the human is the Decider's job (#29 places it first), never the Advisor's.
+`a` runs a Consultation on that question and shows the advice under it, with its suggested option highlighted. **The human still answers.** The answer records who gave it (`By: human`) and the Consultation the human saw (`AdvisedBy`). Answering without the human is the Decider's job (#29 places it first), never the Advisor's.
 
 **A stall** without a failing Check (a turn that loops, or a reply that only asks) isn't a trigger yet. It is fog until dogfooding gives a signal (D-A5).
 

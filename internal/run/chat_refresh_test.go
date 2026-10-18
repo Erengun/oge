@@ -3,10 +3,13 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
 )
@@ -189,31 +192,73 @@ func TestRefreshLeavesTheChainAlone(t *testing.T) {
 // protects would read as Tamper on the next turn.
 func TestRefreshSkipsWithUndeliveredTurns(t *testing.T) {
 	for _, deferred := range []bool{false, true} {
-		c := openCut(t, "",
-			multiturn.Turn{Reply: "sub", Writes: []multiturn.File{{Path: "add.go", Content: refreshSub}, {Path: "sub_test.go", Content: refreshTest}}},
-			multiturn.Turn{Reply: "rewrote", Writes: []multiturn.File{{Path: "sub_test.go", Content: refreshTest + "\n// rewritten\n"}}},
-			multiturn.Turn{Reply: "mul", Writes: []multiturn.File{{Path: "mul.go", Content: refreshMul}}})
-		old := c.Snapshot
-		drain(t, send(t, c, "add Sub"), nil)
-		first := cut(t, c)
-		drain(t, send(t, c, "touch the test"), nil)
-		applyTo(t, c, first, map[string]string{"add.go": refreshSub, "sub_test.go": refreshTest})
-		if deferred {
-			c.cutMu.Lock() // a cut is in flight at /apply
-			if got, _ := c.RefreshSnapshot(); got != RefreshDeferred {
-				t.Fatalf("got %v, want deferred", got)
+		t.Run(fmt.Sprintf("deferred=%v", deferred), func(t *testing.T) {
+			c := openCut(t, "",
+				multiturn.Turn{Reply: "sub", Writes: []multiturn.File{{Path: "add.go", Content: refreshSub}, {Path: "sub_test.go", Content: refreshTest}}},
+				multiturn.Turn{Reply: "rewrote", Writes: []multiturn.File{{Path: "sub_test.go", Content: strings.Replace(refreshTest, "!= 2", "!= 3", 1)}}},
+				multiturn.Turn{Reply: "mul", Writes: []multiturn.File{{Path: "mul.go", Content: refreshMul}}})
+			old := c.Snapshot
+			drain(t, send(t, c, "add Sub"), nil)
+			first := cut(t, c)
+			drain(t, send(t, c, "touch the test"), nil)
+			applyTo(t, c, first, map[string]string{"add.go": refreshSub, "sub_test.go": refreshTest})
+			if deferred {
+				c.cutMu.Lock() // a cut is in flight at /apply
+				if got, _ := c.RefreshSnapshot(); got != RefreshDeferred {
+					t.Fatalf("got %v, want deferred", got)
+				}
+				c.cutMu.Unlock()
+				cut(t, c) // settles; the retry must not retake either
+			} else if got, err := c.RefreshSnapshot(); err != nil || got != RefreshNone {
+				t.Fatalf("refresh with an undelivered turn: %v %v, want none", got, err)
 			}
-			c.cutMu.Unlock()
-			cut(t, c) // settles; the retry must not retake either
-		} else if got, err := c.RefreshSnapshot(); err != nil || got != RefreshNone {
-			t.Fatalf("refresh with an undelivered turn: %v %v, want none", got, err)
+			if c.snapshot() != old || len(refreshed(t, c)) != 0 {
+				t.Errorf("deferred=%v: the base moved with an undelivered turn", deferred)
+			}
+			drain(t, send(t, c, "now Mul"), nil)
+			if tam := runRecords(t, c.Dir, RecTamperEvent); len(tam) != 0 {
+				t.Errorf("deferred=%v: TamperEvents %v after a skipped retake", deferred, tam)
+			}
+		})
+	}
+}
+
+// Two retakes that both passed the early checks: the one that installs
+// second finds the base already this tree, and logs nothing.
+func TestRefreshConcurrentRetakeLogsOnce(t *testing.T) {
+	c := openRefresh(t)
+	drain(t, send(t, c, "add Sub"), nil)
+	first := cut(t, c)
+	applyTo(t, c, first, map[string]string{"add.go": refreshSub, "sub_test.go": refreshTest})
+	c.setRefreshDue(true)
+	c.prepMu.Lock()
+	type out struct {
+		got Refresh
+		err error
+	}
+	done := make(chan out, 1)
+	go func() {
+		got, err := c.RefreshSnapshot()
+		done <- out{got, err}
+	}()
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		c.supersedeMu.Lock()
+		due := c.refreshDue
+		c.supersedeMu.Unlock()
+		if !due {
+			break // past TryLock, blocked at prepMu
 		}
-		if c.snapshot() != old || len(refreshed(t, c)) != 0 {
-			t.Errorf("deferred=%v: the base moved with an undelivered turn", deferred)
+		if time.Now().After(deadline) {
+			t.Fatal("the retake never reached prepMu")
 		}
-		drain(t, send(t, c, "now Mul"), nil)
-		if tam := runRecords(t, c.Dir, RecTamperEvent); len(tam) != 0 {
-			t.Errorf("deferred=%v: TamperEvents %v after a skipped retake", deferred, tam)
-		}
+		time.Sleep(time.Millisecond)
+	}
+	c.scopeMu.Lock()
+	c.Snapshot = first.Candidate // another retake won
+	c.scopeMu.Unlock()
+	c.prepMu.Unlock()
+	r := <-done
+	if r.err != nil || r.got != RefreshNone || len(refreshed(t, c)) != 0 {
+		t.Errorf("got %v %v, records %d; want none and 0", r.got, r.err, len(refreshed(t, c)))
 	}
 }

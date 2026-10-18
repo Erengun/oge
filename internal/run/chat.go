@@ -182,8 +182,8 @@ type Chat struct {
 	// the chain's budget (D5).
 	feedbacks int
 	// chain counts the user's turns, so an advice that lands after one is
-	// known stale; autoUsed is the chain's one automatic Consultation
-	// (D-A3): both reset by the user's turn, as feedbacks does.
+	// known stale; autos counts the chain's automatic Consultations (one at
+	// most, D-A3): both reset by the user's turn, as feedbacks does.
 	chain int
 	autos int // automatic Consultations this chain
 	// verdictCuts are the last turns of the cuts that reached a Verdict,

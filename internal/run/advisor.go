@@ -171,8 +171,8 @@ func (c *Chat) AdvisorAuto() string {
 // ConsultAuto is the Consultation Öge asks for when a chain's feedback
 // budget is spent (D-A3, D-A5a), once per chain: a second call before the
 // user's next turn returns ErrAutoConsulted, and a call with a chain the
-// user's turn has since ended returns ErrChainEnded, starting nothing. A failed or cancelled one
-// still uses the chain's cap. Its advice is a Claim like any other: the
+// user's turn has since ended returns ErrChainEnded, starting nothing. A
+// failed or cancelled one still uses the chain's cap. Its advice is a Claim like any other: the
 // caller sends it with SendAutoAdvice (or shows it first, with auto =
 // "ask"), and a cancelled, failed or empty Consultation returns an error,
 // never advice.
@@ -430,8 +430,8 @@ func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage
 // triggered the Consultation. The agent's text is a Claim (ADR-0009).
 func questionSource(trigger string) string {
 	switch trigger {
-	case "ask":
-		return "the agent's AskUserQuestion, verbatim, agent text (a Claim)"
+	case TriggerAsk:
+		return "the agent's AskUserQuestion in Öge's template, agent text (a Claim)"
 	case TriggerFeedbackBudget:
 		return "Öge's question about the failing chain (templated trigger)"
 	}

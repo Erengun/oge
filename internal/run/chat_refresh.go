@@ -117,6 +117,13 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	// The Workspace must be what was delivered too: a turn after the cut,
 	// or a hold-back, leaves it different, and edits to a file the new
 	// base protects would read as Tamper. The next apply evens it out.
+	// Another retake may have won while this one read: then the base is
+	// already this tree, and nothing is logged twice.
+	if now, err := c.repo.TreeOf(c.Snapshot); err != nil {
+		return RefreshNone, err
+	} else if now == have {
+		return RefreshNone, nil
+	}
 	lastTree, err := c.repo.TreeOf(c.last)
 	if err != nil {
 		return RefreshNone, err

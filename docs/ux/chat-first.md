@@ -74,7 +74,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
   - it is dropped if a newer cut exists, and queues behind a user turn in flight.
 - **QA** always starts fresh, and its text is never streamed. The transcript is never agent context.
 - **Snapshot refresh:** Öge retakes the Snapshot, with a Ledger record, after an apply and whenever the Workspace has no unchecked edits. Otherwise it shows one line, `repo changed outside Öge; not merged`. It never merges silently.
-  - *Implemented in #277 (after-apply trigger only):* the retake happens only when the user's repo and the Workspace both equal the commit applied (an exact-tree gate), so nothing of the user's is merged and no undelivered edit is judged against the new base. A cut in flight keeps its old base and the retake waits for it. The clean-Workspace trigger needs a Workspace sync and is a follow-up.
+  - *Implemented in #277 (after-apply trigger only):* the retake happens only when the user's repo and the Workspace both equal the commit applied (an exact-tree gate), so nothing of the user's is merged and no undelivered edit is judged against the new base. A cut in flight keeps its old base and the retake waits for it. The clean-Workspace trigger needs a Workspace sync and is a follow-up (#304).
 
 ## Ledger and Receipt
 

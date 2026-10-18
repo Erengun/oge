@@ -624,8 +624,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case adviceMsg:
 		return h, h.adviceLanded(m)
 	case askAdviceTickMsg:
-		if t := h.turn; t != nil && t.askAdv != nil && t.askAdv.running && t.askAdv.ask == m.ask && t.askAdv.q == m.q {
-			return h, askAdviceTick(m.ask, m.q)
+		if t := h.turn; t != nil && t.askAdv != nil && t.askAdv.running && t.askAdv.ask == m.ask && t.askAdv.q == m.q && t.askAdv.seq == m.seq {
+			return h, askAdviceTick(m.ask, m.q, m.seq)
 		}
 		return h, nil
 	case askAdviceMsg:
