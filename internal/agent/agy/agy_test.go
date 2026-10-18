@@ -458,18 +458,24 @@ func TestNestedPayloadParsing(t *testing.T) {
 	}
 }
 
+// settleOnWrite simulates a result arriving while Send is still writing.
+type settleOnWrite struct{ s *session }
+
+func (w settleOnWrite) Write(b []byte) (int, error) {
+	w.s.settle(agent.Event{})
+	return len(b), nil
+}
+func (settleOnWrite) Close() error { return nil }
+
 // A result that arrives while Send is still writing must not overtake
 // TurnAccepted (flaked under -race, #307).
-func TestSettleHeldBehindTurnAccepted(t *testing.T) {
+func TestSendHoldsSettleBehindTurnAccepted(t *testing.T) {
 	t.Parallel()
-	s := &session{events: make(chan agent.Event, 8), inFlight: true, accepting: true}
-	s.settle(agent.Event{})
-	select {
-	case ev := <-s.events:
-		t.Fatalf("event before TurnAccepted: %+v", ev)
-	default:
+	s := &session{events: make(chan agent.Event, 8)}
+	s.stdin = settleOnWrite{s}
+	if err := s.Send(agent.Turn{Text: "x"}); err != nil {
+		t.Fatal(err)
 	}
-	s.endAccept(nil)
 	if k := (<-s.events).Kind; k != agent.TurnAccepted {
 		t.Fatalf("first = %v, want TurnAccepted", k)
 	}
