@@ -613,6 +613,13 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
+	case chatStepMsg:
+		return h, h.cutStepped(m)
+	case verifyTickMsg:
+		if h.verify != nil && h.verify.seq == m.seq {
+			return h, verifyTick(m.seq)
+		}
+		return h, nil
 	case chatGateMsg:
 		return h, h.cutGated(m)
 	case chatDiffMsg:
@@ -1301,7 +1308,11 @@ func (h *home) render() (string, int, int) {
 		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · waiting for you at its Gate · /apply"))
 		top++
 	case h.verify != nil:
-		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · verifying… · ctrl+c to cancel"))
+		step := h.verify.step
+		if step == "" {
+			step = "verifying…"
+		}
+		lines = append(lines, " "+st.dim(files(h.verify.changed)+" · "+step+" · "+elapsed(h.clock().Sub(h.verify.since))+" · ctrl+c to cancel"))
 		top++
 	case h.last != nil:
 		lines = append(lines, " "+st.dim("↓ actions · /apply /diff /receipt /branch · /new"))
