@@ -157,6 +157,15 @@ func (h *home) askAdviceLanded(m askAdviceMsg) tea.Cmd {
 		aa.advice = m.advice
 		aa.suggest = suggestedOption(m.advice.Text, m.ask.Questions[m.q].Options)
 		t.advisedBy = m.advice.ID
+		if h.chat != nil {
+			if c := h.chat.get(); c != nil {
+				if h.chat.shown != nil {
+					h.chat.shown(c, m.advice.ID)
+				} else {
+					_ = c.AdviceShown(m.advice.ID)
+				}
+			}
+		}
 	}
 	return nil
 }

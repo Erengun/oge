@@ -34,6 +34,12 @@ const (
 	// RecAdviceSent: a Consultation's advice became a turn, verbatim
 	// (Öge's) or edited (the user's).
 	RecAdviceSent = "AdviceSent"
+	// RecAdviceDismissed: the user dismissed a Consultation's advice (Esc on
+	// its block) without sending it.
+	RecAdviceDismissed = "AdviceDismissed"
+	// RecAdviceShown: the TUI displayed an ask Consultation's advice to the
+	// human. An ask's advice is "shown to you" only with this record.
+	RecAdviceShown = "AdviceShown"
 )
 
 // Consultation outcomes, on ConsultationEnded.
@@ -534,4 +540,16 @@ func (c *Chat) diff(from, to string) ([]byte, error) {
 func (c *Chat) Advisor() (agentName, model string, err error) {
 	_, st, err := c.advisorFor()
 	return st.Agent, st.Model, err
+}
+
+// DismissAdvice records that the user dismissed a Consultation's advice
+// without sending it, so a cut can tell it from advice still waiting.
+func (c *Chat) DismissAdvice(consultation string) error {
+	return c.log(RecAdviceDismissed, map[string]any{"chat": c.ID, "consultation": consultation})
+}
+
+// AdviceShown records that an ask Consultation's advice was displayed to
+// the human (by the TUI, after its checks): the Receipt's "shown to you".
+func (c *Chat) AdviceShown(consultation string) error {
+	return c.log(RecAdviceShown, map[string]any{"chat": c.ID, "consultation": consultation})
 }

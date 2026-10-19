@@ -48,6 +48,9 @@ type homeChat struct {
 	// verdict is the cut's Verdict line, and what can take its Run.
 	verdict func(res *run.Result, changed int) (string, *lastRun)
 	agents  map[string]agent.Adapter
+	// shown logs that ask advice was displayed (Chat.AdviceShown); a test
+	// seam, nil in the product.
+	shown func(c *run.Chat, consultation string)
 
 	mu sync.Mutex
 	c  *run.Chat
@@ -134,6 +137,10 @@ type chatTurn struct {
 	// advice turn (docs/ux/advisor.md).
 	oge    bool
 	advice bool
+	// adviceID and adviceChat: the Consultation an advice turn sends, so a
+	// send that fails is logged dismissed (it was shown but never sent).
+	adviceID   string
+	adviceChat *run.Chat
 	// edited: the advice the text was edited from, kept for a retry.
 	edited *adviceEditState
 	// feedback is a failing cut's feedback turn, held until this turn
@@ -246,6 +253,7 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 	var dismissed tea.Cmd
 	if h.adv != nil && h.adv.shown {
 		// The user's own turn: the advice shown no longer takes ↵ or e.
+		h.dismissAdvice(h.adv)
 		h.adv = nil
 		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
 	}
@@ -290,6 +298,10 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			line := h.ogeLine("✗ sending the feedback turn: " + clean(msg.err.Error()))
 			if h.turn.advice {
 				line = h.ogeLine("✗ sending the advice: " + clean(msg.err.Error()))
+				// ErrChainEnded is logged by Chat.SendAutoAdvice itself.
+				if c := h.turn.adviceChat; c != nil && !errors.Is(msg.err, run.ErrChainEnded) {
+					_ = c.DismissAdvice(h.turn.adviceID)
+				}
 			}
 			if errors.Is(msg.err, run.ErrChainEnded) {
 				line = h.ogeLine(h.st.dim("the advice wasn't sent: you've sent a turn since"))

@@ -248,6 +248,7 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		h.adv = nil
 		return h.println(h.ogeLine(h.st.dim("advising cancelled"))), true
 	case key == "esc" && a.shown:
+		h.dismissAdvice(a)
 		h.adv = nil
 		return h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent"))), true
 	case !a.shown || !h.comp.empty():
@@ -261,6 +262,32 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// dismissAdvice logs that the user let a Consultation's advice go unsent
+// (Esc, their own turn, /new), so a cut counts it once, as Dismissed. A
+// Consultation still running has no advice to log.
+func (h *home) dismissAdvice(a *adviseState) {
+	if a == nil || a.advice == nil || h.chat == nil {
+		return
+	}
+	if c := h.chat.get(); c != nil && c == a.chat {
+		_ = c.DismissAdvice(a.advice.ID)
+	}
+}
+
+// dropAdviceEdit abandons the advice put in the box with e: it was never
+// sent, so it is logged dismissed. A submit that sends it logs AdviceSent
+// instead and clears the edit itself.
+func (h *home) dropAdviceEdit() {
+	e := h.adviceEdit
+	h.adviceEdit = nil
+	if e == nil || e.chat == nil {
+		return
+	}
+	if h.chat != nil && h.chat.get() == e.chat {
+		_ = e.chat.DismissAdvice(e.id)
+	}
 }
 
 // sendAdvice sends the advice shown to the agent, verbatim, as Öge's turn
@@ -291,7 +318,7 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 		h.comp = h.composer()
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
-	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
+	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true, adviceID: adv.ID, adviceChat: c}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()

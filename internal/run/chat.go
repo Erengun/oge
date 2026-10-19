@@ -481,7 +481,13 @@ func (c *Chat) SendAdvice(ctx context.Context, consultation, text string) (<-cha
 // SendAdvice does, unless the user has turned since it began: their turn
 // started a new chain, and advice on the old one is stale, so ErrChainEnded.
 func (c *Chat) SendAutoAdvice(ctx context.Context, a *Advice) (<-chan agent.Event, error) {
-	return c.sendIn(ctx, AdvicePrefix+a.Text, turnAdvice, a.ID, a.Chain)
+	ch, err := c.sendIn(ctx, AdvicePrefix+a.Text, turnAdvice, a.ID, a.Chain)
+	if errors.Is(err, ErrChainEnded) {
+		// The advice was advised and shown, and never sent: a dismissal, or
+		// no Receipt would ever disclose it.
+		_ = c.DismissAdvice(a.ID)
+	}
+	return ch, err
 }
 
 // SendEdited sends text the user made of a Consultation's advice, edited

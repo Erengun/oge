@@ -99,6 +99,8 @@ This is not described as sandbox enforcement where it's only discard (ADR-0018's
 - the Session's process record and residue sweep, as for any Attempt;
 - `ConsultationEnded`: outcome (`advised`, `cancelled`, `failed`), the advice blob's hash, Usage and cost, and duration;
 - `AdviceSent`: the Consultation id, the turn it became, and `verbatim` (an Öge turn) or `edited` (a user turn). An auto-sent one is `by=oge`.
+- `AdviceDismissed`: the Consultation id, when the user pressed Esc on its advice block. A `/advise` Consultation advised but neither sent nor dismissed is still pending: no cut counts it until one of the two is logged, so it is disclosed once.
+- `AdviceShown`: the Consultation id, when the TUI displayed an ask Consultation's advice to the human. "Shown to you" requires it; an ask that advised without one is listed as dismissed, "not shown".
 
 **Receipt.** A cut's Run already records its Chat turn range. The Receipt gains one disclosure when advice reached the agent inside that range:
 

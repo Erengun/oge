@@ -56,6 +56,7 @@ func TestConsultationsInShowsALandedAskConsultation(t *testing.T) {
 		}
 	}
 	log := append(append(ask("k-1", ConsultAdvised), ask("k-2", ConsultCancelled)...), ask("k-3", ConsultFailed)...)
+	log = append(log, chatRec(RecAdviceShown, map[string]any{"consultation": "k-1"}))
 	got := consultationsIn(log, "c-1", 1, 2)
 	if len(got.Shown) != 1 || got.Shown[0].Consultation != "k-1" || got.Shown[0].Advice != "sha256:aa" || got.Shown[0].Model != "opus" || len(got.Sent) != 0 {
 		t.Fatalf("shown: %+v", got)
@@ -116,5 +117,61 @@ func TestConsultationsInFlightAtACutReachExactlyOneLaterCut(t *testing.T) {
 	cut3 := consultationsIn(log, "c-1", 6, 7)
 	if len(cut3.Dismissed) != 1 || cut3.Dismissed[0].Consultation != "k-3" {
 		t.Fatalf("cut 3 counted twice or dropped: %+v", cut3)
+	}
+}
+
+func adviceLog(id string, turn int, trigger string) []ledger.Record {
+	adv := map[string]string{"agent": "claude", "model": "opus"}
+	return []ledger.Record{
+		chatRec(RecConsultationStarted, map[string]any{"consultation": id, "turn": turn, "advisor": adv, "trigger": trigger}),
+		chatRec(RecConsultationEnded, map[string]any{"consultation": id, "outcome": "advised", "advice": "sha256:aa"}),
+	}
+}
+
+// A /advise Consultation advised but unsent at a delivered cut is pending:
+// not in that cut, not in its resolved set, and disclosed once, as Sent.
+func TestConsultationsInPendingAdviceThenSentIsDisclosedOnce(t *testing.T) {
+	log := adviceLog("k-1", 2, "user")
+	cut1 := consultationsIn(log, "c-1", 1, 2)
+	if !cut1.empty() || len(cut1.resolvedIDs()) != 0 {
+		t.Fatalf("pending in cut 1: %+v", cut1)
+	}
+	log = append(log,
+		chatRec(RecDelivered, map[string]any{"run": "r-1", "turn": 2, "resolved": cut1.resolvedIDs()}),
+		chatRec(RecAdviceSent, map[string]any{"consultation": "k-1", "turn": 3, "how": "verbatim"}))
+	cut2 := consultationsIn(log, "c-1", 3, 4)
+	if len(cut2.Sent) != 1 || len(cut2.Dismissed) != 0 {
+		t.Fatalf("cut 2: %+v", cut2)
+	}
+}
+
+// Advised, then Esc: disclosed once, as Dismissed, in the cut after.
+func TestConsultationsInPendingAdviceThenDismissedIsDisclosedOnce(t *testing.T) {
+	log := adviceLog("k-1", 2, "user")
+	cut1 := consultationsIn(log, "c-1", 1, 2)
+	log = append(log,
+		chatRec(RecDelivered, map[string]any{"run": "r-1", "turn": 2, "resolved": cut1.resolvedIDs()}),
+		chatRec(RecAdviceDismissed, map[string]any{"consultation": "k-1"}))
+	if !cut1.empty() {
+		t.Fatalf("cut 1: %+v", cut1)
+	}
+	cut2 := consultationsIn(log, "c-1", 3, 4)
+	if len(cut2.Dismissed) != 1 || cut2.Dismissed[0].Consultation != "k-1" || cut2.Dismissed[0].Outcome != ConsultAdvised || !cut2.Dismissed[0].Before || len(cut2.Sent) != 0 {
+		t.Fatalf("cut 2: %+v", cut2)
+	}
+}
+
+// An ask Consultation that advised without an AdviceShown was never seen:
+// Dismissed as "not shown", not Shown.
+func TestConsultationsInAskAdvisedWithoutAdviceShownIsNotShown(t *testing.T) {
+	log := adviceLog("k-1", 2, TriggerAsk)
+	got := consultationsIn(log, "c-1", 1, 2)
+	if len(got.Shown) != 0 || len(got.Dismissed) != 1 || got.Dismissed[0].Outcome != OutcomeNotShown {
+		t.Fatalf("unshown: %+v", got)
+	}
+	log = append(log, chatRec(RecAdviceShown, map[string]any{"consultation": "k-1"}))
+	got = consultationsIn(log, "c-1", 1, 2)
+	if len(got.Shown) != 1 || len(got.Dismissed) != 0 {
+		t.Fatalf("shown: %+v", got)
 	}
 }
