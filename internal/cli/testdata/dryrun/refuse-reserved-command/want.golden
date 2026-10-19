@@ -1,4 +1,4 @@
 exit: 2
 --- stdout
 --- stderr
-oge: status isn't implemented yet
+oge: status isn't implemented yet; a Task starting with this word needs oge run "<task>"
