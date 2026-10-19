@@ -247,6 +247,10 @@ type session struct {
 	// evClosed is set, under emu, once events is closed: nothing is sent
 	// on it after.
 	evClosed bool
+	// toolSteps are the step_index values a tool Claim was emitted for:
+	// agy updates a step ACTIVE, then DONE or ERROR, and each carries its
+	// tool_info. Only the reader goroutine touches it.
+	toolSteps map[int]bool
 
 	mu          sync.Mutex
 	inFlight    bool
@@ -437,6 +441,16 @@ func (s *session) handleStepUpdate(f map[string]any) {
 	}
 	toolInfo, _ := data["tool_info"].(map[string]any)
 	toolName, _ := data["tool_name"].(string)
+	if idx, ok := data["step_index"].(float64); ok && toolInfo != nil {
+		if s.toolSteps[int(idx)] {
+			toolInfo = nil // claimed when the step started
+		} else {
+			if s.toolSteps == nil {
+				s.toolSteps = map[int]bool{}
+			}
+			s.toolSteps[int(idx)] = true
+		}
+	}
 	if toolInfo != nil {
 		if name, ok := toolInfo["name"].(string); ok && name != "" {
 			toolName = name

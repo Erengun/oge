@@ -383,6 +383,7 @@ func TestProfileArgsAndEnv(t *testing.T) {
 		Network: "off",
 		Model:   "gemini-3.8-flash-high",
 		Effort:  "high",
+		Cache:   "/tmp/cache",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +392,7 @@ func TestProfileArgsAndEnv(t *testing.T) {
 	if slices.Contains(args, "-p") {
 		t.Errorf("args must not contain -p in stream-json mode: %s", joined)
 	}
-	for _, want := range []string{"--input-format stream-json", "--output-format stream-json", "--dangerously-skip-permissions", "--sandbox", "--model gemini-3.8-flash-high", "--effort high"} {
+	for _, want := range []string{"--input-format stream-json", "--output-format stream-json", "--dangerously-skip-permissions", "--sandbox", "--model gemini-3.8-flash-high", "--effort high", "--add-dir /tmp/cache"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args lack %q: %s", want, joined)
 		}
@@ -561,5 +562,42 @@ func TestEventsClosedAfterClose(t *testing.T) {
 		case <-timeout:
 			t.Fatal("Events is still open after Close")
 		}
+	}
+}
+
+// agy updates a tool step ACTIVE, then DONE, each with its tool_info: the
+// step is one Claim, not two.
+func TestToolStepClaimedOnce(t *testing.T) {
+	t.Parallel()
+	ws := t.TempDir()
+	wsJSON, _ := json.Marshal(ws)
+	fixture := strings.Join([]string{
+		`{"dir": "out", "msg": {"event": "init", "cwd": ` + string(wsJSON) + `, "conversation_id": "conv-1", "tools": ["run_command"], "model": "gemini-3.8-flash-high"}}`,
+		`{"dir": "in"}`,
+		`{"dir": "out", "msg": {"event": "step_update", "step_index": 3, "state": "ACTIVE", "step_type": "tool", "tool_info": {"name": "run_command", "parameters": {"CommandLine": "git status"}}}}`,
+		`{"dir": "out", "msg": {"event": "step_update", "step_index": 3, "state": "DONE", "step_type": "tool", "tool_info": {"name": "run_command", "parameters": {"CommandLine": "git status"}, "output": "clean"}}}`,
+		`{"dir": "out", "msg": {"event": "step_update", "step_index": 4, "state": "ACTIVE", "step_type": "tool", "tool_info": {"name": "run_command", "parameters": {"CommandLine": "ls"}}}}`,
+		`{"dir": "out", "msg": {"event": "result", "status": "SUCCESS", "response": "ok", "usage": {"total_tokens": 1}}}`,
+		`{"dir": "in"}`,
+	}, "\n") + "\n"
+	s, err := testAdapter(t, "OGE_FAKE_AGY_FIXTURE="+writeFixture(t, fixture)).Open(context.Background(), agent.LaunchSpec{Role: "implementer", Workspace: ws, RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Send(agent.Turn{Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	var tools []string
+	for ev := range s.Events() {
+		if ev.Kind == agent.Claim && ev.Tool != "" {
+			tools = append(tools, ev.Tool+" "+ev.Target)
+		}
+		if ev.Kind == agent.TurnSettled {
+			break
+		}
+	}
+	if len(tools) != 2 {
+		t.Errorf("tool Claims = %q, want one per step", tools)
 	}
 }
