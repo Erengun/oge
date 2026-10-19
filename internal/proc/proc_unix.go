@@ -5,6 +5,7 @@ package proc
 import (
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 func setGroup(cmd *exec.Cmd) {
@@ -15,7 +16,21 @@ func setGroup(cmd *exec.Cmd) {
 }
 
 func killGroup(cmd *exec.Cmd) {
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	pgid := -cmd.Process.Pid
+	// A fork already in progress can publish its child after SIGKILL
+	// walked the group. Sweep again while it still exists, bounded so an
+	// unreaped zombie cannot hold up the caller that must call Wait.
+	// Escaped groups are not contained; callers still check WaitGone.
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for {
+		if err := syscall.Kill(pgid, syscall.SIGKILL); err != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func group(cmd *exec.Cmd) int {
