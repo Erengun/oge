@@ -318,7 +318,7 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 		h.comp = h.composer()
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
-	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true, adviceID: adv.ID, adviceChat: c}
+	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
