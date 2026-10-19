@@ -233,10 +233,13 @@ func TestAuthFailureStderr(t *testing.T) {
 		t.Fatal("timed out waiting for auth failure Stop")
 	}
 
-	// Verify that premature exit doesn't follow and clobber the Stop
+	// Verify that premature exit doesn't follow and clobber the Stop: the
+	// stream may only end.
 	select {
-	case ev := <-s.Events():
-		t.Fatalf("unexpected extra event after Stop: %+v", ev)
+	case ev, ok := <-s.Events():
+		if ok {
+			t.Fatalf("unexpected extra event after Stop: %+v", ev)
+		}
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -481,5 +484,82 @@ func TestSendHoldsSettleBehindTurnAccepted(t *testing.T) {
 	}
 	if k := (<-s.events).Kind; k != agent.TurnSettled {
 		t.Fatalf("second = %v, want TurnSettled", k)
+	}
+}
+
+// A Chat opens agy under AutoPermissions on its Launch profile, and one
+// Session takes turn after turn (D2, ADR-0023); any other mode is refused.
+func TestChatOpensUnderLaunchProfile(t *testing.T) {
+	t.Parallel()
+	if !agent.HasAutoMode(New()) {
+		t.Fatal("agy can't run a Chat")
+	}
+	ws := t.TempDir()
+	wsJSON, _ := json.Marshal(ws)
+	rec := filepath.Join(t.TempDir(), "argv.json")
+	fixture := strings.Join([]string{
+		`{"dir": "out", "msg": {"event": "init", "cwd": ` + string(wsJSON) + `, "conversation_id": "conv-1", "tools": ["run_command"], "model": "gemini-3.8-flash-high"}}`,
+		`{"dir": "in"}`,
+		`{"dir": "out", "msg": {"event": "result", "status": "SUCCESS", "response": "Hi!", "usage": {"total_tokens": 10}}}`,
+		`{"dir": "in"}`,
+		`{"dir": "out", "msg": {"event": "result", "status": "SUCCESS", "response": "Still here.", "usage": {"total_tokens": 20}}}`,
+	}, "\n") + "\n"
+	ad := testAdapter(t, "OGE_FAKE_AGY_FIXTURE="+writeFixture(t, fixture), "OGE_FAKE_AGY_RECORD="+rec)
+	s, err := ad.Open(context.Background(), agent.LaunchSpec{
+		Role: "implementer", Workspace: ws, RunID: "chat-1", Permissions: agent.AutoPermissions,
+	})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+	<-s.Events() // SessionOpened
+	for _, text := range []string{"yo", "again"} {
+		if err := s.Send(agent.Turn{Text: text}); err != nil {
+			t.Fatal(err)
+		}
+		for ev := range s.Events() {
+			if ev.Kind == agent.TurnSettled {
+				if ev.Failure != "" || ev.Exit != "done" {
+					t.Fatalf("%s: %+v", text, ev)
+				}
+				break
+			}
+		}
+	}
+	b, err := os.ReadFile(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "--dangerously-skip-permissions") || !strings.Contains(string(b), "--sandbox") {
+		t.Errorf("argv = %s", b)
+	}
+
+	if _, err := ad.Open(context.Background(), agent.LaunchSpec{Role: "implementer", Workspace: ws, Permissions: "plan"}); err == nil || !strings.Contains(err.Error(), "no plan permission mode") {
+		t.Errorf("plan mode: %v", err)
+	}
+}
+
+// Events is closed after Close (agent.Session): a Chat's pump ranges over
+// it, so quitting oge waits for it to end.
+func TestEventsClosedAfterClose(t *testing.T) {
+	t.Parallel()
+	s, err := testAdapter(t).Open(context.Background(), agent.LaunchSpec{Role: "implementer", Workspace: t.TempDir(), RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(agent.Turn{Text: "fix"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-s.Events():
+			if !ok {
+				return
+			}
+		case <-timeout:
+			t.Fatal("Events is still open after Close")
+		}
 	}
 }

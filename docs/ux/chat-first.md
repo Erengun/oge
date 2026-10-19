@@ -67,7 +67,10 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 - **Briefing:** Öge builds a light chat Briefing once, without `Exit: done`. Each later user message is sent verbatim and gets its own Briefing-manifest entry (its hash and `session_reused=true`).
 - **Nothing enters a running turn:** messages queue until it settles, or Esc interrupts it.
 - **Permissions:** the implementer runs in Claude Code's auto permission mode. Its classifier approves safe actions and asks about or blocks risky ones. Öge's hard denies apply on top: paths outside the Workspace, and Oracle and held-out internals. An ask from auto mode reaches the composer as a one-line question.
-- **Agents without an auto mode** (OpenCode/ACP) fall back to running read-only commands and the Check commands without asking.
+- **Agents without an auto mode** chat under their Launch profile, which never asks (amended 2026-10-19: chat first on every agent):
+  - Codex declines every approval itself, and its sandbox denies Öge's hard-deny paths (ADR-0018).
+  - agy runs `--dangerously-skip-permissions` under `--sandbox` and can't deny reads by path, so a Chat's implementer could read the held-out tests of earlier cuts. That is a disclosed Agent limitation until a `PreToolUse` hook enforces the denies (ADR-0023).
+  - An agent that can't verify yet (Codex, agy) implements only: `--agent <agent>` leaves the verifier to claude.
 - **Send-back** is an Öge-built feedback turn in the live Session:
   - it carries a count plus criterion ids, never held-out text;
   - it is budgeted at 3 per chain of cuts;
@@ -101,7 +104,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 |---|---|
 | Scope | The redesign blocks M1; #114 is re-run on the Chat UX. |
 | D1 | **Implementer Session reuse** is the default in bare `oge`. It is disclosed in the manifest and the Receipt. Reusing a verifier or QA Session is a hard error. `oge "task"` stays fresh. |
-| D2 | **Permissions** use Claude Code's auto mode, with Öge's hard denies on top. Other agents fall back to read-only commands plus the Check commands. |
+| D2 | **Permissions** use Claude Code's auto mode, with Öge's hard denies on top. Other agents chat under their Launch profile (amended 2026-10-19; see Permissions above). |
 | D3 | **Verification runs in the background:** a newer cut cancels stale verification, and Verdicts are cached. |
 | D4 | **Cuts are automatic:** Öge cuts settled Promoted or Ambiguous changes once queued ordinary follow-ups finish, including when the final follow-up changes nothing. |
 | D5 | **A failed Check** gets an automatic feedback turn (a count plus ids), with a budget of 3 per chain. |
@@ -171,6 +174,7 @@ The first two ship value on today's `run.go`, before any new architecture. The C
    - The wiring and permissions ship together, so the trust layer is never visible on day one.
    - The flag is flipped here.
    - Deferred (#259): the fallback profile ships with the second agent (Codex, #60). Until then an agent without auto mode runs each home message as a one-shot Run, and `OGE_CHAT=0` does the same for claude.
+   - Done 2026-10-19: Codex and agy chat under their Launch profiles. Only the test fake still runs one-shot.
 8. **Background verification** (Opus).
    - The composer stays live during QA and the Check.
    - Superseded cuts are cancelled, Verdicts are cached, and a status line shows `verifying…`.

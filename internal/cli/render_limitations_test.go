@@ -14,7 +14,7 @@ func TestDryRunListsAgentLimitations(t *testing.T) {
 	if len(probs) > 0 {
 		t.Fatal(probs)
 	}
-	f, probs := pipeline.Resolve(cfg, pipeline.Overrides{}, []string{"codex"})
+	f, probs := pipeline.Resolve(cfg, pipeline.Overrides{Agents: []string{"codex"}}, []string{"codex", "claude"})
 	if len(probs) > 0 {
 		t.Fatal(probs)
 	}

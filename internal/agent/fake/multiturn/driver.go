@@ -353,3 +353,7 @@ func (c *Claude) ReadAsk() []Frame {
 // BuildClaude compiles fakeclaude and returns its path, for a test that
 // launches it through the claude adapter with OGE_FAKE_CLAUDE_SCENARIO.
 func BuildClaude(t testing.TB) string { return build(t, "claude/fakeclaude", "claude") }
+
+// BuildAgy compiles fakeagy and returns its path, for a test that launches
+// it through the agy adapter with OGE_FAKE_AGY_FIXTURE.
+func BuildAgy(t testing.TB) string { return build(t, "agy/fakeagy", "agy") }

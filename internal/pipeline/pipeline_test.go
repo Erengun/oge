@@ -344,7 +344,7 @@ func TestAgentImplementerLimitations(t *testing.T) {
 		t.Fatal(probs)
 	}
 	for agent, want := range map[string]int{"codex": 1, "agy": 1, "claude": 0} {
-		f, probs := Resolve(cfg, Overrides{}, []string{agent})
+		f, probs := Resolve(cfg, Overrides{Agents: []string{agent}}, []string{"claude"})
 		if len(probs) > 0 {
 			t.Fatal(probs)
 		}
@@ -354,8 +354,44 @@ func TestAgentImplementerLimitations(t *testing.T) {
 		if want > 0 && agent == "codex" && !strings.Contains(f.Limitations[0], "credentials") {
 			t.Errorf("%s: %q", agent, f.Limitations[0])
 		}
-		if want > 0 && agent == "agy" && !strings.Contains(f.Limitations[0], "dangerously-skip-permissions") {
+		if want > 0 && agent == "agy" && (!strings.Contains(f.Limitations[0], "dangerously-skip-permissions") || !strings.Contains(f.Limitations[0], "held-out tests")) {
 			t.Errorf("%s: %q", agent, f.Limitations[0])
 		}
+	}
+}
+
+// An agent that can't verify yet implements only: --agent binds it to
+// the implementer and claude verifies; binding its verifier is refused.
+func TestImplementOnlyAgentsLeaveTheVerifierToClaude(t *testing.T) {
+	cfg, probs := Load([]byte("schema = 1\n[project]\ntest_globs = [\"*_test.go\"]\n[[check.commands]]\nrun = \"go test -json ./...\"\nreport = \"go-test-json\"\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	for _, agent := range []string{"agy", "codex"} {
+		f, probs := Resolve(cfg, Overrides{Standard: true, Agents: []string{agent}}, []string{"claude", agent})
+		if len(probs) > 0 {
+			t.Fatalf("%s: %v", agent, probs)
+		}
+		if f.Stages[0].Agent != agent || f.Stages[1].Agent != "claude" {
+			t.Errorf("%s: stages %+v", agent, f.Stages)
+		}
+		for _, o := range []Overrides{{Standard: true, Verify: agent}, {Standard: true, Agents: []string{"verify=" + agent}}} {
+			_, probs := Resolve(cfg, o, []string{"claude"})
+			if len(probs) == 0 || !strings.Contains(probs[0].Msg, agent+" can't verify yet") {
+				t.Errorf("%s: %+v: %v", agent, o, probs)
+			}
+		}
+	}
+}
+
+// A project config can't bind a verifier to an agent that can't verify.
+func TestProjectVerifierMustVerify(t *testing.T) {
+	cfg, probs := Load([]byte("schema = 1\n[project]\ntest_globs = [\"*_test.go\"]\n[[check.commands]]\nrun = \"go test -json ./...\"\nreport = \"go-test-json\"\n[pipelines.default.stages.verify]\nagent = \"agy\"\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	_, probs = Resolve(cfg, Overrides{Standard: true, Agents: []string{"implement=claude"}}, []string{"claude"})
+	if len(probs) == 0 || !strings.Contains(probs[0].Msg, "agy can't verify yet") {
+		t.Errorf("problems %v", probs)
 	}
 }

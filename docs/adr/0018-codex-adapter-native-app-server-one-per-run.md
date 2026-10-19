@@ -62,6 +62,7 @@ The Codex spike ([#13](https://github.com/Erengun/oge/issues/13); codex-cli 0.15
 ## Consequences
 
 - `fileChange` items and `turn/diff/updated` are Claims. The turn diff omits shell writes, and a failed patch emits no item. The post-Attempt filesystem comparison stays authoritative (ADR-0010).
+- **Chat (amended 2026-10-19).** A Chat opens codex under `AutoPermissions` on the implementer's Launch profile: approvals are still declined, and the profile denies the Chat's hard-deny paths. Codex can't run the verifier yet (#60), so `--agent codex` leaves it to claude.
 - Domain-scoped network needs Codex's experimental `network_proxy` feature, and the domain list is silently ignored without it. Until that is adopted deliberately, Codex network is on/off only.
 - **Requirements before claiming the guarantee** (they do not block the spec):
   - Linux sandbox and profile behaviour (globs, read-inside-write, deny-read, network, `/tmp`).

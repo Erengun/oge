@@ -748,3 +748,22 @@ func TestCodexProbe(t *testing.T) {
 		t.Errorf("self-test with a .codex file = %v", err)
 	}
 }
+
+// A Chat opens codex under AutoPermissions on its Launch profile (D2);
+// any other mode is refused.
+func TestChatOpensUnderLaunchProfile(t *testing.T) {
+	if !agent.HasAutoMode(New()) {
+		t.Fatal("codex can't run a Chat")
+	}
+	h := &harness{t: t}
+	script := probeThen(t, "command_approval.jsonl")
+	asImplementer(t, script)
+	s, err := h.open(script, agent.LaunchSpec{Permissions: agent.AutoPermissions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := h.open(script, agent.LaunchSpec{Permissions: "plan"}); err == nil || !strings.Contains(err.Error(), "no plan permission mode") {
+		t.Errorf("plan mode: %v", err)
+	}
+}

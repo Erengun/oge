@@ -47,6 +47,11 @@ type Adapter struct {
 // New returns the adapter for the agy on PATH.
 func New() *Adapter { return &Adapter{} }
 
+// AutoMode is true: agy has no auto mode of its own, but its Launch
+// profile never asks, so a Chat runs it as is (D2, ADR-0023). agy can't
+// deny reads by path, so a Chat's hard denies are a disclosed Limitation.
+func (a *Adapter) AutoMode() bool { return true }
+
 const (
 	startTimeout = 30 * time.Second
 	closeGrace   = 5 * time.Second
@@ -59,7 +64,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 	if err != nil {
 		return nil, err
 	}
-	if spec.Permissions != "" {
+	if spec.Permissions != "" && spec.Permissions != agent.AutoPermissions {
 		return nil, fmt.Errorf("agy adapter: agy has no %s permission mode", spec.Permissions)
 	}
 	path := a.Path
@@ -239,6 +244,9 @@ type session struct {
 	emu       sync.Mutex
 	accepting bool
 	held      []agent.Event
+	// evClosed is set, under emu, once events is closed: nothing is sent
+	// on it after.
+	evClosed bool
 
 	mu          sync.Mutex
 	inFlight    bool
@@ -297,11 +305,13 @@ func (s *session) endAccept(err error) {
 		s.mu.Lock()
 		s.inFlight = false
 		s.mu.Unlock()
-	} else {
+	} else if !s.evClosed {
 		s.events <- agent.Event{Kind: agent.TurnAccepted}
 	}
 	for _, ev := range s.held {
-		s.events <- ev
+		if !s.evClosed {
+			s.events <- ev
+		}
 	}
 	s.held = nil
 }
@@ -310,6 +320,9 @@ func (s *session) endAccept(err error) {
 func (s *session) emit(ev agent.Event) {
 	s.emu.Lock()
 	defer s.emu.Unlock()
+	if s.evClosed {
+		return
+	}
 	if s.accepting {
 		s.held = append(s.held, ev)
 		return
@@ -400,6 +413,11 @@ func (s *session) readStdout(r *bufio.Reader) {
 	proc.Kill(s.cmd)
 	_ = proc.Wait(s.cmd)
 	close(s.exited)
+	// Events is closed once the process is gone (agent.Session).
+	s.emu.Lock()
+	s.evClosed = true
+	close(s.events)
+	s.emu.Unlock()
 }
 
 func (s *session) handleFrame(f map[string]any) {

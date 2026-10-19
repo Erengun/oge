@@ -77,10 +77,11 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 }
 
 // homeChatFor is the home's Chat, opened by the first message whose
-// implementer has an auto mode (D2); nil with the OGE_CHAT=0 escape hatch.
-// The Chat launches in the agent's auto mode under Öge's hard denies:
+// implementer can run one (D2); nil with the OGE_CHAT=0 escape hatch.
+// On claude the Chat launches in its auto mode under Öge's hard denies:
 // the PreToolUse hook and Bash parser, and the sandbox's deny-read of
-// $HOME and Öge's state roots (run.OpenChat). Its turns never change the
+// $HOME and Öge's state roots (run.OpenChat). codex and agy run their
+// Launch profiles. Its turns never change the
 // session's exit code: interactive oge exits 0 on a clean quit (D8).
 func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 	if env.Getenv(run.ChatFlag) == "0" {

@@ -4,7 +4,7 @@ fix the login bug
 --require
 held-out
 --implement
-claude:sonnet
---verify
 codex:gpt-5.5
+--verify
+claude:sonnet
 --dry-run
