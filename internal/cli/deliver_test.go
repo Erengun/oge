@@ -469,9 +469,13 @@ func TestDiffPlainAndOnATerminal(t *testing.T) {
 func TestShadowedTaskWordsSuggestOgeRun(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t)
-	code, _, errOut := f.run(t, "", "resume")
+	code, _, errOut := f.run(t, "", "status")
 	if code != ExitRefused || !strings.Contains(errOut, "isn't implemented yet") || !strings.Contains(errOut, `oge run "`) {
-		t.Errorf("resume: exit %d: %s", code, errOut)
+		t.Errorf("status: exit %d: %s", code, errOut)
+	}
+	code, _, errOut = f.run(t, "", "resume")
+	if code != ExitRefused || !strings.Contains(errOut, "needs one Run id") {
+		t.Errorf("bare resume: exit %d: %s", code, errOut)
 	}
 	code, _, errOut = f.run(t, "", "diff", "zzz")
 	if code != ExitRefused || !strings.Contains(errOut, "no Run zzz") || !strings.Contains(errOut, `oge run "`) {

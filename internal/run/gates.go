@@ -115,6 +115,14 @@ type walk struct {
 	promoted  map[string]bool      // new files a human promoted this Run
 	ambiguous []workspace.Withheld // the latest Candidate's Ambiguous files
 	resolved  []Resolution         // every promote and drop so far
+	// reviewPromoted is the current review session's flag: a promote in
+	// it routes the resolved Candidate through a fresh QA pass. A resume
+	// replays it; a fresh session starts it false in follow.
+	reviewPromoted bool
+	// repark is set on a resumed Run: a Gate that gets no decision (the
+	// terminal closed, the walk was cancelled) re-parks where it stood
+	// instead of ending the Run — a stopped Run stays resumable.
+	repark bool
 }
 
 // tamperEvent is one Tamper event as a Gate shows it.
@@ -235,8 +243,10 @@ func (w *walk) follow(ctx context.Context, e pipeline.Edge, a *Attempt, oracleVe
 		}
 		if e.To == gateAmbiguous {
 			// The review returns the promote or drop edge to the walk,
-			// which goes on from the resolved Candidate.
-			return w.review(ctx, a, oracleVersion, cr)
+			// which goes on from the resolved Candidate. A fresh session
+			// starts with nothing promoted.
+			w.reviewPromoted = false
+			return w.review(ctx, a, a.Candidate, oracleVersion, cr)
 		}
 		r, err := w.request(e.To, a, oracleVersion, cr)
 		var nb errNotBuilt
@@ -285,6 +295,9 @@ func (w *walk) decide(ctx context.Context, node string, r gate.Request) (gate.De
 		}
 		if err := w.l.Append(RecGateAbandoned, map[string]any{"pins": r.Pins, "why": why}); err != nil {
 			return d, nil, err
+		}
+		if w.repark {
+			return d, &step{gate: node, stop: Parked, why: []string{why}}, nil
 		}
 		return d, &step{gate: node, stop: InfrastructureStop, why: []string{why}}, nil
 	}
