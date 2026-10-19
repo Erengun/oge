@@ -86,6 +86,7 @@ func toolKind(name string) string {
 // what the tool returned: display only, as the event's Output is.
 type toolStep struct {
 	id     string
+	entry  int // its index in the transcript
 	done   bool
 	failed bool
 	output string
@@ -95,7 +96,7 @@ type toolStep struct {
 // once the agent's ToolResult arrives. bad marks a step the host denied.
 func (h *home) toolEntry(tool, target, id string, bad bool) tea.Cmd {
 	st := h.st
-	step := &toolStep{id: id}
+	step := &toolStep{id: id, entry: len(h.tr.entries)}
 	h.steps = append(h.steps[max(len(h.steps)-63, 0):], step)
 	raw := "  ● " + strings.TrimSpace(tool+" "+target)
 	return h.printBlock(raw, func(w int, expand bool) string {
@@ -135,7 +136,7 @@ func (h *home) toolResult(ev agent.Event) {
 		return
 	}
 	step.done, step.failed, step.output = true, ev.Failed, cleanLines(strings.ReplaceAll(ev.Output, "\t", "    "))
-	h.tr.gen++
+	h.tr.redraw(step.entry)
 }
 
 // outputLines is a step's output as rows, empty when it printed nothing.

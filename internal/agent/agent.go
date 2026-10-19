@@ -397,7 +397,8 @@ const (
 )
 
 // ClipOutput trims s for a ToolResult: trailing space dropped, at most
-// OutputMaxLines lines and OutputMaxBytes bytes kept, cut at a line end.
+// OutputMaxLines lines and OutputMaxBytes bytes kept, with an ellipsis line
+// when it cut.
 func ClipOutput(s string) string {
 	s = strings.TrimRight(strings.ReplaceAll(s, "\r\n", "\n"), " \t\r\n")
 	cut := false

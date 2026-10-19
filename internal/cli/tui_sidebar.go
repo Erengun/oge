@@ -188,7 +188,8 @@ func (h *home) sidebar(width, height int) []string {
 		}
 		if c := s.ctx; c != nil && c.Window > 0 {
 			pct := c.Percent()
-			n := inner - 5
+			label := fmt.Sprintf("%d%%", pct)
+			n := max(inner-8-len(label), 1) // key and space, the bar, a space and the label
 			full := min(pct*n/100, n)
 			paint := st.ok
 			switch {
@@ -197,7 +198,7 @@ func (h *home) sidebar(width, height int) []string {
 			case pct >= 60:
 				paint = st.warn
 			}
-			body = append(body, st.dim("ctx   ")+paint(strings.Repeat("█", full))+st.dim(strings.Repeat("░", n-full))+" "+st.dim(fmt.Sprintf("%d%%", pct)))
+			body = append(body, st.dim(fmt.Sprintf("%-6s", "ctx"))+" "+paint(strings.Repeat("█", full))+st.dim(strings.Repeat("░", n-full))+" "+st.dim(label))
 		}
 	}
 
@@ -282,12 +283,17 @@ func (h *home) sidebar(width, height int) []string {
 				cw++
 				cs = " " + cs
 			}
-			path := clean(f.path)
-			if w := ansi.StringWidth(path); w > inner-cw {
-				path = "…" + ansi.TruncateLeft(path, w-(inner-cw)+1, "")
+			// /apply leaves a held file out: its row says so, not only the count.
+			mark, mw := "", 0
+			if heldStatus(f.status) {
+				mark, mw = st.warn("⚠")+" ", 2
 			}
-			pad := strings.Repeat(" ", max(inner-ansi.StringWidth(path)-cw, 0))
-			body = append(body, path+pad+cs)
+			path := clean(f.path)
+			if w := ansi.StringWidth(path); w > inner-cw-mw {
+				path = "…" + ansi.TruncateLeft(path, w-(inner-cw-mw)+1, "")
+			}
+			pad := strings.Repeat(" ", max(inner-mw-ansi.StringWidth(path)-cw, 0))
+			body = append(body, mark+path+pad+cs)
 		}
 		if len(shown) < len(h.side.changes) {
 			body = append(body, st.dim(fmt.Sprintf("… +%d more", len(h.side.changes)-len(shown))))

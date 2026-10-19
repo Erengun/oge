@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/erengun/oge/internal/agent"
 )
 
 // fullHome is a home on the full screen at w by h, its WindowSizeMsg sent.
@@ -160,5 +161,32 @@ func TestFullKeyLeavesKeysTheFileRebound(t *testing.T) {
 	}
 	if _, ok := h.fullKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); !ok || !h.sidebarOff {
 		t.Error("ctrl+t did not toggle the sidebar by default")
+	}
+}
+
+func TestFullScreenSidebarContextRowShowsItsPercentage(t *testing.T) {
+	h := fullHome(120, 30)
+	h.side.ctx = &agent.ContextUse{Used: 126000, Window: 200000}
+	for _, l := range strings.Split(h.View().Content, "\n") {
+		if strings.Contains(l, "ctx ") {
+			if !strings.Contains(l, "63%") {
+				t.Errorf("the context row lost its percentage: %q", l)
+			}
+			return
+		}
+	}
+	t.Error("no ctx row in the sidebar")
+}
+
+func TestTranscriptRedrawKeepsEarlierEntries(t *testing.T) {
+	calls := [3]int{}
+	tr := &transcript{}
+	for i := range calls {
+		tr.add(trEntry{text: "x", render: func(int, bool) string { calls[i]++; return "line" }})
+	}
+	tr.render(40)
+	tr.redraw(1)
+	if got := tr.render(40); len(got) != 3 || calls != [3]int{1, 2, 2} {
+		t.Errorf("lines %d, renders %v", len(got), calls)
 	}
 }

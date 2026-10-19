@@ -36,9 +36,10 @@ func (h *home) toastView() []string {
 		return nil
 	}
 	st := h.st
-	glyph, border := st.ok("●"), st.dim
+	// The glyph carries the status; its colour only backs it up.
+	glyph, border := st.ok("✓"), st.dim
 	if t.bad {
-		glyph, border = st.bad("●"), st.bad
+		glyph, border = st.bad("✗"), st.bad
 	}
 	text := ansi.Truncate(t.text, max(h.width-10, 8), "…")
 	w := ansi.StringWidth(text) + 4

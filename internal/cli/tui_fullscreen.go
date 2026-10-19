@@ -39,7 +39,8 @@ type transcript struct {
 	rawN   int      // entries rendered
 	width  int
 	exp    bool
-	gen    int // bumped when entries change in place
+	gen    int   // bumped when every entry changes
+	starts []int // the first rendered line of each rendered entry
 	genAt  int
 	scroll bool // scrolled away from the bottom
 	end    int  // while scrolled: the line after the last one shown
@@ -57,13 +58,23 @@ type transcript struct {
 
 func (t *transcript) add(e trEntry) { t.entries = append(t.entries, e) }
 
+// redraw drops the cache from entry i on, for an entry that changed in place:
+// the entries before it keep their rendered lines.
+func (t *transcript) redraw(i int) {
+	if i < 0 || i >= t.rawN {
+		return
+	}
+	t.lines, t.starts, t.rawN = t.lines[:t.starts[i]], t.starts[:i], i
+}
+
 // render brings the cached lines up to date at width.
 func (t *transcript) render(width int) []string {
 	if t.width != width || t.exp != t.expand || t.gen != t.genAt || t.rawN > len(t.entries) {
-		t.lines, t.rawN, t.width, t.exp, t.genAt = nil, 0, width, t.expand, t.gen
+		t.lines, t.starts, t.rawN, t.width, t.exp, t.genAt = nil, nil, 0, width, t.expand, t.gen
 	}
 	for ; t.rawN < len(t.entries); t.rawN++ {
 		e := t.entries[t.rawN]
+		t.starts = append(t.starts, len(t.lines))
 		text := e.text
 		if e.render != nil {
 			text = e.render(width, t.expand)
@@ -289,10 +300,10 @@ func (h *home) compose(v tea.View) tea.View {
 		rows[last] = ansi.Truncate(rows[last], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[last]), 0)) + chip
 		t.chipX0 = x0 + 1
 	}
-	if toast := h.toastView(); len(toast) > 0 && vh >= len(toast) {
+	if toast := h.toastView(); len(toast) > 0 && vh > 0 {
 		w := ansi.StringWidth(ansi.Strip(toast[0]))
 		x0 := max(mainW-w-1, 0)
-		for i, tl := range toast {
+		for i, tl := range toast[:min(len(toast), vh)] {
 			r := headRows + i
 			rows[r] = ansi.Truncate(rows[r], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[r]), 0)) + tl
 		}

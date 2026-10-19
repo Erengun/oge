@@ -38,7 +38,7 @@ SOFTWARE.
 -------------------------------------------------------------------------------
 cavaldos/pitago
 https://github.com/cavaldos/pitago
-Location in this repository: internal/cli/tui_fullscreen.go, tui_sidebar.go, tui_blocks.go, tui_markdown.go, tui_input.go (layout, section style, tool-kind names and framed tables adapted)
+Location in this repository: internal/cli/tui_fullscreen.go, tui_sidebar.go, tui_blocks.go, tui_markdown.go, tui_input.go (layout, section style, tool-kind names, unframed tables, result trees and the toast box adapted)
 -------------------------------------------------------------------------------
 
 MIT License

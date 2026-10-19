@@ -100,8 +100,8 @@ func binaryNotices(t *testing.T) string {
 		m := mods[p]
 		section(t, &b, m.Path+" "+m.Version, m.Dir)
 	}
-	// Not a module: the home's full-screen layout, tool-kind names and
-	// framed tables are adapted from pitago.
+	// Not a module: the home's full-screen layout, tool-kind names,
+	// unframed tables, result trees and the toast box are adapted from pitago.
 	section(t, &b, "pitago (https://github.com/cavaldos/pitago), adapted in internal/cli", "../../internal/cli/thirdparty/pitago")
 	return b.String()
 }
