@@ -196,7 +196,8 @@ func (st styles) codeBlock(code []string, lang string, width int) []string {
 		l = ansi.Truncate(highlight(st, l, lang), max(width-2, 4), "…")
 		out = append(out, gutter+l)
 	}
-	return out
+	// The block is closed where it ends, as it was opened.
+	return append(out, st.dim("╰"+strings.Repeat("─", min(max(width-3, 4), 40))))
 }
 
 // Keywords of the languages the agents write most; a word is a keyword in
@@ -303,11 +304,12 @@ func (st styles) table(rows []string, width int) []string {
 			cw[j] = max(cw[j], ansi.StringWidth(ansi.Strip(st.inline(c))))
 		}
 	}
-	// 3 cells of frame per column plus the last border.
+	// A table is its header, a rule under it and its rows, columns two
+	// spaces apart, as pitago draws it: no grid.
 	for sum := func() int {
-		t := 1
+		t := 2 * (n - 1)
 		for _, c := range cw {
-			t += c + 3
+			t += c
 		}
 		return t
 	}; sum() > width; {
@@ -322,18 +324,9 @@ func (st styles) table(rows []string, width int) []string {
 		}
 		cw[k]--
 	}
-	line := func(l, m, r string) string {
-		parts := make([]string, n)
-		for j := range parts {
-			parts[j] = strings.Repeat("─", cw[j]+2)
-		}
-		return st.dim(l + strings.Join(parts, m) + r)
-	}
 	var out []string
-	out = append(out, line("┌", "┬", "┐"))
 	for i, r := range cells {
 		var b strings.Builder
-		b.WriteString(st.dim("│"))
 		for j := 0; j < n; j++ {
 			c := ""
 			if j < len(r) {
@@ -343,12 +336,19 @@ func (st styles) table(rows []string, width int) []string {
 				c = st.bold(ansi.Strip(c))
 			}
 			c = ansi.Truncate(c, cw[j], "…")
-			b.WriteString(" " + c + strings.Repeat(" ", max(cw[j]-ansi.StringWidth(c), 0)) + " " + st.dim("│"))
+			if j > 0 {
+				b.WriteString("  ")
+			}
+			b.WriteString(c + strings.Repeat(" ", max(cw[j]-ansi.StringWidth(c), 0)))
 		}
-		out = append(out, b.String())
+		out = append(out, strings.TrimRight(b.String(), " "))
 		if i == 0 {
-			out = append(out, line("├", "┼", "┤"))
+			parts := make([]string, n)
+			for j := range parts {
+				parts[j] = strings.Repeat("─", cw[j])
+			}
+			out = append(out, st.dim(strings.Join(parts, "  ")))
 		}
 	}
-	return append(out, line("└", "┴", "┘"))
+	return out
 }

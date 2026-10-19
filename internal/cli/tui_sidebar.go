@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
@@ -29,6 +30,9 @@ type sideState struct {
 	changes []diffFile // the last cut's files with their +/- counts
 	tokens  *int       // what the agent reported, never estimated
 	cost    *float64
+	turns   int               // turns this session has settled
+	steps   int               // tool steps it has taken
+	ctx     *agent.ContextUse // how full the context is, when reported
 }
 
 // setSetup stores the resolved config: the setup bar's lines and what the
@@ -138,10 +142,15 @@ func (h *home) sidebar(width, height int) []string {
 		state, dot = "waiting for you", st.warn("●")
 	case h.turn != nil:
 		state, dot = "working", st.accent("●")
+		if tool, _, _ := strings.Cut(h.side.step, " "); tool != "" {
+			state += " · " + tool
+		}
+	case h.verify != nil:
+		state, dot = "verifying", st.accent("●")
 	case h.run != nil:
 		state, dot = "running", st.accent("●")
 	}
-	body = append(body, dot+" "+st.bold(state))
+	body = append(body, ansi.Truncate(dot+" "+st.bold(state), inner, "…"))
 	agentName, model := h.side.binding()
 	if agentName != "" {
 		kv("agent", clean(agentName))
@@ -163,11 +172,33 @@ func (h *home) sidebar(width, height int) []string {
 	case h.side.took > 0:
 		kv("last", elapsed(h.side.took))
 	}
-	if t := h.side.tokens; t != nil {
-		kv("tokens", fmt.Sprint(*t))
-	}
-	if c := h.side.cost; c != nil {
-		kv("cost", fmt.Sprintf("$%.3f", *c))
+
+	// STATS: counted from the events Öge saw; tokens, cost and context only
+	// when the agent reported them, never estimated.
+	if s := h.side; s.turns > 0 || s.steps > 0 || s.tokens != nil || s.cost != nil || s.ctx != nil {
+		rule()
+		head("stats")
+		kv("turns", fmt.Sprint(s.turns))
+		kv("steps", fmt.Sprint(s.steps))
+		if s.tokens != nil {
+			kv("tokens", fmt.Sprint(*s.tokens))
+		}
+		if s.cost != nil {
+			kv("cost", fmt.Sprintf("$%.3f", *s.cost))
+		}
+		if c := s.ctx; c != nil && c.Window > 0 {
+			pct := c.Percent()
+			n := inner - 5
+			full := min(pct*n/100, n)
+			paint := st.ok
+			switch {
+			case pct >= 85:
+				paint = st.bad
+			case pct >= 60:
+				paint = st.warn
+			}
+			body = append(body, st.dim("ctx   ")+paint(strings.Repeat("█", full))+st.dim(strings.Repeat("░", n-full))+" "+st.dim(fmt.Sprintf("%d%%", pct)))
+		}
 	}
 
 	// ATTENTION
@@ -217,20 +248,34 @@ func (h *home) sidebar(width, height int) []string {
 		body = append(body, st.dim("no Agent limitations"))
 	}
 
-	// CHANGES
+	// WORKSPACE: at the bottom, with the room the sections above leave.
+	top := body
+	body = nil
 	rule()
-	head("changes")
+	title := "workspace"
+	if parts := strings.Split(h.title, " · "); len(parts) > 2 {
+		title += " · " + clean(parts[len(parts)-1])
+	}
+	head(title)
+	room := max(height-2-len(top)-len(body), 1)
 	switch {
 	case h.turn != nil && h.turn.changed > 0:
 		body = append(body, st.dim(files(h.turn.changed)+", not checked yet"))
 	case h.verify != nil:
 		body = append(body, st.dim(files(h.verify.changed)))
 	case len(h.side.changes) > 0:
-		for i, f := range h.side.changes {
-			if i == 8 {
-				body = append(body, st.dim(fmt.Sprintf("… +%d more", len(h.side.changes)-i)))
-				break
+		shown := h.side.changes
+		held := 0
+		for _, f := range shown {
+			if heldStatus(f.status) {
+				held++
 			}
+		}
+		limit := max(room-1, 1)
+		if len(shown) > limit {
+			shown = shown[:max(limit-1, 1)]
+		}
+		for _, f := range shown {
 			cs := counts(st, f.add, f.del)
 			cw := ansi.StringWidth(cs)
 			if cw > 0 {
@@ -243,13 +288,21 @@ func (h *home) sidebar(width, height int) []string {
 			}
 			pad := strings.Repeat(" ", max(inner-ansi.StringWidth(path)-cw, 0))
 			body = append(body, path+pad+cs)
-			if heldStatus(f.status) {
-				body = append(body, "  "+st.warn(f.status))
-			}
+		}
+		if len(shown) < len(h.side.changes) {
+			body = append(body, st.dim(fmt.Sprintf("… +%d more", len(h.side.changes)-len(shown))))
+		}
+		if held > 0 {
+			body = append(body, st.warn("⚠")+" "+st.dim(plural(held, "file")+" held back"))
 		}
 	default:
-		body = append(body, st.dim("none"))
+		body = append(body, st.dim("no changes"))
 	}
+	// A gap keeps the workspace on the pane's last rows.
+	for len(top)+len(body) < height-2 {
+		top = append(top, "")
+	}
+	body = append(top, body...)
 
 	// The box: its rows are height tall.
 	out := make([]string, 0, height)

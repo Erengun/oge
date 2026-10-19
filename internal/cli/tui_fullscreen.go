@@ -224,7 +224,12 @@ func (h *home) welcome() []string {
 	if h.termW >= sidebarMinCols {
 		hints += " · ctrl+t sidebar"
 	}
-	return []string{"", "  " + st.accent(st.bold("oge")) + "  " + ready, "  " + st.dim(hints), ""}
+	out := []string{"", "  " + st.accent(st.bold("oge")) + "  " + ready}
+	if len(h.setup) > 0 {
+		// What the next turn uses, in a line: agent · mode · verifier.
+		out = append(out, "  "+st.dim(strings.Replace(h.setup[0], "implement ", "", 1)))
+	}
+	return append(out, "  "+st.dim(hints), "")
 }
 
 // compose lays out the screen: the header, the transcript viewport, the live
@@ -284,10 +289,13 @@ func (h *home) compose(v tea.View) tea.View {
 		rows[last] = ansi.Truncate(rows[last], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[last]), 0)) + chip
 		t.chipX0 = x0 + 1
 	}
-	if toast := h.toastView(); toast != "" && vh > 0 {
-		w := ansi.StringWidth(ansi.Strip(toast))
+	if toast := h.toastView(); len(toast) > 0 && vh >= len(toast) {
+		w := ansi.StringWidth(ansi.Strip(toast[0]))
 		x0 := max(mainW-w-1, 0)
-		rows[headRows] = ansi.Truncate(rows[headRows], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[headRows]), 0)) + toast
+		for i, tl := range toast {
+			r := headRows + i
+			rows[r] = ansi.Truncate(rows[r], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[r]), 0)) + tl
+		}
 	}
 	rows = append(rows, live...)
 	for len(rows) < H {

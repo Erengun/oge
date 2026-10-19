@@ -28,7 +28,10 @@ func (h *home) fullBox(width int, blank string) (lines []string, curRow, curCol 
 	empty := len(h.comp.lines) == 1 && len(h.comp.lines[0]) == 0
 	// Two text rows where the screen has the room, one on a short one.
 	minRows := 1
-	if h.termH >= 30 {
+	switch {
+	case h.termH >= 40:
+		minRows = 3
+	case h.termH >= 30:
 		minRows = 2
 	}
 	for len(rows) < minRows {
@@ -169,7 +172,8 @@ func (h *home) statusParts() (left []string, right string) {
 	for _, k := range keys {
 		left = append(left, st.dim(k))
 	}
-	if len(h.setup) > 0 {
+	// The sidebar names the agent and mode already.
+	if len(h.setup) > 0 && !h.sidebarOn() {
 		right = strings.Replace(h.setup[0], "implement ", "", 1)
 	}
 	return left, right
@@ -196,13 +200,15 @@ func (h *home) menuLinesFull() []string {
 	out := []string{st.dim("╭" + strings.Repeat("─", width-2) + "╮")}
 	for i := first; i < last; i++ {
 		c := items[i].(slashItem).cmd
+		// The command is bold and its argument hint dim.
+		name, args, _ := strings.Cut(c.usage, " ")
+		usage := st.bold(name) + optional(" ", st.dim(args), args != "")
 		if i == idx {
-			sel := " ▸ " + c.usage + " — " + c.desc
-			sel = ansi.Truncate(sel, inner, "…")
+			sel := ansi.Truncate(" ▸ "+name+optional(" ", args, args != "")+" — "+c.desc, inner, "…")
 			sel += strings.Repeat(" ", max(inner-ansi.StringWidth(sel), 0))
-			out = append(out, st.dim("│")+" "+st.user(sel)+" "+st.dim("│"))
+			out = append(out, st.dim("│")+" "+st.user(st.bold(sel))+" "+st.dim("│"))
 		} else {
-			out = append(out, row("   "+c.usage+st.dim(" — "+c.desc)))
+			out = append(out, row("   "+usage+st.dim(" — "+c.desc)))
 		}
 	}
 	if last < n {

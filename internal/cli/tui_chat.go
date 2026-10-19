@@ -224,6 +224,16 @@ func (p cutGates) Decide(ctx context.Context, r gate.Request) (gate.Decision, er
 // ogeLine is one of Öge's own lines: at the margin, after the marker.
 func (h *home) ogeLine(text string) string {
 	// The glyph carries the status; its colour only backs it up.
+	if h.full {
+		// A Verdict line takes its trust colour, bold, and its actions go dim.
+		paint := map[string]func(string) string{"✓": h.st.ok, "✗": h.st.bad, "■": h.st.warn}
+		for glyph, p := range paint {
+			if strings.HasPrefix(text, glyph) {
+				head, rest, _ := strings.Cut(text, " · ")
+				return "  " + h.st.dim("oge ›") + " " + p(h.st.bold(head)) + optional(h.st.dim(" · "), h.st.dim(rest), rest != "")
+			}
+		}
+	}
 	switch {
 	case strings.HasPrefix(text, "✓"):
 		text = h.st.ok("✓") + strings.TrimPrefix(text, "✓")
@@ -443,6 +453,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		}
 		if s, ok := activityStep(ev); ok {
 			h.side.step = s
+			h.side.steps++
 			if h.full {
 				return h.toolEntry(clean(ev.Tool), clean(ev.Target), ev.ToolID, false)
 			}
@@ -452,6 +463,9 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		h.toolResult(ev)
 		return nil
 	case agent.Usage:
+		if ev.Context != nil {
+			h.side.ctx = ev.Context
+		}
 		if ev.Tokens != nil {
 			h.side.tokens = ev.Tokens
 		}
@@ -723,6 +737,7 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 func (h *home) endTurn() []string {
 	text, queued := h.comp.expanded(), h.turn.queued
 	h.turn = nil
+	h.side.turns++
 	if !h.side.since.IsZero() {
 		h.side.took = h.clock().Sub(h.side.since)
 	}

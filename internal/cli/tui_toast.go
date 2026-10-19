@@ -29,18 +29,24 @@ func (h *home) notice(text string, bad bool) tea.Cmd {
 	return tea.Tick(toastFor, func(time.Time) tea.Msg { return toastGoneMsg{seq} })
 }
 
-func (h *home) toastView() string {
+// toastView is the toast as a small rounded box, one row per line.
+func (h *home) toastView() []string {
 	t := h.toast
 	if t == nil {
-		return ""
+		return nil
 	}
 	st := h.st
-	glyph := st.ok("✓")
+	glyph, border := st.ok("●"), st.dim
 	if t.bad {
-		glyph = st.bad("✗")
+		glyph, border = st.bad("●"), st.bad
 	}
-	text := ansi.Truncate(t.text, max(h.width-8, 8), "…")
-	return st.border("▏") + " " + glyph + " " + text + " "
+	text := ansi.Truncate(t.text, max(h.width-10, 8), "…")
+	w := ansi.StringWidth(text) + 4
+	return []string{
+		border("╭" + strings.Repeat("─", w) + "╮"),
+		border("│") + " " + glyph + " " + text + " " + border("│"),
+		border("╰" + strings.Repeat("─", w) + "╯"),
+	}
 }
 
 // copyText puts text on the clipboard (OSC 52, redacted like /copy) and says

@@ -156,6 +156,11 @@ func shotSession(t *testing.T, dir, bin string, cols, rows int) {
 	shoot("6-palette")
 	s.type_("\x15") // ctrl+u: the box is empty again
 	s.composer()
+	// alt+y copies the last reply and says so in a toast.
+	s.type_("\x1by")
+	s.expectScreen("copied the last reply")
+	settle()
+	shoot("7-toast")
 	s.quitChat(f)
 	// The whole stream too, for a question the screens can't answer.
 	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%dx%d.raw", cols, rows)), []byte(s.out.String()), 0o644); err != nil {

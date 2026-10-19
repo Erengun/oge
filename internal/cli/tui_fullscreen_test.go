@@ -100,7 +100,7 @@ func TestMarkdownWithoutColourWritesNoEscapes(t *testing.T) {
 	if strings.Contains(got, "\x1b") {
 		t.Errorf("escapes with no colour: %q", got)
 	}
-	for _, want := range []string{"Title", "`code`", "bold text", "• one", "func A() {}", "┌", "│ 1"} {
+	for _, want := range []string{"Title", "`code`", "bold text", "• one", "func A() {}", "──", "1  2"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q missing from:\n%s", want, got)
 		}
