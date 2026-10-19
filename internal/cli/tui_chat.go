@@ -48,6 +48,9 @@ type homeChat struct {
 	// verdict is the cut's Verdict line, and what can take its Run.
 	verdict func(res *run.Result, changed int) (string, *lastRun)
 	agents  map[string]agent.Adapter
+	// shown logs that ask advice was displayed (Chat.AdviceShown); a test
+	// seam, nil in the product.
+	shown func(c *run.Chat, consultation string)
 
 	mu sync.Mutex
 	c  *run.Chat

@@ -90,6 +90,8 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 		trigger         string
 		outcome, advice string
 		sent            bool
+		dismissed       bool // the user dismissed its advice (AdviceDismissed)
+		shown           bool // the TUI displayed its ask advice (AdviceShown)
 	}
 	byID := map[string]*consult{}
 	var order []string
@@ -112,7 +114,7 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 	}
 	for _, rec := range recs {
 		switch rec.Type {
-		case RecConsultationStarted, RecConsultationEnded, RecAdviceSent:
+		case RecConsultationStarted, RecConsultationEnded, RecAdviceSent, RecAdviceDismissed, RecAdviceShown:
 		default:
 			continue
 		}
@@ -143,6 +145,14 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 			if c := byID[d.Consultation]; c != nil {
 				c.outcome, c.advice = d.Outcome, d.Advice
 			}
+		case RecAdviceDismissed:
+			if c := byID[d.Consultation]; c != nil {
+				c.dismissed = true
+			}
+		case RecAdviceShown:
+			if c := byID[d.Consultation]; c != nil {
+				c.shown = true
+			}
 		case RecAdviceSent:
 			if d.Turn >= from && d.Turn <= to {
 				sends = append(sends, AdviceSent{Consultation: d.Consultation, Turn: d.Turn, How: d.How})
@@ -164,6 +174,16 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 		if c.sent || c.outcome == "" || c.turn < from || c.turn > to {
 			continue
 		}
+		// A /advise Consultation advised but neither sent nor dismissed still
+		// waits for the user: not this cut's to count, or a later cut would
+		// count it again as Sent or Dismissed.
+		if c.trigger == "user" && c.outcome == ConsultAdvised && !c.dismissed {
+			continue
+		}
+		if c.trigger == TriggerAsk && c.outcome == ConsultAdvised && !c.shown {
+			out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: OutcomeNotShown, Trigger: c.trigger, Before: c.before})
+			continue
+		}
 		if c.trigger == TriggerAsk && c.outcome == ConsultAdvised {
 			out.Shown = append(out.Shown, Shown{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Advice: c.advice, Before: c.before})
 			continue
@@ -172,6 +192,10 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 	}
 	return out
 }
+
+// OutcomeNotShown is a Dismissed outcome: an ask Consultation advised, but
+// the TUI never displayed its advice (no AdviceShown).
+const OutcomeNotShown = "not shown"
 
 // chatAdvice is consultationsIn over the Chat's log now.
 func (c *Chat) chatAdvice(from, to int) (CutAdvice, error) {

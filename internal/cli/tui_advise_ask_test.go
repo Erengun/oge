@@ -183,3 +183,38 @@ func TestAskAdviceStaleLandingKeepsNewerConsult(t *testing.T) {
 		t.Errorf("consult 2 lost: %+v", h.turn.askAdv)
 	}
 }
+
+// AdviceShown is logged only when the advice is displayed: not for a
+// failed, empty, cancelled or stale (discarded) landing.
+func TestAskAdviceLoggedShownOnlyWhenDisplayed(t *testing.T) {
+	var logged []string
+	setup := func() (*home, *agent.Ask) {
+		var got []agent.Answer
+		h, a := askHome(&got)
+		h.chat = &homeChat{c: &run.Chat{}, shown: func(_ *run.Chat, id string) { logged = append(logged, id) }}
+		h.turn.askAdv = &askAdvice{ask: a, cancel: func() {}, running: true}
+		return h, a
+	}
+	for name, m := range map[string]askAdviceMsg{
+		"failed":    {err: errors.New("boom")},
+		"empty":     {advice: &run.Advice{ID: "e", Text: " "}},
+		"cancelled": {err: context.Canceled},
+	} {
+		h, a := setup()
+		m.ask = a
+		h.askAdviceLanded(m)
+		if len(logged) != 0 {
+			t.Fatalf("%s: logged %v", name, logged)
+		}
+	}
+	h, a := setup()
+	h.turn.askAdv.seq = 1
+	h.askAdviceLanded(askAdviceMsg{ask: a, seq: 2, advice: &run.Advice{ID: "stale", Text: "1"}})
+	if len(logged) != 0 {
+		t.Fatalf("stale: logged %v", logged)
+	}
+	h.askAdviceLanded(askAdviceMsg{ask: a, seq: 1, advice: &run.Advice{ID: "k-1", Text: "2. blue"}})
+	if len(logged) != 1 || logged[0] != "k-1" {
+		t.Fatalf("displayed: logged %v", logged)
+	}
+}

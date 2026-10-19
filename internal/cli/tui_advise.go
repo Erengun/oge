@@ -249,6 +249,11 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 		return h.println(h.ogeLine(h.st.dim("advising cancelled"))), true
 	case key == "esc" && a.shown:
 		h.adv = nil
+		if h.chat != nil && a.advice != nil {
+			if c := h.chat.get(); c != nil && c == a.chat {
+				_ = c.DismissAdvice(a.advice.ID)
+			}
+		}
 		return h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent"))), true
 	case !a.shown || !h.comp.empty():
 		return nil, false
