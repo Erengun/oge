@@ -28,6 +28,9 @@ type Shown struct {
 	Agent        string `json:"agent,omitempty"`
 	Model        string `json:"model,omitempty"`
 	Advice       string `json:"advice,omitempty"` // the advice blob's id
+	// Before: asked after the turn was cut (not in a turn of this cut), so
+	// Turn is the cut's first, and the Receipt says "before" it.
+	Before bool `json:"before,omitempty"`
 }
 
 // AdviceSent is a Consultation's advice that became a turn.
@@ -53,6 +56,20 @@ type Dismissed struct {
 	// Outcome is the Consultation's: advised (and not sent), cancelled or failed.
 	Outcome string `json:"outcome"`
 	Trigger string `json:"trigger,omitempty"`
+	Before  bool   `json:"before,omitempty"` // as Shown.Before
+}
+
+// resolvedIDs are the Consultations this snapshot counted as Dismissed or
+// Shown: a Sent one is counted by its AdviceSent's turn, never twice.
+func (a CutAdvice) resolvedIDs() []string {
+	var ids []string
+	for _, d := range a.Dismissed {
+		ids = append(ids, d.Consultation)
+	}
+	for _, h := range a.Shown {
+		ids = append(ids, h.Consultation)
+	}
+	return ids
 }
 
 func (a CutAdvice) empty() bool {
@@ -61,12 +78,14 @@ func (a CutAdvice) empty() bool {
 
 // consultationsIn reads recs, a Chat log, for turns from to to. A
 // Consultation still running has no outcome yet, so it is neither. One
-// whose ConsultationStarted follows a Delivered record at its own turn was
-// asked between the delivery and the next turn: it belongs to the next
-// cut's window (turn+1), or no cut would ever show it.
+// that no delivered cut's snapshot counted (a Delivered record lists the
+// ids it resolved) and whose turn is at or before the delivered one was in
+// flight at that cut, or asked after it: it belongs to the next cut's
+// window (turn+1, Before), or no cut would ever show it.
 func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice {
 	type consult struct {
 		turn            int
+		before          bool
 		agent, model    string
 		trigger         string
 		outcome, advice string
@@ -76,14 +95,22 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 	var order []string
 	var sends []AdviceSent
 	delivered := 0
+	counted := map[string]bool{} // resolved by a delivered cut's snapshot
 	for _, rec := range recs {
 		if rec.Type == RecDelivered {
-			var d struct{ Turn int }
-			if json.Unmarshal(rec.Data, &d) == nil && d.Turn > delivered {
-				delivered = d.Turn
+			var d struct {
+				Turn     int
+				Resolved []string
 			}
-			continue
+			if json.Unmarshal(rec.Data, &d) == nil {
+				delivered = max(delivered, d.Turn)
+				for _, id := range d.Resolved {
+					counted[id] = true
+				}
+			}
 		}
+	}
+	for _, rec := range recs {
 		switch rec.Type {
 		case RecConsultationStarted, RecConsultationEnded, RecAdviceSent:
 		default:
@@ -107,11 +134,11 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 			if byID[d.Consultation] == nil {
 				order = append(order, d.Consultation)
 			}
-			turn := d.Turn
-			if turn > 0 && turn <= delivered {
-				turn = delivered + 1
+			turn, before := d.Turn, false
+			if turn > 0 && turn <= delivered && !counted[d.Consultation] {
+				turn, before = delivered+1, true
 			}
-			byID[d.Consultation] = &consult{turn: turn, agent: d.Advisor.Agent, model: d.Advisor.Model, trigger: d.Trigger}
+			byID[d.Consultation] = &consult{turn: turn, before: before, agent: d.Advisor.Agent, model: d.Advisor.Model, trigger: d.Trigger}
 		case RecConsultationEnded:
 			if c := byID[d.Consultation]; c != nil {
 				c.outcome, c.advice = d.Outcome, d.Advice
@@ -138,10 +165,10 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 			continue
 		}
 		if c.trigger == TriggerAsk && c.outcome == ConsultAdvised {
-			out.Shown = append(out.Shown, Shown{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Advice: c.advice})
+			out.Shown = append(out.Shown, Shown{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Advice: c.advice, Before: c.before})
 			continue
 		}
-		out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: c.outcome, Trigger: c.trigger})
+		out.Dismissed = append(out.Dismissed, Dismissed{Consultation: id, Turn: c.turn, Agent: c.agent, Model: c.model, Outcome: c.outcome, Trigger: c.trigger, Before: c.before})
 	}
 	return out
 }
