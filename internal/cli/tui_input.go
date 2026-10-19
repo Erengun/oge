@@ -134,7 +134,7 @@ func (h *home) statusParts() (left []string, right string) {
 		state = st.accent("●") + " " + st.bold("cancelling verification…")
 	case h.verify != nil && h.verify.gate != nil:
 		state = st.warn("●") + " " + st.bold("waiting at its Gate")
-		keys = []string{"/apply", "/ commands", files(h.verify.changed)}
+		keys = []string{"/apply", "/ commands"}
 	case h.verify != nil:
 		step := h.verify.step
 		if step == "" {
@@ -160,6 +160,11 @@ func (h *home) statusParts() (left []string, right string) {
 			keys = []string{submit + " " + action, "/ commands", "! shell", "tab setup"}
 		}
 	}
+	if h.turn != nil && h.verify != nil {
+		// The cut's Check or Gate goes on while the next turn runs: its state
+		// stays on screen, as the line above the box showed it.
+		keys = append([]string{h.verifyNote()}, keys...)
+	}
 	left = []string{state}
 	for _, k := range keys {
 		left = append(left, st.dim(k))
@@ -178,7 +183,7 @@ func (h *home) menuLinesFull() []string {
 	st := h.st
 	items := h.menu.Items()
 	n := len(items)
-	width := max(h.width, 20)
+	width := max(h.width, 8)
 	inner := width - 4
 	room := max(min(8, h.termH-16), 3)
 	idx := h.menu.Index()
@@ -205,4 +210,20 @@ func (h *home) menuLinesFull() []string {
 	}
 	out = append(out, row(st.dim(fmt.Sprintf(" (%d/%d) Tab complete · Enter accept · Esc close", idx+1, n))))
 	return append(out, st.dim("╰"+strings.Repeat("─", width-2)+"╯"))
+}
+
+// verifyNote is the cut's state, in a few words, for the status while a turn
+// runs.
+func (h *home) verifyNote() string {
+	switch {
+	case h.verify.stopped:
+		return "cancelling verification…"
+	case h.verify.gate != nil:
+		return "cut waiting at its Gate · /apply"
+	}
+	step := h.verify.step
+	if step == "" {
+		step = "verifying…"
+	}
+	return "cut " + step + " · " + elapsed(h.clock().Sub(h.verify.since))
 }

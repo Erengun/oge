@@ -86,7 +86,7 @@ func (h *home) toolEntry(tool, target string, bad bool) tea.Cmd {
 			dot = st.bad("●")
 		}
 		if toolKind(tool) == toolShell && target != "" && !bad {
-			return shellBox(st, tool, target, w, expand)
+			return shellBox(st, tool, target, w, expand, h.kb.expandLabel())
 		}
 		line := "  " + dot + " " + st.bold(clean(tool))
 		if target != "" {
@@ -98,7 +98,7 @@ func (h *home) toolEntry(tool, target string, bad bool) tea.Cmd {
 
 // shellBox draws a command in a rounded box under the tool's name. A long
 // command is cut to a few rows unless the human expanded the output.
-func shellBox(st styles, tool, cmd string, width int, expand bool) string {
+func shellBox(st styles, tool, cmd string, width int, expand bool, expandKey string) string {
 	title := " " + strings.ToLower(clean(tool)) + " "
 	// The box takes the pane's width, as pitago's does: the command on top.
 	inner := max(width-6, 12)
@@ -106,7 +106,7 @@ func shellBox(st styles, tool, cmd string, width int, expand bool) string {
 	const collapsed = 4
 	if !expand && len(lines) > collapsed {
 		more := len(lines) - collapsed
-		lines = append(lines[:collapsed:collapsed], fmt.Sprintf("… %d more lines · ctrl+o to expand", more))
+		lines = append(lines[:collapsed:collapsed], fmt.Sprintf("… %d more lines · %s to expand", more, expandKey))
 		lines[collapsed] = st.dim(lines[collapsed])
 	}
 	b := st.border

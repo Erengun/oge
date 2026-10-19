@@ -259,7 +259,7 @@ func agentLines(text string) string {
 // chatSubmit sends text as the next turn, opening the Chat first.
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
-	h.side.since, h.side.step = h.clock(), ""
+	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	h.comp = h.composer()
 	edited := h.adviceEdit
 	h.adviceEdit = nil
@@ -908,6 +908,7 @@ func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) 
 	}
 	first, _, _ := strings.Cut(text, "\n")
 	h.turn = &chatTurn{text: first, frozen: f, queued: queued, oge: true}
+	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	ctx := h.ctx
 	return func() tea.Msg {
 		ch, err := c.SendFeedback(ctx, text)

@@ -54,9 +54,9 @@ func (st styles) renderMarkdown(text string, width, indent int) string {
 			h := st.bold(st.inline(m[2]))
 			switch len(m[1]) {
 			case 1:
-				h = st.ask(st.bold(strings.ToUpper(ansi.Strip(st.inline(m[2])))))
+				h = st.accent(st.bold(strings.ToUpper(ansi.Strip(st.inline(m[2])))))
 			case 2:
-				h = st.ask(st.bold(ansi.Strip(st.inline(m[2]))))
+				h = st.accent(st.bold(ansi.Strip(st.inline(m[2]))))
 			}
 			for _, wl := range strings.Split(ansi.Wrap(h, w, ""), "\n") {
 				add(wl)

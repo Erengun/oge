@@ -165,6 +165,7 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 	}
 	h.last, h.thread = nil, nil
 	h.side.verdict, h.side.outcome, h.side.changes, h.side.tokens, h.side.cost = "", "", nil, nil, nil
+	h.side.took = 0
 	h.unchecked, h.uncheckedChanged = false, 0
 	// A fresh task is a fresh Chat: the next message opens a new Session,
 	// and the old one's cut in flight ends unshown.

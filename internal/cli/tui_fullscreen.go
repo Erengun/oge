@@ -479,18 +479,20 @@ func (h *home) leaveTranscript(w io.Writer) {
 	fmt.Fprintln(w, strings.Join(t.render(width), "\n"))
 }
 
-// unclip blanks the lines at the top of the viewport that are the tail of a
-// framed block (a table, a box, a code block) whose start scrolled out: a
-// border fragment floating under the header reads as a glitch. The line
+// unclip blanks the closing border lines at the top of the viewport whose
+// block (a box, a table) started above it: a border fragment floating under
+// the header reads as a glitch. The line
 // count stays, so scrolling and selection are unaffected.
 func unclip(body []string, start int) []string {
 	if start == 0 {
 		return body
 	}
 	body = slices.Clone(body) // the lines are the transcript's cache
+	// Only a closing border line (╰…╯) is the tail of a block; a "│ code"
+	// row is content and stays.
 	for i, l := range body {
 		t := strings.TrimLeft(ansi.Strip(l), " ")
-		if t == "" || !strings.ContainsAny(t[:min(len(t), 3)], "│╰└├┘┤┴") {
+		if !strings.HasPrefix(t, "╰") && !strings.HasPrefix(t, "└") {
 			break
 		}
 		body[i] = ""
