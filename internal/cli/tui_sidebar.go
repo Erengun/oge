@@ -111,8 +111,8 @@ func (h *home) sidebar(width, height int) []string {
 	st := h.st
 	inner := max(width-4, 8)
 	var body []string
-	rule := func() { body = append(body, st.dim(strings.Repeat("─", inner))) }
-	head := func(s string) { body = append(body, st.bold(strings.ToUpper(s))) }
+	rule := func() { body = append(body, st.border(strings.Repeat("─", inner))) }
+	head := func(s string) { body = append(body, st.accent(st.bold(strings.ToUpper(s)))) }
 	kv := func(k, v string) {
 		k = fmt.Sprintf("%-6s", k)
 		v = ansi.Truncate(v, max(inner-7, 1), "…")

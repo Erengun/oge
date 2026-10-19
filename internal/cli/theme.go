@@ -211,36 +211,76 @@ var themeNotes = map[string]string{
 // colour, so every theme and NO_COLOR show it.
 func (s styles) selected(t string) string { return lipgloss.NewStyle().Reverse(true).Render(t) }
 
-// warm is the styles with a warm accent, for the full-screen home: the
-// focused border, the active items and the headings take one restrained gold
-// (pitago's), where the shared accent stays what oge "task"'s live view
-// has always drawn. A custom theme's accent wins; the other roles are not
-// touched.
+// warmPalette is the home's palette: one muted gold accent (pitago's cream
+// on charcoal), legible add/remove colours and a dim neutral border. It
+// replaces the 16-colour shades on a dark or unknown background (the ansi
+// preset and the dark preset); the light and daltonized presets keep theirs
+// so nothing reads worse there. A custom theme's accent wins, and its other
+// roles are not touched.
+func (t *themeState) warmPalette() palette {
+	p := t.palette()
+	if t.custom != nil {
+		return p
+	}
+	name := t.name
+	if name == "auto" {
+		name = map[bool]string{true: "dark", false: "light"}[t.dark]
+		if !t.known {
+			name = "ansi"
+		}
+	}
+	switch {
+	case name == "dark" || (name == "ansi" && (!t.known || t.dark)):
+		p.accent, p.ok, p.bad = rgb(0xd7ba7d), rgb(0x7ec27e), rgb(0xe07a7a)
+		p.warn, p.border, p.ask = rgb(0xd19a66), rgb(0x5c6370), rgb(0x8fb8d8)
+		p.diffAdd, p.diffDel = p.ok, p.bad
+	case name == "light" || name == "ansi":
+		p.accent = rgb(0x9a6700)
+	}
+	return p
+}
+
+// diffTint paints a diff row's background across width: a subtle green or
+// red, so a change reads as a band and not only as a glyph. The +/- stays.
+// Without colour the line is returned as it is.
+func (s styles) diffTint(l string, add bool, width int) string {
+	if s.th == nil {
+		return l
+	}
+	dark := !s.th.known || s.th.dark
+	var bg color.Color
+	switch {
+	case add && dark:
+		bg = rgb(0x1d3326)
+	case add:
+		bg = rgb(0xdff3e3)
+	case dark:
+		bg = rgb(0x3a2326)
+	default:
+		bg = rgb(0xfbe3e3)
+	}
+	return lipgloss.NewStyle().Background(bg).Width(max(width, 1)).Render(l)
+}
+
+// warm is the styles with the home's warm palette (warmPalette), where the
+// shared roles stay what oge "task"'s live view has always drawn.
 func (s styles) warm() styles {
 	if s.th == nil {
 		return s
 	}
 	th := s.th
-	s.accent = func(t string) string {
-		c := th.palette().accent
-		if th.custom == nil {
-			name := th.name
-			if name == "auto" {
-				name = map[bool]string{true: "dark", false: "light"}[th.dark]
-				if !th.known {
-					name = "ansi"
-				}
-			}
-			switch name {
-			case "dark":
-				c = rgb(0xe5c07b)
-			case "light":
-				c = rgb(0x9a6700)
-			case "ansi":
-				c = lipgloss.BrightYellow
-			}
+	paint := func(pick func(palette) color.Color) func(string) string {
+		return func(t string) string {
+			return lipgloss.NewStyle().Foreground(pick(th.warmPalette())).Render(t)
 		}
-		return lipgloss.NewStyle().Foreground(c).Render(t)
 	}
+	s.accent = paint(func(p palette) color.Color { return p.accent })
+	s.ok = paint(func(p palette) color.Color { return p.ok })
+	s.bad = paint(func(p palette) color.Color { return p.bad })
+	s.warn = paint(func(p palette) color.Color { return p.warn })
+	s.border = paint(func(p palette) color.Color { return p.border })
+	s.ask = paint(func(p palette) color.Color { return p.ask })
+	s.diffAdd = paint(func(p palette) color.Color { return p.diffAdd })
+	s.diffDel = paint(func(p palette) color.Color { return p.diffDel })
 	return s
 }

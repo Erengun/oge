@@ -28,7 +28,7 @@ func (h *home) userEntry(text string) tea.Cmd {
 		var out []string
 		out = append(out, "")
 		for _, l := range strings.Split(ansi.Wrap(text, max(w-4, 8), ""), "\n") {
-			bar := " ❯ " + l
+			bar := "  ❯ " + l
 			bar += strings.Repeat(" ", max(w-1-ansi.StringWidth(bar), 0))
 			out = append(out, st.user(bar))
 		}
@@ -182,14 +182,18 @@ func diffBlock(st styles, patch string, width int, expand bool) string {
 				continue
 			}
 			budget--
-			var s string
+			row := ansi.Truncate(l, max(width-7, 8), "…")
+			t := strings.TrimLeft(row, " ")
 			switch {
 			case strings.HasPrefix(l, "@@"):
-				s = st.dim(l)
+				out = append(out, "    "+st.ask(row))
+			case strings.HasPrefix(t, "+") && !strings.HasPrefix(t, "+++"):
+				out = append(out, "    "+st.diffTint(st.diffAdd(row), true, max(width-7, 8)))
+			case strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "---"):
+				out = append(out, "    "+st.diffTint(st.diffDel(row), false, max(width-7, 8)))
 			default:
-				s = st.diffLine(l)
+				out = append(out, "    "+st.dim(row))
 			}
-			out = append(out, ansi.Truncate("    "+s, max(width-1, 8), "…"))
 		}
 	}
 	if hidden > 0 {
@@ -198,7 +202,9 @@ func diffBlock(st styles, patch string, width int, expand bool) string {
 	if len(files) > 1 {
 		out = append(out, "  "+st.dim(plural(len(files), "file")+" ")+counts(st, add, del))
 	}
-	return strings.Join(out, "\n")
+	// A blank row on both sides sets the diff off from the Verdict above it
+	// and the actions below.
+	return "\n" + strings.Join(out, "\n") + "\n"
 }
 
 // heldStatus is a file status that says the file is not delivered.

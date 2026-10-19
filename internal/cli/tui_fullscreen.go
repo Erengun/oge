@@ -178,6 +178,10 @@ func (h *home) sidebarOn() bool {
 	return h.full && !h.sidebarOff && h.termW >= sidebarMinCols
 }
 
+// headRows are the rows above the transcript: the header and its rule, so
+// clipped content never touches the title.
+const headRows = 2
+
 // layout sets the content width and height from the terminal's: the main
 // column is the screen less the sidebar, and one row goes to the header.
 func (h *home) layout() {
@@ -188,7 +192,7 @@ func (h *home) layout() {
 	if h.sidebarOn() {
 		w -= sidebarWidth + 1
 	}
-	h.width, h.height = w, max(h.termH-1, 1)
+	h.width, h.height = w, max(h.termH-headRows, 1)
 	if h.run != nil {
 		h.run.width, h.run.height = h.width, h.height
 	}
@@ -220,7 +224,7 @@ func (h *home) welcome() []string {
 	if h.termW >= sidebarMinCols {
 		hints += " · ctrl+t sidebar"
 	}
-	return []string{"", "  " + st.bold("oge") + "  " + ready, "  " + st.dim(hints), ""}
+	return []string{"", "  " + st.accent(st.bold("oge")) + "  " + ready, "  " + st.dim(hints), ""}
 }
 
 // compose lays out the screen: the header, the transcript viewport, the live
@@ -244,13 +248,13 @@ func (h *home) compose(v tea.View) tea.View {
 		curX, curY = v.Cursor.X, v.Cursor.Y
 	}
 	// The live area keeps its bottom rows when it is taller than the screen.
-	if room := H - 1; len(live) > room {
+	if room := H - headRows; len(live) > room {
 		drop := len(live) - room
 		live = live[drop:]
 		curY -= drop
 	}
-	vh := max(H-1-len(live), 0)
-	t.top, t.vh, t.vw, t.chipX0 = 1, vh, mainW, 0
+	vh := max(H-headRows-len(live), 0)
+	t.top, t.vh, t.vw, t.chipX0 = headRows, vh, mainW, 0
 	var body []string
 	if len(t.entries) == 0 {
 		body = h.welcome()
@@ -267,15 +271,15 @@ func (h *home) compose(v tea.View) tea.View {
 		}
 	}
 	rows := make([]string, 0, H)
-	rows = append(rows, h.header(mainW))
+	rows = append(rows, h.header(mainW), h.st.border(strings.Repeat("─", mainW)))
 	rows = append(rows, body...)
-	for len(rows) < 1+vh {
+	for len(rows) < headRows+vh {
 		rows = append(rows, "")
 	}
 	if n := t.behind(); n > 0 && vh > 0 {
 		chip := h.st.accent(" ↓ " + plural(n, "line") + " below · jump to latest (end) ")
 		w := ansi.StringWidth(ansi.Strip(chip))
-		last := 1 + vh - 1
+		last := headRows + vh - 1
 		x0 := max(mainW-w-1, 0)
 		rows[last] = ansi.Truncate(rows[last], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[last]), 0)) + chip
 		t.chipX0 = x0 + 1
@@ -283,7 +287,7 @@ func (h *home) compose(v tea.View) tea.View {
 	if toast := h.toastView(); toast != "" && vh > 0 {
 		w := ansi.StringWidth(ansi.Strip(toast))
 		x0 := max(mainW-w-1, 0)
-		rows[1] = ansi.Truncate(rows[1], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[1]), 0)) + toast
+		rows[headRows] = ansi.Truncate(rows[headRows], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[headRows]), 0)) + toast
 	}
 	rows = append(rows, live...)
 	for len(rows) < H {
@@ -309,7 +313,7 @@ func (h *home) compose(v tea.View) tea.View {
 	out.AltScreen = true
 	out.MouseMode = tea.MouseModeCellMotion
 	if v.Cursor != nil && curY >= 0 {
-		c := tea.NewCursor(curX, 1+vh+curY)
+		c := tea.NewCursor(curX, headRows+vh+curY)
 		c.Blink = false
 		out.Cursor = c
 	}

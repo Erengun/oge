@@ -127,7 +127,7 @@ func TestSelectionIsClampedToThePaneAndCopiesRawText(t *testing.T) {
 	h.println("second line")
 	h.View()
 	t0 := h.tr
-	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2, Y: 1})
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 2, Y: headRows})
 	h.Update(tea.MouseMotionMsg{Button: tea.MouseLeft, X: 500, Y: 500}) // far past the pane
 	if got := t0.sel[1]; got.col >= t0.vw || got.line >= t0.start+t0.vh {
 		t.Errorf("head %v is outside the pane", got)

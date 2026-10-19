@@ -34,9 +34,9 @@ func (h *home) fullBox(width int, blank string) (lines []string, curRow, curCol 
 	for len(rows) < minRows {
 		rows = append(rows, "")
 	}
-	border := st.accent
-	if h.turn != nil || h.verify != nil || h.run != nil {
-		border = st.border // the accent is for an idle, focused box
+	border := st.border // the accent is for a box being typed in
+	if !empty && h.turn == nil && h.verify == nil && h.run == nil {
+		border = st.accent
 	}
 	top := "╭" + strings.Repeat("─", max(width-2, 0)) + "╮"
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
