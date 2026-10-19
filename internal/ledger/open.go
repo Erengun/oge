@@ -23,7 +23,7 @@ func Open(runDir string) (*Ledger, error) {
 		return nil, err
 	}
 	if len(b) > 0 && b[len(b)-1] != '\n' {
-		return nil, fmt.Errorf("%s ends in a torn record", path)
+		return nil, fmt.Errorf("%s ends in a torn record: %w", path, ErrTornTail)
 	}
 	prev := ""
 	if n := bytes.LastIndexByte(b[:max(len(b)-1, 0)], '\n'); len(recs) > 0 {

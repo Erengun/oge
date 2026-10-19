@@ -27,8 +27,18 @@ CI checks this on every pull request.
 ```sh
 gofmt -l .
 go vet ./...
-go test ./...
+go test -timeout 30m ./...
 CGO_ENABLED=0 go build ./...
+```
+
+`internal/cli` and `cmd/oge` are slow e2e packages — together they can
+exceed `go test`'s default 10m per-package timeout locally, which is why
+CI gives every job `-timeout 30m` and splits them across shards with
+`scripts/ci-shard.sh` (see `.github/workflows/ci.yml`). To run one
+package's share of a shard locally:
+
+```sh
+go test -timeout 30m "$(scripts/ci-shard.sh internal/cli 2 4)" ./internal/cli
 ```
 
 ## Where decisions live

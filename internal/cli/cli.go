@@ -190,7 +190,7 @@ func Main(env Env, args []string) int {
 		case a == "receipt":
 			return receiptCommand(env, args[1:])
 		case notYet[a]:
-			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet\n", a)
+			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet; a Task starting with this word needs oge run \"<task>\"\n", a)
 			return ExitRefused
 		}
 	}

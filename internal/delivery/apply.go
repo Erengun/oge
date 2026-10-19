@@ -34,10 +34,12 @@ func Authorize(r *Run, flag string) error { return AuthorizeTo(r, flag, "apply")
 // refusal of a Replied Run says there is nothing to do.
 func AuthorizeTo(r *Run, flag, verb string) error {
 	switch {
-	case r.Candidate == "":
-		return refuse("Run %s has no Candidate to deliver", r.ID)
 	case run.Live(r.Dir):
 		return refuse("Run %s is still running; deliver it once it ends", r.ID)
+	case r.Torn:
+		return refuse("Run %s's Ledger is torn, so its end can't be trusted and its Candidate isn't deliverable; oge diff %s shows it (#54)", r.ID, r.ID)
+	case r.Candidate == "":
+		return refuse("Run %s has no Candidate to deliver", r.ID)
 	case r.Outcome == run.Replied:
 		return refuse("nothing to %s: Run %s replied without changes", verb, r.ID)
 	case r.Parked:
