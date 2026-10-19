@@ -835,11 +835,13 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		// What changed has nothing to cut against (a delivery took it
 		// meanwhile, say): it is not checked, and the next cut will.
 		h.unchecked = true
+		h.side.verdict, h.side.outcome, h.side.changes = "", "", nil
 		return h.println(h.ogeLine(h.st.dim(files(v.changed) + " changed, not checked yet · the next turn's cut checks them")))
 	case errors.Is(msg.err, run.ErrNothingToCut), errors.Is(msg.err, run.ErrSuperseded):
 		return nil
 	case v.stopped && !verdict:
 		h.last = nil // as on an error: the older cut isn't what was just changed
+		h.side.verdict, h.side.outcome, h.side.changes = "", "", nil
 		line = h.ogeLine("■ verification cancelled: nothing was verified")
 	case msg.err != nil:
 		h.last = nil // never an older cut's: it isn't what was just changed

@@ -643,7 +643,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatGateMsg:
 		return h, h.cutGated(m)
 	case sideChangesMsg:
-		h.side.changes = m
+		if h.last != nil && h.last.id == m.id {
+			h.side.changes = m.files
+		}
 		return h, nil
 	case diffEntryMsg:
 		return h, h.diffEntry(string(m))

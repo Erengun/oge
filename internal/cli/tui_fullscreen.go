@@ -196,8 +196,7 @@ func (h *home) layout() {
 	}
 }
 
-// header is the top row: the title, with the scroll hint when the viewport
-// is not at the bottom.
+// header is the top row: the title.
 func (h *home) header(width int) string {
 	st := h.st
 	title := h.title
@@ -324,7 +323,19 @@ func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	t := h.tr
-	switch msg.String() {
+	key := msg.String()
+	// A key the keybindings file gave to an action is that action's, not ours.
+	ctx := ctxComposer
+	if h.run != nil {
+		ctx = ctxRun
+	}
+	switch key {
+	case "ctrl+t", "ctrl+o", "alt+y", "ctrl+end":
+		if h.kb.actionFor(ctx, key) != "" {
+			return nil, false
+		}
+	}
+	switch key {
 	case "pgup":
 		t.move(-max(t.vh-2, 1))
 	case "pgdown":

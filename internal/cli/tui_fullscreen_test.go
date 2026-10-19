@@ -136,3 +136,29 @@ func TestSelectionIsClampedToThePaneAndCopiesRawText(t *testing.T) {
 		t.Errorf("selection %q", text)
 	}
 }
+
+func TestDiffBlockKeepsDashedDeletionsAndHeldBackNotices(t *testing.T) {
+	patch := "# Öge: .claude/settings.json is an agent-config change, held back\n" +
+		"diff --git a/.claude/settings.json b/.claude/settings.json\nindex 1..2 100644\n--- a/.claude/settings.json\n+++ b/.claude/settings.json\n@@ -1 +1 @@\n-a\n+b\n" +
+		"diff --git a/schema.sql b/schema.sql\nindex 1..2 100644\n--- a/schema.sql\n+++ b/schema.sql\n@@ -1,2 +1 @@\n--- old comment\n keep\n"
+	got := diffBlock(newStyles(false), patch, 80, true)
+	for _, want := range []string{"# Öge: .claude/settings.json", "held back", "--- old comment", "schema.sql -1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing from:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "# Öge:") > strings.Index(got, "schema.sql") {
+		t.Errorf("notice is not above its file:\n%s", got)
+	}
+}
+
+func TestFullKeyLeavesKeysTheFileRebound(t *testing.T) {
+	h := fullHome(80, 24)
+	h.setKeys(defaultKeyMap.with(map[keyOverride][]string{{ctxComposer, actStash}: {"alt+y"}}))
+	if _, ok := h.fullKey(tea.KeyPressMsg{Code: 'y', Mod: tea.ModAlt}); ok {
+		t.Error("alt+y was taken though the file bound it")
+	}
+	if _, ok := h.fullKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); !ok || !h.sidebarOff {
+		t.Error("ctrl+t did not toggle the sidebar by default")
+	}
+}

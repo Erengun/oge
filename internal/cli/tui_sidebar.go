@@ -37,21 +37,25 @@ func (h *home) setSetup(f *pipeline.Frozen) {
 	h.side.frozen = f
 }
 
-// sideChangesMsg is the last cut's files with their counts.
-type sideChangesMsg []diffFile
+// sideChangesMsg is a cut's files with their counts; id is the cut's Run, so
+// a read still in flight when /new or a newer cut came is dropped.
+type sideChangesMsg struct {
+	id    string
+	files []diffFile
+}
 
 // sideChanges reads the Candidate's patch for the sidebar's CHANGES.
 func (h *home) sideChanges() tea.Cmd {
 	if !h.full || h.last == nil || h.last.patch == nil {
 		return nil
 	}
-	patch := h.last.patch
+	patch, id := h.last.patch, h.last.id
 	return func() tea.Msg {
 		b, err := patch()
 		if err != nil {
 			return nil
 		}
-		return sideChangesMsg(splitPatch(cleanLines(string(b))))
+		return sideChangesMsg{id, splitPatch(cleanLines(string(b)))}
 	}
 }
 
@@ -83,12 +87,22 @@ func (h *home) attention() (text string, needs bool) {
 		return "a Gate is waiting for you · /apply", true
 	case h.hidden != nil:
 		return "hidden characters in your message: confirm below", true
-	case h.last != nil && h.side.outcome == run.Accepted:
+	case h.last != nil && h.side.outcome == run.Accepted && !h.cutDelivered():
 		return "the cut is Accepted and not applied · /apply or /diff", true
 	case h.last != nil && h.side.outcome == run.Failed:
 		return "the Check failed · /diff /receipt", true
 	}
 	return "nothing needs you", false
+}
+
+// cutDelivered reports whether the Chat marked the last cut delivered, by
+// /apply, /branch or apply on accept: the Ledger's word, not the view's.
+func (h *home) cutDelivered() bool {
+	if h.chat == nil || h.last == nil {
+		return false
+	}
+	c := h.chat.get()
+	return c != nil && c.IsDelivered(h.last.id)
 }
 
 // sidebar draws the pane at width and height: a rounded box of sections.
@@ -210,33 +224,32 @@ func (h *home) sidebar(width, height int) []string {
 	rule()
 	head("changes")
 	switch {
+	case h.turn != nil && h.turn.changed > 0:
+		body = append(body, st.dim(files(h.turn.changed)+", not checked yet"))
+	case h.verify != nil:
+		body = append(body, st.dim(files(h.verify.changed)))
 	case len(h.side.changes) > 0:
 		for i, f := range h.side.changes {
 			if i == 8 {
 				body = append(body, st.dim(fmt.Sprintf("… +%d more", len(h.side.changes)-i)))
 				break
 			}
-			counts := ""
-			cw := 0
-			if f.add > 0 {
-				counts += " " + st.diffAdd(fmt.Sprintf("+%d", f.add))
-				cw += len(fmt.Sprintf(" +%d", f.add))
-			}
-			if f.del > 0 {
-				counts += " " + st.diffDel(fmt.Sprintf("-%d", f.del))
-				cw += len(fmt.Sprintf(" -%d", f.del))
+			cs := counts(st, f.add, f.del)
+			cw := ansi.StringWidth(cs)
+			if cw > 0 {
+				cw++
+				cs = " " + cs
 			}
 			path := clean(f.path)
 			if w := ansi.StringWidth(path); w > inner-cw {
 				path = "…" + ansi.TruncateLeft(path, w-(inner-cw)+1, "")
 			}
 			pad := strings.Repeat(" ", max(inner-ansi.StringWidth(path)-cw, 0))
-			body = append(body, path+pad+counts)
+			body = append(body, path+pad+cs)
+			if heldStatus(f.status) {
+				body = append(body, "  "+st.warn(f.status))
+			}
 		}
-	case h.turn != nil && h.turn.changed > 0:
-		body = append(body, st.dim(files(h.turn.changed)+", not checked yet"))
-	case h.verify != nil:
-		body = append(body, st.dim(files(h.verify.changed)))
 	default:
 		body = append(body, st.dim("none"))
 	}

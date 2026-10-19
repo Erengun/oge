@@ -118,9 +118,6 @@ func (h *home) statusBorder(width int, border func(string) string) string {
 func (h *home) statusParts() (left []string, right string) {
 	st := h.st
 	submit := keyBinding{act: "composer.submit"}.label(h.kb)
-	if submit == "enter" {
-		submit = "enter"
-	}
 	state := st.ok("●") + " " + st.bold("ready")
 	var keys []string
 	switch {
@@ -132,7 +129,7 @@ func (h *home) statusParts() (left []string, right string) {
 		keys = []string{"esc interrupt", submit + " queue"}
 	case h.run != nil:
 		state = st.accent("●") + " " + st.bold("running")
-		keys = []string{"ctrl+o details", "ctrl+c cancel"}
+		keys = []string{h.kb.expandLabel() + " details", "ctrl+c cancel"}
 	case h.job != nil:
 		state = st.accent("●") + " " + st.bold("shell")
 		keys = []string{"ctrl+c stop"}

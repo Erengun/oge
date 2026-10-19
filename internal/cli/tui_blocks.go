@@ -130,32 +130,26 @@ const diffCollapsed = 14
 
 func diffBlock(st styles, patch string, width int, expand bool) string {
 	type file struct {
-		path     string
-		add, del int
-		body     []string
+		diffFile
+		notes []string // the "# Öge:" lines: why the file is held back
+		body  []string // the hunks
 	}
 	var files []*file
-	var cur *file
-	for _, l := range strings.Split(patch, "\n") {
-		switch {
-		case strings.HasPrefix(l, "diff --git "):
-			cur = &file{path: gitHeaderPath(l[len("diff --git "):])}
-			files = append(files, cur)
-		case cur == nil:
-			continue
-		case strings.HasPrefix(l, "index "), strings.HasPrefix(l, "--- "), strings.HasPrefix(l, "+++ "),
-			strings.HasPrefix(l, "new file mode"), strings.HasPrefix(l, "deleted file mode"),
-			strings.HasPrefix(l, "similarity index"):
-			continue
-		case strings.HasPrefix(l, "+"):
-			cur.add++
-			cur.body = append(cur.body, l)
-		case strings.HasPrefix(l, "-"):
-			cur.del++
-			cur.body = append(cur.body, l)
-		default:
-			cur.body = append(cur.body, l)
+	for _, df := range splitPatch(patch) {
+		f := &file{diffFile: df}
+		inHunk := false
+		for _, l := range strings.Split(df.text, "\n") {
+			switch {
+			case strings.HasPrefix(l, "@@"):
+				inHunk = true
+				f.body = append(f.body, l)
+			case inHunk:
+				f.body = append(f.body, l)
+			case strings.HasPrefix(l, "# Öge:"):
+				f.notes = append(f.notes, l)
+			}
 		}
+		files = append(files, f)
 	}
 	if len(files) == 0 {
 		return ""
@@ -168,7 +162,14 @@ func diffBlock(st styles, patch string, width int, expand bool) string {
 	hidden, add, del := 0, 0, 0
 	for _, f := range files {
 		add, del = add+f.add, del+f.del
-		out = append(out, "  "+st.bold(clean(f.path))+" "+counts(st, f.add, f.del))
+		head := "  " + st.bold(clean(f.path)) + " " + counts(st, f.add, f.del)
+		if heldStatus(f.status) {
+			head += " " + st.warn(f.status)
+		}
+		out = append(out, head)
+		for _, n := range f.notes {
+			out = append(out, ansi.Truncate("    "+st.warn(n), max(width-1, 8), "…"))
+		}
 		for _, l := range f.body {
 			if budget == 0 {
 				hidden++
@@ -192,6 +193,11 @@ func diffBlock(st styles, patch string, width int, expand bool) string {
 		out = append(out, "  "+st.dim(plural(len(files), "file")+" ")+counts(st, add, del))
 	}
 	return strings.Join(out, "\n")
+}
+
+// heldStatus is a file status that says the file is not delivered.
+func heldStatus(s string) bool {
+	return strings.HasPrefix(s, "held back") || strings.HasPrefix(s, "submodule")
 }
 
 // counts is "+N -M" in the diff colours, a zero side left out.

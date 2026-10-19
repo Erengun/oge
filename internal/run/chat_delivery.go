@@ -42,6 +42,15 @@ func (c *Chat) Delivered(run, how, rev string) error {
 	return c.log(RecDelivered, map[string]any{"run": run, "how": how, "turn": m.turn, "rev": rev, "resolved": m.resolved})
 }
 
+// IsDelivered reports whether the verified cut run, or a later one, was
+// delivered (applied or branched).
+func (c *Chat) IsDelivered(run string) bool {
+	c.supersedeMu.Lock()
+	defer c.supersedeMu.Unlock()
+	m, ok := c.cuts[run]
+	return ok && m.turn <= c.delivered
+}
+
 // Applied is the commit last applied to the user's tree from this Chat,
 // "" before the first apply, and the directory of the Run whose
 // repository holds it.
