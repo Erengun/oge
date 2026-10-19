@@ -474,6 +474,9 @@ type lastRun struct {
 	branch  func(name string) string                // "" is the default name
 	diff    func(emit func(string) tea.Cmd) tea.Cmd // printed, or paged with $PAGER
 	receipt func() string
+	// copy is the Receipt for /copy: unwrapped, so the clipboard has no hard
+	// breaks. Nil means receipt.
+	copy func() string
 	// full is /receipt's: the Receipt with its dismissed Consultations. Nil
 	// means receipt.
 	full func() string
@@ -1709,6 +1712,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		cur = t
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn
 		u.plain.applying = r.flags.apply
+		u.plain.width = func() int { return h.width }
 		h.done = u.launch(runCtx, runIn, startFor(t, r, fu))
 		go func(forced, ended <-chan struct{}) {
 			select {
@@ -1741,10 +1745,13 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			if res.Dir == "" {
 				return line, nil
 			}
-			receiptText := func(full bool) string {
+			receiptText := func(full, fit bool) string {
 				var b strings.Builder
 				p := *u.plain
 				p.w, p.full = &b, full
+				if !fit {
+					p.width = nil
+				}
 				p.endScreen(res)
 				return b.String()
 			}
@@ -1819,14 +1826,17 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 // human takes, what can take it comes too. code is the Run's exit code.
 func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold func(bool)) (string, *lastRun, int) {
 	var buf strings.Builder
-	receiptText := func(full bool) string {
+	receiptText := func(full, fit bool) string {
 		var b strings.Builder
 		p := *u.plain
 		p.w, p.full = &b, full
+		if !fit {
+			p.width = nil
+		}
 		p.endScreen(res)
 		return b.String()
 	}
-	buf.WriteString(receiptText(false))
+	buf.WriteString(receiptText(false, true))
 	if res.Outcome == run.Replied {
 		return buf.String(), nil, ExitOK
 	}
@@ -1851,7 +1861,7 @@ func (u *tui) summary(env Env, f runFlags, root string, res *run.Result, hold fu
 
 // takeRun is what can take the Run res from the home: /apply, /branch,
 // /diff and /receipt. receiptText is its Receipt as the home prints it.
-func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText func(full bool) string) (*lastRun, error) {
+func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText func(full, fit bool) string) (*lastRun, error) {
 	r, err := delivery.Load(res.Dir)
 	if err != nil {
 		return nil, err
@@ -1877,8 +1887,9 @@ func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText
 		branch: func(name string) string {
 			return deliver("branch", func(q Env) int { return branchCommand(q, r, root, name, delivery.Choice{}) })
 		},
-		receipt: func() string { return receiptText(false) },
-		full:    func() string { return receiptText(true) },
+		receipt: func() string { return receiptText(false, true) },
+		copy:    func() string { return receiptText(false, false) },
+		full:    func() string { return receiptText(true, true) },
 		patch:   func() ([]byte, error) { return delivery.Diff(r) },
 	}
 	s.diff = func(emit func(string) tea.Cmd) tea.Cmd {
@@ -1904,3 +1915,11 @@ func takeRun(env Env, root string, res *run.Result, hold func(bool), receiptText
 
 // pageFailedMsg says the pager failed to show the diff.
 type pageFailedMsg struct{ err error }
+
+// copyText is the Receipt as /copy puts it on the clipboard.
+func (l *lastRun) copyText() string {
+	if l.copy != nil {
+		return l.copy()
+	}
+	return l.receipt()
+}

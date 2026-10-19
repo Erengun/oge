@@ -17,9 +17,11 @@ Scope         no out-of-scope changes
 Handled       0 operations approved automatically · Human interruptions: 0
 Time          X · preflight X · implement X · Check X · your attention X
 Not covered   No independent tests (fast mode): no QA and no held-out tests
-              Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges
+              Checks ran unsandboxed; network not blocked; no isolation against
+              deliberately hostile Candidate code running with your privileges
 Ledger        head X · identifies this Receipt; not tamper-proof
-! test_config is empty: setup and Candidate code can change go.mod/go.sum that the Check reads
+! test_config is empty: setup and Candidate code can change go.mod/go.sum that
+  the Check reads
 Nothing was written to your repository.
 
  ↓ actions · /apply /diff /receipt /branch · /new

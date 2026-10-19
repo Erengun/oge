@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/delivery"
 	"github.com/erengun/oge/internal/redact"
 	"github.com/erengun/oge/internal/run"
@@ -396,6 +397,49 @@ func dur(ms int64) string {
 	return fmt.Sprintf("%dm %ds", int(d/time.Minute), int(d%time.Minute/time.Second))
 }
 
+// Fit is the Receipt that wraps its terminal text to width columns: a long
+// line breaks at its " · " separators (or at spaces) onto continuation rows
+// under the text, so nothing is clipped at the screen edge. Width 0 or less
+// leaves lines whole.
+func (r *Receipt) Fit(width int) *Receipt {
+	f := *r
+	f.width = width
+	return &f
+}
+
+// Wrap is text broken into rows of at most room columns, at " · " first,
+// then at spaces. A room under 20 leaves it whole.
+func Wrap(text string, room int) []string { return wrap(text, room) }
+
+func wrap(text string, room int) []string {
+	if room < 20 || ansi.StringWidth(text) <= room {
+		return []string{text}
+	}
+	var rows []string
+	row := ""
+	lead := ""
+	if strings.HasPrefix(text, " · ") { // keep a leading separator
+		lead, text = "· ", text[len(" · "):]
+	}
+	for i, seg := range strings.Split(text, " · ") {
+		switch {
+		case i == 0:
+			row = lead + seg
+		case ansi.StringWidth(row)+3+ansi.StringWidth(seg) <= room:
+			row += " · " + seg
+		default:
+			rows = append(rows, row)
+			row = "· " + seg
+		}
+	}
+	rows = append(rows, row)
+	var out []string
+	for _, row := range rows {
+		out = append(out, strings.Split(ansi.Wrap(row, room, ""), "\n")...)
+	}
+	return out
+}
+
 // Text is the Receipt for a terminal, painted with p.
 func (r *Receipt) Text(p Paint) string {
 	var b strings.Builder
@@ -404,22 +448,26 @@ func (r *Receipt) Text(p Paint) string {
 		if i == 0 {
 			label = apply(p.Bold, label)
 		}
-		text := unmark.Replace(l.Text)
-		switch l.Tone {
-		case Good:
-			text = apply(p.Good, text)
-		case Bad:
-			text = apply(p.Bad, text)
-		case Warn:
-			text = apply(p.Warn, text)
-		case Dim:
-			text = apply(p.Dim, text)
+		for j, text := range wrap(unmark.Replace(l.Text), r.width-labelWidth) {
+			switch l.Tone {
+			case Good:
+				text = apply(p.Good, text)
+			case Bad:
+				text = apply(p.Bad, text)
+			case Warn:
+				text = apply(p.Warn, text)
+			case Dim:
+				text = apply(p.Dim, text)
+			}
+			if l.Label == "Result" {
+				text = apply(p.Bold, text)
+			}
+			if j > 0 {
+				label = strings.Repeat(" ", labelWidth)
+			}
+			b.WriteString(strings.TrimRight(label+text, " "))
+			b.WriteByte('\n')
 		}
-		if l.Label == "Result" {
-			text = apply(p.Bold, text)
-		}
-		b.WriteString(strings.TrimRight(label+text, " "))
-		b.WriteByte('\n')
 	}
 	return b.String()
 }

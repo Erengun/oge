@@ -96,6 +96,8 @@ type Receipt struct {
 	LedgerUnreadable string `json:"ledger_unreadable,omitempty"`
 	// full adds the lines only the full Receipt shows (FullText).
 	full bool
+	// width wraps the terminal text (Fit).
+	width int
 	// WaitingAt is the Gate a parked Run waits at.
 	WaitingAt string     `json:"waiting_at,omitempty"`
 	Candidate *Candidate `json:"candidate,omitempty"`

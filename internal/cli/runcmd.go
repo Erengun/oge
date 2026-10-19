@@ -370,6 +370,9 @@ type renderer struct {
 	full bool
 	// paint colours the Receipt: only the live view sets it.
 	paint receipt.Paint
+	// width is the live view's columns, for wrapping the Receipt; nil leaves
+	// its lines whole.
+	width func() int
 }
 
 func (r *renderer) show(ctx context.Context, in *interrupts, start startFunc) (*run.Result, error) {
