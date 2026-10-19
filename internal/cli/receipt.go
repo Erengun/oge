@@ -46,8 +46,10 @@ func (r *renderer) endScreen(res *run.Result) {
 // configuration warning, and that nothing was written yet.
 func (r *renderer) receipt(rc *receipt.Receipt, res *run.Result) {
 	r.p("")
+	width := 0
 	if r.width != nil {
-		rc = rc.Fit(r.width())
+		width = r.width()
+		rc = rc.Fit(width)
 	}
 	if r.full {
 		fmt.Fprint(r.w, rc.FullText(r.paint))
@@ -55,7 +57,14 @@ func (r *renderer) receipt(rc *receipt.Receipt, res *run.Result) {
 		fmt.Fprint(r.w, rc.Text(r.paint))
 	}
 	if r.warn != "" {
-		r.p("! %s", r.warn)
+		for i, l := range receipt.Wrap(r.warn, width-2) {
+			if i == 0 {
+				l = "! " + l
+			} else {
+				l = "  " + l
+			}
+			r.p("%s", l)
+		}
 	}
 	if len(rc.Deliveries) == 0 && (!r.applying || res.Outcome != run.Accepted) {
 		r.p("Nothing was written to your repository.")

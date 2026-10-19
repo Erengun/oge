@@ -165,7 +165,7 @@ func (h *home) copyCmd(args []string) (tea.Cmd, string) {
 // copySeq is the OSC 52 for the last Receipt's redacted text and its line
 // count.
 func (h *home) copySeq() (string, int) {
-	text := strings.TrimRight(redacted(h.last.receipt()), "\n")
+	text := strings.TrimRight(redacted(h.last.copyText()), "\n")
 	if base64.StdEncoding.EncodedLen(len(text)) > maxOSC52 {
 		return "", strings.Count(text, "\n") + 1
 	}

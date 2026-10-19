@@ -8,6 +8,14 @@ import (
 	"github.com/erengun/oge/internal/receipt"
 )
 
+// A text that starts with a separator keeps it when it wraps.
+func TestWrapKeepsALeadingSeparator(t *testing.T) {
+	rows := receipt.Wrap(" · "+strings.Repeat("word ", 12), 30)
+	if len(rows) < 2 || !strings.HasPrefix(rows[0], "· ") {
+		t.Errorf("rows %q", rows)
+	}
+}
+
 // timeRows is the Time line of text and the continuation rows under it.
 func timeRows(text string) []string {
 	var rows []string

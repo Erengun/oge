@@ -407,17 +407,24 @@ func (r *Receipt) Fit(width int) *Receipt {
 	return &f
 }
 
-// wrap is text broken into rows of at most room columns, at " · " first.
+// Wrap is text broken into rows of at most room columns, at " · " first,
+// then at spaces. A room under 20 leaves it whole.
+func Wrap(text string, room int) []string { return wrap(text, room) }
+
 func wrap(text string, room int) []string {
 	if room < 20 || ansi.StringWidth(text) <= room {
 		return []string{text}
 	}
 	var rows []string
 	row := ""
-	for _, seg := range strings.Split(text, " · ") {
+	lead := ""
+	if strings.HasPrefix(text, " · ") { // keep a leading separator
+		lead, text = "· ", text[len(" · "):]
+	}
+	for i, seg := range strings.Split(text, " · ") {
 		switch {
-		case row == "":
-			row = seg
+		case i == 0:
+			row = lead + seg
 		case ansi.StringWidth(row)+3+ansi.StringWidth(seg) <= room:
 			row += " · " + seg
 		default:
