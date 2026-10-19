@@ -39,7 +39,7 @@ func (c *Chat) Delivered(run, how, rev string) error {
 	if !moved {
 		return nil
 	}
-	return c.log(RecDelivered, map[string]any{"run": run, "how": how, "turn": m.turn, "rev": rev})
+	return c.log(RecDelivered, map[string]any{"run": run, "how": how, "turn": m.turn, "rev": rev, "resolved": m.resolved})
 }
 
 // Applied is the commit last applied to the user's tree from this Chat,

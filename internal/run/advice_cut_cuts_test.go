@@ -105,7 +105,10 @@ func TestACutAfterADeliveryRecordsNoEarlierConsultations(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if a := adviceOf(t, second); a != nil {
-		t.Errorf("a cut after a delivery carries the earlier Consultations: %v", a)
+	// k-3 was running at the delivered cut and ended after it: this cut
+	// records it, once. The counted ones (k-1 sent, k-2) are not repeated.
+	a := adviceOf(t, second)
+	if got := consultationIDs(a, "dismissed"); !reflect.DeepEqual(got, []string{"k-3"}) || len(consultationIDs(a, "sent")) != 0 {
+		t.Errorf("a cut after a delivery: %v, want k-3 only", a)
 	}
 }

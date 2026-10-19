@@ -73,7 +73,7 @@ func (c *ChatCut) adviceLines() []Line {
 		items = append(items, one(a))
 	}
 	for _, h := range c.Shown {
-		items = append(items, fmt.Sprintf("on the agent's question at turn %d (%s): shown to you · a Claim, not checked", h.Turn, advisorName(h.Agent, h.Model)))
+		items = append(items, fmt.Sprintf("on the agent's question %s (%s): shown to you · a Claim, not checked", askedAt(h.Turn, h.Before), advisorName(h.Agent, h.Model)))
 	}
 	if len(items) == 1 {
 		return []Line{{"Advice", "1 consultation " + items[0], Plain}}
@@ -102,7 +102,7 @@ func (c *ChatCut) dismissedLines() []Line {
 		if d.Trigger == run.TriggerFeedbackBudget {
 			who += ", automatic"
 		}
-		ls = append(ls, Line{label, fmt.Sprintf("consultation asked at turn %d (%s): %s", d.Turn, who, out), Plain})
+		ls = append(ls, Line{label, fmt.Sprintf("consultation asked %s (%s): %s", askedAt(d.Turn, d.Before), who, out), Plain})
 	}
 	return ls
 }
@@ -113,4 +113,13 @@ func (r *Receipt) FullText(p Paint) string {
 	f := *r
 	f.full = true
 	return f.Text(p)
+}
+
+// askedAt is when a Consultation was asked: a Before one was asked after
+// its turn was cut, so it says it came before the cut's first turn.
+func askedAt(turn int, before bool) string {
+	if before {
+		return fmt.Sprintf("before turn %d", turn)
+	}
+	return fmt.Sprintf("at turn %d", turn)
 }
