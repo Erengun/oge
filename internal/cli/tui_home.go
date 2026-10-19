@@ -392,6 +392,7 @@ type home struct {
 	full         bool
 	termW, termH int
 	sidebarOff   bool
+	steps        []*toolStep // the transcript's tool steps, to hang a result on
 	tr           *transcript
 	toast        *toast
 	toastSeq     int

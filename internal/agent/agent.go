@@ -126,8 +126,11 @@ const (
 	HostRequest   EventKind = "host_request"
 	Claim         EventKind = "claim"
 	Usage         EventKind = "usage"
-	Warning       EventKind = "warning"
-	Unknown       EventKind = "unknown"
+	// ToolResult is what a tool step returned: display only, never written
+	// to a stream or the Ledger (Event.Output may hold file contents).
+	ToolResult EventKind = "tool_result"
+	Warning    EventKind = "warning"
+	Unknown    EventKind = "unknown"
 )
 
 // Event is one normalised event.
@@ -140,6 +143,13 @@ type Event struct {
 	// first line. Tool is empty for any other Claim.
 	Tool   string `json:",omitempty"`
 	Target string `json:",omitempty"`
+	// ToolID pairs a tool-use Claim with its ToolResult, when the agent
+	// numbers its steps. Display only, never written to the stream.
+	ToolID string `json:"-"`
+	// Output is a ToolResult's text, redacted and clipped by ClipOutput;
+	// Failed marks a step that ended in an error. Display only.
+	Output string `json:"-"`
+	Failed bool   `json:"-"`
 	// Host is a Host request and how it was answered.
 	Host *HostDecision `json:",omitempty"`
 	// Session is set on SessionOpened when the agent reports it.
@@ -378,3 +388,27 @@ type Residue struct {
 
 // ErrTurnInFlight is returned by Send while a turn is active.
 var ErrTurnInFlight = errors.New("a turn is already in flight")
+
+// Output limits: a ToolResult keeps the head of what a tool printed, enough
+// to show a few lines and say how many more there were.
+const (
+	OutputMaxLines = 200
+	OutputMaxBytes = 16 << 10
+)
+
+// ClipOutput trims s for a ToolResult: trailing space dropped, at most
+// OutputMaxLines lines and OutputMaxBytes bytes kept, cut at a line end.
+func ClipOutput(s string) string {
+	s = strings.TrimRight(strings.ReplaceAll(s, "\r\n", "\n"), " \t\r\n")
+	cut := false
+	if len(s) > OutputMaxBytes {
+		s, cut = strings.ToValidUTF8(s[:OutputMaxBytes], ""), true
+	}
+	if lines := strings.Split(s, "\n"); len(lines) > OutputMaxLines {
+		s, cut = strings.Join(lines[:OutputMaxLines], "\n"), true
+	}
+	if cut {
+		s += "\n…"
+	}
+	return s
+}

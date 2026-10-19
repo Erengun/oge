@@ -1042,7 +1042,9 @@ loop:
 			if !ok {
 				break loop
 			}
-			_ = enc.Encode(ev)
+			if ev.Kind != agent.ToolResult {
+				_ = enc.Encode(ev)
+			}
 			if a.FirstActivity == 0 && visible(ev) {
 				a.FirstActivity = time.Since(launched)
 			}

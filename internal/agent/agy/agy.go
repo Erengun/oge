@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -441,9 +442,18 @@ func (s *session) handleStepUpdate(f map[string]any) {
 	}
 	toolInfo, _ := data["tool_info"].(map[string]any)
 	toolName, _ := data["tool_name"].(string)
+	stepID := ""
 	if idx, ok := data["step_index"].(float64); ok && toolInfo != nil {
+		stepID = strconv.Itoa(int(idx))
 		if s.toolSteps[int(idx)] {
-			toolInfo = nil // claimed when the step started
+			// Claimed when the step started; a later frame may carry what
+			// the tool returned.
+			if out, _ := toolInfo["output"].(string); out != "" {
+				state, _ := data["state"].(string)
+				s.emit(agent.Event{Kind: agent.ToolResult, ToolID: stepID, Failed: state == "ERROR",
+					Output: agent.ClipOutput(string(redact.Redact([]byte(out))))})
+			}
+			toolInfo = nil
 		} else {
 			if s.toolSteps == nil {
 				s.toolSteps = map[int]bool{}
@@ -461,6 +471,7 @@ func (s *session) handleStepUpdate(f map[string]any) {
 			Kind:   agent.Claim,
 			Tool:   shorten(toolName, 32),
 			Target: targetStr,
+			ToolID: stepID,
 		})
 	}
 

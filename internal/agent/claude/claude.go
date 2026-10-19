@@ -514,7 +514,7 @@ type frame struct {
 
 // ignored are message types and system subtypes Öge reads nothing from.
 var ignored = map[string]bool{
-	"user": true, "command_lifecycle": true, "stream_event": true, "keep_alive": true,
+	"command_lifecycle": true, "stream_event": true, "keep_alive": true,
 	"tool_progress": true, "tool_use_summary": true, "prompt_suggestion": true,
 	"system/thinking_tokens": true, "system/status": true, "system/compact_boundary": true,
 	"system/informational": true, "system/notification": true, "system/files_persisted": true,
@@ -585,6 +585,8 @@ func (s *session) frame(line []byte) error {
 		s.emit(agent.Event{Kind: agent.Usage, Text: "rate limit " + clip(f.RateLimit.Status)})
 	case f.Type == "assistant":
 		return s.assistant(f)
+	case f.Type == "user":
+		s.toolResults(f)
 	case f.Type == "result":
 		s.result(f)
 	case ignored[kind]:
@@ -911,6 +913,7 @@ func (s *session) init(line []byte) error {
 }
 
 type content struct {
+	ID    string          `json:"id"`
 	Type  string          `json:"type"`
 	Text  string          `json:"text"`
 	Name  string          `json:"name"`
@@ -951,7 +954,7 @@ func (s *session) assistant(f frame) error {
 		case "tool_use":
 			var in map[string]any
 			_ = json.Unmarshal(c.Input, &in)
-			ev := agent.Event{Kind: agent.Claim, Tool: clip(c.Name), Target: target(c.Name, in, s.policy.ws)}
+			ev := agent.Event{Kind: agent.Claim, Tool: clip(c.Name), Target: target(c.Name, in, s.policy.ws), ToolID: c.ID}
 			if c.Name == "TodoWrite" {
 				ev.Todos = todos(c.Input)
 			}
@@ -959,6 +962,53 @@ func (s *session) assistant(f frame) error {
 		}
 	}
 	return nil
+}
+
+// toolResults emits what the tools of a user message returned, for the
+// view only: redacted, clipped, never written to a stream.
+func (s *session) toolResults(f frame) {
+	if f.Parent != nil {
+		return
+	}
+	var m struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(f.Message, &m) != nil {
+		return
+	}
+	var parts []struct {
+		Type      string          `json:"type"`
+		ToolUseID string          `json:"tool_use_id"`
+		IsError   bool            `json:"is_error"`
+		Content   json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(m.Content, &parts) != nil {
+		return // a plain-string user message
+	}
+	for _, p := range parts {
+		if p.Type != "tool_result" {
+			continue
+		}
+		var text string
+		if json.Unmarshal(p.Content, &text) != nil {
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(p.Content, &blocks) != nil {
+				continue
+			}
+			var sb []string
+			for _, b := range blocks {
+				if b.Type == "text" {
+					sb = append(sb, b.Text)
+				}
+			}
+			text = strings.Join(sb, "\n")
+		}
+		s.emit(agent.Event{Kind: agent.ToolResult, ToolID: p.ToolUseID, Failed: p.IsError,
+			Output: agent.ClipOutput(string(redact.Redact([]byte(text))))})
+	}
 }
 
 // todos is the plan a TodoWrite call carries, redacted; nil when it

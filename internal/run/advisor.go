@@ -408,7 +408,7 @@ func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage
 				return settle(ConsultFailed, "the advisor Session ended")
 			}
 			rec.mu.Lock()
-			if b, err := json.Marshal(ev); err == nil {
+			if b, err := json.Marshal(ev); err == nil && ev.Kind != agent.ToolResult {
 				rec.stream = append(append(rec.stream, b...), '\n')
 			}
 			switch {

@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
 	"github.com/charmbracelet/x/ansi"
+	"github.com/erengun/oge/internal/agent"
 )
 
 // The full-screen transcript's blocks: the human's turn, the agent's reply
@@ -24,9 +26,14 @@ func (h *home) printBlock(raw string, render func(width int, expand bool) string
 // userEntry is the human's message: a tinted bar with a ❯ prompt.
 func (h *home) userEntry(text string) tea.Cmd {
 	st := h.st
+	first := len(h.tr.entries) == 0
 	return h.printBlock("> "+text, func(w int, _ bool) string {
 		var out []string
 		out = append(out, "")
+		if !first {
+			// A dim rule sets one turn off from the last.
+			out = append(out, "  "+st.border(strings.Repeat("─", max(w-5, 4))), "")
+		}
 		for _, l := range strings.Split(ansi.Wrap(text, max(w-5, 8), ""), "\n") {
 			bar := "  ❯ " + l
 			bar += strings.Repeat(" ", max(w-1-ansi.StringWidth(bar), 0))
@@ -75,10 +82,21 @@ func toolKind(name string) string {
 	return toolOther
 }
 
-// toolEntry is one tool step: the call, never its output (Öge's events
-// carry none). bad marks a step the host denied.
-func (h *home) toolEntry(tool, target string, bad bool) tea.Cmd {
+// toolStep is one tool step in the transcript and, once the agent reports it,
+// what the tool returned: display only, as the event's Output is.
+type toolStep struct {
+	id     string
+	done   bool
+	failed bool
+	output string
+}
+
+// toolEntry is one tool step: the call, and under it what the tool returned
+// once the agent's ToolResult arrives. bad marks a step the host denied.
+func (h *home) toolEntry(tool, target, id string, bad bool) tea.Cmd {
 	st := h.st
+	step := &toolStep{id: id}
+	h.steps = append(h.steps[max(len(h.steps)-63, 0):], step)
 	raw := "  ● " + strings.TrimSpace(tool+" "+target)
 	return h.printBlock(raw, func(w int, expand bool) string {
 		dot := st.dim("●")
@@ -86,19 +104,100 @@ func (h *home) toolEntry(tool, target string, bad bool) tea.Cmd {
 			dot = st.bad("●")
 		}
 		if toolKind(tool) == toolShell && target != "" && !bad {
-			return shellBox(st, tool, target, w, expand, h.kb.expandLabel())
+			return shellBox(st, tool, target, step, w, expand, h.kb.expandLabel())
 		}
-		line := "  " + dot + " " + st.bold(clean(tool))
-		if target != "" {
-			line += " " + st.dim(target)
-		}
-		return ansi.Truncate(line, max(w-1, 8), "…")
+		line := ansi.Truncate("  "+dot+" "+st.bold(clean(tool))+optional(" ", st.dim(target), target != ""), max(w-1, 8), "…")
+		return line + resultTree(st, tool, step, w, expand, h.kb.expandLabel())
 	})
 }
 
-// shellBox draws a command in a rounded box under the tool's name. A long
-// command is cut to a few rows unless the human expanded the output.
-func shellBox(st styles, tool, cmd string, width int, expand bool, expandKey string) string {
+func optional(pre, s string, ok bool) string {
+	if !ok {
+		return ""
+	}
+	return pre + s
+}
+
+// toolResult hangs a ToolResult on its step: the one with its id, or, when
+// the agent gave none, the oldest step still waiting. The view is redrawn.
+func (h *home) toolResult(ev agent.Event) {
+	var step *toolStep
+	for _, s := range h.steps {
+		if s.done || (ev.ToolID != "" && s.id != ev.ToolID) {
+			continue
+		}
+		if ev.ToolID != "" || s.id == "" {
+			step = s
+			break
+		}
+	}
+	if step == nil {
+		return
+	}
+	step.done, step.failed, step.output = true, ev.Failed, cleanLines(strings.ReplaceAll(ev.Output, "\t", "    "))
+	h.tr.gen++
+}
+
+// outputLines is a step's output as rows, empty when it printed nothing.
+func outputLines(out string) []string {
+	out = strings.TrimRight(strings.ReplaceAll(out, "\t", "    "), "\n ")
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+// resultTree is what a bullet tool returned, as pitago draws it: a ├── row
+// per line and a └── row last. Folded, it is one row that says what came
+// back: how many lines a read returned, the first line of anything else.
+func resultTree(st styles, tool string, step *toolStep, width int, expand bool, key string) string {
+	if !step.done {
+		return ""
+	}
+	lines := outputLines(step.output)
+	paint := st.dim
+	if step.failed {
+		paint = st.bad
+	}
+	row := func(last bool, l string) string {
+		mark := "├──"
+		if last {
+			mark = "└──"
+		}
+		return "\n    " + st.dim(mark) + " " + paint(ansi.Truncate(l, max(width-10, 8), "…"))
+	}
+	switch {
+	case len(lines) == 0 && step.failed:
+		return row(true, "failed")
+	case len(lines) == 0:
+		return row(true, "ok")
+	case !expand || len(lines) == 1:
+		sum := lines[0]
+		switch {
+		case step.failed:
+		case toolKind(tool) == toolRead && len(lines) > 1:
+			sum = plural(len(lines), "line")
+		case len(lines) > 1:
+			sum += " · +" + plural(len(lines)-1, "line") + " · " + key
+		}
+		return row(true, sum)
+	}
+	const shown = 12
+	var b strings.Builder
+	n := min(len(lines), shown)
+	for i, l := range lines[:n] {
+		b.WriteString(row(i == n-1 && len(lines) <= shown, l))
+	}
+	if len(lines) > shown {
+		b.WriteString(row(true, fmt.Sprintf("+%d more lines", len(lines)-shown)))
+	}
+	return b.String()
+}
+
+// shellBox draws a command in a rounded box under the tool's name, and under
+// it what the command printed. A long command or output is cut to a few rows
+// unless the human expanded the output.
+func shellBox(st styles, tool, cmd string, step *toolStep, width int, expand bool, expandKey string) string {
 	title := " " + strings.ToLower(clean(tool)) + " "
 	// The box takes the pane's width, as pitago's does: the command on top.
 	inner := max(width-6, 12)
@@ -112,9 +211,39 @@ func shellBox(st styles, tool, cmd string, width int, expand bool, expandKey str
 	b := st.border
 	out := []string{""} // a blank row before and after, so the box breathes
 	out = append(out, "  "+b("╭─")+st.dim(title)+b(strings.Repeat("─", max(inner+1-ansi.StringWidth(title)-1, 0))+"╮"))
-	for _, l := range lines {
+	row := func(l string) {
 		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(l), 0))
 		out = append(out, "  "+b("│")+" "+l+pad+b("│"))
+	}
+	for _, l := range lines {
+		row(l)
+	}
+	if step.done {
+		if res := outputLines(step.output); len(res) > 0 {
+			const folded = 5
+			paint := st.dim
+			if step.failed {
+				paint = st.bad
+			}
+			out = append(out, "  "+b("├"+strings.Repeat("─", inner+1)+"┤"))
+			var wrapped []string
+			for _, l := range res {
+				wrapped = append(wrapped, strings.Split(ansi.Hardwrap(l, inner, true), "\n")...)
+			}
+			shown := wrapped
+			if !expand && len(shown) > folded {
+				shown = shown[:folded]
+			}
+			for _, l := range shown {
+				row(paint(l))
+			}
+			if len(shown) < len(wrapped) {
+				row(st.dim(fmt.Sprintf("… +%d lines · %s to expand", len(wrapped)-len(shown), expandKey)))
+			}
+		} else if step.failed {
+			out = append(out, "  "+b("├"+strings.Repeat("─", inner+1)+"┤"))
+			row(st.bad("failed"))
+		}
 	}
 	out = append(out, "  "+b("╰"+strings.Repeat("─", inner+1)+"╯"), "")
 	return strings.Join(out, "\n")

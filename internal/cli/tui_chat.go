@@ -444,10 +444,13 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		if s, ok := activityStep(ev); ok {
 			h.side.step = s
 			if h.full {
-				return h.toolEntry(clean(ev.Tool), clean(ev.Target), false)
+				return h.toolEntry(clean(ev.Tool), clean(ev.Target), ev.ToolID, false)
 			}
 			return h.println("  " + h.st.agent("⏺") + " " + h.st.dim(s))
 		}
+	case agent.ToolResult:
+		h.toolResult(ev)
+		return nil
 	case agent.Usage:
 		if ev.Tokens != nil {
 			h.side.tokens = ev.Tokens
