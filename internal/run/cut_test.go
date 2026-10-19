@@ -142,9 +142,10 @@ func TestCutPromotedChangeIsARun(t *testing.T) {
 // "checks" — named as they start, so a live composer can say what it waits
 // on (#296).
 func TestCutReportsItsStages(t *testing.T) {
-	// A slow setup keeps prepared open past the Cut's start: the wait on
-	// it is the "preparing" step.
-	c := openCut(t, "sleep 3",
+	// Hold setup until Cut reports preparation; machine speed cannot
+	// finish preparation before the event under test.
+	release := filepath.Join(t.TempDir(), "release-setup")
+	c := openCut(t, "while [ ! -f '"+release+"' ]; do sleep 0.05; done",
 		multiturn.Turn{Reply: "added", Writes: []multiturn.File{{Path: "add.go", Content: cutAdd + "\nfunc Sub(a, b int) int { return a - b }\n"}}})
 	drain(t, send(t, c, "add Sub"), nil)
 	var mu sync.Mutex
@@ -156,6 +157,12 @@ func TestCutReportsItsStages(t *testing.T) {
 			mu.Lock()
 			steps = append(steps, ev.Step)
 			mu.Unlock()
+			if ev.Step == "preparing" {
+				if err := os.WriteFile(release, nil, 0o600); err != nil {
+					t.Errorf("release setup: %v", err)
+					cancel()
+				}
+			}
 		}
 	}})
 	if err != nil {
