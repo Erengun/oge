@@ -233,7 +233,7 @@ func (h *home) ogeLine(text string) string {
 		text = h.st.warn("■") + strings.TrimPrefix(text, "■")
 	}
 	if h.full {
-		return h.st.dim("oge ›") + " " + text // a notice, quieter than the words
+		return "  " + h.st.dim("oge ›") + " " + text // a notice, quieter than the words, in the reply's gutter
 	}
 	return h.st.accent("oge ›") + " " + text
 }
@@ -720,6 +720,9 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 func (h *home) endTurn() []string {
 	text, queued := h.comp.expanded(), h.turn.queued
 	h.turn = nil
+	if !h.side.since.IsZero() {
+		h.side.took = h.clock().Sub(h.side.since)
+	}
 	h.side.step = ""
 	h.reopen()
 	if strings.TrimSpace(text) != "" {

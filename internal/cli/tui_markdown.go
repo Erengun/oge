@@ -52,8 +52,11 @@ func (st styles) renderMarkdown(text string, width, indent int) string {
 		case mdHeading.MatchString(l):
 			m := mdHeading.FindStringSubmatch(l)
 			h := st.bold(st.inline(m[2]))
-			if len(m[1]) <= 2 {
-				h = st.accent(st.bold(m[2]))
+			switch len(m[1]) {
+			case 1:
+				h = st.ask(st.bold(strings.ToUpper(ansi.Strip(st.inline(m[2])))))
+			case 2:
+				h = st.ask(st.bold(ansi.Strip(st.inline(m[2]))))
 			}
 			for _, wl := range strings.Split(ansi.Wrap(h, w, ""), "\n") {
 				add(wl)

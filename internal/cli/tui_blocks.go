@@ -32,15 +32,20 @@ func (h *home) userEntry(text string) tea.Cmd {
 			bar += strings.Repeat(" ", max(w-1-ansi.StringWidth(bar), 0))
 			out = append(out, st.user(bar))
 		}
-		return strings.Join(out, "\n")
+		return strings.Join(out, "\n") + "\n"
 	})
 }
 
 // replyEntry is the agent's words, drawn as markdown.
 func (h *home) replyEntry(text string) tea.Cmd {
 	st := h.st
+	// A reply that follows a tool step is set off from it by a blank row.
+	gap := ""
+	if n := len(h.tr.entries); n > 0 && strings.HasPrefix(h.tr.entries[n-1].text, "  ● ") {
+		gap = "\n"
+	}
 	return h.printBlock(agentLines(text), func(w int, _ bool) string {
-		return st.renderMarkdown(text, w-1, 2)
+		return gap + st.renderMarkdown(text, w-1, 2)
 	})
 }
 
@@ -76,7 +81,7 @@ func (h *home) toolEntry(tool, target string, bad bool) tea.Cmd {
 	st := h.st
 	raw := "  ● " + strings.TrimSpace(tool+" "+target)
 	return h.printBlock(raw, func(w int, expand bool) string {
-		dot := st.accent("●")
+		dot := st.dim("●")
 		if bad {
 			dot = st.bad("●")
 		}
@@ -95,22 +100,23 @@ func (h *home) toolEntry(tool, target string, bad bool) tea.Cmd {
 // command is cut to a few rows unless the human expanded the output.
 func shellBox(st styles, tool, cmd string, width int, expand bool) string {
 	title := " " + strings.ToLower(clean(tool)) + " "
-	inner := min(max(ansi.StringWidth(cmd)+2, ansi.StringWidth(title)+4, 20), max(width-6, 12))
+	// The box takes the pane's width, as pitago's does: the command on top.
+	inner := max(width-6, 12)
 	lines := strings.Split(ansi.Wrap("$ "+cmd, inner, ""), "\n")
 	const collapsed = 4
 	if !expand && len(lines) > collapsed {
 		more := len(lines) - collapsed
-		lines = append(lines[:collapsed:collapsed], fmt.Sprintf("… %d more lines · ctrl+o", more))
+		lines = append(lines[:collapsed:collapsed], fmt.Sprintf("… %d more lines · ctrl+o to expand", more))
 		lines[collapsed] = st.dim(lines[collapsed])
 	}
 	b := st.border
-	var out []string
+	out := []string{""} // a blank row before and after, so the box breathes
 	out = append(out, "  "+b("╭─")+st.dim(title)+b(strings.Repeat("─", max(inner+1-ansi.StringWidth(title)-1, 0))+"╮"))
 	for _, l := range lines {
 		pad := strings.Repeat(" ", max(inner-ansi.StringWidth(l), 0))
 		out = append(out, "  "+b("│")+" "+l+pad+b("│"))
 	}
-	out = append(out, "  "+b("╰"+strings.Repeat("─", inner+1)+"╯"))
+	out = append(out, "  "+b("╰"+strings.Repeat("─", inner+1)+"╯"), "")
 	return strings.Join(out, "\n")
 }
 

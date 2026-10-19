@@ -23,6 +23,7 @@ type sideState struct {
 	frozen  *pipeline.Frozen // what the next turn will use
 	step    string           // the turn's latest tool step
 	since   time.Time        // when the turn began
+	took    time.Duration    // how long the last turn took
 	verdict string           // the last cut's Verdict line, plain
 	outcome run.Outcome
 	changes []diffFile // the last cut's files with their +/- counts
@@ -159,6 +160,8 @@ func (h *home) sidebar(width, height int) []string {
 		kv("time", elapsed(h.clock().Sub(h.side.since)))
 	case h.verify != nil:
 		kv("time", elapsed(h.clock().Sub(h.verify.since)))
+	case h.side.took > 0:
+		kv("last", elapsed(h.side.took))
 	}
 	if t := h.side.tokens; t != nil {
 		kv("tokens", fmt.Sprint(*t))
@@ -208,14 +211,8 @@ func (h *home) sidebar(width, height int) []string {
 		body = append(body, st.dim("no cut yet"))
 	}
 	if f := h.side.frozen; f != nil && len(f.Limitations) > 0 {
-		body = append(body, st.dim("Agent limitations"))
-		for i, l := range f.Limitations {
-			if i == 2 {
-				body = append(body, st.dim(fmt.Sprintf("… +%d more · /receipt", len(f.Limitations)-i)))
-				break
-			}
-			wrap(clean(l), st.dim, 4)
-		}
+		// One line: the words are in /receipt, not worth five rows here.
+		body = append(body, st.warn("⚠")+" "+st.dim(plural(len(f.Limitations), "Agent limitation")+" · /receipt"))
 	} else if f != nil {
 		body = append(body, st.dim("no Agent limitations"))
 	}

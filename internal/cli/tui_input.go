@@ -35,6 +35,9 @@ func (h *home) fullBox(width int, blank string) (lines []string, curRow, curCol 
 		rows = append(rows, "")
 	}
 	border := st.accent
+	if h.turn != nil || h.verify != nil || h.run != nil {
+		border = st.border // the accent is for an idle, focused box
+	}
 	top := "╭" + strings.Repeat("─", max(width-2, 0)) + "╮"
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
 		label := " shell "
@@ -79,7 +82,7 @@ func (h *home) statusBorder(width int, border func(string) string) string {
 			if w+2 <= avail || (len(left) <= 1 && r == "") {
 				return l, r
 			}
-			if len(left) > 2 {
+			if len(left) > 3 { // the state and two keys outrank the profile
 				left = left[:len(left)-1]
 				continue
 			}
@@ -127,6 +130,19 @@ func (h *home) statusParts() (left []string, right string) {
 	case h.turn != nil:
 		state = st.accent("●") + " " + st.bold("working")
 		keys = []string{"esc interrupt", submit + " queue"}
+	case h.verify != nil && h.verify.stopped:
+		state = st.accent("●") + " " + st.bold("cancelling verification…")
+	case h.verify != nil && h.verify.gate != nil:
+		state = st.warn("●") + " " + st.bold("waiting at its Gate")
+		keys = []string{"/apply", "/ commands", files(h.verify.changed)}
+	case h.verify != nil:
+		step := h.verify.step
+		if step == "" {
+			step = "verifying…"
+		}
+		state = st.accent("●") + " " + st.bold(files(h.verify.changed)+" · "+step) + " " + st.dim(elapsed(h.clock().Sub(h.verify.since)))
+		// The box stays usable while the Check runs, so its hints stay.
+		keys = []string{"ctrl+c cancel", "/ commands"}
 	case h.run != nil:
 		state = st.accent("●") + " " + st.bold("running")
 		keys = []string{h.kb.expandLabel() + " details", "ctrl+c cancel"}
@@ -154,32 +170,39 @@ func (h *home) statusParts() (left []string, right string) {
 	return left, right
 }
 
-// menuLinesFull is the slash popup for the full screen, drawn above the box:
-// each row is "/command — description", the highlighted one marked ▸, with a
-// counter and what the keys do. Its height is capped to the rows the screen
-// can spare.
+// menuLinesFull is the slash popup for the full screen, drawn above the box
+// in a rounded dim frame at the box's width: each row is "/command —
+// description", the highlighted one marked ▸ and filled, with a counter and
+// what the keys do. Its height is capped to the rows the screen can spare.
 func (h *home) menuLinesFull() []string {
 	st := h.st
 	items := h.menu.Items()
 	n := len(items)
-	room := max(min(8, h.termH-14), 3)
+	width := max(h.width, 20)
+	inner := width - 4
+	room := max(min(8, h.termH-16), 3)
 	idx := h.menu.Index()
 	first := min(max(idx-room+1, 0), max(n-room, 0))
 	last := min(first+room, n)
-	var out []string
+	row := func(s string) string {
+		s = ansi.Truncate(s, inner, "…")
+		return st.dim("│") + " " + s + strings.Repeat(" ", max(inner-ansi.StringWidth(ansi.Strip(s)), 0)) + " " + st.dim("│")
+	}
+	out := []string{st.dim("╭" + strings.Repeat("─", width-2) + "╮")}
 	for i := first; i < last; i++ {
 		c := items[i].(slashItem).cmd
 		if i == idx {
-			out = append(out, " "+st.accent("▸")+" "+st.bold(c.usage)+st.dim(" — "+c.desc))
+			sel := " ▸ " + c.usage + " — " + c.desc
+			sel = ansi.Truncate(sel, inner, "…")
+			sel += strings.Repeat(" ", max(inner-ansi.StringWidth(sel), 0))
+			out = append(out, st.dim("│")+" "+st.user(sel)+" "+st.dim("│"))
 		} else {
-			out = append(out, "   "+c.usage+st.dim(" — "+c.desc))
+			out = append(out, row("   "+c.usage+st.dim(" — "+c.desc)))
 		}
 	}
-	for i, l := range out {
-		out[i] = ansi.Truncate(l, max(h.width-1, 8), "…")
-	}
 	if last < n {
-		out = append(out, " "+st.dim(fmt.Sprintf("…(+%d below)", n-last)))
+		out = append(out, row(st.dim(fmt.Sprintf(" …(+%d below)", n-last))))
 	}
-	return append(out, " "+st.dim(fmt.Sprintf("(%d/%d) Tab complete · Enter accept · Esc close", idx+1, n)))
+	out = append(out, row(st.dim(fmt.Sprintf(" (%d/%d) Tab complete · Enter accept · Esc close", idx+1, n))))
+	return append(out, st.dim("╰"+strings.Repeat("─", width-2)+"╯"))
 }

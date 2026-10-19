@@ -1330,6 +1330,9 @@ func (h *home) render() (string, int, int) {
 	}
 	var lines []string
 	top := 0 // lines above the box
+	if h.full {
+		lines, top = append(lines, ""), 1 // a row of air between the transcript and the box
+	}
 	switch {
 	case h.actions:
 		lines = append(lines, " "+st.bold("[a] apply  [d] diff  [r] receipt  [b] branch")+"   "+st.dim("esc back"))
@@ -1337,6 +1340,8 @@ func (h *home) render() (string, int, int) {
 	case h.resetting:
 		lines = append(lines, " "+st.dim("starting a new Chat…"))
 		top++
+	case h.full && h.verify != nil:
+		// the status inside the box's border says it
 	case h.verify != nil && h.verify.stopped:
 		lines = append(lines, " "+st.dim("cancelling verification…"))
 		top++

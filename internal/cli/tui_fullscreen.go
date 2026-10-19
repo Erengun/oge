@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -258,7 +259,7 @@ func (h *home) compose(v tea.View) tea.View {
 		}
 		t.start = 0
 	} else {
-		body = t.window(mainW, vh)
+		body = unclip(t.window(mainW, vh), t.start)
 		if t.sel != nil {
 			for i := range body {
 				body[i] = t.paintSel(t.start+i, body[i])
@@ -476,4 +477,23 @@ func (h *home) leaveTranscript(w io.Writer) {
 	}
 	t := &transcript{entries: h.tr.entries, expand: h.tr.expand}
 	fmt.Fprintln(w, strings.Join(t.render(width), "\n"))
+}
+
+// unclip blanks the lines at the top of the viewport that are the tail of a
+// framed block (a table, a box, a code block) whose start scrolled out: a
+// border fragment floating under the header reads as a glitch. The line
+// count stays, so scrolling and selection are unaffected.
+func unclip(body []string, start int) []string {
+	if start == 0 {
+		return body
+	}
+	body = slices.Clone(body) // the lines are the transcript's cache
+	for i, l := range body {
+		t := strings.TrimLeft(ansi.Strip(l), " ")
+		if t == "" || !strings.ContainsAny(t[:min(len(t), 3)], "│╰└├┘┤┴") {
+			break
+		}
+		body[i] = ""
+	}
+	return body
 }
