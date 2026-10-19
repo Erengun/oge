@@ -232,6 +232,9 @@ func (h *home) ogeLine(text string) string {
 	case strings.HasPrefix(text, "■"):
 		text = h.st.warn("■") + strings.TrimPrefix(text, "■")
 	}
+	if h.full {
+		return h.st.dim("oge ›") + " " + text // a notice, quieter than the words
+	}
 	return h.st.accent("oge ›") + " " + text
 }
 
@@ -256,6 +259,7 @@ func agentLines(text string) string {
 // chatSubmit sends text as the next turn, opening the Chat first.
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
+	h.side.since, h.side.step = h.clock(), ""
 	h.comp = h.composer()
 	edited := h.adviceEdit
 	h.adviceEdit = nil
@@ -287,7 +291,16 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		ch, err := c.Send(ctx, text)
 		return chatSentMsg{events: ch, err: err}
 	}
-	echo := h.println(h.userBar("> " + task.Parse(text).Title))
+	if h.full {
+		h.tr.latest() // sending brings the view back to the bottom
+		h.tr.freshReply = true
+	}
+	var echo tea.Cmd
+	if h.full {
+		echo = h.userEntry(task.Parse(text).Title)
+	} else {
+		echo = h.println(h.userBar("> " + task.Parse(text).Title))
+	}
 	return h, tea.Sequence(echo, dismissed, send)
 }
 
@@ -416,7 +429,11 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
 	case agent.Claim:
 		if ev.Tool == "" {
-			if t := cleanLines(ev.Text); t != "" {
+			if t := cleanLines(strings.ReplaceAll(ev.Text, "\t", "    ")); t != "" {
+				h.noteReply(ev.Text)
+				if h.full {
+					return h.replyEntry(t)
+				}
 				return h.println(agentLines(t))
 			}
 			return nil
@@ -425,7 +442,18 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 			return nil
 		}
 		if s, ok := activityStep(ev); ok {
+			h.side.step = s
+			if h.full {
+				return h.toolEntry(clean(ev.Tool), clean(ev.Target), false)
+			}
 			return h.println("  " + h.st.agent("⏺") + " " + h.st.dim(s))
+		}
+	case agent.Usage:
+		if ev.Tokens != nil {
+			h.side.tokens = ev.Tokens
+		}
+		if ev.CostUSD != nil {
+			h.side.cost = ev.CostUSD
 		}
 	case agent.HostRequest:
 		if hd := ev.Host; hd != nil && hd.Decision == "cancel" && hd.By == "agent" {
@@ -457,6 +485,11 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 			return nil // the answer is printed where it was given
 		}
 		if s, ok := activityStep(ev); ok {
+			if h.full {
+				return h.printBlock("  ● "+s, func(w int, _ bool) string {
+					return ansi.Truncate("  "+h.st.bad("●")+" "+h.st.dim(s), max(w-1, 8), "…")
+				})
+			}
 			return h.println("  " + h.st.bad("⏺") + " " + h.st.dim(s))
 		}
 	case agent.TurnSettled:
@@ -687,6 +720,7 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 func (h *home) endTurn() []string {
 	text, queued := h.comp.expanded(), h.turn.queued
 	h.turn = nil
+	h.side.step = ""
 	h.reopen()
 	if strings.TrimSpace(text) != "" {
 		h.comp.set(text)
@@ -809,14 +843,17 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		line = h.ogeLine("■ verification cancelled: nothing was verified")
 	case msg.err != nil:
 		h.last = nil // never an older cut's: it isn't what was just changed
+		h.side.verdict, h.side.outcome, h.side.changes = "", "", nil
 		line = h.ogeLine("✗ verifying the change: " + clean(msg.err.Error()))
 	default:
 		var l string
 		l, h.last = h.chat.verdict(res, v.changed)
 		line = h.ogeLine(l)
+		h.side.verdict, h.side.outcome, h.side.changes = sideVerdict(l), res.Outcome, nil
 		if res.Outcome == run.Accepted || res.Outcome == run.Failed {
 			diff = h.inlineDiff()
 		}
+		diff = tea.Batch(diff, h.sideChanges())
 	}
 	// The action row acts on h.last: never on a cut the human hasn't
 	// seen yet.
@@ -924,9 +961,13 @@ func (h *home) inlineDiff() tea.Cmd {
 	if width <= 0 {
 		width = 80
 	}
+	full := h.full
 	return func() tea.Msg {
 		b, err := patch()
 		text := strings.TrimRight(string(b), "\n")
+		if full && err == nil && text != "" {
+			return diffEntryMsg(text)
+		}
 		if err != nil || text == "" || strings.Count(text, "\n")+1 > inlineMax {
 			return nil
 		}
@@ -937,6 +978,10 @@ func (h *home) inlineDiff() tea.Cmd {
 		return chatDiffMsg(lines)
 	}
 }
+
+// diffEntryMsg is a Verdict's patch for the full-screen transcript, which
+// draws it as hunks.
+type diffEntryMsg string
 
 // chatDiffMsg is a Verdict's inline diff, ready to print.
 type chatDiffMsg []string
@@ -1282,4 +1327,14 @@ func verdictLine(res *run.Result, changed int) string {
 		return "✗ Refused" + why
 	}
 	return "✗ " + clean(string(res.Outcome)) + " · " + what + " · /receipt"
+}
+
+// sideVerdict is a Verdict line for the sidebar: the line without the
+// commands it ends with.
+func sideVerdict(line string) string {
+	parts := strings.Split(clean(line), " · ")
+	for len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], "/") {
+		parts = parts[:len(parts)-1]
+	}
+	return strings.Join(parts, " · ")
 }

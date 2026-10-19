@@ -149,6 +149,13 @@ func shotSession(t *testing.T, dir, bin string, cols, rows int) {
 	s.composer()
 	settle()
 	shoot("5-change-verdict")
+	// The slash popup over the box, then cleared again.
+	s.type_("/")
+	s.expectScreen("Tab complete")
+	settle()
+	shoot("6-palette")
+	s.type_("\x15") // ctrl+u: the box is empty again
+	s.composer()
 	s.quitChat(f)
 	// The whole stream too, for a question the screens can't answer.
 	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%dx%d.raw", cols, rows)), []byte(s.out.String()), 0o644); err != nil {

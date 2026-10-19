@@ -210,3 +210,37 @@ var themeNotes = map[string]string{
 // selected paints the VISUAL selection in reverse video: an attribute, not a
 // colour, so every theme and NO_COLOR show it.
 func (s styles) selected(t string) string { return lipgloss.NewStyle().Reverse(true).Render(t) }
+
+// warm is the styles with a warm accent, for the full-screen home: the
+// focused border, the active items and the headings take one restrained gold
+// (pitago's), where the shared accent stays what oge "task"'s live view
+// has always drawn. A custom theme's accent wins; the other roles are not
+// touched.
+func (s styles) warm() styles {
+	if s.th == nil {
+		return s
+	}
+	th := s.th
+	s.accent = func(t string) string {
+		c := th.palette().accent
+		if th.custom == nil {
+			name := th.name
+			if name == "auto" {
+				name = map[bool]string{true: "dark", false: "light"}[th.dark]
+				if !th.known {
+					name = "ansi"
+				}
+			}
+			switch name {
+			case "dark":
+				c = rgb(0xe5c07b)
+			case "light":
+				c = rgb(0x9a6700)
+			case "ansi":
+				c = lipgloss.BrightYellow
+			}
+		}
+		return lipgloss.NewStyle().Foreground(c).Render(t)
+	}
+	return s
+}

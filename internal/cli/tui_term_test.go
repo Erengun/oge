@@ -34,6 +34,9 @@ type vt struct {
 	cont     []bool          // cont[i]: row i continues row i-1 because it wrapped
 	pen      uv.Style        // the SGR state new text is drawn with
 	styles   [][]uv.Style    // styles[i][j]: the pen lines[i][j] was drawn with
+	alt      *vt             // the main screen, saved while the alternate one (?1049) is shown
+	margin   [2]int          // DECSTBM: first and last scrolling row of the screen, 1-based (0: unset)
+	lastRune rune            // for REP
 }
 
 // cols is the screen width, 80 unless set.
@@ -47,6 +50,11 @@ func (t *vt) cols() int {
 // lf moves down a row; at the bottom of a screen with a height the screen
 // scrolls and the top line joins the scrollback.
 func (t *vt) lf() {
+	if t.margin != [2]int{} && t.row == t.top+t.regionBottom() {
+		// At the bottom margin the region scrolls, the cursor stays.
+		t.scrollRegion(t.top+t.regionTop(), -1)
+		return
+	}
 	if t.height > 0 && t.row == t.top+t.height-1 {
 		t.top++
 	}
@@ -96,7 +104,97 @@ func (t *vt) line() []rune {
 	return t.lines[t.row]
 }
 
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// regionTop and regionBottom are the scrolling region's rows, 0-based in the
+// screen.
+func (t *vt) regionTop() int {
+	if t.margin[0] > 0 {
+		return t.margin[0] - 1
+	}
+	return 0
+}
+
+func (t *vt) regionBottom() int {
+	if t.margin[1] > 0 {
+		return t.margin[1] - 1
+	}
+	return max(t.height, 1) - 1
+}
+
+// scrollRegion moves the rows from row (a line index) to the region's bottom
+// up (n < 0) or down (n > 0), blank rows coming in.
+func (t *vt) scrollRegion(row, n int) {
+	bottom := t.top + t.regionBottom()
+	for len(t.lines) <= bottom {
+		t.lines = append(t.lines, nil)
+	}
+	t.line()
+	for len(t.cont) < len(t.lines) {
+		t.cont = append(t.cont, false)
+	}
+	for len(t.styles) < len(t.lines) {
+		t.styles = append(t.styles, nil)
+	}
+	if row > bottom {
+		return
+	}
+	k := min(abs(n), bottom-row+1)
+	if n < 0 {
+		copy(t.lines[row:bottom+1], t.lines[row+k:bottom+1])
+		copy(t.styles[row:bottom+1], t.styles[row+k:bottom+1])
+		for i := bottom - k + 1; i <= bottom; i++ {
+			t.lines[i], t.styles[i] = nil, nil
+		}
+	} else {
+		copy(t.lines[row+k:bottom+1], t.lines[row:bottom+1-k])
+		copy(t.styles[row+k:bottom+1], t.styles[row:bottom+1-k])
+		for i := row; i < row+k; i++ {
+			t.lines[i], t.styles[i] = nil, nil
+		}
+	}
+	t.pend = false
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// altScreen switches to the alternate screen (on) or back to the main one.
+func (t *vt) altScreen(on bool) {
+	if on == (t.alt != nil) {
+		return
+	}
+	if on {
+		saved := *t
+		saved.modes = nil
+		t.alt = &saved
+		t.lines, t.cont, t.styles = nil, nil, nil
+		t.row, t.col, t.top, t.pend = 0, 0, 0, false
+		t.margin = [2]int{}
+		return
+	}
+	s := t.alt
+	t.lines, t.cont, t.styles = s.lines, s.cont, s.styles
+	t.row, t.col, t.top, t.pend = s.row, s.col, s.top, s.pend
+	t.margin = [2]int{}
+	t.alt = nil
+}
+
 func (t *vt) put(r rune) {
+	t.lastRune = r
 	if t.pend { // deferred wrap, as xterm does it
 		t.pend = false
 		t.col = 0
@@ -155,6 +253,17 @@ func (t *vt) write(b []byte) {
 				j++
 			}
 			i = j
+		case r == 0x1b && i+1 < len(rs) && rs[i+1] == 'M': // RI: up a row, or the region down
+			t.pend = false
+			if t.row == t.top+t.regionTop() {
+				t.scrollRegion(t.row, 1)
+			} else {
+				t.row = max(t.row-1, t.top)
+			}
+			i++
+		case r == 0x1b && i+1 < len(rs) && rs[i+1] == 'D': // IND
+			t.lf()
+			i++
 		case r == 0x1b:
 			i++ // a two-byte escape
 		case r < 0x20:
@@ -172,6 +281,9 @@ func (t *vt) csi(params string, final rune) {
 		}
 		for _, m := range strings.Split(params[1:], ";") {
 			t.modes[m] = final
+			if m == "1049" || m == "1047" || m == "47" {
+				t.altScreen(final == 'h')
+			}
 		}
 		return
 	case strings.HasPrefix(params, ">") && final == 'u':
@@ -196,8 +308,69 @@ func (t *vt) csi(params string, final rune) {
 		}
 	}
 	switch final {
-	case 'C', 'D', 'G':
+	case 'C', 'D', 'G', 'H', 'f', 'd':
 		t.pend = false
+	}
+	switch final {
+	case 'H', 'f': // CUP: row;col, 1-based, in the screen
+		r, c := 1, 1
+		ps := strings.Split(params, ";")
+		if v := atoi(ps[0]); v > 0 {
+			r = v
+		}
+		if len(ps) > 1 {
+			if v := atoi(ps[1]); v > 0 {
+				c = v
+			}
+		}
+		t.row, t.col = t.top+r-1, c-1
+		t.line()
+		return
+	case 'd': // VPA
+		t.row = t.top + max(n, 1) - 1
+		t.line()
+		return
+	case 'r': // DECSTBM
+		t.margin = [2]int{}
+		if ps := strings.Split(params, ";"); len(ps) == 2 && atoi(ps[0]) > 0 && atoi(ps[1]) > 0 {
+			t.margin = [2]int{atoi(ps[0]), atoi(ps[1])}
+		}
+		t.row, t.col = t.top, 0
+		return
+	case 'M': // DL
+		t.scrollRegion(t.row, -n)
+		return
+	case 'S':
+		t.scrollRegion(t.top+t.regionTop(), -n)
+		return
+	case 'T':
+		t.scrollRegion(t.top+t.regionTop(), n)
+		return
+	case 'P': // DCH
+		l := t.line()
+		st := t.styles[t.row]
+		if t.col < len(l) {
+			e := min(t.col+n, len(l))
+			t.lines[t.row] = append(l[:t.col:t.col], l[e:]...)
+			if t.col < len(st) {
+				t.styles[t.row] = append(st[:t.col:t.col], st[min(e, len(st)):]...)
+			}
+		}
+		return
+	case '@': // ICH
+		l := t.line()
+		for len(l) < t.col {
+			l = append(l, ' ')
+		}
+		blank := []rune(strings.Repeat(" ", n))
+		t.lines[t.row] = append(l[:t.col:t.col], append(blank, l[t.col:]...)...)
+		t.styles[t.row] = nil
+		return
+	case 'b': // REP
+		for range n {
+			t.put(t.lastRune)
+		}
+		return
 	}
 	switch final {
 	case 'A':
@@ -218,13 +391,29 @@ func (t *vt) csi(params string, final rune) {
 	case 'G':
 		t.col = max(n-1, 0)
 	case 'K':
-		if params == "" || params == "0" {
+		switch params {
+		case "", "0":
 			l := t.line()
 			if t.col < len(l) {
 				t.lines[t.row] = l[:t.col]
 			}
+		case "1":
+			l := t.line()
+			for i := 0; i <= t.col && i < len(l); i++ {
+				l[i] = ' '
+			}
+		case "2":
+			t.line()
+			t.lines[t.row] = nil
+			t.styles[t.row] = nil
 		}
 	case 'J':
+		if params == "2" || params == "3" {
+			t.line()
+			for i := t.top; i < len(t.lines); i++ {
+				t.lines[i], t.styles[i] = nil, nil
+			}
+		}
 		if params == "" || params == "0" {
 			l := t.line()
 			if t.col < len(l) {

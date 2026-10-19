@@ -386,8 +386,18 @@ type home struct {
 	armAt   time.Time
 
 	width, height int
-	run           *model    // nil while composing
-	notify        *notifier // the session's alerts; nil when silent (#170)
+	// full: the home draws on the alternate screen (tui_fullscreen.go).
+	// width and height are then the main column's; termW and termH are the
+	// terminal's. tr is the transcript, toast the notice passing over it.
+	full         bool
+	termW, termH int
+	sidebarOff   bool
+	tr           *transcript
+	toast        *toast
+	toastSeq     int
+	side         sideState
+	run          *model    // nil while composing
+	notify       *notifier // the session's alerts; nil when silent (#170)
 	// scroll is what was printed above the program, for /export (#168);
 	// exportDir is where it goes ("" is the working directory); tmux wraps
 	// /copy's OSC 52.
@@ -587,6 +597,11 @@ func (h *home) Init() tea.Cmd {
 }
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if h.full {
+		if cmd, ok := h.fullUpdate(msg); ok {
+			return h, cmd
+		}
+	}
 	m, cmd := h.update(msg)
 	if h.adviceEdit != nil && h.comp != nil && h.comp.empty() {
 		h.dropAdviceEdit() // emptied: what is typed next isn't the advice
@@ -606,8 +621,13 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if ws, ok := msg.(tea.WindowSizeMsg); ok {
 		h.width, h.height = ws.Width, ws.Height
+		if h.full {
+			h.termW, h.termH = ws.Width, ws.Height
+			h.layout()
+			msg = tea.WindowSizeMsg{Width: h.width, Height: h.height}
+		}
 		if h.diff != nil {
-			h.diff.resize(ws.Width)
+			h.diff.resize(h.width)
 		}
 	}
 	switch m := msg.(type) {
@@ -622,6 +642,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 	case chatGateMsg:
 		return h, h.cutGated(m)
+	case sideChangesMsg:
+		h.side.changes = m
+		return h, nil
+	case diffEntryMsg:
+		return h, h.diffEntry(string(m))
 	case chatDiffMsg:
 		lines := []string(m)
 		for i, l := range lines {
@@ -937,6 +962,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // submit starts the Run (or the follow-up) for text, which is final: slash
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
+	if h.full {
+		h.tr.latest()
+	}
 	h.cleared, h.queuedText = "", ""
 	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
 		// Sent as it was: still the advice turn, outside the Task.
@@ -956,7 +984,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 		h.msg, h.setup = problem, nil
 		return h, nil
 	}
-	h.setup = setupLines(res.frozen)
+	h.setSetup(res.frozen)
 	h.sel.syncFrom(res)
 	h.at.files, h.at.filesReady = nil, false // listed again for the next composer
 	h.hist.add(text)                         // what the human typed, never the agent's output
@@ -1174,7 +1202,7 @@ func (h *home) reopen() {
 		h.msg = append(h.msg, n)
 	}
 	if res != nil {
-		h.setup = setupLines(res.frozen)
+		h.setSetup(res.frozen)
 		h.sel.init(res)
 	}
 }
@@ -1189,6 +1217,9 @@ func (h *home) themeNotice() string {
 
 func (h *home) View() tea.View {
 	v := h.view()
+	if h.full {
+		return h.compose(v)
+	}
 	h.shown = rows(v.Content)
 	return v
 }
@@ -1256,6 +1287,9 @@ func (h *home) wheel(msg tea.MouseWheelMsg) tea.Cmd {
 // it and its column; blank is shown in an empty box. The idle composer and
 // a turn's live area share it.
 func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol int) {
+	if h.full {
+		return h.fullBox(width, blank)
+	}
 	st := h.st
 	inner := max(width-4, 1)
 	h.comp.sel, h.comp.selPaint = h.selection(), st.selected
@@ -1330,6 +1364,16 @@ func (h *home) render() (string, int, int) {
 	if h.chat != nil {
 		placeholder = "Ask a question or describe a change"
 	}
+	if h.full && h.menu != nil {
+		pop := h.menuLinesFull()
+		lines = append(lines, pop...)
+		top += len(pop) // the popup sits above the box
+	}
+	if h.full && h.at.list != nil {
+		pop := h.atLines()
+		lines = append(lines, pop...)
+		top += len(pop)
+	}
 	box, cr, cc := h.boxLines(width, st.dim(placeholder))
 	lines = append(lines, box...)
 	if h.vim {
@@ -1395,15 +1439,18 @@ func (h *home) render() (string, int, int) {
 	case h.diff != nil:
 		lines = append(lines, h.diff.lines()...)
 	}
-	if h.menu != nil {
+	if h.menu != nil && !h.full {
 		lines = append(lines, h.menuLines()...)
 	}
-	if h.at.list != nil {
+	if h.at.list != nil && !h.full {
 		lines = append(lines, h.atLines()...)
 	}
 	if h.panel == nil && h.keys == nil {
 		_, shell := shellLine(h.comp.expanded())
 		for i, l := range h.setup {
+			if h.full && (i == 0 || i == len(h.setup)-1 && strings.HasPrefix(l, "[tab]")) {
+				continue // the status is in the box's border
+			}
 			if i == 0 && h.chat != nil {
 				l = strings.Replace(l, "implement ", "", 1)
 			}
@@ -1469,7 +1516,7 @@ func (h *home) afterSetup(rev0 int) {
 		h.msg, h.setup = problem, nil
 		return
 	}
-	h.setup = setupLines(res.frozen)
+	h.setSetup(res.frozen)
 	h.sel.syncFrom(res)
 	if h.sel.changed && !h.sel.asked && h.save != nil {
 		h.saving, h.sel.asked = true, true
@@ -1516,7 +1563,7 @@ func (h *home) answerReview(key string) {
 		h.note = "Saved " + pipeline.ConfigPath + ". Commit it so every clone uses the same Checks."
 		if res, problem := h.resolve(h.sel); problem == nil {
 			h.sel.syncFrom(res)
-			h.setup = setupLines(res.frozen)
+			h.setSetup(res.frozen)
 			if h.panel != nil {
 				h.panel.rev0 = h.sel.rev
 			}
@@ -1664,7 +1711,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h := &home{comp: newComposer(), tr: &transcript{}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 	}
@@ -1683,11 +1730,13 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.msg = append(h.msg, n)
 	}
 	if res != nil {
-		h.setup = setupLines(res.frozen)
+		h.setSetup(res.frozen)
 		sel.init(res)
 	}
 	h.save = sel.save
 	u.noFallback = true
+	h.full = true
+	h.st = h.st.warm()
 	var (
 		runIn     *interrupts // the running (or last) Run's
 		runCancel context.CancelFunc
@@ -1794,6 +1843,11 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
 	err = u.program(in, h)
+	if h.full {
+		// The alternate screen took the transcript with it: leave it in the
+		// terminal's scrollback, as an inline session would have.
+		h.leaveTranscript(u.out)
+	}
 	select {
 	case <-in.forced:
 		return 0, errForced

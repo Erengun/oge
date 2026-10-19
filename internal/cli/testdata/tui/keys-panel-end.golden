@@ -1,24 +1,24 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-   ctrl+x               cancel the queued Task
-   ctrl+c               clear the queued Task, else cancel the Run
+   ctrl+c                 clear the queued Task, else cancel the Run
+ Full screen
+   pgup · pgdown · wheel  scroll the transcript (drag selects and copies)
+   ctrl+end · end         jump to the latest
+   ctrl+t                 show or hide the sidebar (from 110 columns)
+   ctrl+o                 unfold long commands and diffs
+   alt+y                  copy the last reply
  Delivery
-   ↓ on an empty box    the actions of the last Run
-   a · b · d · r        apply · branch · diff · receipt (each ↓ allows one)
+   ↓ on an empty box      the actions of the last Run
+   a · b · d · r          apply · branch · diff · receipt (each ↓ allows one)
  Setup
-   tab · esc            close setup
-   ↑ ↓ · enter          move · change the row
-   s · w                save as default · write the project Checks
-   d · x                remove the row
+   tab · esc              close setup
+   ↑ ↓ · enter            move · change the row
+   s · w                  save as default · write the project Checks
+   d · x                  remove the row
  Vim (when enabled)
-   esc · i a I A o O    NORMAL · INSERT (enter runs in both)
-   h j k l              left · down · up · right (k, j at the edge: history)
-   w e b                next word · word end · previous (NORMAL)
-   0 ^ $                line start · first char · end (NORMAL)
-   d c y                operator + motion or iw i" i( · dd cc yy (NORMAL)
-   x · D                delete the character · to the line end (NORMAL)
-   p · P                put after · before (the kill ring)
-   v · V                select · select lines (then d x c y p; esc)
-   u · .                undo · repeat the last change
- ↑ ↓ scroll (40-59 of 59) · esc or ? close
+   esc · i a I A o O      NORMAL · INSERT (enter runs in both)
+   h j k l                left · down · up · right (k, j at the edge: history)
+   w e b                  next word · word end · previous (NORMAL)
+   0 ^ $                  line start · first char · end (NORMAL)
+ ↑ ↓ scroll (41-60 of 65) · esc or ? close
