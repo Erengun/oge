@@ -46,6 +46,9 @@ func (r *renderer) endScreen(res *run.Result) {
 // configuration warning, and that nothing was written yet.
 func (r *renderer) receipt(rc *receipt.Receipt, res *run.Result) {
 	r.p("")
+	if r.width != nil {
+		rc = rc.Fit(r.width())
+	}
 	if r.full {
 		fmt.Fprint(r.w, rc.FullText(r.paint))
 	} else {

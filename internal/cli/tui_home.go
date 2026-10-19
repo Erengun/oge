@@ -1709,6 +1709,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		cur = t
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn
 		u.plain.applying = r.flags.apply
+		u.plain.width = func() int { return h.width }
 		h.done = u.launch(runCtx, runIn, startFor(t, r, fu))
 		go func(forced, ended <-chan struct{}) {
 			select {

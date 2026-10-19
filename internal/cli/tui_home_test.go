@@ -192,26 +192,25 @@ func TestHomeTitleAndSetupAreEscaped(t *testing.T) {
 // homeNorm hides what differs between runs: ids, hashes and durations.
 var homeNorm = regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|(\d+m)?\d+(\.\d+)?m?s\b`)
 
-// clippedAttention is the Time line cut at the 80-column screen edge: a slow
-// run lengthens the durations until the last "s" falls off, leaving a bare
-// number after "your attention" (#312). Only that position is masked, so a
-// real count elsewhere stays visible.
-var clippedAttention = regexp.MustCompile(`(?m)(your attention )\d+(\.\d+)?$`)
+// wrappedTime is the Time line wrapped at the screen edge onto a
+// continuation row (#314). How many stages fit on the first row depends on
+// how long the durations are, so normHome joins the rows back up.
+var wrappedTime = regexp.MustCompile(`(?m)^(Time .*)\n {14}(· )`)
 
-// normHome is homeNorm plus the clipped attention time.
+// normHome is homeNorm over the screen with the Time line's wrap undone.
 func normHome(s string) string {
-	return clippedAttention.ReplaceAllString(homeNorm.ReplaceAllString(s, "X"), "${1}X")
+	return homeNorm.ReplaceAllString(wrappedTime.ReplaceAllString(s, "$1 $2"), "X")
 }
 
-func TestNormHomeMasksAClippedAttentionTime(t *testing.T) {
+func TestNormHomeJoinsAWrappedTimeLine(t *testing.T) {
 	t.Parallel()
-	for _, in := range []string{"Time  1.2s · your attention 0s", "Time  1.2s · your attention 0", "Time  1.2s · your attention 12.5"} {
-		if got, want := normHome(in), "Time  X · your attention X"; got != want {
-			t.Errorf("normHome(%q) = %q, want %q", in, got, want)
-		}
+	in := "Time          1.2s · preflight 1.2s · implement 1.2s · Check 1.2s\n              · your attention 0s\nNot covered   x"
+	want := "Time          X · preflight X · implement X · Check X · your attention X\nNot covered   x"
+	if got := normHome(in); got != want {
+		t.Errorf("normHome = %q, want %q", got, want)
 	}
-	if got := normHome("Handled  0 operations\nTime  1s · your attention 0"); got != "Handled  0 operations\nTime  X · your attention X" {
-		t.Errorf("a count outside the attention time was masked: %q", got)
+	if got := normHome("Not covered   a\n              · b"); got != "Not covered   a\n              · b" {
+		t.Errorf("a continuation of another line was joined: %q", got)
 	}
 }
 

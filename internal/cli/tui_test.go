@@ -444,10 +444,7 @@ func TestPlainFlagOnATerminalPrintsPlainLines(t *testing.T) {
 		t.Errorf("--plain wrote escape sequences:\n%q", got)
 	}
 	norm := regexp.MustCompile(`\d{8}T\d{6}-[0-9a-f]{6}|[0-9a-f]{7,64}\b|\d+(\.\d+)?m?s\b`)
-	mask := func(s string) string {
-		return clippedAttention.ReplaceAllString(norm.ReplaceAllString(s, "X"), "${1}X")
-	}
-	if g, w := mask(got), mask(want); g != w {
+	if g, w := norm.ReplaceAllString(got, "X"), norm.ReplaceAllString(want, "X"); g != w {
 		t.Errorf("--plain on a terminal differs from a Run without one\n--- got\n%s\n--- want\n%s", got, want)
 	}
 }
