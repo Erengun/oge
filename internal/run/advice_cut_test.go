@@ -73,7 +73,7 @@ func TestConsultationsInAfterADeliveryBelongsToTheNextCut(t *testing.T) {
 	log := []ledger.Record{
 		chatRec(RecConsultationStarted, map[string]any{"consultation": "k-1", "turn": 2, "advisor": adv}),
 		chatRec(RecConsultationEnded, map[string]any{"consultation": "k-1", "outcome": "advised"}),
-		chatRec(RecDelivered, map[string]any{"run": "r-1", "turn": 2}),
+		chatRec(RecDelivered, map[string]any{"run": "r-1", "turn": 2, "resolved": []string{"k-1"}}),
 		chatRec(RecConsultationStarted, map[string]any{"consultation": "k-2", "turn": 2, "advisor": adv}),
 		chatRec(RecConsultationEnded, map[string]any{"consultation": "k-2", "outcome": "advised"}),
 	}
@@ -83,5 +83,38 @@ func TestConsultationsInAfterADeliveryBelongsToTheNextCut(t *testing.T) {
 	}
 	if prev := consultationsIn(log, "c-1", 1, 2); len(prev.Dismissed) != 1 || prev.Dismissed[0].Consultation != "k-1" {
 		t.Fatalf("the delivered cut: %+v", prev)
+	}
+}
+
+// The issue's probe log: k-1 in flight at the cut, k-2 asked after it at
+// the same turn, both ended after. Each is in exactly one cut, never two,
+// across two deliveries.
+func TestConsultationsInFlightAtACutReachExactlyOneLaterCut(t *testing.T) {
+	adv := map[string]string{"agent": "claude", "model": "opus"}
+	start := func(id string, turn int) ledger.Record {
+		return chatRec(RecConsultationStarted, map[string]any{"consultation": id, "turn": turn, "advisor": adv})
+	}
+	end := func(id string) ledger.Record {
+		return chatRec(RecConsultationEnded, map[string]any{"consultation": id, "outcome": "advised"})
+	}
+	log := []ledger.Record{start("k-1", 2)}
+	cut1 := consultationsIn(log, "c-1", 1, 2) // k-1 still running
+	if !cut1.empty() {
+		t.Fatalf("cut 1: %+v", cut1)
+	}
+	log = append(log, end("k-1"), start("k-2", 2),
+		chatRec(RecDelivered, map[string]any{"run": "r-1", "turn": 2, "resolved": cut1.resolvedIDs()}),
+		end("k-2"))
+	cut2 := consultationsIn(log, "c-1", 3, 5)
+	if len(cut2.Dismissed) != 2 || cut2.Dismissed[0].Consultation != "k-1" || cut2.Dismissed[1].Consultation != "k-2" ||
+		cut2.Dismissed[0].Turn != 3 || !cut2.Dismissed[0].Before {
+		t.Fatalf("cut 2: %+v", cut2)
+	}
+	log = append(log, start("k-3", 5),
+		chatRec(RecDelivered, map[string]any{"run": "r-2", "turn": 5, "resolved": cut2.resolvedIDs()}),
+		end("k-3"))
+	cut3 := consultationsIn(log, "c-1", 6, 7)
+	if len(cut3.Dismissed) != 1 || cut3.Dismissed[0].Consultation != "k-3" {
+		t.Fatalf("cut 3 counted twice or dropped: %+v", cut3)
 	}
 }

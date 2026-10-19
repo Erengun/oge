@@ -312,6 +312,11 @@ func (c *Chat) consult(ctx context.Context, question string, tr consultTrigger) 
 	if outcome == ConsultAdvised && strings.TrimSpace(text) == "" {
 		outcome, why = ConsultFailed, "the advisor gave no advice"
 	}
+	if outcome == ConsultAdvised && ctx.Err() != nil {
+		// Settled as the caller cancelled (the human answered): the advice
+		// was discarded unseen, so the Receipt must not say it was shown.
+		outcome = ConsultCancelled
+	}
 	if err := end(outcome, why, rec); err != nil {
 		return nil, err
 	}

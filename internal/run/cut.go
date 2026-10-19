@@ -74,6 +74,9 @@ type cutMark struct {
 	commit string
 	turn   int
 	prev   *cutMark // the cut it follows
+	// resolved are the Consultations its snapshot counted (Dismissed or
+	// Shown): Delivered records them so no later cut counts them again.
+	resolved []string
 }
 
 // cutEntry is how a cut's Run enters the walk: Start takes the Chat's
@@ -315,7 +318,7 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	case ctx.Err() != nil && !verdict, res.Candidate == "", res.Outcome == Refused, res.Outcome == InfrastructureStop, res.Outcome == Cancelled:
 	default:
 		c.supersedeMu.Lock()
-		c.lastCut = &cutMark{run: res.ID, dir: res.Dir, commit: head, turn: to, prev: c.lastCut}
+		c.lastCut = &cutMark{run: res.ID, dir: res.Dir, commit: head, turn: to, prev: c.lastCut, resolved: e.advice.resolvedIDs()}
 		if c.cuts == nil {
 			c.cuts = map[string]*cutMark{}
 		}
