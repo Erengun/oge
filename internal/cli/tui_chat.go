@@ -249,6 +249,7 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 	var dismissed tea.Cmd
 	if h.adv != nil && h.adv.shown {
 		// The user's own turn: the advice shown no longer takes ↵ or e.
+		h.dismissAdvice(h.adv)
 		h.adv = nil
 		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
 	}

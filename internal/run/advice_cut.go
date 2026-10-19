@@ -174,10 +174,10 @@ func consultationsIn(recs []ledger.Record, chat string, from, to int) CutAdvice 
 		if c.sent || c.outcome == "" || c.turn < from || c.turn > to {
 			continue
 		}
-		// A /advise Consultation advised but neither sent nor dismissed still
+		// A /advise (or auto-ask-mode) Consultation advised but neither sent nor dismissed still
 		// waits for the user: not this cut's to count, or a later cut would
 		// count it again as Sent or Dismissed.
-		if c.trigger == "user" && c.outcome == ConsultAdvised && !c.dismissed {
+		if (c.trigger == "user" || c.trigger == TriggerFeedbackBudget) && c.outcome == ConsultAdvised && !c.dismissed {
 			continue
 		}
 		if c.trigger == TriggerAsk && c.outcome == ConsultAdvised && !c.shown {

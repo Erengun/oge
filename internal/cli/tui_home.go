@@ -586,7 +586,7 @@ func (h *home) Init() tea.Cmd {
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m, cmd := h.update(msg)
 	if h.adviceEdit != nil && h.comp != nil && h.comp.empty() {
-		h.adviceEdit = nil // emptied: what is typed next isn't the advice
+		h.dropAdviceEdit() // emptied: what is typed next isn't the advice
 	}
 	if flush := h.flushAdvice(); flush != nil {
 		cmd = tea.Sequence(cmd, flush) // after whatever this update prints
@@ -833,7 +833,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			h.cleared = h.comp.expanded()
 			h.comp.set("")
-			h.adviceEdit = nil
+			h.dropAdviceEdit()
 			h.navigating = false
 			h.visual = 0
 		case actSubmit:
@@ -973,7 +973,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 // empty box it brings the stash back. With both a draft and a stash it
 // swaps them, so neither is lost.
 func (h *home) stashDraft() {
-	h.adviceEdit = nil
+	h.dropAdviceEdit()
 	h.navigating, h.visual = false, 0
 	draft := h.comp.expanded()
 	if draft == "" && h.stash == "" {
@@ -999,7 +999,7 @@ func (h *home) endNavigation() {
 // one never changes the history. Past the newest entry the box gets back
 // what was in it before the first ↑.
 func (h *home) recall(dir int) bool {
-	h.adviceEdit = nil // history replaces the box
+	h.dropAdviceEdit() // history replaces the box
 	n := h.hist.len()
 	if dir < 0 {
 		if h.cleared != "" && h.comp.empty() && !h.navigating {
