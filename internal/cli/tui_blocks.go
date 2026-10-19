@@ -27,7 +27,7 @@ func (h *home) userEntry(text string) tea.Cmd {
 	return h.printBlock("> "+text, func(w int, _ bool) string {
 		var out []string
 		out = append(out, "")
-		for _, l := range strings.Split(ansi.Wrap(text, max(w-4, 8), ""), "\n") {
+		for _, l := range strings.Split(ansi.Wrap(text, max(w-5, 8), ""), "\n") {
 			bar := "  ❯ " + l
 			bar += strings.Repeat(" ", max(w-1-ansi.StringWidth(bar), 0))
 			out = append(out, st.user(bar))
@@ -182,14 +182,15 @@ func diffBlock(st styles, patch string, width int, expand bool) string {
 				continue
 			}
 			budget--
-			row := ansi.Truncate(l, max(width-7, 8), "…")
-			t := strings.TrimLeft(row, " ")
+			// Tabs become spaces first so the measured width is the drawn one.
+			row := ansi.Truncate(strings.ReplaceAll(l, "\t", "    "), max(width-7, 8), "…")
+			// The rows are raw hunk lines: the first byte is the marker.
 			switch {
 			case strings.HasPrefix(l, "@@"):
 				out = append(out, "    "+st.ask(row))
-			case strings.HasPrefix(t, "+") && !strings.HasPrefix(t, "+++"):
+			case strings.HasPrefix(l, "+"):
 				out = append(out, "    "+st.diffTint(st.diffAdd(row), true, max(width-7, 8)))
-			case strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "---"):
+			case strings.HasPrefix(l, "-"):
 				out = append(out, "    "+st.diffTint(st.diffDel(row), false, max(width-7, 8)))
 			default:
 				out = append(out, "    "+st.dim(row))

@@ -183,7 +183,7 @@ func (h *home) sidebarOn() bool {
 const headRows = 2
 
 // layout sets the content width and height from the terminal's: the main
-// column is the screen less the sidebar, and one row goes to the header.
+// column is the screen less the sidebar, and headRows go to the header.
 func (h *home) layout() {
 	if !h.full {
 		return
@@ -248,7 +248,7 @@ func (h *home) compose(v tea.View) tea.View {
 		curX, curY = v.Cursor.X, v.Cursor.Y
 	}
 	// The live area keeps its bottom rows when it is taller than the screen.
-	if room := H - headRows; len(live) > room {
+	if room := max(H-headRows, 0); len(live) > room {
 		drop := len(live) - room
 		live = live[drop:]
 		curY -= drop
