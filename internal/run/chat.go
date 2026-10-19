@@ -97,10 +97,8 @@ type Chat struct {
 
 	role      string
 	work      string // its disposable directory, the Workspace's parent
-	brief     string
 	instr     string
 	deny      []string
-	checks    []string
 	frozen    *pipeline.Frozen
 	source    string // the user's repository
 	config    []byte
@@ -409,8 +407,6 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	for _, ch := range p.Frozen.Checks {
 		checks = append(checks, ch.Run)
 	}
-	c.checks = checks
-	c.brief = briefing.Chat(checks)
 	cache := filepath.Join(c.work, "cache", stage.Name)
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return nil, err
@@ -648,12 +644,12 @@ func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string) er
 	c.cur, c.sending = out, out
 	c.timer.Stop()
 	c.mu.Unlock()
+	// The user's message goes as typed, the first one too: no Briefing
+	// wraps a Chat turn, so the agent works as it would without Öge. A
+	// reopened Session gets the user's turns so far, which it lacks.
 	sent := text
-	switch {
-	case n == 1:
-		sent = text + c.brief
-	case fresh:
-		sent = briefing.ChatReopened(task.Task{Text: msgs[0], FollowUps: msgs[1:]}, c.checks)
+	if fresh && n > 1 {
+		sent = briefing.ChatReopened(task.Task{Text: msgs[0], FollowUps: msgs[1:]})
 		if oge {
 			sent += "\n\n" + text // the re-brief holds the user's turns only
 		}
@@ -740,7 +736,7 @@ func sha256Hex(s string) string {
 }
 
 // manifest is a turn's Briefing-manifest entry. A fresh Session's first
-// turn carries the chat Briefing (after a reopen, the re-brief with the
+// turn is the user's message (after a reopen, the re-brief with the
 // user's turns so far); every later one is the user's message verbatim,
 // in the same Session (D1, disclosed).
 func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kind turnKind, advice string) map[string]any {

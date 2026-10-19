@@ -64,7 +64,7 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
   - it keeps `--no-session-persistence` and never uses `--resume`;
   - an idle timeout (about 30 minutes) replaces `StageTimeout`;
   - after an idle timeout or a crash, the next message reopens the Session through the #185 re-brief path, which stays as the fallback. The work survives that; the conversation's memory doesn't.
-- **Briefing:** Öge builds a light chat Briefing once, without `Exit: done`. Each later user message is sent verbatim and gets its own Briefing-manifest entry (its hash and `session_reused=true`).
+- **Briefing:** none. Every user message, the first one too, is sent verbatim, with no Öge text around it, and gets its own Briefing-manifest entry (its hash; `session_reused=true` after the first). Only a reopened Session gets a re-brief: the user's turns so far. (Amended 2026-10-19: a chat Briefing that called the agent "the implementer", named the Checks and said not to ask made agents treat "yo" as work. The sandbox and Öge's own Workspace comparison already enforce what it said.)
 - **Nothing enters a running turn:** messages queue until it settles, or Esc interrupts it.
 - **Permissions:** the implementer runs in Claude Code's auto permission mode. Its classifier approves safe actions and asks about or blocks risky ones. Öge's hard denies apply on top: paths outside the Workspace, and Oracle and held-out internals. An ask from auto mode reaches the composer as a one-line question.
 - **Agents without an auto mode** chat under their Launch profile, which never asks (amended 2026-10-19: chat first on every agent):

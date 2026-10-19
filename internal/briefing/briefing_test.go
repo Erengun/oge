@@ -68,18 +68,15 @@ func TestBriefingWithFollowUps(t *testing.T) {
 	}
 }
 
-// The Chat Briefing asks for no Exit and says nothing about denials: the
-// agent's auto mode asks the human instead.
-func TestChatBriefing(t *testing.T) {
-	b := Chat([]string{"go test ./..."})
-	for _, want := range []string{"How this Chat works", "`go test ./...`", Assumptions} {
+// A reopened Chat's re-brief holds the user's turns and asks for no Exit.
+func TestChatReopened(t *testing.T) {
+	b := ChatReopened(task.Task{Text: "first", FollowUps: []string{"second"}})
+	for _, want := range []string{"first", "second", "An earlier Session of this Chat ended"} {
 		if !strings.Contains(b, want) {
-			t.Errorf("Chat Briefing lacks %q:\n%s", want, b)
+			t.Errorf("re-brief lacks %q:\n%s", want, b)
 		}
 	}
-	for _, not := range []string{"Exit:", "denied"} {
-		if strings.Contains(b, not) {
-			t.Errorf("Chat Briefing has %q:\n%s", not, b)
-		}
+	if strings.Contains(b, "Exit:") {
+		t.Errorf("re-brief asks for an Exit:\n%s", b)
 	}
 }
