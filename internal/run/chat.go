@@ -481,13 +481,18 @@ func (c *Chat) SendAdvice(ctx context.Context, consultation, text string) (<-cha
 // SendAdvice does, unless the user has turned since it began: their turn
 // started a new chain, and advice on the old one is stale, so ErrChainEnded.
 func (c *Chat) SendAutoAdvice(ctx context.Context, a *Advice) (<-chan agent.Event, error) {
-	ch, err := c.sendIn(ctx, AdvicePrefix+a.Text, turnAdvice, a.ID, a.Chain)
-	if errors.Is(err, ErrChainEnded) {
-		// The advice was advised and shown, and never sent: a dismissal, or
-		// no Receipt would ever disclose it.
-		_ = c.DismissAdvice(a.ID)
+	return c.sendIn(ctx, AdvicePrefix+a.Text, turnAdvice, a.ID, a.Chain)
+}
+
+// dismissUnsent logs an advice turn that never reached the agent (the send
+// failed, the Chat ended, the chain moved on) as dismissed, once: it was
+// advised and shown, and no AdviceSent was logged, so without this no
+// Receipt would disclose it. Any other turn is not advice to dismiss (an
+// edited one is the user's draft, which they still hold).
+func (c *Chat) dismissUnsent(kind turnKind, advice string) {
+	if kind == turnAdvice && advice != "" {
+		_ = c.DismissAdvice(advice)
 	}
-	return ch, err
 }
 
 // SendEdited sends text the user made of a Consultation's advice, edited
@@ -524,12 +529,14 @@ func (c *Chat) send(ctx context.Context, text string, kind turnKind, advice stri
 // with ErrChainEnded once the user's turn has started another.
 func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice string, chain int) (<-chan agent.Event, error) {
 	if err := ctx.Err(); err != nil {
+		c.dismissUnsent(kind, advice)
 		return nil, err
 	}
 	c.mu.Lock()
 	if !c.closed && (errors.Is(c.err, ErrChatIdle) || errors.Is(c.err, ErrChatLost)) {
 		c.mu.Unlock()
 		if err := c.reopen(ctx); err != nil {
+			c.dismissUnsent(kind, advice)
 			return nil, err
 		}
 		c.mu.Lock()
@@ -538,10 +545,12 @@ func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice st
 	if c.err != nil {
 		err := c.err
 		c.mu.Unlock()
+		c.dismissUnsent(kind, advice)
 		return nil, err
 	}
 	if chain >= 0 && chain != c.chain {
 		c.mu.Unlock()
+		c.dismissUnsent(kind, advice)
 		return nil, ErrChainEnded
 	}
 	switch {
@@ -667,15 +676,22 @@ func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string) er
 		// The manifest is written ahead of the turn (ADR-0009 as amended).
 		err = c.log(RecBriefingManifest, c.manifest(n, fresh, msgs, text, sent, kind, advice))
 	}
+	if err == nil {
+		err = sess.Send(agent.Turn{Text: sent})
+	}
 	if err == nil && advice != "" {
+		// Only once the message reached the agent: a Send that failed is
+		// no AdviceSent, or a cut would disclose advice it never got.
 		how, by := "edited", "user"
 		if kind == turnAdvice {
 			how, by = "verbatim", "oge"
 		}
-		err = c.log(RecAdviceSent, map[string]any{"chat": c.ID, "consultation": advice, "turn": n, "how": how, "by": by})
+		if lerr := c.log(RecAdviceSent, map[string]any{"chat": c.ID, "consultation": advice, "turn": n, "how": how, "by": by}); lerr != nil {
+			c.logFailed(lerr)
+		}
 	}
-	if err == nil {
-		err = sess.Send(agent.Turn{Text: sent})
+	if err != nil {
+		c.dismissUnsent(kind, advice)
 	}
 	c.mu.Lock()
 	var last *agent.Event
@@ -1119,7 +1135,7 @@ func (c *Chat) settled(t *turnOut) {
 	if len(c.queue) > 0 {
 		q := c.queue[0]
 		c.queue = c.queue[1:]
-		_ = c.start(q.text, q.out, q.kind, q.advice)
+		_ = c.start(q.text, q.out, q.kind, q.advice) // logs a failed advice dismissed
 		return
 	}
 	c.timer.Reset(c.idle)
@@ -1136,6 +1152,7 @@ func (c *Chat) drop() {
 	c.cur = nil
 	for _, q := range c.queue {
 		q.out.end(last)
+		c.dismissUnsent(q.kind, q.advice) // never started: no AdviceSent
 	}
 	c.queue = nil
 }
