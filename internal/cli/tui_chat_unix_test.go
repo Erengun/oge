@@ -378,19 +378,24 @@ func TestHomeChatCtrlCCancelsTheCut(t *testing.T) {
 // time; when it ends the Verdict line is the final state (#296).
 func TestHomeChatShowsACheckStepThenAccepts(t *testing.T) {
 	t.Parallel()
+	release := filepath.Join(t.TempDir(), "release-check")
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "fixed Add", Writes: []multiturn.File{
 			{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"},
 			{Path: "slow.go", Content: "package fx\n"},
 		}},
 	}}, func(f *runFixture) {
-		// slow.go is the change's, so the baseline passes instantly and
-		// only the Candidate's Check sleeps.
-		writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte("schema = 1\n[project]\ntest_globs = [\"**/*_test.go\"]\noutput_globs = [\"**/*.go\"]\n[[check.commands]]\nrun = 'if [ -f slow.go ]; then sleep 3; fi; go test -json ./...'\nreport = \"go-test-json\"\n"))
+		// Only the Candidate's Check holds. Release it after observing
+		// the phase and live composer, not after a machine-speed-dependent
+		// sleep that could expire before a busy PTY renders the phase.
+		check := "if [ -f slow.go ]; then while [ ! -f \"" + release + "\" ]; do sleep 0.05; done; fi; go test -json ./..."
+		writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte("schema = 1\n[project]\ntest_globs = [\"**/*_test.go\"]\noutput_globs = [\"**/*.go\"]\n[[check.commands]]\nrun = '"+check+"'\nreport = \"go-test-json\"\n"))
 	})
 	s.composer()
 	s.type_("fix Add\r")
 	s.expectScreen("running the Checks")
+	s.composer()
+	writeFile(t, release, nil)
 	s.expect("✓ Accepted")
 	s.composer()
 	s.quitChat(f)
