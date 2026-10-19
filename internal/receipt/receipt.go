@@ -338,12 +338,13 @@ func Build(runDir string) (*Receipt, error) {
 	recs, head, err := ledger.ReplayHead(runDir)
 	torn := ""
 	switch {
-	case err != nil && (len(recs) == 0 || errors.Is(err, ledger.ErrBrokenChain)):
-		// A broken chain isn't a torn write: the Ledger was changed.
-		return nil, fmt.Errorf("reading the Run's Ledger: %w", err)
-	case err != nil:
+	case err != nil && errors.Is(err, ledger.ErrTornTail) && len(recs) > 0:
 		// A torn last line (a crash mid-write): the records before it stand.
 		torn = fmt.Sprintf("the Ledger is unreadable after record %d (%v); this Receipt is of the records before it", len(recs)-1, err)
+	case err != nil:
+		// Anything else — a broken chain, a changed record — isn't a torn
+		// write: the Ledger was changed.
+		return nil, fmt.Errorf("reading the Run's Ledger: %w", err)
 	}
 	blobs, _ := ledger.OpenBlobs(runDir)
 	src := runSource{blobs: blobs, repo: &workspace.RunRepo{Dir: filepath.Join(runDir, "repo.git")}}

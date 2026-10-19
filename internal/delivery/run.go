@@ -47,6 +47,9 @@ type Run struct {
 	// or stopped without RunEnded).
 	Outcome run.Outcome
 	Parked  bool
+	// Torn says the Ledger's last record died mid-write (ErrTornTail):
+	// the records before it verified, but the Run's end can't be trusted.
+	Torn bool
 	// Why says why the Candidate wasn't Accepted: the last Verdict and the
 	// decision that ended the Run.
 	Why []string
@@ -82,10 +85,13 @@ func Short(rev string) string {
 // Load rebuilds the Run in dir from its Ledger.
 func Load(dir string) (*Run, error) {
 	recs, err := ledger.Replay(dir)
-	if err != nil {
+	// A torn tail with no verified record before it has nothing to read:
+	// no Source to match, so Find must refuse it rather than skip to an
+	// older Run.
+	if err != nil && (!errors.Is(err, ledger.ErrTornTail) || len(recs) == 0) {
 		return nil, fmt.Errorf("reading the Run's Ledger: %w", err)
 	}
-	r := &Run{Dir: dir, ID: filepath.Base(dir), Label: run.ReadLabel(dir)}
+	r := &Run{Dir: dir, ID: filepath.Base(dir), Label: run.ReadLabel(dir), Torn: err != nil}
 	var verdict struct {
 		Check     int
 		Verdict   string
@@ -221,7 +227,7 @@ func Find(private, repoRoot, id string) (*Run, error) {
 		}
 		switch len(names) {
 		case 0:
-			return nil, refuse("no Run %s", id)
+			return nil, refuse("no Run %s; to give a Task instead: oge run \"<task>\"", id)
 		case 1:
 			return Load(filepath.Join(runs, names[0]))
 		}

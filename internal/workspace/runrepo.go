@@ -218,6 +218,16 @@ func InitRunRepo(dir string) (*RunRepo, error) {
 	return r, nil
 }
 
+// OpenRunRepo reopens the Run repository InitRunRepo made, for a resumed
+// Run. It only checks that the repository exists.
+func OpenRunRepo(dir string) (*RunRepo, error) {
+	r := &RunRepo{Dir: dir}
+	if _, err := r.git("", "", nil, "rev-parse", "--git-dir"); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
 // TakeSnapshot copies the Snapshot of the user's repository at root into
 // dir (which becomes the implementer's Workspace) and commits it to the Run
 // repository as the Snapshot. After it returns, nothing reads root again.

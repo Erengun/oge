@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -43,8 +44,9 @@ type homeChat struct {
 	// open opens the Chat on the config the first message resolved.
 	open func(res *resolved) (*run.Chat, error)
 	// cut cuts the Chat's turns since the last cut into a Run, in the
-	// Pipeline f resolved for the turn (its Shift+Tab mode).
-	cut func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port) (*run.Result, error)
+	// Pipeline f resolved for the turn (its Shift+Tab mode); observe gets
+	// its progress events.
+	cut func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port, observe func(run.Event)) (*run.Result, error)
 	// verdict is the cut's Verdict line, and what can take its Run.
 	verdict func(res *run.Result, changed int) (string, *lastRun)
 	agents  map[string]agent.Adapter
@@ -152,6 +154,10 @@ type chatVerify struct {
 	frozen  *pipeline.Frozen
 	cancel  context.CancelFunc
 	stopped bool // Ctrl+C cancelled it
+	// since is when the cut started; step is the cut's current phase named
+	// for the status line (empty: the bare verifying).
+	since time.Time
+	step  string
 	// gate is the Gate its Run waits at, if any: shown only at delivery.
 	gate *chatGateMsg
 }
@@ -183,6 +189,15 @@ type (
 		reply chan<- gate.Decision
 		next  tea.Cmd
 	}
+	// chatStepMsg is the cut seq's next progress event; next waits on the
+	// cut again.
+	chatStepMsg struct {
+		seq  int
+		ev   run.Event
+		next tea.Cmd
+	}
+	// verifyTickMsg redraws the verify line's elapsed seconds for seq.
+	verifyTickMsg struct{ seq int }
 )
 
 // cutGates is a cut's Gate port: a Gate waits, never shown mid-turn,
@@ -520,12 +535,24 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 	h.uncheckedChanged = 0
 	h.cutGate, h.gateFor = nil, nil
 	h.cutFrozen = f
-	h.verify = &chatVerify{seq: h.cuts, changed: changed, frozen: f, cancel: cancel}
+	h.verify = &chatVerify{seq: h.cuts, changed: changed, frozen: f, cancel: cancel, since: h.clock()}
 	hc, seq := h.chat, h.cuts
 	c := hc.get()
 	reqs, done := make(chan chatGateMsg), make(chan chatCutMsg, 1)
+	steps := make(chan chatStepMsg, 16)
 	go func() {
-		res, err := hc.cut(ctx, c, f, cutGates{reqs})
+		res, err := hc.cut(ctx, c, f, cutGates{reqs}, func(ev run.Event) {
+			// Only the events a step text consumes reach the pipe, so an
+			// agent's event burst can't fill it and drop a boundary one.
+			if ev.Kind != run.EvStage && ev.Kind != run.EvAttempt {
+				return
+			}
+			// Progress never stalls the cut: a full pipe drops the event.
+			select {
+			case steps <- chatStepMsg{seq: seq, ev: ev}:
+			default:
+			}
+		})
 		done <- chatCutMsg{seq, res, err}
 	}()
 	var wait tea.Cmd
@@ -536,9 +563,46 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 		case g := <-reqs:
 			g.seq, g.next = seq, wait
 			return g
+		case s := <-steps:
+			s.next = wait
+			return s
 		}
 	}
-	return wait
+	return tea.Batch(wait, verifyTick(seq))
+}
+
+// verifyTick repaints the verify line's elapsed seconds, once a second
+// while the cut seq verifies.
+func verifyTick(seq int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return verifyTickMsg{seq} })
+}
+
+// cutStepped names the step a cut's progress event puts on the status
+// line. A superseded cut's events are dropped with it.
+func (h *home) cutStepped(m chatStepMsg) tea.Cmd {
+	v := h.verify
+	if v == nil || v.seq != m.seq {
+		return m.next
+	}
+	v.step = verifyStepText(m.ev, v.step)
+	return m.next
+}
+
+// verifyStepText names a cut event's step for the status line; cur is
+// kept for events that name none. A verifier Attempt's end returns to the
+// bare verifying until the Check's own step starts.
+func verifyStepText(ev run.Event, cur string) string {
+	switch {
+	case ev.Kind == run.EvStage && ev.Step == "preparing":
+		return "preparing the baseline"
+	case ev.Kind == run.EvStage && ev.Step == "verify":
+		return "QA writing held-out tests"
+	case ev.Kind == run.EvStage && ev.Step == "checks":
+		return "running the Checks"
+	case ev.Kind == run.EvAttempt && ev.Attempt != nil && ev.Attempt.Role == "verifier":
+		return ""
+	}
+	return cur
 }
 
 // cutGated takes a Gate the cut's Run reached. At a delivery it opens

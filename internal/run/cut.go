@@ -207,6 +207,16 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	head, to := e.candidate, e.to
 	select {
 	case <-c.prepared:
+	default:
+		// The Preflight and the Snapshot control can take minutes (the
+		// frozen Checks run once on the Snapshot); no Run exists to name
+		// the wait yet, so the cut itself does (#296).
+		if cp.Observe != nil {
+			cp.Observe(Event{Kind: EvStage, Step: "preparing"})
+		}
+	}
+	select {
+	case <-c.prepared:
 	case <-c.stop:
 		return nil, ErrChatClosed
 	case <-ctx.Done():
@@ -388,7 +398,7 @@ func (c *Chat) chatRecords(typ string, from, to int) ([]json.RawMessage, error) 
 	c.logMu.Lock()
 	recs, err := ledger.Replay(c.Dir)
 	c.logMu.Unlock()
-	if err != nil {
+	if err != nil && !errors.Is(err, ledger.ErrTornTail) {
 		return nil, err
 	}
 	var out []json.RawMessage

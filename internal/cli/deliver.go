@@ -232,6 +232,9 @@ func diffCommand(env Env, r *delivery.Run, f deliverFlags) int {
 	if r.Outcome != run.Accepted {
 		fmt.Fprintf(env.Stderr, "oge: Run %s is %s, not Accepted; this is its Candidate %s\n", r.ID, outcomeWord(r), delivery.Short(r.Candidate))
 	}
+	if r.Torn {
+		fmt.Fprintf(env.Stderr, "oge: Run %s's Ledger is torn; this diff is of the records before the tear\n", r.ID)
+	}
 	if len(patch) == 0 {
 		fmt.Fprintf(env.Stderr, "oge: Candidate %s changes nothing since the Snapshot\n", delivery.Short(r.Candidate))
 		return ExitOK

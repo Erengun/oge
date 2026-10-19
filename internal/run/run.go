@@ -166,6 +166,7 @@ const (
 	EvDecided                    // a Gate decision is recorded
 	EvNotice                     // something the user is told once, in Notice
 	EvResolved                   // the Ambiguous-file review resolved every file; Next is where the walk goes
+	EvStage                      // a wait or a stage of the walk began; Step names it
 )
 
 // Event is one progress event.
@@ -190,6 +191,10 @@ type Event struct {
 	Conflicts []string
 	// EvResolved: "verify" or "check".
 	Next string
+	// EvStage: "preparing" while a cut waits on the Chat's Preflight and
+	// Snapshot control, "verify" when a verifier Attempt starts (Attempt
+	// is set), "checks" when a Check's own execution starts.
+	Step string
 	// EvPreflight: why setup failed on the Snapshot; empty when Preflight
 	// passed. Only a Run with setup sends it, at the join, before it ends.
 	Why string
@@ -363,36 +368,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	var w *walk // the walk of the graph, once it starts
-	end := func(o Outcome, why ...string) (*Result, error) {
-		superseded := o == InfrastructureStop && errors.Is(context.Cause(ctx), ErrSuperseded)
-		if superseded {
-			why = []string{WhySuperseded} // a newer cut's Check covers this one's
-		}
-		res.Outcome, res.Why, res.Duration = o, why, time.Since(res.Started)
-		if o != Accepted && w != nil && res.Candidate != "" {
-			// The final Candidate's: a Run that stops before its Check
-			// never classified it, and the last list is an earlier one's.
-			if err := w.classify(res.Candidate); err != nil {
-				return nil, err
-			}
-			res.Unresolved = w.ambiguousPaths()
-		}
-		rec, data := RecRunEnded, map[string]any{"outcome": o, "why": why, "candidate": res.Candidate}
-		if o == Parked {
-			rec, data = RecRunParked, map[string]any{"gate": res.Gate, "why": why}
-		}
-		if superseded {
-			data["stop"] = "superseded"
-		}
-		if len(res.Unresolved) > 0 {
-			// The Receipt's Not covered line (#63).
-			data["unresolved"] = res.Unresolved
-		}
-		if err := l.Append(rec, data); err != nil {
-			return nil, err
-		}
-		return res, nil
-	}
+	end := runEnder(ctx, res, &w, l)
 
 	taskBlob, err := blobs.Put([]byte(p.Task.Text))
 	if err != nil {
@@ -556,28 +532,29 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 			prepared <- pf
 		}()
 	}
-	var (
-		seed    *oracle.Seed
-		control *oracle.Control
-		joined  bool
-	)
+	// sw is the state the walk's loop runs on; resume rebuilds the same
+	// shape from the Ledger and re-enters loop mid-graph.
+	sw := &walker{
+		p: p, res: res, l: l, blobs: blobs, repo: repo, runner: runner, adapter: adapter, impl: impl,
+		m: m, mBlob: mBlob, workDir: workDir, frozen: frozenBlob, start: start, end: end,
+	}
 	defer func() {
 		cancelSeed()
-		if !joined {
+		if !sw.joined {
 			pf := <-prepared
-			seed, control = pf.seed, pf.control
+			sw.seed, sw.control = pf.seed, pf.control
 		}
 		if p.cut == nil {
-			control.Stop()
-			seed.Close()
+			sw.control.Stop()
+			sw.seed.Close()
 		}
 	}()
 	// join waits for setup, the seed and the control. stop is true when
 	// the Run ends here: Öge failed (err), or setup was interrupted or
 	// failed on the Snapshot (r).
-	join := func() (stop bool, r *Result, err error) {
+	sw.join = func() (stop bool, r *Result, err error) {
 		pf := <-prepared
-		joined, seed, control = true, pf.seed, pf.control
+		sw.seed, sw.control = pf.seed, pf.control
 		if pf.err != nil {
 			return true, nil, pf.err
 		}
@@ -614,10 +591,9 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 	w = &walk{p: p, l: l, g: f.Graph, limits: f.Limits, repo: repo, snap: snap, promoted: map[string]bool{}}
 	// The implementer's protected set is Oracle v0's: held-out tests never
 	// enter its Workspace (ADR-0009).
-	scope := implementerScope(m, f)
-	var qa *qaStage
+	sw.scope = implementerScope(m, f)
 	if verifier != nil {
-		qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
+		sw.qa = &qaStage{p: p, l: l, blobs: blobs, repo: repo, adapter: verifier, stage: ver, runID: res.ID,
 			snap: snap, workDir: workDir, m: m, mBlob: mBlob, runner: runner, runDir: res.Dir} // its seed once joined
 	}
 	next := attemptSpec{n: 1, cause: "first", start: start, ws: ws}
@@ -629,11 +605,11 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		// A cut's Candidate is the turn commit: no implementer Attempt runs,
 		// and the walk starts at QA, after Preflight. Every Tamper event of
 		// its turns stays unacknowledged for the Run (ADR-0019 #2).
-		if stop, r, err := join(); stop {
+		if stop, r, err := sw.joinPreflight(); stop {
 			return r, err
 		}
-		if qa != nil {
-			qa.seed = seed
+		if sw.qa != nil {
+			sw.qa.seed = sw.seed
 		}
 		w.attempts++
 		if a, err = p.cut.attempt(l, w, repo, impl); err != nil {
@@ -646,272 +622,7 @@ func Start(ctx context.Context, p Params) (*Result, error) {
 		}
 		resume = "verify"
 	}
-	for check := 1; ; check++ {
-		if resume == "" {
-			w.attempts++
-			var err error
-			a, err = implement(attemptCtx, p, l, blobs, repo, adapter, impl, res.ID, snap, next, scope)
-			if err != nil {
-				return nil, err
-			}
-			// A home turn that changed nothing to verify ends here (#254),
-			// before Preflight is joined: no QA, Check or Verdict, and no
-			// wait on setup (the deferred cleanup stops and drains it), so
-			// even a failing setup leaves a reply a reply. Only a first
-			// Attempt that ended normally, with no scope revert or Tamper
-			// event. Compared against the Run's own start, so a follow-up
-			// that left the previous Candidate as it was has replied too.
-			// Excluded files never count.
-			if p.Interactive && w.attempts == 1 && a.Stop == "" && a.Failure == "" && a.Exit == "done" && a.Candidate != "" &&
-				len(a.Reverted) == 0 && a.Tamper() == 0 {
-				promoted, withheld, err := repo.Classify(start, a.Candidate, w.promotedNew)
-				if err != nil {
-					return nil, err
-				}
-				ambiguous := false
-				for _, f := range withheld {
-					ambiguous = ambiguous || f.Class == workspace.ClassAmbiguous
-				}
-				if len(promoted) == 0 && !ambiguous {
-					res.Attempt, res.Candidate = a, a.Candidate
-					res.Friction = agent.SumFriction(res.Friction, a.Friction)
-					p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
-					if err := recordTripwires(l, repo, res, a); err != nil {
-						return nil, err
-					}
-					return end(Replied)
-				}
-			}
-			if !joined {
-				// Setup's outcome comes before the Attempt's: a setup
-				// failure cancelled it, and refuses the Run.
-				if stop, r, err := join(); stop {
-					return r, err
-				}
-				if qa != nil {
-					qa.seed = seed
-				}
-			}
-			res.Attempt = a
-			res.Friction = agent.SumFriction(res.Friction, a.Friction)
-			p.Observe(Event{Kind: EvAttempt, Result: res, Attempt: a})
-			if a.Stop != "" {
-				return end(InfrastructureStop, a.Stop)
-			}
-			if a.Failure != "" {
-				// TODO(#40-decision): an Attempt failure should retry on its
-				// budget and then reach the bound-exhaustion Gate (ADR-0012);
-				// with neither built yet the Run stops with no Verdict.
-				return end(InfrastructureStop, "the implementer Attempt failed: "+a.Failure)
-			}
-			if a.Exit != "done" {
-				// TODO(#50): other Exits (e.g. infeasible) route to the
-				// infeasible Gate; until then the Run stops with no Verdict.
-				return end(InfrastructureStop, fmt.Sprintf("the implementer declared Exit %q, and its Gate isn't built yet", a.Exit))
-			}
-			res.Candidate = a.Candidate
-			if err := recordTripwires(l, repo, res, a); err != nil {
-				return nil, err
-			}
-			// A Tamper event stays unacknowledged for the rest of the Run,
-			// whatever later Attempts do (ADR-0019 #2).
-			w.addTamper(a)
-		}
-
-		// QA: a fresh verifier on the Promoted view of the Candidate adds
-		// held-out tests to a new Oracle version (ADR-0009, ADR-0010).
-		if qa != nil && resume != "check" {
-			s, err := qa.review(ctx, w, res, a)
-			if err != nil {
-				return nil, err
-			}
-			if s.stop != "" {
-				res.Gate = s.gate
-				return end(s.stop, s.why...)
-			}
-			m, mBlob = qa.m, qa.mBlob
-			res.Oracle = m.Version
-		}
-		resume = ""
-
-		// The Check, from the cache seed once it is warm. A cancelled Run
-		// never reaches a Verdict: the Check it killed didn't fail.
-		if seed != nil && runner.Seed == nil {
-			limit := p.CacheWait
-			if limit <= 0 {
-				limit = DefaultCacheWait
-			}
-			sw := seed.WaitFor(limit)
-			sw.Error = string(redact.Redact([]byte(sw.Error)))
-			if err := l.Append(RecCacheSeeded, sw); err != nil {
-				return nil, err
-			}
-			runner.Seed = seed
-		}
-		if ctx.Err() != nil {
-			return end(InfrastructureStop, interrupted)
-		}
-		checked, err := w.checkedTree(a.Candidate)
-		if err != nil {
-			return nil, err
-		}
-		started := map[string]any{"check": check, "candidate": a.Candidate, "oracle_version": m.Version, "manifest": mBlob}
-		if checked != a.Candidate {
-			started["checked_tree"] = checked // held-back agent config left out (#107)
-		}
-		// A cut whose tree an earlier cut of the Chat checked, on the same
-		// Oracle and Pipeline, reuses that Check (D3): the Run records
-		// whose it is.
-		var key checkKey
-		var hit *checkedBy
-		if p.cut != nil {
-			if key, err = p.cut.checkKey(repo, checked, mBlob, frozenBlob); err != nil {
-				return nil, err
-			}
-			if by, ok := p.cut.checks[key]; ok {
-				hit = &by
-				started["reused_from"] = by.run
-			}
-		}
-		if err := l.Append(RecCheckStarted, started); err != nil {
-			return nil, err
-		}
-		var cr *oracle.Result
-		if hit != nil {
-			if err := l.Append(RecVerdictReused, map[string]any{"check": check, "run": hit.run, "run_check": hit.check,
-				"candidate": a.Candidate, "tree": key.tree, "manifest": key.oracle, "frozen": key.pipeline}); err != nil {
-				return nil, err
-			}
-			cr = hit.cr
-		} else {
-			// With held-out tests, two executions: the visible Oracle in a
-			// build no held-out file enters, and the held-out tests on their
-			// own (#46); both must pass.
-			if cr, err = runner.SplitCheck(ctx, repo, m, checked, f.Setup.Run, filepath.Join(res.Dir, "checks", fmt.Sprint(check)), control); err != nil {
-				return nil, err
-			}
-		}
-		if hit == nil && ctx.Err() != nil {
-			if err := l.Append(RecCheckEnded, map[string]any{"check": check, "result": cr, "uncontained": true, "interrupted": true}); err != nil {
-				return nil, err
-			}
-			return end(InfrastructureStop, interrupted)
-		}
-		res.Check, res.Checks = cr, check
-		verdict := "fail"
-		if cr.Pass {
-			verdict = "pass"
-		}
-		ended := map[string]any{"check": check, "result": cr, "uncontained": true}
-		if hit != nil {
-			ended["reused_from"] = hit.run
-		}
-		if err := l.Append(RecCheckEnded, ended); err != nil {
-			return nil, err
-		}
-		if p.cut != nil && hit == nil && cr.Infra == "" {
-			p.cut.checks[key] = checkedBy{run: res.ID, check: check, cr: cr}
-		}
-		// TODO(#73-decision): the Snapshot control is recorded once a Check
-		// has consulted it; one no Verdict needed is stopped unrecorded at
-		// the end of the Run.
-		rec, ok := control.Consulted()
-		if p.cut != nil {
-			// The Chat's control, shared by its cuts: this cut's consults.
-			rec, ok = p.cut.control(control)
-		}
-		if ok {
-			if err := l.Append(RecControlEnded, rec); err != nil {
-				return nil, err
-			}
-		}
-		if cr.Infra != "" {
-			return end(InfrastructureStop, cr.Infra)
-		}
-		if err := l.Append(RecVerdict, map[string]any{"check": check, "verdict": verdict, "candidate": a.Candidate, "oracle_version": m.Version}); err != nil {
-			return nil, err
-		}
-		w.check = check
-		ev := Event{Kind: EvCheck, Result: res, Check: cr}
-		if qa != nil {
-			ev.Issues, ev.Conflicts = issues(m, cr, blobs), m.HeldOutBuildConflicts(cr)
-		}
-		p.Observe(ev)
-		if len(ev.Conflicts) > 0 {
-			// QA's held-out test no longer builds against the Candidate. The
-			// implementer can't see it, so a send-back can't fix it, and
-			// only a human removes an Oracle test (ADR-0007): the Run parks,
-			// naming QA and the package, never a held-out name or source.
-			// TODO(#46-decision): a Gate offering `remove <test>` is post-M1;
-			// until then this parks with no choice to make here.
-			var why []string
-			for _, pkg := range ev.Conflicts {
-				why = append(why, "QA's held-out test in package "+pkg+" no longer builds against the Candidate; the implementer isn't sent back over it, and only a human removes an Oracle test")
-			}
-			res.Gate = gateHeldOutConflict
-			return end(Parked, why...)
-		}
-
-		// Ambiguous files: the Candidate's new files no glob covers and no
-		// human has promoted. Accepted needs none (ADR-0013).
-		if err := w.classify(a.Candidate); err != nil {
-			return nil, err
-		}
-		if p.cut != nil && verdict == "fail" {
-			// A Chat sends a failing cut back as a feedback turn in its live
-			// Session (D5), never as a fresh implementer: the cut ends with
-			// its Verdict, and the Chat sends the turn.
-			res.failures = verdictFailures(cr, blobs, m, goSources(repo, a.Candidate))
-			res.Feedback = feedbackTurn(res.failures)
-			return end(Failed, "the Check failed on the cut")
-		}
-		// TODO(#47): failing own tests become a condition here.
-		holds := func(c string) bool {
-			return c == "verdict:"+verdict || (c == "tamper_event" && len(w.unacknowledged()) > 0) ||
-				(c == "ambiguous_files" && len(w.ambiguous) > 0)
-		}
-		e, ok := f.Graph.Route("check", holds, w.exhausted)
-		if !ok {
-			return nil, fmt.Errorf("the frozen graph has no edge for this Verdict")
-		}
-		s, err := w.follow(ctx, e, a, m.Version, cr, holds)
-		if err != nil {
-			return nil, err
-		}
-		res.Gate, res.Decision = s.gate, s.decision
-		if s.candidate != "" {
-			res.Candidate = s.candidate
-		}
-		res.Resolutions = w.resolved
-		if s.stop != "" {
-			return end(s.stop, s.why...)
-		}
-		if s.edge.To == "end" {
-			return end(Outcome(s.edge.Outcome))
-		}
-		if s.edge.To == "verify" || s.edge.To == "check" {
-			// Every Ambiguous file is resolved: a fresh QA pass if a file
-			// was promoted (cause: user request, ADR-0013), then the final
-			// Check, on exactly the resolved Candidate.
-			r := *a
-			r.Candidate, r.Cause = s.candidate, "user_request"
-			a, resume = &r, s.edge.To
-			p.Observe(Event{Kind: EvResolved, Result: res, Next: s.edge.To})
-			continue
-		}
-		d := s.decision
-		// A send-back Attempt, from the Candidate it sends back.
-		w.sendBacks++
-		p.Observe(Event{Kind: EvSendBack, Result: res, SendBack: w.sendBacks, SendBacks: f.Limits.SendBacks, Decision: d})
-		next = attemptSpec{n: next.n + 1, cause: "send_back", start: a.Candidate,
-			extra: sendBackTurnFrom(cr, blobs, d, m, goSources(repo, a.Candidate)), ws: filepath.Join(workDir, fmt.Sprintf("implement-%d", next.n+1))}
-		if err := repo.Checkout(a.Candidate, next.ws); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(filepath.Join(next.ws, ledger.WorkspaceMarker), nil, 0o600); err != nil {
-			return nil, err
-		}
-	}
+	return sw.loop(ctx, attemptCtx, w, a, next, resume, 1)
 }
 
 // attemptSpec is what one implementer Attempt starts from.
@@ -999,6 +710,11 @@ func implement(ctx context.Context, p Params, l *ledger.Ledger, blobs *ledger.Bl
 	// agent is about to be given and denied (ADR-0009).
 	if err := l.Append(RecBriefingManifest, briefingManifest(p, a, at, brief, instructions, spec.DenyRead)); err != nil {
 		return nil, err
+	}
+	if a.Role == "verifier" {
+		// A verifier Attempt runs quiet in a Chat's cut: name it while it
+		// writes its held-out tests (#296).
+		p.Observe(Event{Kind: EvStage, Attempt: a, Step: "verify"})
 	}
 	launched := time.Now()
 	sess, err := adapter.Open(ctx, spec)

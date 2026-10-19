@@ -114,15 +114,18 @@ func pluralFiles(n int, one, many string) string {
 // the Pipeline has a verifier), and the final Check.
 // It routes once, after every file is resolved, so a mixed selection costs
 // one QA pass and one Check (GLOSSARY: Ambiguous-file review).
-func (w *walk) review(ctx context.Context, a *Attempt, oracleVersion int, cr *oracle.Result) (step, error) {
+// review runs the Ambiguous-file review. current is the Candidate the
+// review is at: a.Candidate when the walk reaches it, the resolved one a
+// resume re-enters with partway through.
+func (w *walk) review(ctx context.Context, a *Attempt, current string, oracleVersion int, cr *oracle.Result) (step, error) {
 	// How often the review fires, for the evaluation: if it is common,
 	// fix the globs `oge init` proposes rather than the Gate.
 	if err := w.l.Append(RecObservation, map[string]any{"kind": "ambiguous_review", "count": len(w.ambiguous),
-		"files": w.ambiguousPaths(), "candidate": a.Candidate, "check": w.check}); err != nil {
+		"files": w.ambiguousPaths(), "candidate": current, "check": w.check}); err != nil {
 		return step{}, err
 	}
 	cur := *a
-	promoted := false
+	cur.Candidate = current
 	s := step{gate: gateAmbiguous}
 	for len(w.ambiguous) > 0 {
 		r, err := w.request(gateAmbiguous, &cur, oracleVersion, cr)
@@ -155,7 +158,7 @@ func (w *walk) review(ctx context.Context, a *Attempt, oracleVersion int, cr *or
 		if d.Choice == "drop" {
 			drop = d.Files
 		} else {
-			promoted = true
+			w.reviewPromoted = true
 			for _, f := range d.Files {
 				w.promoted[f] = true
 			}
@@ -176,7 +179,7 @@ func (w *walk) review(ctx context.Context, a *Attempt, oracleVersion int, cr *or
 		}
 	}
 	word := "drop"
-	if promoted {
+	if w.reviewPromoted {
 		word = "promote"
 	}
 	e, ok := w.g.Choice(gateAmbiguous, word)

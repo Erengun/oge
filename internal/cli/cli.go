@@ -109,7 +109,7 @@ func runEditor(path string) error {
 // with that text; quoting a one-word Task that equals a command name would
 // need `oge run <word>`.
 var notYet = map[string]bool{
-	"doctor": true, "init": true, "resume": true, "cancel": true, "status": true,
+	"doctor": true, "init": true, "cancel": true, "status": true,
 }
 
 const usage = `Usage:
@@ -118,6 +118,7 @@ const usage = `Usage:
   oge diff [<run>]             review changes
   oge receipt [<run>]          show the result and checks
   oge apply [<run>]            apply accepted changes to your working tree
+  oge resume <run>             continue a stopped Run
 
 Flags:
   --task-file <path|->         read the task from a file or stdin
@@ -137,6 +138,7 @@ const advancedUsage = `Advanced usage:
   oge apply [<run>]        apply an Accepted Candidate to your working tree
   oge branch [<name>] [<run>]   make a local branch with it, never checked out
   oge receipt [<run>] [--md|--json]   a Run's Receipt, from its Ledger
+  oge resume <run>           continue a stopped Run from where its Ledger left it
   oge --version
 
 Run flags:
@@ -189,8 +191,10 @@ func Main(env Env, args []string) int {
 			return deliverCommand(env, a, args[1:])
 		case a == "receipt":
 			return receiptCommand(env, args[1:])
+		case a == "resume":
+			return resumeCommand(env, args[1:])
 		case notYet[a]:
-			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet\n", a)
+			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet; a Task starting with this word needs oge run \"<task>\"\n", a)
 			return ExitRefused
 		}
 	}

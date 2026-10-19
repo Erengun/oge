@@ -464,6 +464,25 @@ func TestDiffPlainAndOnATerminal(t *testing.T) {
 	}
 }
 
+// A Task whose first word is a command name is shadowed by it; the
+// refusals name the oge run escape rather than leaving it a mystery.
+func TestShadowedTaskWordsSuggestOgeRun(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t)
+	code, _, errOut := f.run(t, "", "status")
+	if code != ExitRefused || !strings.Contains(errOut, "isn't implemented yet") || !strings.Contains(errOut, `oge run "`) {
+		t.Errorf("status: exit %d: %s", code, errOut)
+	}
+	code, _, errOut = f.run(t, "", "resume")
+	if code != ExitRefused || !strings.Contains(errOut, "needs one Run id") {
+		t.Errorf("bare resume: exit %d: %s", code, errOut)
+	}
+	code, _, errOut = f.run(t, "", "diff", "zzz")
+	if code != ExitRefused || !strings.Contains(errOut, "no Run zzz") || !strings.Contains(errOut, `oge run "`) {
+		t.Errorf("diff zzz: exit %d: %s", code, errOut)
+	}
+}
+
 // An unattended Run never waits on a key, even on a terminal that draws
 // the live view: it prints the commands instead of the action bar.
 func TestUnattendedRunOnATerminalOffersNoActionBar(t *testing.T) {

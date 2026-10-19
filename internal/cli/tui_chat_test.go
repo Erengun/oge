@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -20,14 +21,63 @@ import (
 func TestChatCutUsesTheTurnsPipeline(t *testing.T) {
 	standard := &pipeline.Frozen{Mode: pipeline.Standard}
 	var got *pipeline.Frozen
-	h := &home{chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen, _ gate.Port) (*run.Result, error) {
+	h := &home{chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen, _ gate.Port, _ func(run.Event)) (*run.Result, error) {
 		got = f
 		return nil, run.ErrNothingToCut
 	}}, turn: &chatTurn{frozen: standard, changed: 1}}
-	cmd := h.startCut()
-	if _, ok := cmd().(chatCutMsg); !ok || got != standard {
+	batch, _ := h.startCut()().(tea.BatchMsg)
+	if len(batch) == 0 {
+		t.Fatal("the cut returned no command")
+	}
+	if _, ok := batch[0]().(chatCutMsg); !ok || got != standard {
 		t.Errorf("the cut ran in %v, not the turn's Pipeline", got)
 	}
+}
+
+// A cut's progress events name the status line's step; a stale seq's are
+// dropped with it (#296).
+func TestChatVerifyNamesAStep(t *testing.T) {
+	ready := make(chan func(run.Event), 1)
+	h := &home{now: func() time.Time { return time.Unix(0, 0) },
+		chat: &homeChat{cut: func(ctx context.Context, _ *run.Chat, _ *pipeline.Frozen, _ gate.Port, o func(run.Event)) (*run.Result, error) {
+			ready <- o
+			<-ctx.Done() // the cut holds until the test ends it
+			return nil, ctx.Err()
+		}}, turn: &chatTurn{frozen: &pipeline.Frozen{}, changed: 1}}
+	batch, _ := h.startCut()().(tea.BatchMsg)
+	if len(batch) == 0 {
+		t.Fatal("the cut returned no command")
+	}
+	wait := batch[0]
+	observe := <-ready
+	observe(run.Event{Kind: run.EvStage, Step: "preparing"})
+	m, ok := wait().(chatStepMsg)
+	if !ok {
+		t.Fatalf("wait returned %T, want chatStepMsg", m)
+	}
+	h.cutStepped(m)
+	if h.verify.step != "preparing the baseline" {
+		t.Errorf("step %q, want the baseline named", h.verify.step)
+	}
+	h.cutStepped(chatStepMsg{seq: h.verify.seq, ev: run.Event{Kind: run.EvStage, Step: "verify", Attempt: &run.Attempt{Role: "verifier"}}})
+	if h.verify.step != "QA writing held-out tests" {
+		t.Errorf("step %q, want QA named", h.verify.step)
+	}
+	// The verifier Attempt's end is back to the bare verifying until the
+	// Check's own step starts.
+	h.cutStepped(chatStepMsg{seq: h.verify.seq, ev: run.Event{Kind: run.EvAttempt, Attempt: &run.Attempt{Role: "verifier"}}})
+	if h.verify.step != "" {
+		t.Errorf("step %q after the verifier Attempt, want the bare verifying", h.verify.step)
+	}
+	h.cutStepped(chatStepMsg{seq: h.verify.seq, ev: run.Event{Kind: run.EvStage, Step: "checks"}})
+	if h.verify.step != "running the Checks" {
+		t.Errorf("step %q, want the Checks named", h.verify.step)
+	}
+	h.cutStepped(chatStepMsg{seq: h.verify.seq + 9, ev: run.Event{Kind: run.EvStage, Step: "preparing"}})
+	if h.verify.step != "running the Checks" {
+		t.Errorf("a stale seq's step landed: %q", h.verify.step)
+	}
+	h.verify.cancel()
 }
 
 // A cut refused for setup drift says so, and how to go on.

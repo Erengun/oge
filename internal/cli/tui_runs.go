@@ -33,7 +33,11 @@ func runWhen(id string) string {
 type runItem struct{ r *delivery.Run }
 
 func (i runItem) FilterValue() string {
-	return i.r.ID + " " + outcomeWord(i.r) + " " + clean(i.r.Title) + " " + clean(i.r.Label)
+	v := i.r.ID + " " + outcomeWord(i.r) + " " + clean(i.r.Title) + " " + clean(i.r.Label)
+	if i.r.Torn {
+		v += " torn"
+	}
+	return v
 }
 
 type runDelegate struct{ st styles }
@@ -49,6 +53,9 @@ func (d runDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	}
 	line += clean(r.Title)
 	var tail []string
+	if r.Torn {
+		tail = append(tail, "ledger torn")
+	}
 	if r.Follows != "" {
 		tail = append(tail, "continues "+clean(r.Follows))
 	}

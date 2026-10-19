@@ -1,6 +1,7 @@
 package receipt_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -398,12 +399,28 @@ func TestBuildFromATornLedger(t *testing.T) {
 	if r.Outcome != "Accepted" || !strings.Contains(r.Text(receipt.Paint{}), "the Ledger is unreadable after record ") {
 		t.Errorf("torn tail:\n%s", r.Text(receipt.Paint{}))
 	}
+	// A tear on a '}' boundary fails the chain check on the unterminated
+	// last line: still a torn tail, not an edited Ledger.
+	if err := os.WriteFile(path, append(append([]byte(nil), good...), `{"format":1,"seq":9}`...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := receipt.Build(dir); err != nil || r.Outcome != "Accepted" {
+		t.Errorf("a chain-torn tail built no Receipt: %v", err)
+	}
 	broken := strings.Replace(string(good), `"seq":2,`, `"seq":7,`, 1)
 	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := receipt.Build(dir); err == nil {
 		t.Error("a broken chain built a Receipt")
+	}
+	// Nor does a bad line before the tail: it isn't a torn write.
+	bad := bytes.Replace(good, []byte(`"outcome":"Accepted"`), []byte(`"outcome":`), 1)
+	if err := os.WriteFile(path, bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receipt.Build(dir); err == nil {
+		t.Error("a mid-Ledger bad line built a Receipt")
 	}
 }
 
