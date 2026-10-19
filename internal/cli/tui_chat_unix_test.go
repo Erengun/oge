@@ -190,7 +190,7 @@ func (s *homeSession) composerAfter(anchor string) {
 		if !strings.Contains(out[s.mark:], anchor) {
 			continue
 		}
-		if cur := vtScreen(out); cur != last {
+		if cur := s.screen(out); cur != last {
 			last, since = cur, time.Now()
 		} else if time.Since(since) >= 300*time.Millisecond && idleComposer(cur, hint) {
 			return

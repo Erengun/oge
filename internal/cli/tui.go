@@ -44,6 +44,8 @@ type tui struct {
 	kill func()
 	// programStarted, when set, is told each time a program starts (tests).
 	programStarted func()
+	// programOptions come after the program's own options (tests).
+	programOptions []tea.ProgramOption
 	// notify is how this view tells the human, nil when it stays silent.
 	notify *notifier
 }
@@ -64,6 +66,7 @@ func newTUI(env Env, t task.Task, f *pipeline.Frozen, plain *renderer) *tui {
 		m:              newModel(t, f, newStyles(colorAllowed(env.Getenv)), time.Now),
 		gone:           make(chan struct{}),
 		programStarted: env.programStarted,
+		programOptions: env.programOptions,
 	}
 }
 
@@ -114,7 +117,7 @@ func (u *tui) program(in *interrupts, root tea.Model) error {
 		opts = append(opts, tea.WithWindowSize(80, 24))
 	}
 	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
-	p := tea.NewProgram(root, opts...)
+	p := tea.NewProgram(root, append(opts, u.programOptions...)...)
 	u.kill = p.Kill
 	if u.programStarted != nil {
 		u.programStarted()

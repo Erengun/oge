@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/run"
@@ -29,6 +32,8 @@ type vt struct {
 	width    int             // screen columns; 0 is 80
 	pend     bool            // the last column was written: the wrap waits for the next printable
 	cont     []bool          // cont[i]: row i continues row i-1 because it wrapped
+	pen      uv.Style        // the SGR state new text is drawn with
+	styles   [][]uv.Style    // styles[i][j]: the pen lines[i][j] was drawn with
 }
 
 // cols is the screen width, 80 unless set.
@@ -69,9 +74,11 @@ func (t *vt) insertLines(n int) {
 	blank := make([][]rune, n)
 	t.lines = append(t.lines[:t.row], append(blank, t.lines[t.row:]...)...)
 	t.cont = append(t.cont[:t.row], append(make([]bool, n), t.cont[t.row:]...)...)
+	t.styles = append(t.styles[:t.row], append(make([][]uv.Style, n), t.styles[t.row:]...)...)
 	if t.height > 0 && len(t.lines) > t.top+t.height {
 		t.lines = t.lines[:t.top+t.height]
 		t.cont = t.cont[:t.top+t.height]
+		t.styles = t.styles[:t.top+t.height]
 	}
 	t.col = 0
 }
@@ -82,6 +89,9 @@ func (t *vt) line() []rune {
 	}
 	for len(t.cont) < len(t.lines) {
 		t.cont = append(t.cont, false)
+	}
+	for len(t.styles) < len(t.lines) {
+		t.styles = append(t.styles, nil)
 	}
 	return t.lines[t.row]
 }
@@ -94,11 +104,18 @@ func (t *vt) put(r rune) {
 		t.cont[t.row] = true
 	}
 	l := t.line()
+	// Cells past the line's end were erased: so are their styles.
+	st := t.styles[t.row][:min(len(t.styles[t.row]), len(l))]
 	for len(l) <= t.col {
 		l = append(l, ' ')
 	}
 	l[t.col] = r
 	t.lines[t.row] = l
+	for len(st) < len(l) {
+		st = append(st, uv.Style{})
+	}
+	st[t.col] = t.pen
+	t.styles[t.row] = st
 	t.col++
 	if t.col >= t.cols() {
 		t.col = t.cols() - 1
@@ -116,6 +133,9 @@ func (t *vt) write(b []byte) {
 		case r == '\n': // as a terminal with ONLCR shows it
 			t.lf()
 			t.col = 0
+		case r == '\t': // to the next tab stop, every 8 columns
+			t.col = min((t.col/8+1)*8, t.cols()-1)
+			t.pend = false
 		case r == 0x1b && i+1 < len(rs) && rs[i+1] == '[':
 			j := i + 2
 			for j < len(rs) && (rs[j] < 0x40 || rs[j] > 0x7e) {
@@ -162,6 +182,11 @@ func (t *vt) csi(params string, final rune) {
 		return
 	case strings.ContainsAny(params, "?<>=$"):
 		return // other private sequences and queries
+	case final == 'm':
+		p := ansi.NewParser()
+		ansi.DecodeSequence("\x1b["+params+"m", 0, p)
+		uv.ReadStyle(p.Params(), &t.pen)
+		return
 	}
 	n := 1
 	if params != "" && !strings.Contains(params, ";") {
@@ -207,6 +232,7 @@ func (t *vt) csi(params string, final rune) {
 			}
 			t.lines = t.lines[:t.row+1]
 			t.cont = t.cont[:t.row+1]
+			t.styles = t.styles[:t.row+1]
 		}
 	}
 }

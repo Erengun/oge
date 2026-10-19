@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/pipeline"
@@ -68,6 +69,10 @@ type Env struct {
 	// programStarted, when set, is told each time the live view starts a
 	// Bubble Tea program: tests count them.
 	programStarted func()
+	// programOptions, when set, come after the live view's own options, so
+	// a test can give the program a terminal size and colour profile that
+	// a pipe can't report (the screenshot harness).
+	programOptions []tea.ProgramOption
 }
 
 // ProcessEnv is the Env of the running process.

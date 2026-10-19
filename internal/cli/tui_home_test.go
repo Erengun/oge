@@ -228,6 +228,24 @@ type homeSession struct {
 	errOut syncBuf
 	exit   chan int
 	mark   int // how much output there was when the last keys were typed
+	// cols and rows are the terminal's size; 0 is 80x24. Only a session
+	// whose program is told a size (programOptions) sets them.
+	cols, rows int
+}
+
+// term is an empty terminal of the session's size.
+func (s *homeSession) term() *vt {
+	if s.rows == 0 {
+		return &vt{height: 24} // inline printing needs the terminal's height
+	}
+	return &vt{height: s.rows, width: s.cols}
+}
+
+// screen is out on the session's terminal.
+func (s *homeSession) screen(out string) string {
+	v := s.term()
+	v.write([]byte(out))
+	return v.String()
 }
 
 func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession {
@@ -282,14 +300,14 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 func (s *homeSession) composer() {
 	s.t.Helper()
 	const hint = "[tab] setup  /help"
-	before := vtScreen(s.out.String()[:s.mark])
+	before := s.screen(s.out.String()[:s.mark])
 	last, since := "", time.Now()
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		out := s.out.String()
 		if strings.Contains(out[s.mark:], hint) {
 			return
 		}
-		if cur := vtScreen(out); cur != last {
+		if cur := s.screen(out); cur != last {
 			last, since = cur, time.Now()
 		} else if time.Since(since) >= 300*time.Millisecond && cur != before && idleComposer(cur, hint) {
 			return
@@ -351,7 +369,7 @@ func (s *homeSession) settledScreen() string {
 	// Trailing blank rows depend on where the cursor rested when the
 	// screen was read, not on what was drawn: they're not compared.
 	render := func() string {
-		v := vt{height: 24}
+		v := s.term()
 		v.write([]byte(s.out.String()))
 		return strings.TrimRight(v.String(), "\n") + "\n"
 	}
@@ -372,11 +390,7 @@ func (s *homeSession) settledScreen() string {
 // few characters never appears whole in the raw output; the screen does.
 func (s *homeSession) expectScreen(text string) {
 	s.t.Helper()
-	screen := func(b string) string {
-		v := vt{height: 24} // inline printing needs the terminal's height
-		v.write([]byte(b))
-		return v.String()
-	}
+	screen := s.screen
 	before := strings.Count(screen(s.out.String()[:s.mark]), text)
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if strings.Count(screen(s.out.String()), text) > before {
