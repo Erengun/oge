@@ -39,5 +39,6 @@ None of these was chosen, for the reasons below.
 ## Consequences
 
 - The adapter declares capability `CapInterrupt`, but not `CapHostRequests`.
+- **Chat (amended 2026-10-19).** A Chat opens agy under `AutoPermissions` on this same Launch profile; nothing asks. agy can't deny reads by path, so the Chat's hard denies (Öge's private state, QA's and the cuts' directories) aren't enforced: the Agent Limitation says a Chat's implementer can read the held-out tests of earlier cuts. A `PreToolUse` hook in the Workspace would close this. agy can't run the verifier yet, so `--agent agy` leaves it to claude.
 - The adapter works strictly with the installed `agy` CLI using cached Google credentials from the system keyring. Öge never touches tokens or credentials.
 - Test suites replay recorded NDJSON fixtures via `fakeagy`, ensuring zero quota usage in CI (ADR-0017).

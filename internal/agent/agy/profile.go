@@ -14,7 +14,7 @@ import (
 
 // ProfileVersion versions the Launch profile: its flags, environment
 // lists and isolation recipe (ADR-0023).
-const ProfileVersion = 1
+const ProfileVersion = 2
 
 // MinVersion is the oldest agy this adapter supports (since 1.2.6 AGY_ERROR
 // is on stderr and exit code 3). LastTested is the newest it was run against.
@@ -65,6 +65,12 @@ func (p profile) args(spec agent.LaunchSpec) ([]string, error) {
 	}
 	if spec.Network != "on" {
 		args = append(args, "--sandbox")
+	}
+	if spec.Cache != "" {
+		// GOCACHE points at the Run-private cache, outside the Workspace:
+		// --sandbox allows writes only in workspace directories, so a
+		// go test would fail there and the agent work around it.
+		args = append(args, "--add-dir", spec.Cache)
 	}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)

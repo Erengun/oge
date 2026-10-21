@@ -61,9 +61,8 @@ type homeChat struct {
 }
 
 // fits reports whether a message on res goes to the Chat: one is open, or
-// res's implementer has an auto mode to open one in. An agent without one
-// (the fake, Codex later) runs each message as a one-shot Run under its
-// Launch profile.
+// res's implementer can run one (agent.AutoMode: claude, codex, agy). The
+// fake runs each message as a one-shot Run under its Launch profile.
 func (hc *homeChat) fits(res *resolved) bool {
 	if hc == nil {
 		return false

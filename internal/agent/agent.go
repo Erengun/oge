@@ -47,8 +47,9 @@ type LaunchSpec struct {
 	// agent's tool caches (such as GOCACHE).
 	Cache string
 	// Permissions is who decides a tool call: "" is Öge's Launch-profile
-	// policy; AutoPermissions is the agent's own auto mode under Öge's
-	// hard denies, with its asks routed to the host (Chat, D2 in
+	// policy; AutoPermissions is a Chat's: the agent's own auto mode under
+	// Öge's hard denies, with its asks routed to the host, or, for an agent
+	// without one, its Launch profile, which never asks (D2 in
 	// docs/ux/chat-first.md).
 	Permissions string
 	// StateRoots are Öge's state directories (the state dir, its private
@@ -60,16 +61,17 @@ type LaunchSpec struct {
 // AutoPermissions is LaunchSpec.Permissions for the agent's auto mode.
 const AutoPermissions = "auto"
 
-// AutoMode is an Adapter whose agent has its own auto permission mode,
-// which a Chat runs under (D2). The bare oge home opens a Chat only on
-// one; an agent without it runs each message as a one-shot Run under its
-// Launch profile.
+// AutoMode is an Adapter that can run a Chat (D2): its Session takes
+// turn after turn, and it opens under AutoPermissions, in its agent's own
+// auto mode (claude) or else under its Launch profile (codex, agy). The
+// bare oge home opens a Chat only on one; any other adapter (the fake)
+// runs each message as a one-shot Run.
 type AutoMode interface {
 	Adapter
 	AutoMode() bool
 }
 
-// HasAutoMode reports whether a has an auto permission mode.
+// HasAutoMode reports whether a can run a Chat.
 func HasAutoMode(a Adapter) bool {
 	m, ok := a.(AutoMode)
 	return ok && m.AutoMode()

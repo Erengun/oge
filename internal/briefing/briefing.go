@@ -37,37 +37,13 @@ func Implementer(t task.Task, checks []string) string {
 	return b.String()
 }
 
-// Chat is the light Briefing a Chat's implementer Session gets once,
-// with the first user message (docs/ux/chat-first.md): no Exit to
-// declare, since a Chat turn ends when the agent stops, and nothing about
-// denials, since the agent's own auto mode asks the human. Later messages
-// reach the Session verbatim.
-func Chat(checks []string) string {
-	var b strings.Builder
-	b.WriteString("\n\n---\nHow this Chat works:\n")
-	b.WriteString("- You are the implementer, chatting with the user. The current directory is a disposable copy of the repository; work only inside it, and don't commit.\n")
-	if len(checks) > 0 {
-		fmt.Fprintf(&b, "- When your changes settle, Öge verifies them with the project's Checks: %s. Their result decides the outcome, not your report.\n", quotedCode(checks))
-	}
-	b.WriteString("- " + Assumptions + "\n")
-	return b.String()
-}
-
-// ChatReopened is the Briefing a Chat's fresh Session gets after the last
-// one ended (an idle timeout or a crash): the user's turns so far as the
-// Task and its follow-ups, the #185 re-brief, then the chat Briefing. The
-// work survives in the Workspace; the conversation's memory doesn't.
-func ChatReopened(t task.Task, checks []string) string {
-	return taskText(t) + Chat(checks) +
-		"- An earlier Session of this Chat ended. The current directory holds the work so far: continue from it.\n"
-}
-
-func quotedCode(list []string) string {
-	q := make([]string, len(list))
-	for i, c := range list {
-		q[i] = "`" + c + "`"
-	}
-	return strings.Join(q, ", ")
+// ChatReopened is what a Chat's fresh Session gets after the last one
+// ended (an idle timeout or a crash): the user's turns so far as the Task
+// and its follow-ups, the #185 re-brief. A Chat's turns carry no other
+// Briefing (docs/ux/chat-first.md). The work survives in the Workspace;
+// the conversation's memory doesn't.
+func ChatReopened(t task.Task) string {
+	return taskText(t) + "\n\n---\nAn earlier Session of this Chat ended. The current directory holds the work so far: continue from it.\n"
 }
 
 // Verifier is the verifier's Briefing: the Task with its Acceptance

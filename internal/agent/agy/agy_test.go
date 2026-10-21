@@ -233,10 +233,13 @@ func TestAuthFailureStderr(t *testing.T) {
 		t.Fatal("timed out waiting for auth failure Stop")
 	}
 
-	// Verify that premature exit doesn't follow and clobber the Stop
+	// Verify that premature exit doesn't follow and clobber the Stop: the
+	// stream may only end.
 	select {
-	case ev := <-s.Events():
-		t.Fatalf("unexpected extra event after Stop: %+v", ev)
+	case ev, ok := <-s.Events():
+		if ok {
+			t.Fatalf("unexpected extra event after Stop: %+v", ev)
+		}
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -380,6 +383,7 @@ func TestProfileArgsAndEnv(t *testing.T) {
 		Network: "off",
 		Model:   "gemini-3.8-flash-high",
 		Effort:  "high",
+		Cache:   "/tmp/cache",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +392,7 @@ func TestProfileArgsAndEnv(t *testing.T) {
 	if slices.Contains(args, "-p") {
 		t.Errorf("args must not contain -p in stream-json mode: %s", joined)
 	}
-	for _, want := range []string{"--input-format stream-json", "--output-format stream-json", "--dangerously-skip-permissions", "--sandbox", "--model gemini-3.8-flash-high", "--effort high"} {
+	for _, want := range []string{"--input-format stream-json", "--output-format stream-json", "--dangerously-skip-permissions", "--sandbox", "--model gemini-3.8-flash-high", "--effort high", "--add-dir /tmp/cache"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args lack %q: %s", want, joined)
 		}
@@ -481,5 +485,119 @@ func TestSendHoldsSettleBehindTurnAccepted(t *testing.T) {
 	}
 	if k := (<-s.events).Kind; k != agent.TurnSettled {
 		t.Fatalf("second = %v, want TurnSettled", k)
+	}
+}
+
+// A Chat opens agy under AutoPermissions on its Launch profile, and one
+// Session takes turn after turn (D2, ADR-0023); any other mode is refused.
+func TestChatOpensUnderLaunchProfile(t *testing.T) {
+	t.Parallel()
+	if !agent.HasAutoMode(New()) {
+		t.Fatal("agy can't run a Chat")
+	}
+	ws := t.TempDir()
+	wsJSON, _ := json.Marshal(ws)
+	rec := filepath.Join(t.TempDir(), "argv.json")
+	fixture := strings.Join([]string{
+		`{"dir": "out", "msg": {"event": "init", "cwd": ` + string(wsJSON) + `, "conversation_id": "conv-1", "tools": ["run_command"], "model": "gemini-3.8-flash-high"}}`,
+		`{"dir": "in"}`,
+		`{"dir": "out", "msg": {"event": "result", "status": "SUCCESS", "response": "Hi!", "usage": {"total_tokens": 10}}}`,
+		`{"dir": "in"}`,
+		`{"dir": "out", "msg": {"event": "result", "status": "SUCCESS", "response": "Still here.", "usage": {"total_tokens": 20}}}`,
+	}, "\n") + "\n"
+	ad := testAdapter(t, "OGE_FAKE_AGY_FIXTURE="+writeFixture(t, fixture), "OGE_FAKE_AGY_RECORD="+rec)
+	s, err := ad.Open(context.Background(), agent.LaunchSpec{
+		Role: "implementer", Workspace: ws, RunID: "chat-1", Permissions: agent.AutoPermissions,
+	})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer s.Close()
+	<-s.Events() // SessionOpened
+	for _, text := range []string{"yo", "again"} {
+		if err := s.Send(agent.Turn{Text: text}); err != nil {
+			t.Fatal(err)
+		}
+		for ev := range s.Events() {
+			if ev.Kind == agent.TurnSettled {
+				if ev.Failure != "" || ev.Exit != "done" {
+					t.Fatalf("%s: %+v", text, ev)
+				}
+				break
+			}
+		}
+	}
+	b, err := os.ReadFile(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "--dangerously-skip-permissions") || !strings.Contains(string(b), "--sandbox") {
+		t.Errorf("argv = %s", b)
+	}
+
+	if _, err := ad.Open(context.Background(), agent.LaunchSpec{Role: "implementer", Workspace: ws, Permissions: "plan"}); err == nil || !strings.Contains(err.Error(), "no plan permission mode") {
+		t.Errorf("plan mode: %v", err)
+	}
+}
+
+// Events is closed after Close (agent.Session): a Chat's pump ranges over
+// it, so quitting oge waits for it to end.
+func TestEventsClosedAfterClose(t *testing.T) {
+	t.Parallel()
+	s, err := testAdapter(t).Open(context.Background(), agent.LaunchSpec{Role: "implementer", Workspace: t.TempDir(), RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(agent.Turn{Text: "fix"}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-s.Events():
+			if !ok {
+				return
+			}
+		case <-timeout:
+			t.Fatal("Events is still open after Close")
+		}
+	}
+}
+
+// agy updates a tool step ACTIVE, then DONE, each with its tool_info: the
+// step is one Claim, not two.
+func TestToolStepClaimedOnce(t *testing.T) {
+	t.Parallel()
+	ws := t.TempDir()
+	wsJSON, _ := json.Marshal(ws)
+	fixture := strings.Join([]string{
+		`{"dir": "out", "msg": {"event": "init", "cwd": ` + string(wsJSON) + `, "conversation_id": "conv-1", "tools": ["run_command"], "model": "gemini-3.8-flash-high"}}`,
+		`{"dir": "in"}`,
+		`{"dir": "out", "msg": {"event": "step_update", "step_index": 3, "state": "ACTIVE", "step_type": "tool", "tool_info": {"name": "run_command", "parameters": {"CommandLine": "git status"}}}}`,
+		`{"dir": "out", "msg": {"event": "step_update", "step_index": 3, "state": "DONE", "step_type": "tool", "tool_info": {"name": "run_command", "parameters": {"CommandLine": "git status"}, "output": "clean"}}}`,
+		`{"dir": "out", "msg": {"event": "step_update", "step_index": 4, "state": "ACTIVE", "step_type": "tool", "tool_info": {"name": "run_command", "parameters": {"CommandLine": "ls"}}}}`,
+		`{"dir": "out", "msg": {"event": "result", "status": "SUCCESS", "response": "ok", "usage": {"total_tokens": 1}}}`,
+		`{"dir": "in"}`,
+	}, "\n") + "\n"
+	s, err := testAdapter(t, "OGE_FAKE_AGY_FIXTURE="+writeFixture(t, fixture)).Open(context.Background(), agent.LaunchSpec{Role: "implementer", Workspace: ws, RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Send(agent.Turn{Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+	var tools []string
+	for ev := range s.Events() {
+		if ev.Kind == agent.Claim && ev.Tool != "" {
+			tools = append(tools, ev.Tool+" "+ev.Target)
+		}
+		if ev.Kind == agent.TurnSettled {
+			break
+		}
+	}
+	if len(tools) != 2 {
+		t.Errorf("tool Claims = %q, want one per step", tools)
 	}
 }

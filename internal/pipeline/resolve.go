@@ -461,7 +461,7 @@ func limitations(stages []Stage) []string {
 			out = append(out, s.Name+" (codex): shell commands can see your environment's credentials; Codex's shell snapshot ignores its environment policy")
 		}
 		if s.Agent == "agy" && s.Role == "implementer" {
-			out = append(out, s.Name+" (agy): headless runs operate under --dangerously-skip-permissions; in-band interactive approvals are not supported by the agy CLI")
+			out = append(out, s.Name+" (agy): headless runs operate under --dangerously-skip-permissions; in-band interactive approvals are not supported by the agy CLI; agy can't deny reads by path, so the implementer isn't kept from held-out tests (in a Chat, those of earlier cuts)")
 		}
 	}
 	return out
@@ -490,6 +490,9 @@ func userBinding(s *Stage, u UserStage, name string, registered, profiles []stri
 		}
 		if msg := checkProfile(agent, profile, profiles); msg != "" {
 			return []Problem{{key, msg}}
+		}
+		if s.Role == "verifier" && !canVerify(agent) {
+			return []Problem{{key, cantVerify(agent)}}
 		}
 		s.Agent, s.Profile, s.Model, s.Source = agent, profile, u.Model, FromUser
 	case u.Model != "":
@@ -576,6 +579,10 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 			if stages[i].Name != stage {
 				continue
 			}
+			if stages[i].Role == "verifier" && !canVerify(agent) {
+				probs = append(probs, Problem{flag, cantVerify(agent)})
+				return
+			}
 			if prev, ok := boundBy[stage]; ok {
 				probs = append(probs, Problem{flag, fmt.Sprintf("Stage %s is already bound by %s", stage, prev)})
 				return
@@ -595,11 +602,17 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 			set(flag, stage, spec)
 			continue
 		}
-		if agent, profile, _ := ParseBinding(a); bareAt(a) || !knownAgent(agent) || checkProfile(agent, profile, profiles) != "" {
+		agent, profile, _ := ParseBinding(a)
+		if bareAt(a) || !knownAgent(agent) || checkProfile(agent, profile, profiles) != "" {
 			set(flag, stages[0].Name, a) // reports the unknown agent or profile once
 			continue
 		}
 		for _, s := range stages {
+			// --agent <agent> binds every Stage its agent can run; a
+			// verifier it can't is left to defaultBindings.
+			if s.Role == "verifier" && !canVerify(agent) {
+				continue
+			}
 			set(flag, s.Name, a)
 		}
 	}
@@ -644,6 +657,12 @@ func bind(stages []Stage, o Overrides, knownAgent func(string) bool) []Problem {
 	return probs
 }
 
+// cantVerify is the Problem for a verifier bound to an agent that can't
+// run one.
+func cantVerify(agent string) string {
+	return agent + " can't verify yet; bind it with --implement " + agent + ", and the verifier is claude"
+}
+
 const (
 	profilesArePersonal = "Claude profiles are personal; bind them with --agent or the user config (~/.config/oge/config.toml)"
 	emptyProfile        = "empty profile name after @"
@@ -681,7 +700,8 @@ func stageNames(stages []Stage) string {
 
 // defaultBindings binds the implementer to the one installed agent when
 // nothing bound it, and an unbound verifier to the implementer's agent and,
-// unless one is configured, its model (always in a fresh Session).
+// unless one is configured, its model (always in a fresh Session). An
+// implementer whose agent can't verify hands the verifier to claude.
 func defaultBindings(stages []Stage, installed []string) []Problem {
 	var impl *Stage
 	for i := range stages {
@@ -700,6 +720,13 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 		}
 	}
 	for i := range stages {
+		if stages[i].Role == "verifier" && stages[i].Agent == "" && !canVerify(impl.Agent) {
+			if !oneOf("claude", installed...) {
+				return []Problem{{"--verify", impl.Agent + " can't verify yet and claude isn't installed; install claude to verify, or use --fast"}}
+			}
+			stages[i].Agent, stages[i].Source = "claude", FromInstalled
+			continue
+		}
 		if stages[i].Role == "verifier" && stages[i].Agent == "" {
 			// Inherit only what isn't set: a configured verify model wins.
 			stages[i].Agent, stages[i].Profile, stages[i].Source = impl.Agent, impl.Profile, FromInherited
@@ -712,9 +739,13 @@ func defaultBindings(stages []Stage, installed []string) []Problem {
 		}
 	}
 	// Effort is supported for claude and agy: refuse it rather than show
-	// or record a level no launch applies (#179, ADR-0023).
+	// or record a level no launch applies (#179, ADR-0023). A verifier the
+	// project config bound to an agent that can't verify is refused too.
 	var probs []Problem
 	for _, s := range stages {
+		if s.Role == "verifier" && !canVerify(s.Agent) {
+			probs = append(probs, Problem{"stages." + s.Name + ".agent", cantVerify(s.Agent)})
+		}
 		if s.Effort != "" && s.Agent != "claude" && s.Agent != "agy" {
 			probs = append(probs, Problem{"stages." + s.Name + ".effort", "effort is supported for claude and agy only"})
 		}

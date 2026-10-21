@@ -10,8 +10,8 @@ Config     .oge/oge.toml from the Snapshot, schema 1
 Pipeline   default (frozen, compiled graph cb4c8843108a)
            verify (before) -> implement -> Check
            mandatory Gates: tamper · infeasible · bound-exhaustion · Oracle-growth · Own-test-failure · Ambiguous-file
-  verify     codex:gpt-5.5  network off   fresh Session every Attempt   (cli)
-  implement  claude:sonnet  network off   (cli)
+  verify     claude:sonnet  network off   fresh Session every Attempt   (cli)
+  implement  codex:gpt-5.5  network off   (cli)
   Check      go test -json ./...   go-test-json · timeout 5m · network off (not enforced)   (project)
   tests      **/*_test.go  testdata/**
   output     internal/**/*.go
@@ -21,6 +21,9 @@ Pipeline   default (frozen, compiled graph cb4c8843108a)
 ! No acceptance criteria found in the Task.
 !   Held-out tests will be reported as unmapped, and send-back feedback can name no criteria.
 !   Add a "## Acceptance criteria" list to fix this.
+
+! Agent limitations
+!   implement (codex): shell commands can see your environment's credentials; Codex's shell snapshot ignores its environment policy
 
 ! Trust-weakening options in effect
 !   setup network = on       from .oge/oge.toml

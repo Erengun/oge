@@ -287,6 +287,14 @@ var roleKinds = map[string]bool{
 // KnownAgents are the agent names a Stage may bind.
 var KnownAgents = []string{"claude", "codex", "agy"}
 
+// implementOnly are the KnownAgents whose adapter can't run a verifier
+// yet (#60, ADR-0023): a verifier their implementer would hand down is
+// claude's instead.
+var implementOnly = []string{"codex", "agy"}
+
+// canVerify reports whether agent's adapter runs the verifier role.
+func canVerify(agent string) bool { return !oneOf(agent, implementOnly...) }
+
 // SplitAgent splits a binding's agent into the agent and its profile:
 // "claude@work" is ("claude", "work"). Whether the profile exists is
 // checked when the Run is resolved, against the profiles found then.

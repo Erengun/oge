@@ -70,6 +70,11 @@ type Adapter struct {
 // New returns the adapter for the codex on PATH.
 func New() *Adapter { return &Adapter{} }
 
+// AutoMode is true: a Chat runs codex under its Launch profile, which
+// declines every approval itself and denies Öge's DenyRead paths in its
+// sandbox (D2, ADR-0018).
+func (a *Adapter) AutoMode() bool { return true }
+
 const (
 	requestTimeout = 30 * time.Second
 	closeGrace     = 5 * time.Second
@@ -84,7 +89,7 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		// shell_snapshot=false.
 		return nil, fmt.Errorf("codex adapter: the %s role isn't supported yet", spec.Role)
 	}
-	if spec.Permissions != "" {
+	if spec.Permissions != "" && spec.Permissions != agent.AutoPermissions {
 		return nil, fmt.Errorf("codex adapter: codex has no %s permission mode", spec.Permissions)
 	}
 	path := a.Path

@@ -49,7 +49,7 @@ func TestChatReopensAfterCrash(t *testing.T) {
 		t.Errorf("SessionReopened %v", r)
 	}
 	mans := recordsOf(t, c, RecBriefingManifest)
-	brief := briefing.ChatReopened(task.Task{Text: "first", FollowUps: []string{"second"}}, []string{"go test ./..."})
+	brief := briefing.ChatReopened(task.Task{Text: "first", FollowUps: []string{"second"}})
 	if len(mans) != 2 || mans[1]["session_reused"] != false || !strings.Contains(string(mustJSON(mans[1]["items"])), sha(brief)) {
 		t.Errorf("turn 2's manifest %v", mans[len(mans)-1])
 	}
