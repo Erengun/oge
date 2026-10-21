@@ -606,8 +606,8 @@ func TestHomeChatQuitDuringVerify(t *testing.T) {
 	checkGone(t, pids)
 }
 
-// A Verdict shows its diff inline when it is 20 lines or fewer, dim and
-// indented; a longer one only behind /diff.
+// A Verdict shows its diff under it as hunks; a long one folds after
+// diffCollapsed lines, the rest behind ctrl+o.
 func TestHomeChatInlineDiff(t *testing.T) {
 	t.Parallel()
 	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
@@ -627,9 +627,9 @@ func TestHomeChatInlineDiff(t *testing.T) {
 	s.composer()
 	s.type_("and long\r")
 	s.expect("oge › ✓ Accepted · 1 file · ")
-	s.composer()
-	if out := s.out.String(); strings.Contains(out, "long line 3") {
-		t.Errorf("a diff over 20 lines showed inline:\n%s", out)
+	s.expect("… 16 more lines · ctrl+o to expand")
+	if out := s.out.String(); !strings.Contains(out, "long line 8") || strings.Contains(out, "long line 9") {
+		t.Errorf("a long diff didn't fold after %d lines:\n%s", diffCollapsed, out)
 	}
 	s.quitChat(f)
 }
