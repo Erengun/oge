@@ -97,7 +97,7 @@ func TestHomeChatRepliesRemembersAndCuts(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	s.type_("and again\r")
 	s.expect("still the same session") // a fresh Session would replay the first turn
-	s.expect("Bash ls")
+	s.expect("$ ls")
 	s.composer()
 	s.type_("fix Add\r")
 	s.expect("oge › ✓ Accepted · 1 file · ")
@@ -183,14 +183,15 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 // in flight, Öge's feedback turn too, shows "working…" there.
 func (s *homeSession) composerAfter(anchor string) {
 	s.t.Helper()
-	const hint = "[tab] setup  /help"
+	const hint = "/ commands"
 	last, since := "", time.Now()
+	before := s.shownCount(s.out.String()[:s.mark], anchor)
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		out := s.out.String()
-		if !strings.Contains(out[s.mark:], anchor) {
+		if !strings.Contains(out[s.mark:], anchor) && s.shownCount(out, anchor) <= before {
 			continue
 		}
-		if cur := vtScreen(out); cur != last {
+		if cur := s.screen(out); cur != last {
 			last, since = cur, time.Now()
 		} else if time.Since(since) >= 300*time.Millisecond && idleComposer(cur, hint) {
 			return
@@ -205,6 +206,11 @@ func (s *homeSession) expectAfter(anchor, text string) {
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		out := s.out.String()
 		if i := strings.LastIndex(out, anchor); i >= 0 && strings.Contains(out[i:], text) {
+			return
+		}
+		// The full-screen renderer rewrites only changed cells: the screen too.
+		if scr := strings.Join(strings.Fields(s.screen(out)), " "); strings.Contains(scr, strings.Join(strings.Fields(anchor), " ")) &&
+			strings.Contains(scr[strings.LastIndex(scr, strings.Join(strings.Fields(anchor), " ")):], strings.Join(strings.Fields(text), " ")) {
 			return
 		}
 	}
@@ -341,11 +347,11 @@ func TestHomeChatEscInterrupts(t *testing.T) {
 	s.expect("interrupted")
 	s.composer()
 	time.Sleep(300 * time.Millisecond)
-	if out := s.out.String()[s.mark:]; strings.Contains(out, "> go on") {
+	if out := s.out.String()[s.mark:]; strings.Contains(out, "❯ go on") {
 		t.Fatalf("a queued message was sent after Esc:\n%s", out)
 	}
 	s.type_("\r") // it waits in the composer: the human sends it
-	s.expect("> go on")
+	s.expect("❯ go on")
 	s.expect("next turn")
 	s.composer()
 	s.quitChat(f)
@@ -600,8 +606,8 @@ func TestHomeChatQuitDuringVerify(t *testing.T) {
 	checkGone(t, pids)
 }
 
-// A Verdict shows its diff inline when it is 20 lines or fewer, dim and
-// indented; a longer one only behind /diff.
+// A Verdict shows its diff under it as hunks; a long one folds after
+// diffCollapsed lines, the rest behind ctrl+o.
 func TestHomeChatInlineDiff(t *testing.T) {
 	t.Parallel()
 	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
@@ -621,9 +627,9 @@ func TestHomeChatInlineDiff(t *testing.T) {
 	s.composer()
 	s.type_("and long\r")
 	s.expect("oge › ✓ Accepted · 1 file · ")
-	s.composer()
-	if out := s.out.String(); strings.Contains(out, "long line 3") {
-		t.Errorf("a diff over 20 lines showed inline:\n%s", out)
+	s.expect("… 16 more lines · ctrl+o to expand")
+	if out := s.out.String(); !strings.Contains(out, "long line 8") || strings.Contains(out, "long line 9") {
+		t.Errorf("a long diff didn't fold after %d lines:\n%s", diffCollapsed, out)
 	}
 	s.quitChat(f)
 }

@@ -9,3 +9,6 @@
 # the canonical copies live in .agents/skills.
 /skills/
 /fakeclaude
+
+# TUI screenshots (scripts/tui-shots.sh)
+/.tui-shots/

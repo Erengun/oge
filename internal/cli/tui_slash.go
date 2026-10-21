@@ -164,7 +164,10 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/new")
 	}
 	h.last, h.thread = nil, nil
+	h.side.verdict, h.side.outcome, h.side.changes, h.side.tokens, h.side.cost = "", "", nil, nil, nil
+	h.side.took, h.side.turns, h.side.steps, h.side.ctx = 0, 0, 0, nil
 	h.unchecked, h.uncheckedChanged = false, 0
+	h.steps = nil // a result of the old Session hangs on no new step
 	// A fresh task is a fresh Chat: the next message opens a new Session,
 	// and the old one's cut in flight ends unshown.
 	if v := h.verify; v != nil {
@@ -233,7 +236,7 @@ func (h *home) setupReady() string {
 	if h.sel != nil && !h.sel.ready {
 		if res, problem := h.resolve(h.sel); problem == nil {
 			h.sel.init(res)
-			h.setup = setupLines(res.frozen)
+			h.setSetup(res.frozen)
 		}
 	}
 	if h.sel == nil || !h.sel.ready {

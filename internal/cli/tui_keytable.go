@@ -14,7 +14,7 @@ import (
 // case labels. Keys that are typed, not bound (/, @, ?), have no probe.
 
 // keyGroups are the panel's sections, in order.
-var keyGroups = []string{"Composer", "History", "Menus & pickers", "Run", "Delivery", "Setup", "Vim (when enabled)"}
+var keyGroups = []string{"Composer", "History", "Menus & pickers", "Run", "Full screen", "Delivery", "Setup", "Vim (when enabled)"}
 
 // keyBinding is one row: what the human reads, the key names (as
 // tea.KeyPressMsg.String() spells them) the handlers switch on, and what it does.
@@ -104,6 +104,12 @@ var keyTable = []keyBinding{
 	{"Run", "type · enter", nil, "the next Task; enter queues it, never sent to the Run", ""},
 	{"Run", "", nil, "cancel the queued Task", "run.cancelQueue"},
 	{"Run", "ctrl+c", nil, "clear the queued Task, else cancel the Run", ""},
+
+	{"Full screen", "pgup · pgdown · wheel", []string{"pgup", "pgdown"}, "scroll the transcript (drag selects and copies)", ""},
+	{"Full screen", "ctrl+end · end", []string{"ctrl+end"}, "jump to the latest", ""},
+	{"Full screen", "ctrl+t", []string{"ctrl+t"}, "show or hide the sidebar (from 110 columns)", ""},
+	{"Full screen", "ctrl+o", []string{"ctrl+o"}, "unfold long commands and diffs", ""},
+	{"Full screen", "alt+y", []string{"alt+y"}, "copy the last reply", ""},
 
 	{"Delivery", "↓ on an empty box", nil, "the actions of the last Run", ""},
 	{"Delivery", "a · b · d · r", []string{"a", "b", "d", "r"}, "apply · branch · diff · receipt (each ↓ allows one)", ""},

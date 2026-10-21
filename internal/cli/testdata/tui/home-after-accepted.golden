@@ -1,3 +1,5 @@
+ oge · repo · main
+────────────────────────────────────────────────────────────────────────────────
 > fix Add
 Run X · Fast mode · HEAD X (main) + 1 untracked
 
@@ -25,9 +27,9 @@ Ledger        head X · identifies this Receipt; not tamper-proof
 Nothing was written to your repository.
 
  ↓ actions · /apply /diff /receipt /branch · /new
-╭─ oge · repo · main ──────────────────────────────────────────────────────────╮
-│ Ask a question or describe a change                                          │
-╰──────────────────────────────────────────────────────────────────────────────╯
- Fast · fake · no verifier
- [enter] send  [tab] setup  /help
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ❯ Ask a question or describe a change                                        │
+│                                                                              │
+│                                                                              │
+╰─ ● ready · enter send · / commands · ! shell ──── Fast · fake · no verifier ─╯
  continuing Run X (/new for a fresh task)

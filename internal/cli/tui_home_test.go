@@ -228,6 +228,27 @@ type homeSession struct {
 	errOut syncBuf
 	exit   chan int
 	mark   int // how much output there was when the last keys were typed
+	// cols and rows are the terminal's size; 0 is 80x24. Only a session
+	// whose program is told a size (programOptions) sets them.
+	cols, rows int
+}
+
+// homeTestRows is the rows of the terminal a home session runs on.
+const homeTestRows = 120
+
+// term is an empty terminal of the session's size.
+func (s *homeSession) term() *vt {
+	if s.rows == 0 {
+		return &vt{height: 24}
+	}
+	return &vt{height: s.rows, width: s.cols}
+}
+
+// screen is out on the session's terminal.
+func (s *homeSession) screen(out string) string {
+	v := s.term()
+	v.write([]byte(out))
+	return v.String()
 }
 
 func startHomeSession(t *testing.T, f *runFixture, args ...string) *homeSession {
@@ -252,6 +273,10 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 	s := &homeSession{t: t, f: f, pw: pw, exit: make(chan int, 1)}
 	env := f.envWithFake(script, &s.out, &s.errOut)
 	env.Stdin = pr
+	// The home is full-screen: a pipe reports no size, so give the program one
+	// tall enough that a session's whole transcript shows on the screen.
+	env.programOptions = []tea.ProgramOption{tea.WithWindowSize(80, homeTestRows)}
+	s.cols, s.rows = 80, homeTestRows
 	if tweak != nil {
 		tweak(&env)
 	}
@@ -281,15 +306,15 @@ func startHomeSessionWith(t *testing.T, f *runFixture, tweak func(*Env), args ..
 // keys.
 func (s *homeSession) composer() {
 	s.t.Helper()
-	const hint = "[tab] setup  /help"
-	before := vtScreen(s.out.String()[:s.mark])
+	const hint = "/ commands"
+	before := s.screen(s.out.String()[:s.mark])
 	last, since := "", time.Now()
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		out := s.out.String()
 		if strings.Contains(out[s.mark:], hint) {
 			return
 		}
-		if cur := vtScreen(out); cur != last {
+		if cur := s.screen(out); cur != last {
 			last, since = cur, time.Now()
 		} else if time.Since(since) >= 300*time.Millisecond && cur != before && idleComposer(cur, hint) {
 			return
@@ -331,15 +356,20 @@ func idleComposer(screen, hint string) bool {
 	return true
 }
 
-// expect waits until text is written after the last keys were typed.
+// expect waits until text is written after the last keys were typed. The
+// full-screen renderer rewrites only the cells that changed, so text rarely
+// shows whole in the raw output: it counts too when it is on the screen more
+// often than it was before the keys.
 func (s *homeSession) expect(text string) {
 	s.t.Helper()
+	before := s.shownCount(s.out.String()[:s.mark], text)
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if strings.Contains(s.out.String()[s.mark:], text) {
+		out := s.out.String()
+		if strings.Contains(out[s.mark:], text) || s.shownCount(out, text) > before {
 			return
 		}
 	}
-	s.t.Fatalf("%q never appeared after the last keys in:\n%s", text, s.out.String())
+	s.t.Fatalf("%q never appeared after the last keys in:\n%s\nscreen:\n%s", text, s.out.String(), s.screen(s.out.String()))
 }
 
 // settledScreen is the screen on an 80x24 terminal once it has stopped
@@ -351,9 +381,9 @@ func (s *homeSession) settledScreen() string {
 	// Trailing blank rows depend on where the cursor rested when the
 	// screen was read, not on what was drawn: they're not compared.
 	render := func() string {
-		v := vt{height: 24}
+		v := s.term()
 		v.write([]byte(s.out.String()))
-		return strings.TrimRight(v.String(), "\n") + "\n"
+		return collapseBlank(strings.TrimRight(v.String(), "\n")) + "\n"
 	}
 	last, since := render(), time.Now()
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
@@ -366,17 +396,34 @@ func (s *homeSession) settledScreen() string {
 	return last
 }
 
+// shownCount is how often text is on the screen out draws, wrapped lines and
+// indents read as single spaces: the transcript wraps at words.
+func (s *homeSession) shownCount(out, text string) int {
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	return strings.Count(flat(s.screen(out)), flat(text))
+}
+
+// collapseBlank folds runs of blank rows into one: the full-screen home
+// pins its box to the bottom of a tall screen, and the gap between the
+// transcript and the box is only the screen's height.
+func collapseBlank(s string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) == "" && len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+			continue
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
+}
+
 // expectScreen waits until text shows on the rendered screen more often
 // than it did when the last keys were typed. The renderer rewrites only the
 // cells that changed, so a hint that differs from the previous frame by a
 // few characters never appears whole in the raw output; the screen does.
 func (s *homeSession) expectScreen(text string) {
 	s.t.Helper()
-	screen := func(b string) string {
-		v := vt{height: 24} // inline printing needs the terminal's height
-		v.write([]byte(b))
-		return v.String()
-	}
+	screen := s.screen
 	before := strings.Count(screen(s.out.String()[:s.mark]), text)
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if strings.Count(screen(s.out.String()), text) > before {
@@ -412,7 +459,8 @@ func (s *homeSession) ended() {
 	s.expect("↓ actions")
 	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		out := s.out.String()
-		if strings.Contains(out[strings.LastIndex(out, "↓ actions"):], "(/new for a fresh task)") {
+		if strings.Contains(out[strings.LastIndex(out, "↓ actions"):], "(/new for a fresh task)") ||
+			strings.Contains(s.screen(out), "(/new for a fresh task)") {
 			return
 		}
 	}
@@ -493,9 +541,9 @@ func TestBareOgeStashAndBackslashNewline(t *testing.T) {
 	s.type_("\x0c") // Ctrl+L
 	s.composer()
 	s.type_("\x13") // restores
-	s.expectScreen("│ half a thought zq7")
+	s.expectScreen("│ ❯ half a thought zq7")
 	s.type_("\\\rmore")
-	s.expectScreen("│ more")
+	s.expectScreen("│   more")
 	s.type_("\x03\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d", code)
@@ -809,14 +857,14 @@ func TestBareOgeHistoryRecallAndSearch(t *testing.T) {
 	s.type_("\x1b[A") // ↑: the newest
 	s.expectScreen("add tests zq7")
 	s.type_("\x1b[A") // ↑: the one before
-	s.expectScreen("│ fix Add")
+	s.expectScreen("│ ❯ fix Add")
 	s.type_("\x1b[B\x1b[B") // ↓ back to the newest, then past it: empty
 	s.type_("\x12")         // Ctrl+R
 	s.expectScreen("(reverse-i-search)''")
 	s.type_("zq7")
 	s.expectScreen("(reverse-i-search)'zq7': add tests zq7")
 	s.type_("\r") // accepts into the box, doesn't submit
-	s.expectScreen("│ add tests zq7")
+	s.expectScreen("│ ❯ add tests zq7")
 	s.type_("\x03\x03")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())

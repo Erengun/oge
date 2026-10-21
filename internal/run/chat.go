@@ -249,6 +249,9 @@ func newTurnOut() *turnOut { return &turnOut{ch: make(chan agent.Event, 64)} }
 func (t *turnOut) record(ev agent.Event) {
 	t.rec.Lock()
 	defer t.rec.Unlock()
+	if ev.Kind == agent.ToolResult {
+		return // display only
+	}
 	_ = json.NewEncoder(&t.stream).Encode(ev)
 	switch {
 	case ev.Kind == agent.Claim && ev.Tool == "":

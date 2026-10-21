@@ -50,6 +50,7 @@ func handlerKeys(t *testing.T) map[string]bool {
 		{"tui_setup.go", "setupPanel", "key"},
 		{"tui.go", "model", "Update"},
 		{"tui_queue.go", "home", "queueKey"},
+		{"tui_fullscreen.go", "home", "fullKey"},
 	}
 	got := map[string]bool{}
 	fset := token.NewFileSet()

@@ -2,23 +2,23 @@
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  Composer
-   enter                run the task
-   ctrl+j · \+enter     newline
-   ctrl+g *             write the task in $EDITOR
-   ctrl+s               stash the draft (again on an empty box restores)
-   ctrl+c               clear the draft (↑ restores), then leave
-   ctrl+l               redraw
-   tab                  open setup
-   shift+tab            switch Standard / Fast (this session)
-   alt+m                open setup at the implement model
-   !                    shell mode, one line (ctrl+c stops · \! is a Task)
-   / · @ · ?            commands · files · this panel (on an empty box)
-   ← → · ctrl+b ctrl+f  move
-   home · end · ctrl+a  line start · end
-   alt+b alt+f          move by word
-   backspace · delete   delete back · forward
-   ctrl+k · ctrl+u      kill to line end · start
-   ctrl+w · alt+d       kill word back · forward
-   ctrl+y               yank what was killed
+   enter                  run the task
+   ctrl+j · \+enter       newline
+   ctrl+g *               write the task in $EDITOR
+   ctrl+s                 stash the draft (again on an empty box restores)
+   ctrl+c                 clear the draft (↑ restores), then leave
+   ctrl+l                 redraw
+   tab                    open setup
+   shift+tab              switch Standard / Fast (this session)
+   alt+m                  open setup at the implement model
+   !                      shell mode, one line (ctrl+c stops · \! is a Task)
+   / · @ · ?              commands · files · this panel (on an empty box)
+   ← → · ctrl+b ctrl+f    move
+   home · end · ctrl+a    line start · end
+   alt+b alt+f            move by word
+   backspace · delete     delete back · forward
+   ctrl+k · ctrl+u        kill to line end · start
+   ctrl+w · alt+d         kill word back · forward
+   ctrl+y                 yank what was killed
  * keys from ~/.config/oge/keybindings.toml
- ↑ ↓ scroll (1-19 of 59) · esc or ? close
+ ↑ ↓ scroll (1-19 of 65) · esc or ? close
