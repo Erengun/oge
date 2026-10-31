@@ -190,6 +190,15 @@ func chatCorpus(tool string) []struct {
 		{"cat \"/e$(echo tc)/passwd\"", true},
 		{"cd sub && python3 - <<'EOF'\nprint(open('../../x').read())\nEOF", true},
 
+		// tee to /dev/null writes the body to the named file; /dev/null
+		// feeds nothing on.
+		{"tee x.txt > /dev/null <<'EOF'\nsee /etc\nEOF", false},
+		// Traded on purpose (#341): a here-document written to a file and
+		// then run is not stopped here. A Write tool call followed by
+		// `sh x.sh` was never stopped either; the sandbox is the backstop
+		// (ADR-0013 as amended: the check is a speed bump).
+		{"cat <<'EOF' > x.sh && sh x.sh\ncat /etc/passwd\nEOF", false},
+
 		// Known false stops, a product decision pending: a lone / in
 		// quoted text is read as the root, since text like 'x /' can
 		// reach a command as arguments (echo 'x /' | xargs grep -r), and

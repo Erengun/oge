@@ -84,7 +84,7 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 			cur.words = append(cur.words, w)
 			if target {
 				t := filepath.Clean(w.text)
-				cur.toFile = !w.dynamic && t != "/dev" && !strings.HasPrefix(t, "/dev/")
+				cur.toFile = !w.dynamic && (t == "/dev/null" || (t != "/dev" && !strings.HasPrefix(t, "/dev/")))
 				target = false
 			}
 		}
