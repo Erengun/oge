@@ -268,6 +268,7 @@ func agentLines(text string) string {
 
 // chatSubmit sends text as the next turn, opening the Chat first.
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
+	h.pendingFB = nil // a new turn of the human's: the old failure is theirs no more
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	h.comp = h.composer()
@@ -341,9 +342,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// (D-A3), unless [advisor] auto is off.
 				consult, ok := h.autoConsult()
 				if ok {
-					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; asking the advisor", run.FeedbackBudget))
+					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; asking the advisor", h.feedbackBudget()))
 				} else {
-					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", run.FeedbackBudget))
+					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", h.feedbackBudget()))
 				}
 				m, cmd := h.nextTurn(h.println(line))
 				return m, tea.Batch(cmd, consult)
@@ -843,6 +844,7 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	}
 	h.verify = nil
 	v.cancel()
+	h.pendingFB = nil // a newer cut supersedes the one that failed
 	res := msg.res
 	h.cutGate = nil
 	deliver := h.gateFor
@@ -900,6 +902,15 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 	}
 	// After Ctrl+C on the verify, the human has taken over: no feedback.
 	if verdict && res.Feedback != "" && !v.stopped {
+		switch h.feedbackMode() {
+		case pipeline.ChatFeedbackOff:
+			return tea.Sequence(h.println(line), diff)
+		case pipeline.ChatFeedbackAsk:
+			// Öge doesn't prompt the agent for the human: the turn waits
+			// for s or /feedback, and is never sent on its own.
+			h.pendingFB = &pendingFeedback{text: res.Feedback, frozen: v.frozen, seq: msg.seq}
+			return tea.Sequence(h.println(line), diff)
+		}
 		if h.turn != nil {
 			// Nothing enters a running turn: it waits, and a newer cut of
 			// that turn drops it (D5).
@@ -909,6 +920,57 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		return tea.Sequence(h.println(line), diff, h.feedbackSubmit(res.Feedback, v.frozen, nil))
 	}
 	return tea.Sequence(h.println(line), diff)
+}
+
+// pendingFeedback is a failing cut's feedback turn held for the human.
+type pendingFeedback struct {
+	text   string
+	frozen *pipeline.Frozen
+	seq    int
+}
+
+// feedbackMode is [chat] feedback, "ask" without a Chat.
+func (h *home) feedbackMode() string {
+	if h.chat != nil {
+		if c := h.chat.get(); c != nil {
+			return c.FeedbackMode()
+		}
+	}
+	return pipeline.ChatFeedbackAsk
+}
+
+// feedbackBudget is the Chat's feedback budget.
+func (h *home) feedbackBudget() int {
+	if h.chat != nil {
+		if c := h.chat.get(); c != nil {
+			return c.FeedbackBudget()
+		}
+	}
+	return run.FeedbackBudget
+}
+
+// sendBack sends the held feedback turn (s on the action row, /feedback):
+// the human's explicit act, never decided by Enter alone.
+func (h *home) sendBack() (tea.Cmd, string) {
+	p := h.pendingFB
+	switch {
+	case p == nil:
+		return nil, "/feedback: no failed Check to send back"
+	case h.turn != nil:
+		return nil, "/feedback: a turn is running"
+	case h.verify != nil:
+		return nil, "/feedback: a newer cut is verifying"
+	}
+	h.pendingFB = nil
+	return h.feedbackSubmit(p.text, p.frozen, nil), ""
+}
+
+// feedbackCmd is /feedback.
+func (h *home) feedbackCmd(args []string) (tea.Cmd, string) {
+	if len(args) > 0 {
+		return nil, usageOf("/feedback")
+	}
+	return h.sendBack()
 }
 
 // feedbackSubmit sends a failing cut's feedback turn into the Chat's

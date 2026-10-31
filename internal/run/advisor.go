@@ -163,15 +163,15 @@ func (c *Chat) AutoState() (chain int, used bool) {
 	return c.chain, c.autos >= AutoCap
 }
 
-// AdvisorAuto is [advisor] auto: "on" (the default, D-A3) sends the advice
-// when the feedback budget is spent, "ask" shows it first, "off" never
-// consults on its own.
+// AdvisorAuto is [advisor] auto: "on" sends the advice when the feedback
+// budget is spent, "ask" (the default) shows it first, "off" never consults
+// on its own.
 func (c *Chat) AdvisorAuto() string {
 	switch c.advisor.Auto {
-	case pipeline.AdvisorAutoAsk, pipeline.AdvisorAutoOff:
+	case pipeline.AdvisorAutoOn, pipeline.AdvisorAutoOff:
 		return c.advisor.Auto
 	}
-	return pipeline.AdvisorAutoOn
+	return pipeline.AdvisorAutoAsk
 }
 
 // ConsultAuto is the Consultation Öge asks for when a chain's feedback

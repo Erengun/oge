@@ -46,6 +46,7 @@ func slashCommands() []slashCmd {
 		{name: "/model", advanced: true, usage: "/model <stage> <model>", desc: "a Stage's model (from setup)", args: true, run: (*home).modelCmd},
 		{name: "/effort", advanced: true, usage: "/effort <stage> <level>", desc: "a Stage's effort, Claude only (from setup)", args: true, run: (*home).effortCmd},
 		{name: "/advise", advanced: true, usage: "/advise <question>", desc: "ask a fresh advisor for a second opinion", args: true, run: (*home).adviseCmd},
+		{name: "/feedback", advanced: true, usage: "/feedback", desc: "send the failed Check back to the agent", run: (*home).feedbackCmd},
 		{name: "/runs", advanced: true, usage: "/runs", desc: "recent Runs in this repo", run: (*home).runsCmd},
 		{name: "/receipt", usage: "/receipt [run]", desc: "show the result and checks", run: deliverSlash("r", "receipt")},
 		{name: "/diff", usage: "/diff [run]", desc: "review changes", run: (*home).diffCmd},
@@ -175,6 +176,7 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		h.verify = nil
 	}
 	h.actions = false
+	h.pendingFB = nil
 	if h.adv != nil {
 		h.dismissAdvice(h.adv)
 		h.adv.cancel()

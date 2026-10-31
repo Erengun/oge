@@ -48,6 +48,18 @@ bell = true        # ring the bell with either
 
 `/notify on|off` in the home turns both alerts (and so the bell) on or off for the session. Nothing is sent in plain mode, without a TTY, with `--unattended`, or in dry-run. Under tmux the OSC goes through the passthrough (needs `allow-passthrough on`); under GNU screen only the bell rings; foot and rxvt get OSC 777.
 
+**Chat feedback.** When a Chat's Check fails, Öge no longer prompts the agent on your behalf by default. The `[chat]` table is global, not per repo:
+
+```toml
+[chat]
+feedback = "ask"      # "ask" (default) | "on" | "off"
+feedback_budget = 3   # feedback turns a chain of cuts gets; 0 or absent is 3
+```
+
+With `ask`, a failed Check shows `✗ Check failed` under the box and sends nothing: ↓ then `s` (or `/feedback`) sends the failing Check's feedback turn back, one turn, and `/advise <question>` asks the advisor. Enter alone never sends it. A newer cut, or a message of yours, drops it. With `on`, Öge sends the feedback turn at once, up to `feedback_budget` turns, as it did before. With `off`, a failed Check offers nothing.
+
+**Advisor.** `[advisor] auto` says what happens when a chain's feedback budget is spent: `ask` (the default) shows the advice first, `on` sends it, `off` never consults on its own.
+
 **Theme.** `theme` is a global key (not per repo) that sets the live view's palette: `auto` (the default: follows the terminal's background, and is the terminal's own 16 colours until it answers), `dark`, `light`, `daltonized` (blue and orange, never red against green) or `ansi` (16 colours only). An unknown value is a Problem.
 
 ```toml

@@ -86,6 +86,9 @@ type ChatParams struct {
 	CacheSeedTemplate string
 	// Advisor is the user's [advisor] config: who Consult asks.
 	Advisor pipeline.AdvisorConfig
+	// Feedback is the user's [chat] config: whether a failing Check sends
+	// its feedback turn, and the budget of them.
+	Feedback pipeline.ChatConfig
 }
 
 // Chat is an open Chat. Its methods are safe to call concurrently.
@@ -109,6 +112,7 @@ type Chat struct {
 	getenv    func(string) string
 	seedTmpl  string
 	advisor   pipeline.AdvisorConfig
+	feedback  pipeline.ChatConfig
 	repo      *workspace.RunRepo
 	blobs     *ledger.Blobs
 	protected func(string) string // the implementer's protected set
@@ -339,7 +343,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
 		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
 		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, advised: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate,
-		advisor: p.Advisor}
+		advisor: p.Advisor, feedback: p.Feedback}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
 	}
@@ -510,6 +514,24 @@ var ErrFeedbackBudget = errors.New("the chain's feedback turns are spent")
 // started a new chain while it was being made.
 var ErrChainEnded = errors.New("the user's turn began a new chain")
 
+// FeedbackMode is [chat] feedback: "on", "ask" (the default) or "off".
+func (c *Chat) FeedbackMode() string {
+	switch c.feedback.Feedback {
+	case pipeline.ChatFeedbackOn, pipeline.ChatFeedbackOff:
+		return c.feedback.Feedback
+	}
+	return pipeline.ChatFeedbackAsk
+}
+
+// FeedbackBudget is how many feedback turns a chain gets: [chat]
+// feedback_budget, or FeedbackBudget.
+func (c *Chat) FeedbackBudget() int {
+	if c.feedback.FeedbackBudget > 0 {
+		return c.feedback.FeedbackBudget
+	}
+	return FeedbackBudget
+}
+
 // SendFeedback sends a failing cut's feedback turn (Result.Feedback), as
 // Send does: Öge's turn, recorded as one (TurnStarted's by is "oge"),
 // never part of a Task (D7). It queues behind a turn in flight, and
@@ -557,7 +579,7 @@ func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice st
 		c.feedbacks = 0 // the user's own turn starts a chain
 		c.chain++
 		c.autos = 0
-	case kind == turnFeedback && c.feedbacks >= FeedbackBudget:
+	case kind == turnFeedback && c.feedbacks >= c.FeedbackBudget():
 		c.mu.Unlock()
 		return nil, ErrFeedbackBudget
 	}
