@@ -68,6 +68,9 @@ type Run struct {
 	// Label is the human's own name for the Run, kept beside it and never
 	// in the Ledger (run.LabelFile).
 	Label string
+	// Usage is a Chat cut's turns and the tokens the agent reported for
+	// them, as its RunStarted recorded; nil for a one-shot Run.
+	Usage *run.CutUsage
 }
 
 func (r *Run) repo() *workspace.RunRepo {
@@ -106,14 +109,17 @@ func Load(dir string) (*Run, error) {
 	for _, rec := range recs {
 		switch rec.Type {
 		case run.RecRunStarted:
-			var d struct{ Run, Source, Task, Frozen, Follows string }
+			var d struct {
+				Run, Source, Task, Frozen, Follows string
+				Usage                              *run.CutUsage `json:"usage"`
+			}
 			if err := json.Unmarshal(rec.Data, &d); err != nil {
 				return nil, err
 			}
 			if d.Run != "" {
 				r.ID = d.Run
 			}
-			r.Source, r.Follows = d.Source, d.Follows
+			r.Source, r.Follows, r.Usage = d.Source, d.Follows, d.Usage
 			if blobs, err := ledger.OpenBlobs(dir); err == nil {
 				if b, err := blobs.Get(d.Task); err == nil {
 					r.Title = task.Parse(string(b)).Title

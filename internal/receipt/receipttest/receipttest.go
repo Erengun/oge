@@ -415,6 +415,7 @@ func Scenarios() []Scenario {
 			// sent, not what it said. The cut's RunStarted holds all of it.
 			b := NewCut(pipeline.Fast, map[string]any{"chat": "c-1", "turns": map[string]int{"from": 3, "to": 4},
 				"task_turns": []map[string]any{{"turn": 1, "sha256": "aa"}},
+				"usage":      run.CutUsage{You: 1, Advice: 1, Reported: 2, OutTokens: 5400},
 				"advice": run.CutAdvice{
 					Sent: []run.AdviceSent{
 						{Consultation: "k-1", Turn: 3, How: "edited", Agent: "claude", Model: "opus", Advice: "sha256:aa"},

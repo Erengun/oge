@@ -307,15 +307,15 @@ func (s *scen) hold() bool {
 
 func (s *scen) result(uuid string, t multiturn.Turn, interrupted bool) {
 	var cost float64
-	var tokens int
+	var tokens, out int
 	if t.Usage != nil && !interrupted {
-		cost, tokens = t.Usage.CostUSD, t.Usage.Tokens
+		cost, tokens, out = t.Usage.CostUSD, t.Usage.Tokens, t.Usage.OutTokens
 	}
 	r := map[string]any{"type": "result", "subtype": "success", "is_error": false,
 		"result": t.Reply, "stop_reason": "end_turn", "terminal_reason": "completed",
 		"num_turns": 1, "total_cost_usd": cost, "user_message_uuid": uuid,
 		"permission_denials": []any{},
-		"usage":              map[string]any{"input_tokens": tokens, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+		"usage":              map[string]any{"input_tokens": tokens, "output_tokens": out, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
 		"modelUsage":         map[string]any{scenModel: map[string]any{"contextWindow": 200000}}}
 	if interrupted {
 		r["subtype"], r["is_error"], r["stop_reason"], r["terminal_reason"] = "error_during_execution", true, nil, "aborted_streaming"

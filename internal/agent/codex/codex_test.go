@@ -767,3 +767,29 @@ func TestChatOpensUnderLaunchProfile(t *testing.T) {
 		t.Errorf("plan mode: %v", err)
 	}
 }
+
+// thread/tokenUsage/updated carries the thread's running total: each
+// turn's Usage is the change since the last turn settled.
+func TestUsageIsPerTurnNotTheRunningTotal(t *testing.T) {
+	s, _ := bare(agent.LaunchSpec{})
+	for _, total := range []int{210371, 225571, 241021} {
+		s.mu.Lock()
+		s.inFlight = true
+		out := total / 100 // output is a small share; cached input is in total
+		ev := agent.Event{Kind: agent.Usage, Tokens: &total, OutTokens: &out}
+		s.usage = &ev
+		s.mu.Unlock()
+		s.settle(agent.Event{})
+		u := <-s.events
+		if u.Kind != agent.Usage || u.Tokens == nil {
+			t.Fatalf("usage event %+v", u)
+		} else if want := map[int]int{210371: 210371, 225571: 15200, 241021: 15450}[total]; *u.Tokens != want {
+			t.Errorf("total %d: turn tokens %d, want %d", total, *u.Tokens, want)
+		}
+		wantOut := map[int]int{210371: 2103, 225571: 2255 - 2103, 241021: 2410 - 2255}[total]
+		if u.OutTokens == nil || *u.OutTokens != wantOut {
+			t.Errorf("total %d: turn out tokens %v, want %d", total, u.OutTokens, wantOut)
+		}
+		<-s.events // TurnSettled
+	}
+}

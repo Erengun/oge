@@ -53,6 +53,9 @@ func (d runDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	}
 	line += clean(r.Title)
 	var tail []string
+	if t := runUsage(r); t != "" {
+		tail = append(tail, t)
+	}
 	if r.Torn {
 		tail = append(tail, "ledger torn")
 	}
@@ -70,6 +73,30 @@ func (d runDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 		return
 	}
 	fmt.Fprint(w, "   "+line)
+}
+
+// runUsage is a Chat cut's turns, and its tokens only when every turn
+// reported them (never a partial sum): "4 turns · 12.3k out tok".
+func runUsage(r *delivery.Run) string {
+	u := r.Usage
+	if u == nil || u.Turns() == 0 {
+		return ""
+	}
+	t := fmt.Sprintf("%d turn", u.Turns())
+	if u.Turns() != 1 {
+		t += "s"
+	}
+	if u.Reported != u.Turns() {
+		return t
+	}
+	n := float64(u.OutTokens)
+	switch {
+	case u.OutTokens >= 1_000_000:
+		return fmt.Sprintf("%s · %.1fM out tok", t, n/1e6)
+	case u.OutTokens >= 1000:
+		return fmt.Sprintf("%s · %.1fk out tok", t, n/1e3)
+	}
+	return fmt.Sprintf("%s · %d out tok", t, u.OutTokens)
 }
 
 type runPicker struct {

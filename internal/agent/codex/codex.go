@@ -322,6 +322,8 @@ type session struct {
 	items     map[string][]string // a turn's file-change paths, by item id
 	last      string              // the turn's last agent message
 	usage     *agent.Event
+	base      int // the thread's token total when the last turn settled
+	baseOut   int // its output tokens then
 	dead      error
 	why       error // why Öge ended the Session, failing closed
 	closeOnce sync.Once
@@ -531,6 +533,29 @@ func (s *session) settle(ev agent.Event) {
 	s.mu.Lock()
 	was, use := s.inFlight, s.usage
 	s.inFlight, s.turn, s.usage = false, "", nil
+	if use != nil && use.Tokens != nil {
+		// thread/tokenUsage/updated carries the thread's running total;
+		// a turn's usage is the change since the last turn settled.
+		total := *use.Tokens
+		n := total - s.base
+		if n < 0 {
+			n = total
+		}
+		s.base = total
+		cp := *use
+		cp.Tokens = &n
+		cp.OutTokens = nil
+		if use.OutTokens != nil {
+			total := *use.OutTokens
+			o := total - s.baseOut
+			if o < 0 {
+				o = total
+			}
+			s.baseOut = total
+			cp.OutTokens = &o
+		}
+		use = &cp
+	}
 	s.mu.Unlock()
 	if !was {
 		return
@@ -677,7 +702,8 @@ func (s *session) notification(m message) {
 		} `json:"turn"`
 		TokenUsage struct {
 			Total struct {
-				Total int `json:"totalTokens"`
+				Total  int `json:"totalTokens"`
+				Output int `json:"outputTokens"`
 			} `json:"total"`
 			Last struct {
 				Input int `json:"inputTokens"`
@@ -736,6 +762,9 @@ func (s *session) notification(m message) {
 	case m.Method == "thread/tokenUsage/updated":
 		n := p.TokenUsage.Total.Total
 		ev := agent.Event{Kind: agent.Usage, Text: "codex token usage", Tokens: &n}
+		if o := p.TokenUsage.Total.Output; o > 0 {
+			ev.OutTokens = &o
+		}
 		if p.TokenUsage.Window > 0 && p.TokenUsage.Last.Input > 0 {
 			ev.Context = &agent.ContextUse{Used: p.TokenUsage.Last.Input, Window: p.TokenUsage.Window}
 		}

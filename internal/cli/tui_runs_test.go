@@ -296,3 +296,20 @@ func TestLabelEscapedInRunLine(t *testing.T) {
 		t.Errorf("runLine %q", got)
 	}
 }
+
+func TestRunUsageSuffix(t *testing.T) {
+	for _, c := range []struct {
+		u    *run.CutUsage
+		want string
+	}{
+		{nil, ""},
+		{&run.CutUsage{You: 4, Reported: 4, OutTokens: 12345}, "4 turns · 12.3k out tok"},
+		{&run.CutUsage{You: 1, Reported: 1, OutTokens: 800}, "1 turn · 800 out tok"},
+		{&run.CutUsage{You: 3, Feedback: 1, Reported: 2, OutTokens: 900}, "4 turns"}, // partial: no tokens
+		{&run.CutUsage{You: 2}, "2 turns"},
+	} {
+		if got := runUsage(&delivery.Run{Usage: c.u}); got != c.want {
+			t.Errorf("runUsage(%+v) = %q, want %q", c.u, got, c.want)
+		}
+	}
+}

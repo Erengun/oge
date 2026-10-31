@@ -369,7 +369,7 @@ func (r *adviceRecord) fill(ended map[string]any, c *Chat) {
 		}
 	}
 	if u := r.usage; u != nil {
-		ended["usage"] = map[string]any{"cost_usd": u.CostUSD, "tokens": u.Tokens}
+		ended["usage"] = map[string]any{"cost_usd": u.CostUSD, "tokens": u.Tokens, "out_tokens": u.OutTokens}
 	}
 	if s := r.session; s != nil {
 		ended["auth_source"] = s.AuthSource

@@ -56,7 +56,7 @@ func typesOf(t *testing.T, c *Chat) []string {
 func TestChatLogThreeTurns(t *testing.T) {
 	c := openChat(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "one"},
-		{Reply: "two", Writes: []multiturn.File{{Path: "b.go", Content: "package fx\n"}}, Usage: &multiturn.Usage{CostUSD: 0.5, Tokens: 7}},
+		{Reply: "two", Writes: []multiturn.File{{Path: "b.go", Content: "package fx\n"}}, Usage: &multiturn.Usage{CostUSD: 0.5, Tokens: 900, OutTokens: 7}},
 		{Reply: "three"},
 	}}, 0)
 	for _, m := range []string{"msg one", "msg two", "msg three"} {
@@ -79,7 +79,7 @@ func TestChatLogThreeTurns(t *testing.T) {
 	if e["turn"] != float64(2) || !strings.HasPrefix(e["reply"].(string), "two") || e["failure"] != "" {
 		t.Errorf("AttemptEnded 2: %v", e)
 	}
-	if u, _ := e["usage"].(map[string]any); u["cost_usd"] != 0.5 || u["tokens"] != float64(7) {
+	if u, _ := e["usage"].(map[string]any); u["cost_usd"] != 0.5 || u["out_tokens"] != float64(7) {
 		t.Errorf("AttemptEnded 2 usage: %v", e["usage"])
 	}
 	// No output globs here: a new file is Ambiguous.

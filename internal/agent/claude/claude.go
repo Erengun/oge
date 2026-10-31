@@ -1055,6 +1055,10 @@ func (s *session) result(f frame) {
 	if u := f.TokenUsage; u != nil && u.In+u.Out > 0 {
 		n := u.In + u.Out
 		use.Tokens = &n
+		if u.Out > 0 {
+			o := u.Out
+			use.OutTokens = &o
+		}
 	}
 	s.mu.Lock()
 	used, model := s.ctxUsed, s.model
