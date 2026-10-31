@@ -144,6 +144,7 @@ func chatCorpus(tool string) []struct {
 		{"ls -d /", true},
 		{"tree -d /", true},
 		{"rsync -a -t / ./copy", true},
+		{"column -t /", true},
 		// x://.. is a path through a directory named x:.
 		{"cat x://../../../../../../../../../etc/passwd", true},
 		{"git -C x://../../../../../../../.. status", true},
@@ -163,6 +164,7 @@ func chatCorpus(tool string) []struct {
 		{"python3 -c \"import os;print(open(os.path.normpath('/nope/../etc/passwd')).read())\"", true},
 		{"python3 -c \"open('/e' + 'tc/passwd')\"", true},
 		{"awk 'BEGIN{system(\"cat /e\" \"tc/passwd\")}'", true},
+		{"awk -v 'a=/e' 'BEGIN{system(\"cat \" a \"tc/passwd\")}'", true},
 		{"python3 - <<'EOF'\nx = '/e'\nprint(open(x + 'tc/passwd').read())\nEOF", true},
 		{"cat \"/e\"*/passwd", true},
 		{"cat '/e'*'/passwd'", true},

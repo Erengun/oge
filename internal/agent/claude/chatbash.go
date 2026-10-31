@@ -476,7 +476,7 @@ func interpreter(name string) bool {
 var delimiters = map[string][]string{
 	"cut": {"-d", "--delimiter"}, "paste": {"-d", "--delimiters"},
 	"awk": {"-F"}, "gawk": {"-F", "--field-separator"}, "mawk": {"-F"}, "nawk": {"-F"},
-	"sort": {"-t", "--field-separator"}, "join": {"-t"}, "column": {"-s", "-t"},
+	"sort": {"-t", "--field-separator"}, "join": {"-t"}, "column": {"-s"},
 }
 
 // separator reports whether a lone / is a delimiter, not the root: an
@@ -506,12 +506,12 @@ func union(a, b []string) []string {
 // In a word quoted whole, a /-prefixed part is a path only when its
 // first component exists: '/api/v1' and '/^func/' are patterns,
 // '/etc/x' is a path. Nothing is there to read, so long as the part
-// can't be joined to more text: not in a program, not with a $ or a
-// glob, and not where the word holds quotes of its own, as in awk's
+// can't be joined to more text: not in a program, not with a $, a glob
+// or an =, and not where the word holds quotes of its own, as in awk's
 // system("cat /e" "tc/passwd").
 func (p *policy) wordEscapes(cwd string, sw sword, program bool) bool {
 	w := sw.text
-	pattern := sw.quoted && !sw.bare && !sw.dynamic && !program && !strings.ContainsAny(w, "'\"*?[")
+	pattern := sw.quoted && !sw.bare && !sw.dynamic && !program && !strings.ContainsAny(w, "'\"*?[=")
 	parts := strings.FieldsFunc(w, func(r rune) bool { return strings.ContainsRune(" '\"(),;=<>|&`[]", r) })
 	for _, t := range parts {
 		if m := urlRE.FindStringSubmatch(t); m != nil && !hasDotDot(t) {
