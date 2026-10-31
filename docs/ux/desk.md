@@ -147,7 +147,7 @@ Every behaviour above follows a cited principle, listed below. A change that con
 Each slice is small, fakes-first (ADR-0017), and leaves `main` shippable.
 
 0. **Docs:** this spec, the research note, ADR-0024, the glossary, and the D5/D-A3/D-A5 amendments.
-1. **Stop auto-prompting.** Add `[chat] feedback` (gating `SendFeedback` in `cutEnded`) and change the `[advisor] auto` default to `ask`. With one Chat, the "card" is the action row. Show turns and tokens per Accepted cut in the Receipt and `/runs`.
+1. **Stop auto-prompting.** Add `[chat] feedback` (gating `SendFeedback` in `cutEnded`) and change the `[advisor] auto` default to `ask`. With one Chat, the "card" is the action row. Show turns and output tokens per Accepted cut in the Receipt and `/runs` (#346).
 2. **Per-Chat view model** (a refactor with no UX change):
    - Move `home`'s per-Chat fields (`chat`, `turn`, `verify`, `cutGate`, `gateFor`, `stale`, `adv`, `last`, `thread`, transcript, scroll, draft) into a `chatView`.
    - Put the Chat id on every `chat*Msg` and on `verifyTickMsg`.

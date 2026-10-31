@@ -63,7 +63,7 @@ type File struct {
 type Usage struct {
 	CostUSD float64 `json:"cost_usd"`
 	Tokens  int     `json:"tokens,omitempty"`
-	// OutTokens is the output share of Tokens.
+	// OutTokens is the output tokens reported beside Tokens.
 	OutTokens int `json:"out_tokens,omitempty"`
 }
 
