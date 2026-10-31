@@ -2,6 +2,7 @@ package run
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/erengun/oge/internal/ledger"
 )
@@ -11,7 +12,8 @@ import (
 // A snapshot at cut time, so the Receipt and /runs read the Ledger only.
 // Turns are classified from the Chat log's records (TurnStarted's by,
 // AdviceSent), never from text. Tokens is what the agent reported per turn
-// (input and output together), summed only when every counted turn
+// (input and output together; an adapter whose count is cumulative reports
+// the turn's share), summed only when every counted turn
 // reported it: Reported says how many did, and nothing is estimated.
 type CutUsage struct {
 	You      int `json:"you"`
@@ -31,6 +33,7 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 	kind := map[int]string{} // turn → "you", "feedback" or "advice"
 	advice := map[int]bool{}
 	tokens := map[int]*int{}
+	unsent := map[int]bool{} // Send failed: the turn never reached the agent
 	for _, rec := range recs {
 		switch rec.Type {
 		case RecTurnStarted, RecAdviceSent, RecAttemptEnded:
@@ -42,6 +45,7 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 			Turn         int    `json:"turn"`
 			By           string `json:"by"`
 			Consultation string `json:"consultation"`
+			Failure      string `json:"failure"`
 			Usage        *struct {
 				Tokens *int `json:"tokens"`
 			} `json:"usage"`
@@ -62,6 +66,9 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 			}
 		case RecAttemptEnded:
 			// A Consultation's AttemptEnded has no turn: it is not one.
+			if d.Consultation == "" && strings.HasPrefix(d.Failure, "send_failed") {
+				unsent[d.Turn] = true
+			}
 			if d.Consultation == "" && d.Usage != nil && d.Usage.Tokens != nil {
 				tokens[d.Turn] = d.Usage.Tokens
 			}
@@ -69,6 +76,9 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 	}
 	var u CutUsage
 	for n, k := range kind {
+		if unsent[n] {
+			continue // as the cut's Task and send-backs skip it
+		}
 		if advice[n] {
 			k = "advice"
 		}

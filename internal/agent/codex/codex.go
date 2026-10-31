@@ -322,6 +322,7 @@ type session struct {
 	items     map[string][]string // a turn's file-change paths, by item id
 	last      string              // the turn's last agent message
 	usage     *agent.Event
+	base      int // the thread's token total when the last turn settled
 	dead      error
 	why       error // why Öge ended the Session, failing closed
 	closeOnce sync.Once
@@ -531,6 +532,19 @@ func (s *session) settle(ev agent.Event) {
 	s.mu.Lock()
 	was, use := s.inFlight, s.usage
 	s.inFlight, s.turn, s.usage = false, "", nil
+	if use != nil && use.Tokens != nil {
+		// thread/tokenUsage/updated carries the thread's running total;
+		// a turn's usage is the change since the last turn settled.
+		total := *use.Tokens
+		n := total - s.base
+		if n < 0 {
+			n = total
+		}
+		s.base = total
+		cp := *use
+		cp.Tokens = &n
+		use = &cp
+	}
 	s.mu.Unlock()
 	if !was {
 		return

@@ -7,7 +7,7 @@ Run 20261005T090000-a1b2c3 · Fast mode
 | **Task** | ` fix Add ` |
 | **Chat** | Task from 1 turn |
 | | 0 verify cycles · 0 send-backs in this chain |
-| | 2 turns (you 1, feedback 0, advice 1) · 5400 tokens (as the agent reported) |
+| | 2 turns (you 1, feedback 0, advice 1) · 5400 tokens (summed from the agent's per-turn reports) |
 | **Advice** | 3 consultations |
 | | sent at turn 3 (` claude opus `, fresh) · edited by you, sent as your turn |
 | | sent at turn 4 (` claude opus `, fresh, automatic) · a Claim, not checked |

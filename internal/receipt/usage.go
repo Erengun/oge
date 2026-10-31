@@ -46,7 +46,7 @@ func (u *ChatUsage) line() string {
 	s := fmt.Sprintf("%s (you %d, feedback %d, advice %d)", plural(u.Turns, "turn", "turns"), u.You, u.Feedback, u.Advice)
 	switch {
 	case u.Tokens != nil:
-		s += fmt.Sprintf(" · %d tokens (as the agent reported)", *u.Tokens)
+		s += fmt.Sprintf(" · %d tokens (summed from the agent's per-turn reports)", *u.Tokens)
 	case u.ReportedTurns > 0:
 		s += fmt.Sprintf(" · tokens: partial (%d of %d turns reported)", u.ReportedTurns, u.Turns)
 	}

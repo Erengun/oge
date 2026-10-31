@@ -255,7 +255,9 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	if e.advice, err = c.chatAdvice(e.delivered+1, to); err != nil {
 		return nil, err
 	}
-	if e.usage, err = c.chatUsage(e.from, to); err != nil {
+	// The chain's turns, like the Consultations above: the Receipt's
+	// Chat block is one chain, not one cut.
+	if e.usage, err = c.chatUsage(e.delivered+1, to); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
