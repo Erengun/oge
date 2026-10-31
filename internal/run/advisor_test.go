@@ -395,9 +395,10 @@ func TestConsultAutoEmptyAndCancelled(t *testing.T) {
 	}
 }
 
-// [advisor] auto defaults to on and takes on, ask and off.
+// [advisor] auto defaults to ask (an empty or unknown value) and takes on,
+// ask and off.
 func TestAdvisorAutoSetting(t *testing.T) {
-	for in, want := range map[string]string{"": "on", "on": "on", "ask": "ask", "off": "off", "bogus": "on"} {
+	for in, want := range map[string]string{"": "ask", "on": "on", "ask": "ask", "off": "off", "bogus": "ask"} {
 		c := &Chat{advisor: pipeline.AdvisorConfig{Auto: in}}
 		if got := c.AdvisorAuto(); got != want {
 			t.Errorf("auto %q: %q, want %q", in, got, want)

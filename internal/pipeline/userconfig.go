@@ -44,6 +44,35 @@ type UserConfig struct {
 	// Advisor is who gives a Chat's second opinion (docs/ux/advisor.md,
 	// D-A1). Global: what a person pays for a second opinion is theirs.
 	Advisor *AdvisorConfig `toml:"advisor,omitempty"`
+	// Chat is how a Chat treats a failing Check (docs/ux/desk.md, U2).
+	// Global: whether Öge may prompt an agent for them is the person's.
+	Chat *ChatConfig `toml:"chat,omitempty"`
+}
+
+// ChatConfig is the [chat] table.
+type ChatConfig struct {
+	// Feedback is what a failing Check does: "on" sends the agent its
+	// feedback turn at once, "ask" shows `s send back` and waits for the
+	// human, "off" offers nothing. Empty is "ask".
+	Feedback string `toml:"feedback,omitempty"`
+	// FeedbackBudget is how many feedback turns a chain of cuts gets; 0 is
+	// run.FeedbackBudget (3, D5).
+	FeedbackBudget int `toml:"feedback_budget,omitempty"`
+}
+
+// [chat] feedback values.
+const (
+	ChatFeedbackOn  = "on"
+	ChatFeedbackAsk = "ask"
+	ChatFeedbackOff = "off"
+)
+
+// ChatConfig returns the [chat] settings, the zero value when there are none.
+func (c *UserConfig) ChatConfig() ChatConfig {
+	if c == nil || c.Chat == nil {
+		return ChatConfig{}
+	}
+	return *c.Chat
 }
 
 // AdvisorConfig is the [advisor] table. Each key falls back when empty:
@@ -55,7 +84,7 @@ type AdvisorConfig struct {
 	Effort string `toml:"effort,omitempty"`
 	// Auto is what happens when a chain's feedback budget is spent (D-A3):
 	// "on" consults and sends the advice, "ask" shows it first, "off" never
-	// consults. Empty is "on".
+	// consults. Empty is "ask".
 	Auto string `toml:"auto,omitempty"`
 }
 
@@ -214,6 +243,14 @@ func (c *UserConfig) validate() []Problem {
 			if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {
 				add("advisor."+field, "looks like a credential; Öge never takes credentials in config (ADR-0006)")
 			}
+		}
+	}
+	if ch := c.Chat; ch != nil {
+		if ch.Feedback != "" && !oneOf(ch.Feedback, ChatFeedbackOn, ChatFeedbackAsk, ChatFeedbackOff) {
+			add("chat.feedback", "must be one of ask, on, off")
+		}
+		if ch.FeedbackBudget < 0 {
+			add("chat.feedback_budget", "must be 0 or more")
 		}
 	}
 	for _, name := range sortedKeys(c.Profiles) {

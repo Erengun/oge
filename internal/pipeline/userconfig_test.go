@@ -424,6 +424,19 @@ func TestLoadUserConfigAdvisor(t *testing.T) {
 	}
 }
 
+func TestLoadUserConfigChat(t *testing.T) {
+	for _, v := range []string{"ask", "on", "off"} {
+		if _, probs := LoadUserConfig([]byte("schema = 1\n[chat]\nfeedback = \"" + v + "\"\nfeedback_budget = 2\n")); len(probs) != 0 {
+			t.Errorf("feedback %q: %v", v, probs)
+		}
+	}
+	for _, bad := range []string{"feedback = \"of\"", "feedback = \"On\"", "feedback_budget = -1"} {
+		if _, probs := LoadUserConfig([]byte("schema = 1\n[chat]\n" + bad + "\n")); len(probs) != 1 || !strings.HasPrefix(probs[0].Key, "chat.feedback") {
+			t.Errorf("%s gave %v", bad, probs)
+		}
+	}
+}
+
 func TestSaveUserDefaultsKeepsAndSetsTheme(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "oge", "config.toml")
 	root := t.TempDir()

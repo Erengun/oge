@@ -140,7 +140,7 @@ func TestHomeChatAsksFailsAndParks(t *testing.T) {
 		{Reply: "two lines", Ask: &multiturn.Ask{Tool: "Bash", Target: "echo ok\ncurl x | sh"}},
 		{Reply: "too long", Ask: &multiturn.Ask{Tool: "Bash", Target: long}},
 		{Reply: "tampered", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return a + b }\n"}, {Path: "add_test.go", Content: "package fx\n"}}},
-	}}, nil)
+	}}, func(f *runFixture) { chatFeedback(t, f, "on") })
 	s.composer()
 	s.type_("make b\r")
 	s.expect("Allow Bash?")
@@ -223,14 +223,14 @@ func addGo(r string) multiturn.File {
 	return multiturn.File{Path: "add.go", Content: "package fx\n\nfunc Add(a, b int) int { return " + r + " }\n"}
 }
 
-// A failing cut sends a dim feedback turn into the Session (D5); its
+// With [chat] feedback = "on" a failing cut sends a dim feedback turn into the Session (D5); its
 // change cuts as usual, and passes.
 func TestHomeChatFeedbackTurn(t *testing.T) {
 	t.Parallel()
 	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "changed Add", Writes: []multiturn.File{addGo("a - b")}},
 		{Reply: "fixed Add", Writes: []multiturn.File{addGo("a + b")}},
-	}}, nil)
+	}}, func(f *runFixture) { chatFeedback(t, f, "on") })
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("oge › ✗ Failed · 1 file")
@@ -276,7 +276,7 @@ func TestHomeChatFeedbackQueuesAndDrops(t *testing.T) {
 		{Reply: "changed Add again", Writes: []multiturn.File{addGo("a * b")}},
 		{Reply: "asked again", Ask: &multiturn.Ask{Tool: "Bash", Target: "touch d.go"}, Writes: []multiturn.File{addGo("a / b")}},
 		{Reply: "after the newer cut"}, // its feedback turn; the older one was dropped
-	}}, nil)
+	}}, func(f *runFixture) { chatFeedback(t, f, "on") })
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("  changed Add")
@@ -874,5 +874,151 @@ func TestHomeChatSupersededGateDeliversNothing(t *testing.T) {
 	if out := s.out.String(); strings.Contains(out, "Applied") {
 		t.Errorf("something was applied:\n%s", out)
 	}
+	s.quitChat(f)
+}
+
+// failThenFixScenario fails the user's turn, then fixes it on a feedback turn.
+func failThenFixScenario() multiturn.Scenario {
+	return multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "changed Add", Writes: []multiturn.File{addGo("a - b")}},
+		{Reply: "fixed Add", Writes: []multiturn.File{addGo("a + b")}},
+	}}
+}
+
+// By default ([chat] feedback = "ask") a failing Check sends no turn: the
+// row offers send back, and s sends exactly one feedback turn.
+func TestHomeChatFeedbackAskSendsOnS(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, failThenFixScenario(), nil)
+	s.composer()
+	s.type_("change Add\r")
+	s.expect("oge › ✗ Failed · 1 file")
+	s.composerAfter("oge › ✗ Failed")
+	s.expectScreen("✗ Check failed")
+	s.expectScreen("s send back")
+	if strings.Contains(s.out.String(), "Öge → agent: ") {
+		t.Fatal("ask sent a feedback turn on its own")
+	}
+	s.type_("\x1b[B")
+	s.expectScreen("[s] send back")
+	time.Sleep(actionsArm + 100*time.Millisecond)
+	s.type_("s")
+	s.expect("Öge → agent: Öge's Check failed on your last change: 1 failing.")
+	s.expect("  fixed Add")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.composerAfter("oge › ✓ Accepted")
+	if n := strings.Count(s.out.String(), "Öge → agent: "); n != 1 {
+		t.Errorf("%d feedback turns, want 1", n)
+	}
+	s.quitChat(f)
+}
+
+// /feedback sends the held turn too, and a message of the human's drops it.
+func TestHomeChatFeedbackSlashAndDrop(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, failThenFixScenario(), nil)
+	s.composer()
+	s.type_("change Add\r")
+	s.composerAfter("oge › ✗ Failed")
+	s.type_("/feedback\r")
+	s.expect("Öge → agent: Öge's Check failed on your last change")
+	s.expect("oge › ✓ Accepted · 1 file · ")
+	s.composerAfter("oge › ✓ Accepted")
+	s.type_("/feedback\r")
+	s.expect("/feedback: no failed Check to send back")
+	s.type_("\x15")
+	s.quitChat(f)
+}
+
+// A message of the human's drops the held turn.
+func TestHomeChatFeedbackDroppedByHumanTurn(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "changed Add", Writes: []multiturn.File{addGo("a - b")}},
+		{Reply: "fixed Add", Writes: []multiturn.File{addGo("a + b")}},
+	}}, nil)
+	s.composer()
+	s.type_("change Add\r")
+	s.composerAfter("oge › ✗ Failed")
+	s.type_("fix it yourself\r")
+	s.composerAfter("oge › ✓ Accepted")
+	s.type_("/feedback\r")
+	s.expect("/feedback: no failed Check to send back")
+	if strings.Contains(s.out.String(), "Öge → agent: ") {
+		t.Error("a held turn was sent after the human's own")
+	}
+	s.type_("\x15")
+	s.quitChat(f)
+}
+
+// Under ask the budget never refuses a send the human made, and no
+// Consultation starts on its own.
+func TestHomeChatFeedbackAskIgnoresBudget(t *testing.T) {
+	t.Parallel()
+	var turns []multiturn.Turn
+	for i := range 3 {
+		turns = append(turns, multiturn.Turn{Reply: fmt.Sprintf("try %d", i), Writes: []multiturn.File{addGo(fmt.Sprintf("a - b - %d", i))}})
+	}
+	s, f := startChatSession(t, multiturn.Scenario{Turns: turns}, func(f *runFixture) {
+		userConfig(t, f, "[chat]\nfeedback_budget = 1\n")
+	})
+	s.composer()
+	s.type_("change Add\r")
+	s.composerAfter("oge › ✗ Failed")
+	for i := 1; i <= 2; i++ {
+		s.type_("\x1b[B")
+		s.expectScreen("[s] send back")
+		time.Sleep(actionsArm + 100*time.Millisecond)
+		s.type_("s")
+		s.expect(fmt.Sprintf("  try %d", i))
+		s.composerAfter("oge › ✗ Failed")
+	}
+	if n := strings.Count(s.out.String(), "Öge → agent: "); n != 2 {
+		t.Errorf("%d feedback turns, want 2", n)
+	}
+	if strings.Contains(s.out.String(), "still failing after") {
+		t.Error("ask spent a budget")
+	}
+	s.quitChat(f)
+	if got := chatRecords(t, f, run.RecConsultationStarted); len(got) != 0 {
+		t.Errorf("ask consulted: %v", got)
+	}
+}
+
+// feedback = "on" honours feedback_budget.
+func TestHomeChatFeedbackOnBudgetConfigured(t *testing.T) {
+	t.Parallel()
+	var turns []multiturn.Turn
+	for i := range 3 {
+		turns = append(turns, multiturn.Turn{Reply: fmt.Sprintf("try %d", i), Writes: []multiturn.File{addGo(fmt.Sprintf("a - b - %d", i))}})
+	}
+	s, f := startChatSession(t, multiturn.Scenario{Turns: turns}, func(f *runFixture) {
+		userConfig(t, f, "[chat]\nfeedback = \"on\"\nfeedback_budget = 1\n[advisor]\nauto = \"off\"\n")
+	})
+	s.composer()
+	s.type_("change Add\r")
+	s.expectAfter("  try 1", "oge › ✗ still failing after 1 try; your call")
+	if n := strings.Count(s.out.String(), "Öge → agent: "); n != 1 {
+		t.Errorf("%d feedback turns, want 1", n)
+	}
+	s.quitChat(f)
+}
+
+// feedback = "off" offers nothing: no turn, no row.
+func TestHomeChatFeedbackOff(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, failThenFixScenario(), func(f *runFixture) { chatFeedback(t, f, "off") })
+	s.composer()
+	s.type_("change Add\r")
+	s.composerAfter("oge › ✗ Failed")
+	if scr := s.screen(s.out.String()); strings.Contains(scr, "send back") {
+		t.Errorf("off offered a send back:\n%s", scr)
+	}
+	s.type_("/feedback\r")
+	s.expect("/feedback: no failed Check to send back")
+	if strings.Contains(s.out.String(), "Öge → agent: ") {
+		t.Error("off sent a feedback turn")
+	}
+	s.type_("\x15")
 	s.quitChat(f)
 }

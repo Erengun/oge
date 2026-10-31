@@ -92,7 +92,7 @@ func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 		open: func(res *resolved) (*run.Chat, error) {
 			return run.OpenChat(context.Background(), run.ChatParams{Repo: root, Frozen: res.frozen, Agents: env.Agents,
 				State: state, Getenv: env.Getenv, Config: res.cfgData, CacheSeedTemplate: env.CacheSeedTemplate,
-				Advisor: userForNotify(env).AdvisorConfig()})
+				Advisor: userForNotify(env).AdvisorConfig(), Feedback: userForNotify(env).ChatConfig()})
 		},
 		cut: func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port, observe func(run.Event)) (*run.Result, error) {
 			return c.Cut(ctx, run.CutParams{Frozen: f, Version: env.Version, Gates: gates, Observe: observe})

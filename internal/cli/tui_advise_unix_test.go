@@ -365,15 +365,29 @@ func TestHomeChatAdviseOwnTurnDismisses(t *testing.T) {
 }
 
 // advisorAuto writes a user config with [advisor] auto = mode, in a config
-// home of this fixture's own.
+// home of this fixture's own. It also turns [chat] feedback on: these
+// tests are about the chain the automatic feedback turns make.
 func advisorAuto(t *testing.T, f *runFixture, mode string) {
+	t.Helper()
+	userConfig(t, f, "[chat]\nfeedback = \"on\"\n[advisor]\nauto = \""+mode+"\"\n")
+}
+
+// chatFeedback writes a user config with [chat] feedback = mode.
+func chatFeedback(t *testing.T, f *runFixture, mode string) {
+	t.Helper()
+	userConfig(t, f, "[chat]\nfeedback = \""+mode+"\"\n")
+}
+
+// userConfig writes body as the user config, in a config home of this
+// fixture's own.
+func userConfig(t *testing.T, f *runFixture, body string) {
 	t.Helper()
 	f.setenv("XDG_CONFIG_HOME", t.TempDir())
 	path := pipeline.UserConfigPath(f.getenv())
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("schema = 1\n[advisor]\nauto = \""+mode+"\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("schema = 1\n"+body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -393,7 +407,7 @@ func autoScenario() multiturn.Scenario {
 // cap used and as an AdviceSent by oge.
 func TestHomeChatAutoConsultSendsAdvice(t *testing.T) {
 	t.Parallel()
-	s, f := startAdvisedSession(t, autoScenario(), adviceScript)
+	s, f := startAdvisedSession(t, autoScenario(), adviceScript, func(f *runFixture) { advisorAuto(t, f, "on") })
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("still failing after 3 tries; asking the advisor")
@@ -437,7 +451,7 @@ func TestHomeChatAutoConsultAskWaitsForTheUser(t *testing.T) {
 // An advisor that gives nothing sends nothing: the chain stops as it did.
 func TestHomeChatAutoConsultEmptyStopsTheChain(t *testing.T) {
 	t.Parallel()
-	s, f := startAdvisedSession(t, autoScenario(), "true\n")
+	s, f := startAdvisedSession(t, autoScenario(), "true\n", func(f *runFixture) { advisorAuto(t, f, "on") })
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("still failing · your call")
@@ -451,7 +465,7 @@ func TestHomeChatAutoConsultEmptyStopsTheChain(t *testing.T) {
 // What the user types while the advisor works survives the auto-send.
 func TestHomeChatAutoConsultKeepsTheDraft(t *testing.T) {
 	t.Parallel()
-	s, f := startAdvisedSession(t, autoScenario(), "sleep 2\n"+adviceScript)
+	s, f := startAdvisedSession(t, autoScenario(), "sleep 2\n"+adviceScript, func(f *runFixture) { advisorAuto(t, f, "on") })
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("still failing after 3 tries; asking the advisor")
@@ -472,7 +486,7 @@ func TestHomeChatAutoConsultSpentSaysYourCall(t *testing.T) {
 	t.Parallel()
 	sc := autoScenario()
 	sc.Turns[len(sc.Turns)-1] = multiturn.Turn{Reply: "took the advice", Writes: []multiturn.File{addGo("a - b - 9")}}
-	s, f := startAdvisedSession(t, sc, adviceScript)
+	s, f := startAdvisedSession(t, sc, adviceScript, func(f *runFixture) { advisorAuto(t, f, "on") })
 	s.composer()
 	s.type_("change Add\r")
 	s.expect("  took the advice")

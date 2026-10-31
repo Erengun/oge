@@ -741,6 +741,14 @@ func TestHomeDeliveryNeedsAnExplicitAct(t *testing.T) {
 	if h.actions || h.comp.text() != "x" {
 		t.Fatalf("typing on the row: focused %v, text %q", h.actions, h.comp.text())
 	}
+	// s with no failed Check to send back is text too.
+	h.comp = newComposer()
+	key("down")
+	at = at.Add(actionsArm)
+	key("s")
+	if h.actions || h.comp.text() != "s" {
+		t.Fatalf("s with nothing held: focused %v, text %q", h.actions, h.comp.text())
+	}
 	h.comp.set("/apply")
 	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if applied != 2 || !h.comp.empty() || h.run != nil {

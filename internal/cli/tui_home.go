@@ -454,6 +454,10 @@ type home struct {
 	uncheckedChanged int // largest known deferred or cancelled change count
 	// stale is the delivery waiting on its stale-edit choice.
 	stale *staleAsk
+	// pendingFB is a failing cut's feedback turn, held under [chat] feedback
+	// = "ask" until the human sends it back (s or /feedback). A newer cut or
+	// a new turn of theirs drops it.
+	pendingFB *pendingFeedback
 	// cutGate is the newest cut's Gate, open at /apply or /branch;
 	// gateFor is that delivery, made once the cut is Accepted.
 	cutGate *gateState
@@ -948,7 +952,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return h, nil
 			}
-			if h.last != nil && h.composerFree() {
+			if (h.last != nil || h.pendingFB != nil) && h.composerFree() {
 				h.actions, h.actionsAt = true, h.clock()
 				return h, nil
 			}
@@ -1120,6 +1124,16 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc", "up", "ctrl+c":
 		h.actions = false
 		return h, nil
+	case "s":
+		if h.pendingFB == nil {
+			break // nothing to send back: an ordinary key
+		}
+		if h.clock().Sub(h.actionsAt) < actionsArm || !h.composerFree() {
+			return h, nil // typed ahead, before the row could be seen
+		}
+		h.actions = false
+		cmd, _ := h.sendBack()
+		return h, cmd
 	case "a", "b", "d", "r":
 		if h.clock().Sub(h.actionsAt) < actionsArm || !h.composerFree() || h.last == nil {
 			return h, nil // typed ahead, before the row could be seen
@@ -1336,7 +1350,14 @@ func (h *home) render() (string, int, int) {
 	}
 	switch {
 	case h.actions:
-		lines = append(lines, " "+st.bold("[a] apply  [d] diff  [r] receipt  [b] branch")+"   "+st.dim("esc back"))
+		keys := "[a] apply  [d] diff  [r] receipt  [b] branch"
+		if h.pendingFB != nil {
+			keys += "  [s] send back"
+		}
+		lines = append(lines, " "+st.bold(keys)+"   "+st.dim("esc back"))
+		top++
+	case h.pendingFB != nil && h.turn == nil && h.verify == nil:
+		lines = append(lines, " "+st.dim("✗ Check failed · ↓ then s send back · /feedback · /advise"))
 		top++
 	case h.resetting:
 		lines = append(lines, " "+st.dim("starting a new Chat…"))
