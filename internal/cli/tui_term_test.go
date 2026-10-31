@@ -37,6 +37,7 @@ type vt struct {
 	alt      *vt             // the main screen, saved while the alternate one (?1049) is shown
 	margin   [2]int          // DECSTBM: first and last scrolling row of the screen, 1-based (0: unset)
 	lastRune rune            // for REP
+	insert   bool            // IRM (CSI 4 h): a printed rune pushes the rest of the row right
 }
 
 // cols is the screen width, 80 unless set.
@@ -204,6 +205,15 @@ func (t *vt) put(r rune) {
 	l := t.line()
 	// Cells past the line's end were erased: so are their styles.
 	st := t.styles[t.row][:min(len(t.styles[t.row]), len(l))]
+	if t.insert && t.col < len(l) {
+		// The cells from the cursor on move right; the last column's falls off.
+		l = append(l[:t.col:t.col], append([]rune{' '}, l[t.col:]...)...)
+		l = l[:min(len(l), t.cols())]
+		if t.col < len(st) {
+			st = append(st[:t.col:t.col], append([]uv.Style{{}}, st[t.col:]...)...)
+			st = st[:min(len(st), len(l))]
+		}
+	}
 	for len(l) <= t.col {
 		l = append(l, ' ')
 	}
@@ -283,6 +293,13 @@ func (t *vt) csi(params string, final rune) {
 			t.modes[m] = final
 			if m == "1049" || m == "1047" || m == "47" {
 				t.altScreen(final == 'h')
+			}
+		}
+		return
+	case !strings.HasPrefix(params, "?") && (final == 'h' || final == 'l'): // SM, RM
+		for _, m := range strings.Split(params, ";") {
+			if m == "4" { // IRM: insert, not replace
+				t.insert = final == 'h'
 			}
 		}
 		return
@@ -606,6 +623,26 @@ func TestVTInsertLinesAfterAWrappedLine(t *testing.T) {
 	}
 	if want := "\n\n" + strings.Repeat("a", 85) + "\nz\n"; s.String() != want {
 		t.Errorf("String() = %q", s.String())
+	}
+}
+
+// The renderer types into the middle of a row in insert mode (IRM): the
+// rest of the row moves right instead of being written over. These are the
+// bytes a CI run drew for the Ctrl+R search line as "zq7" was typed; read
+// as overwrites, they showed "'zq7'add tests zq7 esc cancel".
+func TestVTInsertModePushesTheRowRight(t *testing.T) {
+	var s vt
+	s.write([]byte(" (reverse-i-search)'':    enter use · esc cancel" +
+		"\x1b[1;21Hz': \x1b[4hadd tests zq7 \x1b[4l" +
+		"\x1b[1;22Hq\x1b[4h7'\x1b[4l"))
+	if got, want := s.String(), " (reverse-i-search)'zq7': add tests zq7   enter use · esc cancel\n"; got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	// Off again, a rune writes over the cell; on, the last column's falls off.
+	s = vt{width: 6}
+	s.write([]byte("abcdef\r\x1b[4hX\x1b[4lY"))
+	if got := s.String(); got != "XYbcde\n" {
+		t.Errorf("got %q", got)
 	}
 }
 
