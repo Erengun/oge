@@ -277,9 +277,10 @@ func (p *policy) escapes(cmd string) bool {
 				return true
 			}
 		}
+		h := head(c.words)
 		for _, cwd := range cwds {
 			for i, w := range c.words {
-				if i > 0 && separator(c.words[0].text, c.words[i-1].text, w.text) {
+				if i > h && h < len(c.words) && separator(c.words[h].text, c.words[i-1].text, w.text) {
 					continue
 				}
 				if p.wordEscapes(cwd, w) {
@@ -288,21 +289,22 @@ func (p *policy) escapes(cmd string) bool {
 			}
 		}
 		for j, w := range c.words {
-			// An interpreter heads the command, or follows a wrapper
-			// (env bash -c, xargs sh -c, find -exec sh -c).
+			// An interpreter heads the command, or sits further in it
+			// (xargs sh -c, find -exec sh -c): there, only the flag right
+			// after it counts.
 			flags := inline[filepath.Base(w.text)]
 			if flags == nil {
 				continue
 			}
 			for i := j + 1; i < len(c.words); i++ {
 				if !oneOf(c.words[i].text, flags) {
-					if j > 0 {
-						break // only the flag right after it counts
+					if j != h {
+						break
 					}
 					continue
 				}
 				if i+1 >= len(c.words) {
-					if j > 0 {
+					if j != h {
 						break
 					}
 					return true // a flag with no program
@@ -310,12 +312,11 @@ func (p *policy) escapes(cmd string) bool {
 				if prog := c.words[i+1]; prog.dynamic || p.escapes(prog.text) {
 					return true
 				}
-				if j > 0 {
+				if j != h {
 					break
 				}
 			}
 		}
-		h := head(c.words)
 		if h >= len(c.words) {
 			continue
 		}
