@@ -143,6 +143,7 @@ All create one isolated worktree per agent/task, run the user's own CLIs on thei
 | [superset-sh/superset](https://github.com/superset-sh/superset) | custom (NOASSERTION) | 14,864 | desktop-v1.35.0 (2026-10-02) | "Run any agent with your own subscription"; terminals + diff + browser |
 | [imbue-ai/sculptor](https://github.com/imbue-ai/sculptor) | MIT | 235 | v0.48.0 (2026-09-21) | experimental; container backend |
 | Conductor ([docs](https://www.conductor.build/docs/)) | closed, macOS | – | – | "run Claude Code, Codex, Cursor, and OpenCode in parallel"; per-task workspace + review path |
+| [herdrdev/herdr](https://github.com/herdrdev/herdr) | Apache-2.0 | 47,107 | v0.9.5 (2026-10-14) | *Added 2026-10-31.* Terminal workspace with a background server; agent state (`working`/`blocked`/`done`/`idle`) from screen manifests or self-reports; socket API for agents. See [herdr-and-attention.md](herdr-and-attention.md) |
 
 ### Substrates and status changes worth knowing
 - **coder/agentapi: deprecated and archived.** [coder/agentapi](https://github.com/coder/agentapi), MIT, archived (last push 2026-09-13; last release v0.12.2 2026-05-27). README: "AgentAPI is deprecated and no longer maintained." It was a PTY/terminal-emulation HTTP wrapper.

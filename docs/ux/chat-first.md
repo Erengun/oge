@@ -103,11 +103,11 @@ One-shot `oge "task"`, `oge run` and `oge resume` are unchanged.
 | # | Decision |
 |---|---|
 | Scope | The redesign blocks M1; #114 is re-run on the Chat UX. |
-| D1 | **Implementer Session reuse** is the default in bare `oge`. It is disclosed in the manifest and the Receipt. Reusing a verifier or QA Session is a hard error. `oge "task"` stays fresh. |
+| D1 | **Implementer Session reuse** is the default in bare `oge`. It is disclosed in the manifest and the Receipt. Reusing a verifier or QA Session is a hard error. `oge "task"` stays fresh. *Amended 2026-10-31 (ADR-0024): the home can host several Chats (a Desk); each keeps its own Session.* |
 | D2 | **Permissions** use Claude Code's auto mode, with Öge's hard denies on top. Other agents chat under their Launch profile (amended 2026-10-19; see Permissions above). |
 | D3 | **Verification runs in the background:** a newer cut cancels stale verification, and Verdicts are cached. |
 | D4 | **Cuts are automatic:** Öge cuts settled Promoted or Ambiguous changes once queued ordinary follow-ups finish, including when the final follow-up changes nothing. |
-| D5 | **A failed Check** gets an automatic feedback turn (a count plus ids), with a budget of 3 per chain. |
+| D5 | **A failed Check** gets an automatic feedback turn (a count plus ids), with a budget of 3 per chain. *Amended 2026-10-31 (ADR-0024): a failed Check asks by default (`[chat] feedback = ask`): send back, advise or open. The automatic turn is opt-in (`on`).* |
 | D6 | **Held-out sampling** is disclosed (`held_out_viewed` and the cycle count), with no cap yet. |
 | D7 | **The Task** is the user's turns since the last delivery, verbatim and hashed. It is never summarized by the agent. |
 | D8 | **Interactive `oge` exits 0** on a clean quit, which is not a trust statement. Only the one-shot commands carry the ADR-0015 contract. |

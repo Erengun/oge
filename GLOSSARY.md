@@ -1,6 +1,6 @@
 # Öge
 
-Öge is a multi-agent engineering harness that coordinates independent roles across native coding agents and accepts work only on evidence it gathers itself.
+Öge is the supervision layer for coding agents: it runs the native agents you already use, routes only real decisions to you, and accepts work only on evidence it gathers itself.
 
 ## Language
 
@@ -95,6 +95,14 @@ _Avoid_: Thread, conversation, agent session id (the agent's own id is mapped, n
 **Chat**:
 What bare `oge` opens: one Snapshot, one implementer Workspace and one long-lived implementer Session that the user talks to, a **turn** at a time. A Chat hosts Runs; it isn't one (docs/ux/chat-first.md).
 _Avoid_: Conversation, thread, chat session (a Session is one agent conversation, and a Chat holds one)
+
+**Desk**:
+What bare `oge` opens once it hosts more than one Chat: several independent Chats in one full-screen home, a rail showing each one's state, and one Inbox (docs/ux/desk.md, ADR-0024). Chats on a Desk never talk to each other.
+_Avoid_: Fleet, swarm, dashboard, workspace (a Workspace is an agent's directory)
+
+**Inbox**:
+The Desk's queue of things waiting for the human (open Gates and asks, failed Checks, Accepted cuts not yet seen), shown one card at a time with the Evidence. Öge orders it with a fixed table of attention levels, never with a model.
+_Avoid_: Notifications, feed, queue (a queued message is a turn waiting to be sent)
 
 **Turn**:
 One user message in a Chat: one `Send` to the implementer Session, which ends when the agent's reply settles. Messages sent during a turn queue; Esc interrupts it without ending the Session.
