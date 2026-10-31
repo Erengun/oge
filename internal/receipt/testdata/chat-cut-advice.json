@@ -46,7 +46,14 @@
         "model": "opus",
         "advice": "sha256:cc"
       }
-    ]
+    ],
+    "usage": {
+      "turns": 2,
+      "you": 1,
+      "feedback": 0,
+      "advice": 1,
+      "tokens": 5400
+    }
   },
   "outcome": "Accepted",
   "headline": "✓ Accepted",
@@ -121,5 +128,5 @@
     "Checks ran unsandboxed; network not blocked; no isolation against deliberately hostile Candidate code running with your privileges"
   ],
   "deliveries": [],
-  "ledger_head": "8f6169b3bd2c350bdc1ead1ec95ea4078049c7ca613d50644ee4cd5c53986af3"
+  "ledger_head": "3f7785cbe6ef3f4bd72ea7da16da214dee78b67d768e6e65a3eac6b28a2b7246"
 }

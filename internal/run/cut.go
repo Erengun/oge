@@ -100,6 +100,7 @@ type cutEntry struct {
 	refers           bool
 	heldOutViewed    int
 	advice           CutAdvice
+	usage            CutUsage
 	verifies, sendBk int               // over the Task's turns
 	tamper           []json.RawMessage // the Task's turns' TamperEvent records, verbatim
 	prep             chatPrep
@@ -252,6 +253,9 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	// The Consultations of the Task's turns, as of this cut (the Tamper
 	// window): the Receipt reads them from the Ledger, not the Chat log.
 	if e.advice, err = c.chatAdvice(e.delivered+1, to); err != nil {
+		return nil, err
+	}
+	if e.usage, err = c.chatUsage(e.from, to); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
@@ -433,6 +437,7 @@ func (e *cutEntry) addTo(begun map[string]any) {
 	if !e.advice.empty() {
 		begun["advice"] = e.advice
 	}
+	begun["usage"] = e.usage
 	if e.follows != "" {
 		begun["follows"] = e.follows
 	}

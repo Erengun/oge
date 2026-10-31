@@ -63,6 +63,9 @@ type ChatCut struct {
 	Dismissed []Dismissed `json:"dismissed_consultations,omitempty"`
 	// Shown are ask Consultations whose advice reached you, not the agent.
 	Shown []Shown `json:"shown_consultations,omitempty"`
+	// Usage is the cut's turns by kind and the tokens the agent reported
+	// for them; nil for a Ledger that recorded none.
+	Usage *ChatUsage `json:"usage,omitempty"`
 }
 
 // Receipt is the model every rendering reads. Its JSON form is schema 1.
@@ -497,6 +500,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				TaskTurns                              []json.RawMessage `json:"task_turns"`
 				RefersToAgentText                      bool              `json:"refers_to_agent_text"`
 				Advice                                 run.CutAdvice     `json:"advice"`
+				Usage                                  *run.CutUsage     `json:"usage"`
 				HeldOutViewed                          int               `json:"held_out_viewed"`
 				Cycles                                 struct {
 					Verify   int `json:"verify"`
@@ -511,6 +515,7 @@ func FromRecords(recs []ledger.Record, head string, src Source) *Receipt {
 				r.Chat = &ChatCut{ID: clean(d.Chat), TaskTurns: len(d.TaskTurns), RefersToAgentText: d.RefersToAgentText,
 					HeldOutViewed: d.HeldOutViewed, VerifyCycles: d.Cycles.Verify, SendBackCycles: d.Cycles.SendBack}
 				r.Chat.Advice, r.Chat.Dismissed, r.Chat.Shown = cutAdvice(d.Advice)
+				r.Chat.Usage = chatUsage(d.Usage)
 			}
 			if b, err := src.Blob(d.Task); err == nil {
 				r.Task = clean(task.Parse(string(b)).Title)
