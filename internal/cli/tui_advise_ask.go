@@ -39,17 +39,19 @@ type askAdvice struct {
 // seq numbers the consult, so a tick of an earlier one (Esc, then the key
 // again on the same question) does not start a second chain.
 type askAdviceTickMsg struct {
-	ask *agent.Ask
-	q   int
-	seq int
+	view *chatView
+	ask  *agent.Ask
+	q    int
+	seq  int
 }
 
-func askAdviceTick(a *agent.Ask, q, seq int) tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return askAdviceTickMsg{a, q, seq} })
+func askAdviceTick(view *chatView, a *agent.Ask, q, seq int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return askAdviceTickMsg{view, a, q, seq} })
 }
 
 // askAdviceMsg is the end of the Consultation on question q of ask.
 type askAdviceMsg struct {
+	view   *chatView
 	ask    *agent.Ask
 	q      int
 	seq    int // the consult it ends: an earlier one lands after a newer began
@@ -124,14 +126,14 @@ func (h *home) askAdviceKey(a *agent.Ask) (cmd tea.Cmd, ok bool) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	h.advSeq++
-	seq := h.advSeq
+	seq, view := h.advSeq, h.chatView
 	t.askAdv = &askAdvice{ask: a, q: q, seq: seq, cancel: cancel, started: h.clock(), running: true}
 	question := askAdviceQuestion(a.Questions[q])
 	consult := func() tea.Msg {
 		adv, err := c.ConsultAsk(ctx, question)
-		return askAdviceMsg{ask: a, q: q, seq: seq, advice: adv, err: err}
+		return askAdviceMsg{view: view, ask: a, q: q, seq: seq, advice: adv, err: err}
 	}
-	return tea.Batch(consult, askAdviceTick(a, q, seq)), true
+	return tea.Batch(consult, askAdviceTick(view, a, q, seq)), true
 }
 
 // askAdviceLanded takes a Consultation's end. It is discarded when its ask

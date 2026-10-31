@@ -42,9 +42,11 @@ func (h *home) setSetup(f *pipeline.Frozen) {
 	h.side.frozen = f
 }
 
-// sideChangesMsg is a cut's files with their counts; id is the cut's Run, so
-// a read still in flight when /new or a newer cut came is dropped.
+// sideChangesMsg is a cut's files with their counts, for view's sidebar;
+// id is the cut's Run, so a read still in flight when /new or a newer cut
+// came is dropped.
 type sideChangesMsg struct {
+	view  *chatView
 	id    string
 	files []diffFile
 }
@@ -54,13 +56,13 @@ func (h *home) sideChanges() tea.Cmd {
 	if !h.full || h.last == nil || h.last.patch == nil {
 		return nil
 	}
-	patch, id := h.last.patch, h.last.id
+	patch, id, view := h.last.patch, h.last.id, h.chatView
 	return func() tea.Msg {
 		b, err := patch()
 		if err != nil {
 			return nil
 		}
-		return sideChangesMsg{id, splitPatch(cleanLines(string(b)))}
+		return sideChangesMsg{view, id, splitPatch(cleanLines(string(b)))}
 	}
 }
 

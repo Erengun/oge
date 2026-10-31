@@ -388,21 +388,16 @@ type home struct {
 	width, height int
 	// full: the home draws on the alternate screen (tui_fullscreen.go).
 	// width and height are then the main column's; termW and termH are the
-	// terminal's. tr is the transcript, toast the notice passing over it.
+	// terminal's. toast is the notice passing over the transcript.
 	full         bool
 	termW, termH int
 	sidebarOff   bool
-	steps        []*toolStep // the transcript's tool steps, to hang a result on
-	tr           *transcript
 	toast        *toast
 	toastSeq     int
-	side         sideState
 	run          *model    // nil while composing
 	notify       *notifier // the session's alerts; nil when silent (#170)
-	// scroll is what was printed above the program, for /export (#168);
-	// exportDir is where it goes ("" is the working directory); tmux wraps
-	// /copy's OSC 52.
-	scroll    []string
+	// exportDir is where /export goes ("" is the working directory); tmux
+	// wraps /copy's OSC 52.
 	exportDir string
 	tmux      bool
 	// shown is the rows of the last frame View handed the renderer: the
@@ -416,58 +411,18 @@ type home struct {
 	// after takes the Run's end: it returns the summary to print and, after
 	// an Accepted Run, what can take it. stop ends the session (Öge failed).
 	after func(ended) (text string, last *lastRun, stop bool)
-	// thread is the Run the next message continues (#185): set when a Run
-	// ends with a Candidate that wasn't applied, until /new, /clear or
-	// /apply. nil: the next message is a fresh Task.
-	thread *thread
-	// last is the latest ended Run the human can take: /apply, /diff,
-	// /receipt, /branch, or ↓ and a key. nil when there is none.
-	last *lastRun
-	// actions: ↓ moved the focus to the action row, whose keys act once
-	// actionsArm has passed since actionsAt. Keys before were typed ahead,
-	// never meant for it (ADR-0015: applying is an explicit act). now is
-	// the clock; nil is time.Now.
-	actions   bool
-	actionsAt time.Time
 	// hold, while true, swallows interrupts: a pager or $EDITOR has the
-	// terminal, and its Ctrl+C is its own (nil in tests).
+	// terminal, and its Ctrl+C is its own (nil in tests). now is the
+	// clock; nil is time.Now.
 	hold func(bool)
 	now  func() time.Time
-	// chat is the session's Chat (#259): each message is its turn. nil
-	// runs each message as a one-shot Run (an agent without auto mode, or
-	// OGE_CHAT=0). turn is the turn in flight; verify is the newest cut
-	// verifying in the background, while turns go on.
-	chat *homeChat
-	// adv is the session's Consultation (/advise); adviceEdit is the
-	// Consultation whose advice the composer holds, edited: the next
-	// message is the user's turn, and its AdviceSent says where it came
-	// from.
-	adv        *adviseState
-	advSeq     int
-	adviceEdit *adviceEditState
-	turn       *chatTurn
-	verify     *chatVerify
-	cuts       int // the cuts started, each one's seq
-	// unchecked: a turn changed something no cut covers yet (it was
-	// interrupted or continued by queued messages); the next cut does.
-	unchecked        bool
-	uncheckedChanged int // largest known deferred or cancelled change count
-	// stale is the delivery waiting on its stale-edit choice.
-	stale *staleAsk
-	// pendingFB is a failing cut's feedback turn, held under [chat] feedback
-	// = "ask" until the human sends it back (s or /feedback). A newer cut or
-	// a new turn of theirs drops it.
-	pendingFB *pendingFeedback
-	// cutGate is the newest cut's Gate, open at /apply or /branch;
-	// gateFor is that delivery, made once the cut is Accepted.
-	cutGate *gateState
-	gateFor *staleAsk
-	// cutFrozen is the newest cut's Pipeline; recut: a delivery refused
-	// for a late Tamper event asks for the cut again.
-	cutFrozen *pipeline.Frozen
-	recut     bool
-	// resetting: /new is closing the old Chat.
-	resetting bool
+
+	// *chatView is the focused Chat's state (tui_chatview.go): its fields
+	// read as the home's own. views are the session's Chats, one for now.
+	*chatView
+	views []*chatView
+	// dropped counts messages for a Chat no longer in views.
+	dropped int
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -602,6 +557,13 @@ func (h *home) Init() tea.Cmd {
 }
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// A Chat's message is handled with that Chat focused, the whole update
+	// through; one for a Chat the home no longer has is dropped.
+	restore, ok := h.route(msg)
+	if !ok {
+		return h, nil
+	}
+	defer restore()
 	if h.full {
 		if cmd, ok := h.fullUpdate(msg); ok {
 			return h, cmd
@@ -642,7 +604,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.cutStepped(m)
 	case verifyTickMsg:
 		if h.verify != nil && h.verify.seq == m.seq {
-			return h, verifyTick(m.seq)
+			return h, verifyTick(h.chatView, m.seq)
 		}
 		return h, nil
 	case chatGateMsg:
@@ -653,9 +615,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 	case diffEntryMsg:
-		return h, h.diffEntry(string(m))
+		return h, h.diffEntry(m.text)
 	case chatDiffMsg:
-		lines := []string(m)
+		lines := m.lines
 		for i, l := range lines {
 			lines[i] = h.st.diffLine(l)
 		}
@@ -667,14 +629,14 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.adviceLanded(m)
 	case askAdviceTickMsg:
 		if t := h.turn; t != nil && t.askAdv != nil && t.askAdv.running && t.askAdv.ask == m.ask && t.askAdv.q == m.q && t.askAdv.seq == m.seq {
-			return h, askAdviceTick(m.ask, m.q, m.seq)
+			return h, askAdviceTick(h.chatView, m.ask, m.q, m.seq)
 		}
 		return h, nil
 	case askAdviceMsg:
 		return h, h.askAdviceLanded(m)
 	case adviceTickMsg:
 		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
-			return h, adviceTick(m.seq)
+			return h, adviceTick(h.chatView, m.seq)
 		}
 		return h, nil
 	}
@@ -861,7 +823,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			// Ctrl+C cancels a cut verifying, then clears a Task (↑ brings
 			// it back) and, on an empty box, leaves (as Claude Code's
-			// prompt does).
+			// prompt does). h.verify is the focused Chat's: a Chat in the
+			// background goes on verifying.
 			if v := h.verify; v != nil && !v.stopped && v.gate == nil {
 				// One waiting at its Gate isn't verifying: it goes with
 				// the Chat.
@@ -1740,7 +1703,8 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), tr: &transcript{}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h := &home{comp: newComposer(), chatView: &chatView{tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h.views = []*chatView{h.chatView}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 	}

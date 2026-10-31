@@ -183,7 +183,7 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		h.adv = nil
 	}
 	h.dropAdviceEdit()
-	cmd := h.chat.reset()
+	cmd := h.chat.reset(h.chatView)
 	h.resetting = cmd != nil
 	return cmd, ""
 }

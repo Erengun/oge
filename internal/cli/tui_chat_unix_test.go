@@ -111,9 +111,7 @@ func TestHomeChatRepliesRemembersAndCuts(t *testing.T) {
 	}
 	s.composer()
 	s.type_("anything else?\r") // the Chat goes on
-	s.expect("  still here")
-	s.mark = len(s.out.String()) // the composer back after the turn, not the one typed in
-	s.composer()
+	s.composerAfter("  still here")
 	s.quitChat(f)
 	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
 	recs, _ := ledger.Replay(logs[0])

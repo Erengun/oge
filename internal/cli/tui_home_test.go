@@ -30,7 +30,7 @@ func homeFrozen() *pipeline.Frozen {
 
 func testHome(width int) *home {
 	f := homeFrozen()
-	h := &home{comp: newComposer(), title: "oge · demo · main", setup: setupLines(f), st: newStyles(false)}
+	h := &home{comp: newComposer(), title: "oge · demo · main", setup: setupLines(f), st: newStyles(false), chatView: &chatView{}}
 	h.resolve = func(*setupState) (*resolved, []string) { return &resolved{frozen: f}, nil }
 	h.width, h.height = width, 24
 	return h

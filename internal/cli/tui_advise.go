@@ -45,18 +45,23 @@ type adviseState struct {
 }
 
 type (
-	// adviceMsg is the end of the Consultation seq.
+	// adviceMsg is the end of the Consultation seq of view's Chat.
 	adviceMsg struct {
+		view   *chatView
 		seq    int
 		advice *run.Advice
 		err    error
 	}
-	// adviceTickMsg redraws the elapsed seconds of the Consultation seq.
-	adviceTickMsg struct{ seq int }
+	// adviceTickMsg redraws the elapsed seconds of the Consultation seq
+	// of view's Chat.
+	adviceTickMsg struct {
+		view *chatView
+		seq  int
+	}
 )
 
-func adviceTick(seq int) tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return adviceTickMsg{seq} })
+func adviceTick(view *chatView, seq int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return adviceTickMsg{view, seq} })
 }
 
 // adviseCmd is /advise <question>.
@@ -89,15 +94,15 @@ func (h *home) adviseCmd(args []string) (tea.Cmd, string) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	h.advSeq++
-	seq := h.advSeq
+	seq, view := h.advSeq, h.chatView
 	h.adv = &adviseState{chat: c, seq: seq, cancel: cancel, started: h.clock(), running: true,
 		agent: strings.TrimSpace(agentName + " " + model)}
 	consult := func() tea.Msg {
 		a, err := c.Consult(ctx, question)
-		return adviceMsg{seq: seq, advice: a, err: err}
+		return adviceMsg{view: view, seq: seq, advice: a, err: err}
 	}
 	echo := h.println(h.userBar("> /advise " + clean(question)))
-	return tea.Batch(tea.Sequence(echo), consult, adviceTick(seq)), ""
+	return tea.Batch(tea.Sequence(echo), consult, adviceTick(view, seq)), ""
 }
 
 // adviseStatus is the line shown while a Consultation runs. Its Esc hint
@@ -196,14 +201,14 @@ func (h *home) autoConsult() (tea.Cmd, bool) {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	h.advSeq++
-	seq := h.advSeq
+	seq, view := h.advSeq, h.chatView
 	h.adv = &adviseState{chat: c, seq: seq, cancel: cancel, started: h.clock(), running: true, auto: true,
 		mode: c.AdvisorAuto(), agent: strings.TrimSpace(agentName + " " + model)}
 	consult := func() tea.Msg {
 		a, err := c.ConsultAuto(ctx, chain)
-		return adviceMsg{seq: seq, advice: a, err: err}
+		return adviceMsg{view: view, seq: seq, advice: a, err: err}
 	}
-	return tea.Batch(consult, adviceTick(seq)), true
+	return tea.Batch(consult, adviceTick(view, seq)), true
 }
 
 // adviceBlock is the advice as a block: a header with who, how long and
@@ -320,17 +325,17 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
-	ctx := h.ctx
+	ctx, v := h.ctx, h.chatView
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
 		if auto {
 			ch, err := c.SendAutoAdvice(ctx, adv)
-			return chatSentMsg{events: ch, err: err}
+			return chatSentMsg{view: v, events: ch, err: err}
 		}
 		ch, err := c.SendAdvice(ctx, adv.ID, adv.Text)
-		return chatSentMsg{events: ch, err: err}
+		return chatSentMsg{view: v, events: ch, err: err}
 	}
 }
 
