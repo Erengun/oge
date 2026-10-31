@@ -56,7 +56,7 @@ type heredoc struct {
 // scmd is one simple command, the operators between it and the previous
 // one (&&, ||, ;, a new line, |, &, ( and ), and $( <( >( opening a
 // substitution), the here-documents it reads, and whether its standard
-// output last went to a named file.
+// output last went to a named file (not a descriptor or a device).
 type scmd struct {
 	words  []sword
 	ops    []string
@@ -76,17 +76,24 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 	var w sword
 	var b strings.Builder
 	in := false
+	target := false // the next word is where standard output goes
 	var quote rune
 	flushWord := func() {
 		if in {
 			w.text = b.String()
 			cur.words = append(cur.words, w)
+			if target {
+				t := filepath.Clean(w.text)
+				cur.toFile = !w.dynamic && t != "/dev" && !strings.HasPrefix(t, "/dev/")
+				target = false
+			}
 		}
 		w, in = sword{}, false
 		b.Reset()
 	}
 	flushCmd := func(op string) {
 		flushWord()
+		target = false
 		if len(cur.words) > 0 || len(cur.docs) > 0 {
 			cur.ops = ops
 			cmds = append(cmds, cur)
@@ -104,7 +111,9 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 	// redirect reads a redirection operator starting at i and returns
 	// where it ends. Its target is the next word, kept a word; >& and <&
 	// name a descriptor, >| overrides noclobber, and <( and >( open a
-	// process substitution. stdout is a redirection of standard output.
+	// process substitution. stdout is a redirection of standard output;
+	// it goes to a named file only when its target isn't a device
+	// (/dev/stdout, /dev/fd/1) or dynamic.
 	redirect := func(i int, stdout bool) int {
 		dup := false
 		for strings.ContainsRune("<>&|", next(i)) {
@@ -120,7 +129,7 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 			return i
 		}
 		if stdout {
-			cur.toFile = !dup
+			cur.toFile, target = false, !dup
 		}
 		return i
 	}
@@ -328,8 +337,11 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 		if h < len(c.words) {
 			name = filepath.Base(c.words[h].text)
 		}
+		// A here-document piped on, or inside a subshell or a
+		// substitution, may reach a shell whatever cat does with it.
+		bare := len(outer) == 0 && (k+1 >= len(cmds) || !oneOf("|", cmds[k+1].ops))
 		for _, d := range c.docs {
-			if !hereData(c, d) && p.escapesIn(d.body, cwds, program || interpreter(name)) {
+			if !(bare && hereData(c, d)) && p.escapesIn(d.body, cwds, program || interpreter(name)) {
 				return true
 			}
 		}
@@ -457,8 +469,8 @@ func isAssign(t string) bool   { return assignRE.MatchString(t) }
 func isDuration(t string) bool { return durationRE.MatchString(t) }
 
 // hereData reports whether a here-document is only data: cat or tee
-// writes it to a named file, so no pipe, substitution or shell reads it,
-// and the shell runs nothing inside it.
+// writes it to a named file, and the shell runs nothing inside it. The
+// caller checks that no pipe or substitution reads the command.
 func hereData(c *scmd, d *heredoc) bool {
 	h := head(c.words)
 	if h >= len(c.words) || !oneOf(filepath.Base(c.words[h].text), []string{"cat", "tee"}) || !c.toFile {

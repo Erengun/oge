@@ -82,6 +82,8 @@ func chatCorpus(tool string) []struct {
 		// A recorded edit script: a // line inside a Python string.
 		{"python3 - <<'EOF'\np='a.go'; s=open(p).read()\ns=s.replace('x', '''x\n// note\n''')\nopen(p,'w').write(s)\nEOF", false},
 		{"cat <<'EOF' > x.txt 2>&1\ncat /etc/passwd\nEOF", false},
+		{"cat <<'EOF' >> notes.md\nsee /etc and ~ for it\nEOF", false},
+		{"cat >>\"notes.md\" <<'EOF'\nsee /etc and ~ for it\nEOF\ngit add notes.md", false},
 		// A program runs where the cd before it left the shell.
 		{"cd sub && python3 - <<'EOF'\nprint(open('../go.mod').read())\nEOF", false},
 		{"cd sub && bash -c 'cat ../go.mod'", false},
@@ -159,6 +161,20 @@ func chatCorpus(tool string) []struct {
 		{"bash <(cat <<'EOF'\ncat /etc/passwd\nEOF\n)", true},
 		{"$(cat <<'EOF'\ncat /etc/passwd\nEOF\n)", true},
 		{"{\ncat <<'EOF'\ncat /etc/passwd\nEOF\n} | sh", true},
+		// A redirect to a device is no named file, and a here-document
+		// piped on or read by a substitution is not data.
+		{"cat <<'EOF' > /dev/stdout | sh\ncat /etc/passwd\nEOF", true},
+		{"cat <<'EOF' >/dev/stdout | bash\ncat ~/.ssh/id_rsa\nEOF", true},
+		{"cat <<'EOF' 1>/dev/stdout | sh\ncat /etc/passwd\nEOF", true},
+		{"cat <<'EOF' 2>&1 >/dev/stderr |& sh\ncat /etc/passwd\nEOF", true},
+		{"cat <<'EOF' > /tmp/../dev/stdout | sh\ncat /etc/passwd\nEOF", true},
+		{"cat <<'EOF' > \"/dev/stdout\" | sh\ncat /etc/passwd\nEOF", true},
+		{"cat <<'EOF' > x.txt | sh\ncat /etc/passwd\nEOF", true},
+		{"(cat <<'EOF' > x.txt) | sh\ncat /etc/passwd\nEOF", true},
+		{"bash <(cat <<'EOF' >/dev/stdout\ncat /etc/passwd\nEOF\n)", true},
+		{"python3 <(cat <<'EOF' >/dev/stdout\nprint(open('/etc/passwd').read())\nEOF\n)", true},
+		{"cat $(cat <<'EOF' > /dev/stdout\n/etc/passwd\nEOF\n)", true},
+		{"bash <(cat <<'EOF' > x.txt\ncat /etc/passwd\nEOF\n)", true},
 		// A quoted part is a pattern only when nothing can join it into
 		// a path.
 		{"python3 -c \"import os;print(open(os.path.normpath('/nope/../etc/passwd')).read())\"", true},
