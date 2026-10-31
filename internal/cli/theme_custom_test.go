@@ -107,7 +107,7 @@ func TestCustomThemeNoColorWins(t *testing.T) {
 func TestCustomThemeReloadsBetweenRuns(t *testing.T) {
 	env := themeEnv(t, "accent = \"#112233\"\n")
 	st := newStyles(true)
-	h := &home{comp: newComposer(), st: st, resolve: func(*setupState) (*resolved, []string) { return nil, nil }}
+	h := &home{comp: newComposer(), st: st, resolve: func(*setupState) (*resolved, []string) { return nil, nil }, chatView: &chatView{}}
 	h.reloadTheme = func() string { return st.reloadCustomTheme(env) }
 	h.reopen()
 	if st.th.palette().accent != rgb(0x112233) {

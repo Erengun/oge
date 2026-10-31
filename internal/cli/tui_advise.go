@@ -320,17 +320,17 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
-	ctx := h.ctx
+	ctx, v := h.ctx, h.chatView
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return func() tea.Msg {
 		if auto {
 			ch, err := c.SendAutoAdvice(ctx, adv)
-			return chatSentMsg{events: ch, err: err}
+			return chatSentMsg{view: v, events: ch, err: err}
 		}
 		ch, err := c.SendAdvice(ctx, adv.ID, adv.Text)
-		return chatSentMsg{events: ch, err: err}
+		return chatSentMsg{view: v, events: ch, err: err}
 	}
 }
 

@@ -98,8 +98,8 @@ func (hc *homeChat) close() {
 
 // reset closes the Chat in the background, so the next message opens a
 // new one (/new): closing waits for a cut in flight to unwind. The
-// command's message is chatClosedMsg; nil when no Chat is open.
-func (hc *homeChat) reset() tea.Cmd {
+// command's message is v's chatClosedMsg; nil when no Chat is open.
+func (hc *homeChat) reset(v *chatView) tea.Cmd {
 	if hc == nil {
 		return nil
 	}
@@ -114,7 +114,7 @@ func (hc *homeChat) reset() tea.Cmd {
 	return func() tea.Msg {
 		defer hc.closing.Done()
 		_ = c.Close()
-		return chatClosedMsg{}
+		return chatClosedMsg{view: v}
 	}
 }
 
@@ -164,25 +164,29 @@ type chatVerify struct {
 type (
 	// chatSentMsg is a message's turn started, or why it couldn't.
 	chatSentMsg struct {
+		view   *chatView // the Chat it is for; nil is the focused one
 		events <-chan agent.Event
 		err    error
 	}
 	// chatEvMsg is the turn's next event; ok is false once they end.
 	chatEvMsg struct {
-		ev agent.Event
-		ok bool
+		view *chatView
+		ev   agent.Event
+		ok   bool
 	}
 	// chatClosedMsg is a Chat /new closed, closed.
-	chatClosedMsg struct{}
+	chatClosedMsg struct{ view *chatView }
 	// chatCutMsg is the end of the cut seq.
 	chatCutMsg struct {
-		seq int
-		res *run.Result
-		err error
+		view *chatView
+		seq  int
+		res  *run.Result
+		err  error
 	}
 	// chatGateMsg is a Gate the cut seq's Run reached: the decision goes
 	// to reply, and next waits on the cut again.
 	chatGateMsg struct {
+		view  *chatView
 		seq   int
 		req   gate.Request
 		reply chan<- gate.Decision
@@ -191,12 +195,16 @@ type (
 	// chatStepMsg is the cut seq's next progress event; next waits on the
 	// cut again.
 	chatStepMsg struct {
+		view *chatView
 		seq  int
 		ev   run.Event
 		next tea.Cmd
 	}
 	// verifyTickMsg redraws the verify line's elapsed seconds for seq.
-	verifyTickMsg struct{ seq int }
+	verifyTickMsg struct {
+		view *chatView
+		seq  int
+	}
 )
 
 // cutGates is a cut's Gate port: a Gate waits, never shown mid-turn,
@@ -282,14 +290,14 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		h.adv = nil
 		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
 	}
-	hc, ctx := h.chat, h.ctx
+	hc, ctx, v := h.chat, h.ctx, h.chatView
 	send := func() tea.Msg {
 		hc.mu.Lock()
 		if hc.c == nil {
 			c, err := hc.open(res)
 			if err != nil {
 				hc.mu.Unlock()
-				return chatSentMsg{err: err}
+				return chatSentMsg{view: v, err: err}
 			}
 			hc.c = c
 		}
@@ -297,10 +305,10 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		hc.mu.Unlock()
 		if edited != nil && edited.chat == c {
 			ch, err := c.SendEdited(ctx, edited.id, text) // the user's turn, from an advisor's text
-			return chatSentMsg{events: ch, err: err}
+			return chatSentMsg{view: v, events: ch, err: err}
 		}
 		ch, err := c.Send(ctx, text)
-		return chatSentMsg{events: ch, err: err}
+		return chatSentMsg{view: v, events: ch, err: err}
 	}
 	if h.full {
 		h.tr.latest() // sending brings the view back to the bottom
@@ -316,10 +324,10 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 }
 
 // nextEvent waits for the turn's next event.
-func nextEvent(ch <-chan agent.Event) tea.Cmd {
+func nextEvent(v *chatView, ch <-chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
-		return chatEvMsg{ev, ok}
+		return chatEvMsg{view: v, ev: ev, ok: ok}
 	}
 }
 
@@ -356,6 +364,8 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.nextTurn(h.println(line))
 		}
 		if msg.err != nil {
+			// The composer and msg are the terminal's, not this Chat's:
+			// for a Chat in the background, slice 4 gates them.
 			text, held, ed := h.turn.text, h.turn.feedback != "", h.turn.edited
 			queued := h.endTurn()
 			defer func() { h.adviceEdit = ed }() // kept for the retry
@@ -371,14 +381,14 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.turn.events = msg.events
 		if h.turn.oge {
 			// Shown once it is sent: a spent budget prints no such line.
-			return h, tea.Sequence(h.println(h.ogeAdviceLine(h.turn.text)), nextEvent(msg.events))
+			return h, tea.Sequence(h.println(h.ogeAdviceLine(h.turn.text)), nextEvent(h.chatView, msg.events))
 		}
-		return h, nextEvent(msg.events)
+		return h, nextEvent(h.chatView, msg.events)
 	case chatEvMsg:
 		if !msg.ok {
 			return h.turnEnded()
 		}
-		return h, tea.Sequence(h.chatEvent(msg.ev), nextEvent(h.turn.events))
+		return h, tea.Sequence(h.chatEvent(msg.ev), nextEvent(h.chatView, h.turn.events))
 	case tea.KeyPressMsg:
 		return h.chatKey(msg)
 	case tea.PasteMsg:
@@ -431,6 +441,8 @@ func (h *home) showAsk() {
 	h.dropAskAdvice()
 	h.turn.advisedBy = ""
 	if a := h.ask(); a != nil && a.Questions != nil {
+		// The composer is the terminal's: slice 4 gates this for a Chat in
+		// the background.
 		if text := strings.TrimSpace(h.comp.expanded()); text != "" {
 			h.enqueue(text)
 			h.comp = h.composer()
@@ -590,7 +602,7 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 	h.cutGate, h.gateFor = nil, nil
 	h.cutFrozen = f
 	h.verify = &chatVerify{seq: h.cuts, changed: changed, frozen: f, cancel: cancel, since: h.clock()}
-	hc, seq := h.chat, h.cuts
+	hc, seq, view := h.chat, h.cuts, h.chatView
 	c := hc.get()
 	reqs, done := make(chan chatGateMsg), make(chan chatCutMsg, 1)
 	steps := make(chan chatStepMsg, 16)
@@ -603,11 +615,11 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 			}
 			// Progress never stalls the cut: a full pipe drops the event.
 			select {
-			case steps <- chatStepMsg{seq: seq, ev: ev}:
+			case steps <- chatStepMsg{view: view, seq: seq, ev: ev}:
 			default:
 			}
 		})
-		done <- chatCutMsg{seq, res, err}
+		done <- chatCutMsg{view: view, seq: seq, res: res, err: err}
 	}()
 	var wait tea.Cmd
 	wait = func() tea.Msg {
@@ -615,20 +627,20 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 		case m := <-done:
 			return m
 		case g := <-reqs:
-			g.seq, g.next = seq, wait
+			g.view, g.seq, g.next = view, seq, wait
 			return g
 		case s := <-steps:
 			s.next = wait
 			return s
 		}
 	}
-	return tea.Batch(wait, verifyTick(seq))
+	return tea.Batch(wait, verifyTick(view, seq))
 }
 
 // verifyTick repaints the verify line's elapsed seconds, once a second
 // while the cut seq verifies.
-func verifyTick(seq int) tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return verifyTickMsg{seq} })
+func verifyTick(v *chatView, seq int) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return verifyTickMsg{view: v, seq: seq} })
 }
 
 // cutStepped names the step a cut's progress event puts on the status
@@ -739,6 +751,9 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 
 // endTurn opens the composer again, keeping what was typed during the
 // turn and not yet sent; it returns the messages queued meanwhile.
+//
+// The composer is the terminal's: for a Chat in the background, slice 4
+// gates the reopening.
 func (h *home) endTurn() []string {
 	text, queued := h.comp.expanded(), h.turn.queued
 	h.turn = nil
@@ -992,10 +1007,10 @@ func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) 
 	first, _, _ := strings.Cut(text, "\n")
 	h.turn = &chatTurn{text: first, frozen: f, queued: queued, oge: true}
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
-	ctx := h.ctx
+	ctx, v := h.ctx, h.chatView
 	return func() tea.Msg {
 		ch, err := c.SendFeedback(ctx, text)
-		return chatSentMsg{events: ch, err: err}
+		return chatSentMsg{view: v, events: ch, err: err}
 	}
 }
 
@@ -1085,6 +1100,7 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	h.msg = nil
 	switch k.String() {
 	case "ctrl+c":
+		// A key is the focused Chat's: it stops that turn only.
 		if t.stopped {
 			h.quit = true
 			return h, tea.Quit
