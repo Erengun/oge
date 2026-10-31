@@ -23,12 +23,13 @@ var Timeout = 20 * time.Second
 
 // Line is one event from the fake agent.
 type Line struct {
-	Kind    string // a Kind* constant
-	Text    string // a claim's text, or an end's reason
-	Tool    string // a tool Claim's or ask's tool
-	Target  string
-	CostUSD float64
-	Tokens  int
+	Kind      string // a Kind* constant
+	Text      string // a claim's text, or an end's reason
+	Tool      string // a tool Claim's or ask's tool
+	Target    string
+	CostUSD   float64
+	Tokens    int
+	OutTokens int
 }
 
 // build compiles the main package at pkg (relative to the repo's internal/agent) into dir.
@@ -214,6 +215,7 @@ func parseLine(raw string) Line {
 	case KindUsage:
 		l.CostUSD, _ = strconv.ParseFloat(arg(1), 64)
 		l.Tokens, _ = strconv.Atoi(arg(2))
+		l.OutTokens, _ = strconv.Atoi(arg(3))
 	}
 	return l
 }

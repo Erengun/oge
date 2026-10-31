@@ -775,14 +775,20 @@ func TestUsageIsPerTurnNotTheRunningTotal(t *testing.T) {
 	for _, total := range []int{210371, 225571, 241021} {
 		s.mu.Lock()
 		s.inFlight = true
-		ev := agent.Event{Kind: agent.Usage, Tokens: &total}
+		out := total / 100 // output is a small share; cached input is in total
+		ev := agent.Event{Kind: agent.Usage, Tokens: &total, OutTokens: &out}
 		s.usage = &ev
 		s.mu.Unlock()
 		s.settle(agent.Event{})
-		if u := <-s.events; u.Kind != agent.Usage || u.Tokens == nil {
+		u := <-s.events
+		if u.Kind != agent.Usage || u.Tokens == nil {
 			t.Fatalf("usage event %+v", u)
 		} else if want := map[int]int{210371: 210371, 225571: 15200, 241021: 15450}[total]; *u.Tokens != want {
 			t.Errorf("total %d: turn tokens %d, want %d", total, *u.Tokens, want)
+		}
+		wantOut := map[int]int{210371: 2103, 225571: 2255 - 2103, 241021: 2410 - 2255}[total]
+		if u.OutTokens == nil || *u.OutTokens != wantOut {
+			t.Errorf("total %d: turn out tokens %v, want %d", total, u.OutTokens, wantOut)
 		}
 		<-s.events // TurnSettled
 	}

@@ -7,7 +7,7 @@ Run 20261005T090000-a1b2c3 · Fast mode
 | **Task** | ` fix Add ` |
 | **Chat** | Task from 1 turn |
 | | 0 verify cycles · 0 send-backs in this chain |
-| | 2 turns (you 1, feedback 0, advice 1) · 5400 tokens (summed from the agent's per-turn reports) |
+| | 2 turns (you 1, feedback 0, advice 1) · out 5400 tokens (summed from the agent's per-turn reports) |
 | **Advice** | 3 consultations |
 | | sent at turn 3 (` claude opus `, fresh) · edited by you, sent as your turn |
 | | sent at turn 4 (` claude opus `, fresh, automatic) · a Claim, not checked |
@@ -18,7 +18,7 @@ Run 20261005T090000-a1b2c3 · Fast mode
 | **Scope** | no out-of-scope changes |
 | **Handled** | 18 operations approved automatically · 2 denied · Human interruptions: 0 |
 | **Time** | 7.3s · preflight 400ms · implement 5.6s · Check 1s · your attention 0s |
-| **Ledger** | head 3f7785cbe6ef · identifies this Receipt; not tamper-proof |
+| **Ledger** | head 30ebacf76418 · identifies this Receipt; not tamper-proof |
 
 **Not covered**
 
@@ -31,6 +31,6 @@ Run 20261005T090000-a1b2c3 · Fast mode
   - command · ` go test -json ./... ` · pass · 1s
 - Files changed: ` add.go `
 - Dismissed: consultation asked at turn 4 (` claude opus `): cancelled
-- Ledger head ` 3f7785cbe6ef3f4bd72ea7da16da214dee78b67d768e6e65a3eac6b28a2b7246 ` (identifies this Receipt; not tamper-proof)
+- Ledger head ` 30ebacf76418685bc649d11636cabcdd0219b203f6211492c677c4cfb1bb3796 ` (identifies this Receipt; not tamper-proof)
 
 </details>

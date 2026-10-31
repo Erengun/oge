@@ -11,18 +11,18 @@ import (
 // cut: how many of each kind, and the tokens the agent reported for them.
 // A snapshot at cut time, so the Receipt and /runs read the Ledger only.
 // Turns are classified from the Chat log's records (TurnStarted's by,
-// AdviceSent), never from text. Tokens is what the agent reported per turn
-// (input and output together; an adapter whose count is cumulative reports
-// the turn's share), summed only when every counted turn
-// reported it: Reported says how many did, and nothing is estimated.
+// AdviceSent), never from text. OutTokens is the output tokens the agent
+// reported per turn (output alone: the one count that means the same on
+// every agent; an adapter whose count is cumulative reports the turn's
+// share), summed only when every counted turn reported it: Reported says how many did, and nothing is estimated.
 type CutUsage struct {
 	You      int `json:"you"`
 	Feedback int `json:"feedback"`
 	Advice   int `json:"advice"`
-	// Reported is the turns whose AttemptEnded carried a token count.
+	// Reported is the turns whose AttemptEnded carried an output token count.
 	Reported int `json:"reported"`
-	// Tokens is the sum over the Reported turns.
-	Tokens int `json:"tokens"`
+	// OutTokens is the sum over the Reported turns.
+	OutTokens int `json:"out_tokens"`
 }
 
 // Turns is every counted turn.
@@ -47,7 +47,7 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 			Consultation string `json:"consultation"`
 			Failure      string `json:"failure"`
 			Usage        *struct {
-				Tokens *int `json:"tokens"`
+				OutTokens *int `json:"out_tokens"`
 			} `json:"usage"`
 		}
 		if json.Unmarshal(rec.Data, &d) != nil || d.Turn < from || d.Turn > to || (d.Chat != "" && d.Chat != chat) {
@@ -69,8 +69,8 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 			if d.Consultation == "" && strings.HasPrefix(d.Failure, "send_failed") {
 				unsent[d.Turn] = true
 			}
-			if d.Consultation == "" && d.Usage != nil && d.Usage.Tokens != nil {
-				tokens[d.Turn] = d.Usage.Tokens
+			if d.Consultation == "" && d.Usage != nil && d.Usage.OutTokens != nil {
+				tokens[d.Turn] = d.Usage.OutTokens
 			}
 		}
 	}
@@ -92,7 +92,7 @@ func usageIn(recs []ledger.Record, chat string, from, to int) CutUsage {
 		}
 		if t := tokens[n]; t != nil {
 			u.Reported++
-			u.Tokens += *t
+			u.OutTokens += *t
 		}
 	}
 	return u

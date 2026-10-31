@@ -1216,6 +1216,14 @@ func usageOf(t *testing.T, evs []agent.Event) agent.Event {
 	return agent.Event{}
 }
 
+// OutTokens is output_tokens alone, apart from Tokens (input plus output).
+func TestUsageReportsOutputTokensAlone(t *testing.T) {
+	use := usageOf(t, replay(t, firstTurn(t, "turns.ndjson")).turn("hi"))
+	if use.OutTokens == nil || use.Tokens == nil || *use.OutTokens <= 0 || *use.OutTokens >= *use.Tokens {
+		t.Errorf("Tokens %v, OutTokens %v: want output alone, less than the total", use.Tokens, use.OutTokens)
+	}
+}
+
 // The context is the last assistant message's input, cache read and cache
 // creation tokens against the window result reports (turns.ndjson: the last
 // message used 8+273+5770 of haiku's 200000).

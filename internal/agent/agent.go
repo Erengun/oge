@@ -173,6 +173,10 @@ type Event struct {
 	// far, on a Usage event; nil when it reported none. Never estimated.
 	CostUSD *float64 `json:",omitempty"`
 	Tokens  *int     `json:",omitempty"`
+	// OutTokens is the output tokens alone, when the agent splits them
+	// out: the one count that means the same on every agent (Tokens may
+	// include cached input). nil when it does not.
+	OutTokens *int `json:",omitempty"`
 	// Context is how full the agent's context was after its last message,
 	// on a Usage event, when the agent reported both numbers: display
 	// only, never written to the stream or Ledger.

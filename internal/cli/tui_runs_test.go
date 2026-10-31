@@ -303,9 +303,9 @@ func TestRunUsageSuffix(t *testing.T) {
 		want string
 	}{
 		{nil, ""},
-		{&run.CutUsage{You: 4, Reported: 4, Tokens: 12345}, "4 turns · 12.3k tok"},
-		{&run.CutUsage{You: 1, Reported: 1, Tokens: 800}, "1 turn · 800 tok"},
-		{&run.CutUsage{You: 3, Feedback: 1, Reported: 2, Tokens: 900}, "4 turns"}, // partial: no tokens
+		{&run.CutUsage{You: 4, Reported: 4, OutTokens: 12345}, "4 turns · 12.3k out tok"},
+		{&run.CutUsage{You: 1, Reported: 1, OutTokens: 800}, "1 turn · 800 out tok"},
+		{&run.CutUsage{You: 3, Feedback: 1, Reported: 2, OutTokens: 900}, "4 turns"}, // partial: no tokens
 		{&run.CutUsage{You: 2}, "2 turns"},
 	} {
 		if got := runUsage(&delivery.Run{Usage: c.u}); got != c.want {

@@ -121,7 +121,7 @@ func Serve(r io.Reader, w io.Writer, dir string, sc Scenario) error {
 			return nil
 		}
 		if t.Usage != nil {
-			out(KindUsage, strconv.FormatFloat(t.Usage.CostUSD, 'f', -1, 64), strconv.Itoa(t.Usage.Tokens))
+			out(KindUsage, strconv.FormatFloat(t.Usage.CostUSD, 'f', -1, 64), strconv.Itoa(t.Usage.Tokens), strconv.Itoa(t.Usage.OutTokens))
 		}
 		out(KindEnd, EndDone)
 	}

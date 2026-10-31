@@ -34,10 +34,10 @@ func TestReceiptUsage(t *testing.T) {
 		want  []string
 		not   []string
 	}{
-		{"all reported", run.CutUsage{You: 2, Feedback: 1, Advice: 1, Reported: 4, Tokens: 12345},
-			[]string{"4 turns (you 2, feedback 1, advice 1) · 12345 tokens"}, []string{"partial"}},
-		{"partial", run.CutUsage{You: 2, Feedback: 1, Advice: 1, Reported: 3, Tokens: 999},
-			[]string{"4 turns (you 2, feedback 1, advice 1) · tokens: partial (3 of 4 turns reported)"}, []string{"999"}},
+		{"all reported", run.CutUsage{You: 2, Feedback: 1, Advice: 1, Reported: 4, OutTokens: 12345},
+			[]string{"4 turns (you 2, feedback 1, advice 1) · out 12345 tokens"}, []string{"partial"}},
+		{"partial", run.CutUsage{You: 2, Feedback: 1, Advice: 1, Reported: 3, OutTokens: 999},
+			[]string{"4 turns (you 2, feedback 1, advice 1) · out tokens: partial (3 of 4 turns reported)"}, []string{"999"}},
 		{"none reported", run.CutUsage{You: 1}, []string{"1 turn (you 1, feedback 0, advice 0)"}, []string{"tokens"}},
 		{"an old Ledger", nil, nil, []string{"feedback 0", "tokens"}},
 	} {
@@ -62,10 +62,10 @@ func TestReceiptUsage(t *testing.T) {
 			if c.usage == nil && strings.Contains(string(js), `"usage"`) {
 				t.Errorf("JSON has usage with none recorded: %s", js)
 			}
-			if c.name != "all reported" && strings.Contains(string(js), `"tokens"`) {
+			if c.name != "all reported" && strings.Contains(string(js), `"out_tokens"`) {
 				t.Errorf("JSON has tokens without a full report: %s", js)
 			}
-			if c.name == "all reported" && !strings.Contains(string(js), `"tokens": 12345`) {
+			if c.name == "all reported" && !strings.Contains(string(js), `"out_tokens": 12345`) {
 				t.Errorf("JSON lacks the tokens: %s", js)
 			}
 		})

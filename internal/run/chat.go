@@ -867,7 +867,7 @@ func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
 			ended["stop"] = string(redact.Redact([]byte(ev.Stop)))
 		}
 		if u := usage; u != nil {
-			ended["usage"] = map[string]any{"cost_usd": u.CostUSD, "tokens": u.Tokens}
+			ended["usage"] = map[string]any{"cost_usd": u.CostUSD, "tokens": u.Tokens, "out_tokens": u.OutTokens}
 		}
 		if changes != nil {
 			ended["changes"] = changes
