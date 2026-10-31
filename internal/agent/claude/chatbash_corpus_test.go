@@ -83,6 +83,7 @@ func chatCorpus(tool string) []struct {
 		{"python3 - <<'EOF'\np='a.go'; s=open(p).read()\ns=s.replace('x', '''x\n// note\n''')\nopen(p,'w').write(s)\nEOF", false},
 		{"cat <<'EOF' > x.txt 2>&1\ncat /etc/passwd\nEOF", false},
 		{"cat <<'EOF' >> notes.md\nsee /etc and ~ for it\nEOF", false},
+		{"(cd web && cat <<'EOF' > x.js\n// see /etc for defaults\nEOF\n)", false},
 		{"cat >>\"notes.md\" <<'EOF'\nsee /etc and ~ for it\nEOF\ngit add notes.md", false},
 		// A program runs where the cd before it left the shell.
 		{"cd sub && python3 - <<'EOF'\nprint(open('../go.mod').read())\nEOF", false},

@@ -315,17 +315,18 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 	every := cwds        // every directory a command may have run in
 	var failed []string  // where a cd that may have failed left the shell
 	var outer [][]string // cwds at each open (
+	var opened []string  // the op that opened each
 	for k, c := range cmds {
 		for _, op := range c.ops {
 			switch op {
 			case ";", "\n", "||":
 				cwds, failed = union(cwds, failed), nil
 			case "(", "$(", "<(", ">(":
-				outer = append(outer, cwds)
+				outer, opened = append(outer, cwds), append(opened, op)
 			case ")":
 				// A subshell's cd doesn't leave it.
 				if n := len(outer); n > 0 {
-					cwds, outer = union(outer[n-1], failed), outer[:n-1]
+					cwds, outer, opened = union(outer[n-1], failed), outer[:n-1], opened[:n-1]
 				} else {
 					cwds = every
 				}
@@ -337,9 +338,10 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 		if h < len(c.words) {
 			name = filepath.Base(c.words[h].text)
 		}
-		// A here-document piped on, or inside a subshell or a
-		// substitution, may reach a shell whatever cat does with it.
-		bare := len(outer) == 0 && (k+1 >= len(cmds) || !oneOf("|", cmds[k+1].ops))
+		// A here-document piped on, or inside a substitution, may reach
+		// a shell whatever cat does with it.
+		bare := !oneOf("$(", opened) && !oneOf("<(", opened) && !oneOf(">(", opened) &&
+			(k+1 >= len(cmds) || !oneOf("|", cmds[k+1].ops))
 		for _, d := range c.docs {
 			if !(bare && hereData(c, d)) && p.escapesIn(d.body, cwds, program || interpreter(name)) {
 				return true
