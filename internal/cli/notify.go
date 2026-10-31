@@ -135,10 +135,6 @@ func (n *notifier) notifyCommand(arg string) string {
 	return "/notify: say on or off"
 }
 
-// sessionHerdr is the reporter every Run's model starts with. startHerdr
-// sets it once, when the live view is chosen; it stays a no-op outside herdr.
-var sessionHerdr herdr.Reporter = herdr.Nop{}
-
 // startHerdr builds the session's reporter from env and returns it, for the
 // view to release at exit. It returns nil outside herdr.
 func startHerdr(env Env) herdr.Reporter {
@@ -146,7 +142,6 @@ func startHerdr(env Env) herdr.Reporter {
 	if _, off := r.(herdr.Nop); off {
 		return nil
 	}
-	sessionHerdr = r
 	return r
 }
 
@@ -163,8 +158,9 @@ func (m *model) reportHerdr(s herdr.State, msg string) {
 	}
 }
 
-// reportEnded tells herdr how the Run ended: idle when Accepted, otherwise
-// blocked with the same fixed text the desktop notification uses.
+// reportEnded tells herdr the Run is over. Nothing waits on the human now: an
+// open Gate already reported blocked (needsYou), so every end is idle, with
+// the desktop notification's fixed text when it was not Accepted.
 func (m *model) reportEnded(res *run.Result, failed bool) {
 	var outcome run.Outcome
 	if res != nil && !failed {
@@ -174,5 +170,5 @@ func (m *model) reportEnded(res *run.Result, failed bool) {
 		m.reportHerdr(herdr.Idle, "")
 		return
 	}
-	m.reportHerdr(herdr.Blocked, strings.TrimPrefix(notifyEnded(outcome), "oge: "))
+	m.reportHerdr(herdr.Idle, strings.TrimPrefix(notifyEnded(outcome), "oge: "))
 }

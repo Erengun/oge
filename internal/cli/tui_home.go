@@ -1754,6 +1754,9 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		u.m = newModel(t, r.frozen, u.m.st, time.Now)
 		u.m.kb = h.kb
 		u.m.notify = u.notify
+		if u.herdr != nil {
+			u.m.herdr = u.herdr
+		}
 		u.m.width, u.m.height = w, ht
 		u.m.scroll = true
 		var fu *run.FollowUp

@@ -382,7 +382,7 @@ type model struct {
 }
 
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
-	m := &model{title: clean(t.Title), frozen: f, st: st, now: now, started: now(), herdr: sessionHerdr}
+	m := &model{title: clean(t.Title), frozen: f, st: st, now: now, started: now()}
 	m.head = fmt.Sprintf("%s mode", f.Mode)
 	pre := stage{name: "preflight"}
 	if f.Setup.Run != "" {

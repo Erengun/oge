@@ -333,6 +333,9 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	u.m.st.reloadCustomTheme(env.Getenv)
 	u.m.kb, _ = loadKeybindings(env.Getenv)
 	u.m.notify = u.notify
+	if u.herdr != nil {
+		u.m.herdr = u.herdr
+	}
 	return u
 }
 

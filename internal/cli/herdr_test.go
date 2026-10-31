@@ -13,7 +13,7 @@ import (
 type fakeReporter struct{ got []string }
 
 func (f *fakeReporter) Report(s herdr.State, msg string) { f.got = append(f.got, string(s)+"|"+msg) }
-func (f *fakeReporter) Release()                          { f.got = append(f.got, "release") }
+func (f *fakeReporter) Release()                         { f.got = append(f.got, "release") }
 
 func TestHerdrRollup(t *testing.T) {
 	cases := []struct {
@@ -24,8 +24,9 @@ func TestHerdrRollup(t *testing.T) {
 		{"progress", func(m *model) { m.apply(progressMsg{kind: run.EvStarted}) }, "working|"},
 		{"gate", func(m *model) { m.needsYou() }, "blocked|oge: waiting for you"},
 		{"accepted", func(m *model) { m.runEnded(&run.Result{Outcome: run.Accepted}, false) }, "idle|"},
-		{"refused", func(m *model) { m.runEnded(&run.Result{Outcome: run.Refused}, false) }, "blocked|Run ended: refused"},
-		{"failed", func(m *model) { m.runEnded(nil, true) }, "blocked|Run ended: stopped"},
+		{"refused", func(m *model) { m.runEnded(&run.Result{Outcome: run.Refused}, false) }, "idle|Run ended: refused"},
+		{"replied", func(m *model) { m.runEnded(&run.Result{Outcome: run.Replied}, false) }, "idle|Run ended: replied"},
+		{"failed", func(m *model) { m.runEnded(nil, true) }, "idle|Run ended: stopped"},
 	}
 	for _, c := range cases {
 		m := newModel(task.Task{Title: "t"}, &pipeline.Frozen{}, styles{}, time.Now)
@@ -54,5 +55,19 @@ func TestNotifyOffUnderHerdrUnlessSet(t *testing.T) {
 	n = notifierFor(Env{Getenv: func(string) string { return "" }}, runFlags{}, nil)
 	if !n.attention || !n.runEnd || !n.bell {
 		t.Errorf("outside herdr: %+v, want all on", n)
+	}
+}
+
+func TestSelectViewWiresHerdr(t *testing.T) {
+	env := Env{Getenv: func(k string) string {
+		return map[string]string{"HERDR_ENV": "1", "HERDR_BIN_PATH": "/h", "HERDR_PANE_ID": "p", "TERM": "xterm"}[k]
+	}, Interactive: func() bool { return true }}
+	v := selectView(env, runFlags{}, task.Task{Title: "t"}, &pipeline.Frozen{})
+	u, ok := v.(*tui)
+	if !ok {
+		t.Skipf("not the live view: %T", v)
+	}
+	if _, nop := u.m.herdr.(herdr.Nop); nop || u.m.herdr == nil {
+		t.Errorf("u.m.herdr = %T, want the real reporter", u.m.herdr)
 	}
 }
