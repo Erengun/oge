@@ -249,6 +249,14 @@ func (c *UserConfig) validate() []Problem {
 			}
 		}
 	}
+	if ch := c.Chat; ch != nil {
+		if ch.Feedback != "" && !oneOf(ch.Feedback, ChatFeedbackOn, ChatFeedbackAsk, ChatFeedbackOff) {
+			add("chat.feedback", "must be one of ask, on, off")
+		}
+		if ch.FeedbackBudget < 0 {
+			add("chat.feedback_budget", "must be 0 or more")
+		}
+	}
 	for _, name := range sortedKeys(c.Profiles) {
 		key := "profiles." + name
 		switch {

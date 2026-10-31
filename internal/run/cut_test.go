@@ -45,8 +45,10 @@ func cutFrozen(t *testing.T, setup string) *pipeline.Frozen {
 // openCut opens a Chat on a small Go module with fakeclaude serving turns.
 func openCut(t *testing.T, setup string, turns ...multiturn.Turn) *Chat {
 	t.Helper()
-	return openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: turns}), 0, cutFrozen(t, setup),
+	c := openChatIn(t.Context(), t, fakeClaude(t, multiturn.Scenario{Turns: turns}), 0, cutFrozen(t, setup),
 		map[string]string{"go.mod": cutMod, "add.go": cutAdd, "add_test.go": cutAddTest})
+	c.feedback.Feedback = pipeline.ChatFeedbackOn // the budget is on's: ask sends only what the human asks
+	return c
 }
 
 func cut(t *testing.T, c *Chat) *Result {
@@ -398,6 +400,24 @@ func TestCutFailingCheckSendsFeedback(t *testing.T) {
 	turns := runRecords(t, c.Dir, RecTurnStarted)
 	if len(turns) != 2 || turns[0]["by"] != nil || turns[1]["by"] != "oge" {
 		t.Errorf("TurnStarted %v", turns)
+	}
+}
+
+// Under ask no budget refuses a feedback turn: each one is the human's.
+func TestFeedbackBudgetIsOnlyForOn(t *testing.T) {
+	var turns []multiturn.Turn
+	for range FeedbackBudget + 2 {
+		turns = append(turns, multiturn.Turn{Reply: "ok"})
+	}
+	c := openCut(t, "", turns...)
+	c.feedback.Feedback = pipeline.ChatFeedbackAsk
+	drain(t, send(t, c, "yo"), nil)
+	for i := range FeedbackBudget + 1 {
+		ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+		if err != nil {
+			t.Fatalf("feedback %d: %v", i+1, err)
+		}
+		drain(t, ch, nil)
 	}
 }
 

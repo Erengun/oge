@@ -56,7 +56,7 @@ feedback = "ask"      # "ask" (default) | "on" | "off"
 feedback_budget = 3   # feedback turns a chain of cuts gets; 0 or absent is 3
 ```
 
-With `ask`, a failed Check shows `✗ Check failed` under the box and sends nothing: ↓ then `s` (or `/feedback`) sends the failing Check's feedback turn back, one turn, and `/advise <question>` asks the advisor. Enter alone never sends it. A newer cut, or a message of yours, drops it. With `on`, Öge sends the feedback turn at once, up to `feedback_budget` turns, as it did before. With `off`, a failed Check offers nothing.
+With `ask`, a failed Check shows `✗ Check failed` under the box and sends nothing: ↓ then `s` (or `/feedback`) sends the failing Check's feedback turn back, one turn, and `/advise <question>` asks the advisor. Enter alone never sends it, and no budget refuses a send you made. A newer cut, or a message of yours, drops it. With `on`, Öge sends the feedback turn at once, up to `feedback_budget` turns, as it did before; the budget applies only here. With `off`, a failed Check offers nothing.
 
 **Advisor.** `[advisor] auto` says what happens when a chain's feedback budget is spent: `ask` (the default) shows the advice first, `on` sends it, `off` never consults on its own.
 

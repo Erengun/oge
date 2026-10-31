@@ -340,7 +340,11 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(msg.err, run.ErrFeedbackBudget) {
 				// Instead of stopping at the user's call, Öge consults once
 				// (D-A3), unless [advisor] auto is off.
-				consult, ok := h.autoConsult()
+				var consult tea.Cmd
+				ok := false
+				if h.feedbackMode() == pipeline.ChatFeedbackOn {
+					consult, ok = h.autoConsult()
+				}
 				if ok {
 					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; asking the advisor", h.feedbackBudget()))
 				} else {

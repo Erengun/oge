@@ -579,7 +579,9 @@ func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice st
 		c.feedbacks = 0 // the user's own turn starts a chain
 		c.chain++
 		c.autos = 0
-	case kind == turnFeedback && c.feedbacks >= c.FeedbackBudget():
+	// The budget guards Öge's own loop. Under ask or off every feedback turn
+	// is one the human sent, which no budget refuses.
+	case kind == turnFeedback && c.FeedbackMode() == pipeline.ChatFeedbackOn && c.feedbacks >= c.FeedbackBudget():
 		c.mu.Unlock()
 		return nil, ErrFeedbackBudget
 	}

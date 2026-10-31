@@ -1125,8 +1125,11 @@ func (h *home) actionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.actions = false
 		return h, nil
 	case "s":
-		if h.clock().Sub(h.actionsAt) < actionsArm || !h.composerFree() || h.pendingFB == nil {
-			return h, nil // typed ahead, or nothing failed to send back
+		if h.pendingFB == nil {
+			break // nothing to send back: an ordinary key
+		}
+		if h.clock().Sub(h.actionsAt) < actionsArm || !h.composerFree() {
+			return h, nil // typed ahead, before the row could be seen
 		}
 		h.actions = false
 		cmd, _ := h.sendBack()
