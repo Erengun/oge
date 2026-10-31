@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/gate"
+	"github.com/erengun/oge/internal/herdr"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -48,6 +49,8 @@ type tui struct {
 	programOptions []tea.ProgramOption
 	// notify is how this view tells the human, nil when it stays silent.
 	notify *notifier
+	// herdr is released when the program exits (nil: not under herdr).
+	herdr herdr.Reporter
 }
 
 const (
@@ -132,6 +135,7 @@ func (u *tui) program(in *interrupts, root tea.Model) error {
 		}
 	}()
 	_, err := p.Run()
+	u.releaseHerdr()
 	close(u.gone)
 	return err
 }
@@ -363,9 +367,10 @@ type model struct {
 	st            styles
 	queue         *queue
 	interrupt     func()
-	gate          *gateState // an open Gate, waiting for the human
-	notify        *notifier  // nil: no bell or desktop notification (#170)
-	alerts        []string   // queued, to leave through flushAlerts
+	gate          *gateState     // an open Gate, waiting for the human
+	notify        *notifier      // nil: no bell or desktop notification (#170)
+	herdr         herdr.Reporter // the pane's state for herdr; a no-op outside it
+	alerts        []string       // queued, to leave through flushAlerts
 
 	// scroll: finished items are printed above the program (take) and leave
 	// the frame, which keeps only what still changes (the home, #190).
@@ -377,7 +382,7 @@ type model struct {
 }
 
 func newModel(t task.Task, f *pipeline.Frozen, st styles, now func() time.Time) *model {
-	m := &model{title: clean(t.Title), frozen: f, st: st, now: now, started: now()}
+	m := &model{title: clean(t.Title), frozen: f, st: st, now: now, started: now(), herdr: sessionHerdr}
 	m.head = fmt.Sprintf("%s mode", f.Mode)
 	pre := stage{name: "preflight"}
 	if f.Setup.Run != "" {
@@ -509,6 +514,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) apply(msg tea.Msg) bool {
 	switch msg := msg.(type) {
 	case progressMsg:
+		m.reportHerdr(herdr.Working, "")
 		switch msg.kind {
 		case run.EvStarted:
 			m.head, m.began = msg.head, true

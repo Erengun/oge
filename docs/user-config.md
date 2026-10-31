@@ -48,6 +48,8 @@ bell = true        # ring the bell with either
 
 `/notify on|off` in the home turns both alerts (and so the bell) on or off for the session. Nothing is sent in plain mode, without a TTY, with `--unattended`, or in dry-run. Under tmux the OSC goes through the passthrough (needs `allow-passthrough on`); under GNU screen only the bell rings; foot and rxvt get OSC 777.
 
+**Under herdr.** When Öge runs in a herdr pane (`HERDR_ENV=1`, with `HERDR_BIN_PATH` and `HERDR_PANE_ID` set), it tells herdr what the pane is doing, so the pane shows as an agent instead of a plain terminal. It runs `pane report-agent` with state `working`, `blocked` or `idle`, and `pane release-agent` when it exits. The call has a 500 ms timeout, runs off the UI, and its failures are ignored. A `--message` carries only the fixed texts above ("oge: waiting for you", "Run ended: <outcome>"), never agent text. Outside herdr nothing is run. Because herdr already shows the state, Öge's own bell and desktop notifications are off by default there; set `attention`, `run_end` or `bell` in `[notify]` to turn one back on.
+
 **Chat feedback.** When a Chat's Check fails, Öge no longer prompts the agent on your behalf by default. The `[chat]` table is global, not per repo:
 
 ```toml
