@@ -71,9 +71,6 @@ type chatView struct {
 	side  sideState
 	// scroll is what was printed above the program, for /export (#168).
 	scroll []string
-	// unsent is the composer's text while another Chat has the focus
-	// (slice 3); unused while there is one Chat.
-	unsent string
 }
 
 // focus makes v the Chat the home shows and the keys go to.
