@@ -27,6 +27,7 @@ func lockTree(r *Run, target string) (func(), error) {
 		return nil, err
 	}
 	deadline := time.Now().Add(treeLockWait)
+	contended := false
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -36,6 +37,10 @@ func lockTree(r *Run, target string) (func(), error) {
 			f.Close()
 			return nil, err
 		}
+		if !contended && treeContended != nil {
+			treeContended(r)
+		}
+		contended = true
 		if time.Now().After(deadline) {
 			f.Close()
 			return nil, refuse(treeBusy)

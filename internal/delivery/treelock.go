@@ -16,8 +16,14 @@ var treeLockWait = 10 * time.Second
 // two applies.
 var betweenPlanAndWrite func(r *Run)
 
-// treeBusy is the refusal when another apply holds the working tree.
-const treeBusy = "another apply to this repository is in progress"
+// treeContended, when set, runs in lockTree the first time it finds the
+// working tree held by another apply. Tests use it to see the second
+// apply wait.
+var treeContended func(r *Run)
+
+// treeBusy is the refusal when another apply holds the working tree. The
+// OS drops the lock when its holder dies, so waiting is the only step.
+const treeBusy = "another Öge apply to this repository is still running; apply again once it finishes"
 
 // treeLockPath is the lock file for the working tree at target: in the
 // private state dir, never in the user's repository. r.Dir is

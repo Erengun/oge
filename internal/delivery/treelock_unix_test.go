@@ -76,11 +76,11 @@ type result struct {
 }
 
 // race applies ra and then rb to user, forced to interleave: ra stops
-// between its plan and its write until rb has started and had time to
-// plan. During rb's plan, check runs.
+// between its plan and its write until rb is seen waiting for the working
+// tree. During rb's plan, check runs.
 func race(t *testing.T, user string, ra, rb *Run, check func()) (result, result) {
 	t.Helper()
-	planned, release := make(chan struct{}), make(chan struct{})
+	planned, release, contended := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	betweenPlanAndWrite = func(r *Run) {
 		switch r.ID {
 		case ra.ID:
@@ -90,18 +90,38 @@ func race(t *testing.T, user string, ra, rb *Run, check func()) (result, result)
 			check()
 		}
 	}
-	t.Cleanup(func() { betweenPlanAndWrite = nil })
+	treeContended = func(r *Run) {
+		if r.ID == rb.ID {
+			close(contended)
+		}
+	}
+	t.Cleanup(func() { betweenPlanAndWrite, treeContended = nil, nil })
 	da, db := make(chan result, 1), make(chan result, 1)
 	go func() {
 		a, err := ApplyOnto(ra, user, Choice{}, Base{})
 		da <- result{a, err}
 	}()
-	<-planned
+	select {
+	case <-planned:
+	case res := <-da:
+		t.Fatalf("the first apply ended before its write: %v", res.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first apply never reached its write")
+	}
 	go func() {
 		a, err := ApplyOnto(rb, user, Choice{}, Base{})
 		db <- result{a, err}
 	}()
-	time.Sleep(200 * time.Millisecond) // rb would plan now, unlocked
+	select {
+	case <-contended:
+	case res := <-db:
+		close(release)
+		<-da
+		t.Fatalf("the second apply ran without waiting for the first: %v", res.err)
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the second apply never waited for the working tree")
+	}
 	close(release)
 	return <-da, <-db
 }
