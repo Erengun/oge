@@ -1065,12 +1065,12 @@ func (h *home) inlineDiff() tea.Cmd {
 	if width <= 0 {
 		width = 80
 	}
-	full := h.full
+	full, view := h.full, h.chatView
 	return func() tea.Msg {
 		b, err := patch()
 		text := strings.TrimRight(string(b), "\n")
 		if full && err == nil && text != "" {
-			return diffEntryMsg(text)
+			return diffEntryMsg{view, text}
 		}
 		if err != nil || text == "" || strings.Count(text, "\n")+1 > inlineMax {
 			return nil
@@ -1079,16 +1079,22 @@ func (h *home) inlineDiff() tea.Cmd {
 		for i, l := range lines {
 			lines[i] = ansi.Truncate("    "+l, max(width-1, 8), "…")
 		}
-		return chatDiffMsg(lines)
+		return chatDiffMsg{view, lines}
 	}
 }
 
 // diffEntryMsg is a Verdict's patch for the full-screen transcript, which
-// draws it as hunks.
-type diffEntryMsg string
+// draws it as hunks; view is its Chat.
+type diffEntryMsg struct {
+	view *chatView
+	text string
+}
 
-// chatDiffMsg is a Verdict's inline diff, ready to print.
-type chatDiffMsg []string
+// chatDiffMsg is a Verdict's inline diff, ready to print in view's Chat.
+type chatDiffMsg struct {
+	view  *chatView
+	lines []string
+}
 
 // chatKey takes a key during a turn. Esc interrupts the turn; so does
 // Ctrl+C, and a second Ctrl+C quits. y or n answers a

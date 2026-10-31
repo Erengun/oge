@@ -615,9 +615,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 	case diffEntryMsg:
-		return h, h.diffEntry(string(m))
+		return h, h.diffEntry(m.text)
 	case chatDiffMsg:
-		lines := []string(m)
+		lines := m.lines
 		for i, l := range lines {
 			lines[i] = h.st.diffLine(l)
 		}
@@ -629,14 +629,14 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.adviceLanded(m)
 	case askAdviceTickMsg:
 		if t := h.turn; t != nil && t.askAdv != nil && t.askAdv.running && t.askAdv.ask == m.ask && t.askAdv.q == m.q && t.askAdv.seq == m.seq {
-			return h, askAdviceTick(m.ask, m.q, m.seq)
+			return h, askAdviceTick(h.chatView, m.ask, m.q, m.seq)
 		}
 		return h, nil
 	case askAdviceMsg:
 		return h, h.askAdviceLanded(m)
 	case adviceTickMsg:
 		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
-			return h, adviceTick(m.seq)
+			return h, adviceTick(h.chatView, m.seq)
 		}
 		return h, nil
 	}

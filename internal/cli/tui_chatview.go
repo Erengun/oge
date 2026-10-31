@@ -96,6 +96,20 @@ func chatViewOf(msg tea.Msg) *chatView {
 		return m.view
 	case chatClosedMsg:
 		return m.view
+	case chatDiffMsg:
+		return m.view
+	case diffEntryMsg:
+		return m.view
+	case sideChangesMsg:
+		return m.view
+	case adviceMsg:
+		return m.view
+	case adviceTickMsg:
+		return m.view
+	case askAdviceMsg:
+		return m.view
+	case askAdviceTickMsg:
+		return m.view
 	}
 	return nil
 }

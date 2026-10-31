@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -97,5 +98,81 @@ func TestCtrlCStopsTheFocusedChatOnly(t *testing.T) {
 	h.Update(ctrlC)
 	if !a.turn.stopped || b.turn.stopped || cancelled[b] != 0 || h.quit || h.chatView != a {
 		t.Errorf("turn: a stopped %v, b stopped %v, b cancelled %d, quit %v", a.turn.stopped, b.turn.stopped, cancelled[b], h.quit)
+	}
+}
+
+// deliver runs cmd off the update loop and hands the home each Chat's
+// message it ends in, as the program would.
+func deliver(h *home, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	switch m := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range m {
+			deliver(h, c)
+		}
+	case chatDiffMsg, diffEntryMsg, sideChangesMsg:
+		_, next := h.Update(m)
+		deliver(h, next)
+	default:
+		if chatViewOf(m) != nil {
+			_, next := h.Update(m)
+			deliver(h, next)
+			return
+		}
+		for _, c := range seqCmds(m) {
+			deliver(h, c)
+		}
+	}
+}
+
+// A cut ending in the background prints its Verdict and its diff in its
+// own Chat, and fills that Chat's sidebar: never the focused one's.
+func TestBackgroundVerdictDiffGoesToItsChat(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		h, a, b, _ := twoChats()
+		h.full = full
+		a.tr, b.tr = &transcript{}, &transcript{}
+		b.chat.verdict = func(*run.Result, int) (string, *lastRun) {
+			return "✓ accepted", &lastRun{id: "b-run", patch: func() ([]byte, error) {
+				return []byte("diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-old\n+new\n"), nil
+			}}
+		}
+		_, cmd := h.Update(chatCutMsg{view: b, seq: 1, res: &run.Result{Outcome: run.Accepted, Check: &oracle.Result{Pass: true}}})
+		deliver(h, cmd)
+		if h.chatView != a {
+			t.Fatalf("full %v: the focus moved", full)
+		}
+		if !strings.Contains(printed(b), "+new") || printed(a) != "" || len(a.tr.entries) != 0 {
+			t.Errorf("full %v: a %q (%d entries), b %q", full, printed(a), len(a.tr.entries), printed(b))
+		}
+		if full && (len(b.side.changes) != 1 || a.side.changes != nil) {
+			t.Errorf("sidebar changes: a %v, b %v", a.side.changes, b.side.changes)
+		}
+	}
+}
+
+// Each Chat numbers its own Consultations, so two can share a seq: the
+// advice lands in the Chat that asked, and its tick re-arms there.
+func TestAdviceLandsInItsChat(t *testing.T) {
+	h, a, b, _ := twoChats()
+	a.adv = &adviseState{seq: 1, running: true}
+	b.adv = &adviseState{seq: 1, running: true}
+	h.focus(b)
+	if _, cmd := h.Update(adviceTickMsg{view: a, seq: 1}); cmd == nil {
+		t.Error("a's tick did not re-arm while b had the focus")
+	}
+	advice := &run.Advice{ID: "c-1", Text: "try the other branch"}
+	h.Update(adviceMsg{view: a, seq: 1, advice: advice})
+	if a.adv.running || a.adv.advice != advice || !b.adv.running || b.adv.advice != nil || h.chatView != b {
+		t.Errorf("a %+v, b %+v", a.adv, b.adv)
+	}
+
+	ask := &agent.Ask{}
+	b.turn.askAdv = &askAdvice{ask: ask, seq: 1, running: true}
+	h.focus(a)
+	if _, cmd := h.Update(askAdviceTickMsg{view: b, ask: ask, seq: 1}); cmd == nil {
+		t.Error("b's ask advice tick did not re-arm while a had the focus")
 	}
 }
