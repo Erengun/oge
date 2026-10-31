@@ -65,7 +65,7 @@ func TestSelectViewWiresHerdr(t *testing.T) {
 	v := selectView(env, runFlags{}, task.Task{Title: "t"}, &pipeline.Frozen{})
 	u, ok := v.(*tui)
 	if !ok {
-		t.Skipf("not the live view: %T", v)
+		t.Fatalf("not the live view: %T", v)
 	}
 	if _, nop := u.m.herdr.(herdr.Nop); nop || u.m.herdr == nil {
 		t.Errorf("u.m.herdr = %T, want the real reporter", u.m.herdr)

@@ -369,7 +369,7 @@ type model struct {
 	interrupt     func()
 	gate          *gateState     // an open Gate, waiting for the human
 	notify        *notifier      // nil: no bell or desktop notification (#170)
-	herdr         herdr.Reporter // the pane's state for herdr; a no-op outside it
+	herdr         herdr.Reporter // the pane's state for herdr; nil outside it
 	alerts        []string       // queued, to leave through flushAlerts
 
 	// scroll: finished items are printed above the program (take) and leave
