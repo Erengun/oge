@@ -35,12 +35,13 @@ var wrappers = map[string]bool{"env": true, "command": true, "builtin": true, "e
 	"nohup": true, "time": true, "timeout": true, "stdbuf": true, "sudo": true, "doas": true}
 
 // sword is one shell word: its text with quotes removed, whether any of
-// it is expanded by the shell ($, a backtick), and whether any of it was
-// quoted.
+// it is expanded by the shell ($, a backtick), whether any of it was
+// quoted, and whether any of it was not.
 type sword struct {
 	text    string
 	dynamic bool
 	quoted  bool
+	bare    bool
 }
 
 // heredoc is a here-document's body; quoted is a quoted delimiter, so
@@ -53,17 +54,21 @@ type heredoc struct {
 }
 
 // scmd is one simple command, the operators between it and the previous
-// one (&&, ||, ;, a new line, |, &, ( and )), and the here-documents it
-// reads.
+// one (&&, ||, ;, a new line, |, &, ( and ), and $( <( >( opening a
+// substitution), the here-documents it reads, and whether its standard
+// output last went to a named file.
 type scmd struct {
-	words []sword
-	ops   []string
-	docs  []*heredoc
+	words  []sword
+	ops    []string
+	docs   []*heredoc
+	toFile bool
 }
 
 // splitShell splits a command into simple commands, and those into
 // words. A # starting a word comments out the rest of its line. ok is
-// false for an unbalanced quote or a here-document with no delimiter.
+// false for an unbalanced quote, or a here-document whose delimiter is
+// missing, never closes, or is one the shell would read differently
+// ($'EOF', "E\"OF").
 func splitShell(cmd string) (cmds []*scmd, ok bool) {
 	cur := &scmd{}
 	var ops []string
@@ -96,6 +101,29 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 		}
 		return 0
 	}
+	// redirect reads a redirection operator starting at i and returns
+	// where it ends. Its target is the next word, kept a word; >& and <&
+	// name a descriptor, >| overrides noclobber, and <( and >( open a
+	// process substitution. stdout is a redirection of standard output.
+	redirect := func(i int, stdout bool) int {
+		dup := false
+		for strings.ContainsRune("<>&|", next(i)) {
+			i++
+			dup = dup || rs[i] == '&'
+		}
+		if next(i) == '(' {
+			i++
+			if stdout {
+				cur.toFile = false
+			}
+			flushCmd(string(rs[i-1]) + "(")
+			return i
+		}
+		if stdout {
+			cur.toFile = !dup
+		}
+		return i
+	}
 	for i := 0; i < len(rs); i++ {
 		r := rs[i]
 		switch {
@@ -123,7 +151,7 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 		case r == '\\' && i+1 < len(rs):
 			i++
 			b.WriteRune(rs[i])
-			in = true
+			in, w.bare = true, true
 		case r == '#' && !in:
 			for i+1 < len(rs) && rs[i+1] != '\n' {
 				i++
@@ -136,6 +164,7 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 			j := i + 1
 			for _, d := range pending {
 				var body strings.Builder
+				closed := false
 				for j < len(rs) {
 					k := j
 					for k < len(rs) && rs[k] != '\n' {
@@ -148,9 +177,13 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 						check = strings.TrimLeft(line, "\t")
 					}
 					if check == d.delim {
+						closed = true
 						break
 					}
 					body.WriteString(line + "\n")
+				}
+				if !closed {
+					return nil, false
 				}
 				d.body = body.String()
 			}
@@ -171,8 +204,10 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 			i++
 			flushCmd(";")
 		case r == '&' && next(i) == '>':
-			// &> and &>>: a redirection, not a background job.
+			// &> and &>>: a redirection of both outputs, not a
+			// background job.
 			flushWord()
+			i = redirect(i+1, true)
 		case r == '<' && next(i) == '<' && (i+2 >= len(rs) || rs[i+2] != '<'):
 			flushWord()
 			i += 2
@@ -187,13 +222,15 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 			var dl strings.Builder
 			for ; i < len(rs) && !strings.ContainsRune(" \t\n;&|()<>", rs[i]); i++ {
 				switch c := rs[i]; {
+				case c == '$':
+					return nil, false // $'EOF' is EOF to the shell
 				case c == '\'' || c == '"':
 					d.quoted = true
 					e := i + 1
 					for e < len(rs) && rs[e] != c {
 						e++
 					}
-					if e >= len(rs) {
+					if e >= len(rs) || (c == '"' && strings.ContainsRune(string(rs[i+1:e]), '\\')) {
 						return nil, false
 					}
 					dl.WriteString(string(rs[i+1 : e]))
@@ -213,12 +250,21 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 			cur.docs = append(cur.docs, d)
 			pending = append(pending, d)
 		case r == '<' || r == '>':
-			// A redirection's target is the next word; keep it a word.
-			// >& and <& name a descriptor, >| overrides noclobber.
-			flushWord()
-			for strings.ContainsRune("<>&|", next(i)) {
-				i++
+			// A descriptor written right before it, as in 2>, is not
+			// a word.
+			stdout := r == '>'
+			if in && !w.quoted && !w.dynamic && strings.Trim(b.String(), "0123456789") == "" {
+				stdout = stdout && b.String() == "1"
+				w, in = sword{}, false
+				b.Reset()
 			}
+			flushWord()
+			i = redirect(i, stdout)
+		case r == '$' && next(i) == '(':
+			w.dynamic, in = true, true
+			b.WriteRune(r)
+			i++
+			flushCmd("$(")
 		case strings.ContainsRune(";&|()", r):
 			flushCmd(string(r))
 		default:
@@ -226,10 +272,10 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 				w.dynamic = true
 			}
 			b.WriteRune(r)
-			in = true
+			in, w.bare = true, true
 		}
 	}
-	if quote != 0 {
+	if quote != 0 || len(pending) > 0 {
 		return nil, false
 	}
 	flushCmd("")
@@ -246,12 +292,17 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 // existing directory moves the working directory, one that may fail
 // leaves both possible, and one in a subshell or a pipeline moves
 // nothing after it.
-func (p *policy) escapes(cmd string) bool {
+func (p *policy) escapes(cmd string) bool { return p.escapesIn(cmd, []string{p.ws[0]}, false) }
+
+// escapesIn is escapes for a command that may run in any of cwds.
+// program is a program for an interpreter that isn't a shell (python -c,
+// a here-document fed to node), where quoted text joins up into paths,
+// so no quoted part is taken for a pattern.
+func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 	cmds, ok := splitShell(cmd)
 	if !ok {
 		return true
 	}
-	cwds := []string{p.ws[0]}
 	every := cwds        // every directory a command may have run in
 	var failed []string  // where a cd that may have failed left the shell
 	var outer [][]string // cwds at each open (
@@ -260,7 +311,7 @@ func (p *policy) escapes(cmd string) bool {
 			switch op {
 			case ";", "\n", "||":
 				cwds, failed = union(cwds, failed), nil
-			case "(":
+			case "(", "$(", "<(", ">(":
 				outer = append(outer, cwds)
 			case ")":
 				// A subshell's cd doesn't leave it.
@@ -272,22 +323,20 @@ func (p *policy) escapes(cmd string) bool {
 				failed = nil
 			}
 		}
+		h := head(c.words)
+		name := ""
+		if h < len(c.words) {
+			name = filepath.Base(c.words[h].text)
+		}
 		for _, d := range c.docs {
-			if !p.hereData(c, cmds, k, d) && p.escapes(d.body) {
+			if !hereData(c, d) && p.escapesIn(d.body, cwds, program || interpreter(name)) {
 				return true
 			}
 		}
-		h := head(c.words)
-		for _, cwd := range cwds {
-			for i, w := range c.words {
-				if i > h && h < len(c.words) && separator(c.words[h].text, c.words[i-1].text, w.text) {
-					continue
-				}
-				if p.wordEscapes(cwd, w) {
-					return true
-				}
-			}
-		}
+		// An inline program is read as its own command. A shell's is
+		// then not a word; another interpreter's is a word too, read
+		// as a program (a # there is not a comment).
+		progs := map[int]bool{}
 		for j, w := range c.words {
 			// An interpreter heads the command, or sits further in it
 			// (xargs sh -c, find -exec sh -c): there, only the flag right
@@ -309,7 +358,9 @@ func (p *policy) escapes(cmd string) bool {
 					}
 					return true // a flag with no program
 				}
-				if prog := c.words[i+1]; prog.dynamic || p.escapes(prog.text) {
+				shell := !interpreter(filepath.Base(w.text))
+				progs[i+1] = shell
+				if prog := c.words[i+1]; prog.dynamic || p.escapesIn(prog.text, cwds, program || !shell) {
 					return true
 				}
 				if j != h {
@@ -317,10 +368,18 @@ func (p *policy) escapes(cmd string) bool {
 				}
 			}
 		}
-		if h >= len(c.words) {
-			continue
+		for _, cwd := range cwds {
+			for i, w := range c.words {
+				shell, prog := progs[i]
+				if shell || i > h && separator(name, c.words[i-1].text, w.text) {
+					continue
+				}
+				if p.wordEscapes(cwd, w, program || prog) {
+					return true
+				}
+			}
 		}
-		switch name := filepath.Base(c.words[h].text); name {
+		switch name {
 		case "cd", "pushd":
 			args := c.words[h+1:]
 			for len(args) > 0 && oneOf(args[0].text, []string{"-L", "-P", "-e", "-@", "--"}) {
@@ -398,26 +457,36 @@ func isAssign(t string) bool   { return assignRE.MatchString(t) }
 func isDuration(t string) bool { return durationRE.MatchString(t) }
 
 // hereData reports whether a here-document is only data: cat or tee
-// writes it out, nothing reads it as a program, and the shell runs
-// nothing inside it.
-func (p *policy) hereData(c *scmd, cmds []*scmd, k int, d *heredoc) bool {
+// writes it to a named file, so no pipe, substitution or shell reads it,
+// and the shell runs nothing inside it.
+func hereData(c *scmd, d *heredoc) bool {
 	h := head(c.words)
-	if h >= len(c.words) || !oneOf(filepath.Base(c.words[h].text), []string{"cat", "tee"}) {
+	if h >= len(c.words) || !oneOf(filepath.Base(c.words[h].text), []string{"cat", "tee"}) || !c.toFile {
 		return false
-	}
-	if k+1 < len(cmds) && oneOf("|", cmds[k+1].ops) {
-		return false // piped on, perhaps to a shell
 	}
 	return d.quoted || (!strings.Contains(d.body, "$(") && !strings.Contains(d.body, "`"))
 }
 
+// interpreter is a program that reads code and isn't a shell.
+func interpreter(name string) bool {
+	return inline[name] != nil && !oneOf(name, []string{"sh", "bash", "zsh", "dash", "ksh", "fish"})
+}
+
+// delimiters are the flags whose value is a field delimiter.
+var delimiters = map[string][]string{
+	"cut": {"-d", "--delimiter"}, "paste": {"-d", "--delimiters"},
+	"awk": {"-F"}, "gawk": {"-F", "--field-separator"}, "mawk": {"-F"}, "nawk": {"-F"},
+	"sort": {"-t", "--field-separator"}, "join": {"-t"}, "column": {"-s", "-t"},
+}
+
 // separator reports whether a lone / is a delimiter, not the root: an
-// argument of tr, or the value of cut -d, awk -F or sort -t.
+// argument of tr, or the value of a delimiter flag (cut -d, awk -F,
+// sort -t).
 func separator(name, prev, w string) bool {
 	if w == "" || strings.Trim(w, "/") != "" {
 		return false
 	}
-	return filepath.Base(name) == "tr" || oneOf(prev, []string{"-d", "-F", "-t", "--delimiter", "--field-separator"})
+	return name == "tr" || oneOf(prev, delimiters[name])
 }
 
 func union(a, b []string) []string {
@@ -431,22 +500,28 @@ func union(a, b []string) []string {
 }
 
 // wordEscapes reports whether any path-like part of a word leaves the
-// Workspace, read from cwd. A URL is not a path, except a file:// one.
-// In a quoted word, a /-prefixed part is a path only when its first
-// component exists: '/api/v1' and '/^func/' are patterns, '/etc/x' is a
-// path.
-func (p *policy) wordEscapes(cwd string, sw sword) bool {
+// Workspace, read from cwd. A URL is not a path, except a file:// one or
+// one with a .. in it (x://../.. is a path through a directory x:).
+//
+// In a word quoted whole, a /-prefixed part is a path only when its
+// first component exists: '/api/v1' and '/^func/' are patterns,
+// '/etc/x' is a path. Nothing is there to read, so long as the part
+// can't be joined to more text: not in a program, not with a $ or a
+// glob, and not where the word holds quotes of its own, as in awk's
+// system("cat /e" "tc/passwd").
+func (p *policy) wordEscapes(cwd string, sw sword, program bool) bool {
 	w := sw.text
-	parts := strings.FieldsFunc(w, func(r rune) bool { return strings.ContainsRune(" '\"(),;=<>|&`[]\n\t", r) })
+	pattern := sw.quoted && !sw.bare && !sw.dynamic && !program && !strings.ContainsAny(w, "'\"*?[")
+	parts := strings.FieldsFunc(w, func(r rune) bool { return strings.ContainsRune(" '\"(),;=<>|&`[]", r) })
 	for _, t := range parts {
-		if m := urlRE.FindStringSubmatch(t); m != nil {
+		if m := urlRE.FindStringSubmatch(t); m != nil && !hasDotDot(t) {
 			if !strings.EqualFold(m[1], "file") {
 				continue
 			}
 			t = t[len(m[0])-1:] // file:///etc/x is /etc/x
 		}
 		for _, t := range strings.Split(t, ":") {
-			if p.partEscapes(cwd, t, sw.quoted) {
+			if p.partEscapes(cwd, t, pattern) {
 				return true
 			}
 		}
@@ -454,15 +529,15 @@ func (p *policy) wordEscapes(cwd string, sw sword) bool {
 	return false
 }
 
-func (p *policy) partEscapes(cwd, t string, quoted bool) bool {
+func (p *policy) partEscapes(cwd, t string, pattern bool) bool {
 	switch {
 	case t == "":
 		return false
 	case strings.HasPrefix(t, "~"), strings.HasPrefix(t, "$HOME"), strings.HasPrefix(t, "${HOME}"):
 		return true
 	case strings.HasPrefix(t, "/"):
-		if quoted {
-			first := "/" + strings.SplitN(strings.TrimLeft(t, "/"), "/", 2)[0]
+		if pattern {
+			first := "/" + strings.SplitN(strings.TrimLeft(filepath.Clean(t), "/"), "/", 2)[0]
 			if _, err := os.Lstat(first); err != nil {
 				return false
 			}
