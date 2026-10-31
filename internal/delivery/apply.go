@@ -534,6 +534,13 @@ func ApplyOnto(r *Run, target string, c Choice, base Base) (*Applied, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The working tree first, then the Run; released in reverse. They
+	// cover the plan and the write, never a question to the human.
+	unlockTree, err := lockTree(r, target)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockTree()
 	unlock, err := lock(r)
 	if err != nil {
 		return nil, err
@@ -565,6 +572,9 @@ func ApplyOnto(r *Run, target string, c Choice, base Base) (*Applied, error) {
 	}
 	if p.Writes() == 0 {
 		return &Applied{Plan: p, Held: h}, nil
+	}
+	if betweenPlanAndWrite != nil {
+		betweenPlanAndWrite(r)
 	}
 	note := map[string]any{"kind": "apply", "candidate": r.Candidate, "outcome": r.Outcome, "flag": c.Outcome,
 		"files": p.Writes(), "merged": p.Merged, "target": target}
