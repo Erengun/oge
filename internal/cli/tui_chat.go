@@ -346,9 +346,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 					consult, ok = h.autoConsult()
 				}
 				if ok {
-					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; asking the advisor", h.feedbackBudget()))
+					line = h.ogeLine("✗ still failing after " + tries(h.feedbackBudget()) + "; asking the advisor")
 				} else {
-					line = h.ogeLine(fmt.Sprintf("✗ still failing after %d tries; your call", h.feedbackBudget()))
+					line = h.ogeLine("✗ still failing after " + tries(h.feedbackBudget()) + "; your call")
 				}
 				m, cmd := h.nextTurn(h.println(line))
 				return m, tea.Batch(cmd, consult)
@@ -912,7 +912,7 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		case pipeline.ChatFeedbackAsk:
 			// Öge doesn't prompt the agent for the human: the turn waits
 			// for s or /feedback, and is never sent on its own.
-			h.pendingFB = &pendingFeedback{text: res.Feedback, frozen: v.frozen, seq: msg.seq}
+			h.pendingFB = &pendingFeedback{text: res.Feedback, frozen: v.frozen}
 			return tea.Sequence(h.println(line), diff)
 		}
 		if h.turn != nil {
@@ -930,7 +930,6 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 type pendingFeedback struct {
 	text   string
 	frozen *pipeline.Frozen
-	seq    int
 }
 
 // feedbackMode is [chat] feedback, "ask" without a Chat.
@@ -1427,4 +1426,12 @@ func sideVerdict(line string) string {
 		parts = parts[:len(parts)-1]
 	}
 	return strings.Join(parts, " · ")
+}
+
+// tries is n feedback tries in words: "1 try", "3 tries".
+func tries(n int) string {
+	if n == 1 {
+		return "1 try"
+	}
+	return fmt.Sprintf("%d tries", n)
 }

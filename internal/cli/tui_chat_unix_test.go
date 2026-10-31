@@ -997,7 +997,7 @@ func TestHomeChatFeedbackOnBudgetConfigured(t *testing.T) {
 	})
 	s.composer()
 	s.type_("change Add\r")
-	s.expectAfter("  try 1", "oge › ✗ still failing after 1 tries; your call")
+	s.expectAfter("  try 1", "oge › ✗ still failing after 1 try; your call")
 	if n := strings.Count(s.out.String(), "Öge → agent: "); n != 1 {
 		t.Errorf("%d feedback turns, want 1", n)
 	}

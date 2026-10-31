@@ -56,7 +56,7 @@ type ChatConfig struct {
 	// human, "off" offers nothing. Empty is "ask".
 	Feedback string `toml:"feedback,omitempty"`
 	// FeedbackBudget is how many feedback turns a chain of cuts gets; 0 is
-	// DefaultFeedbackBudget.
+	// run.FeedbackBudget (3, D5).
 	FeedbackBudget int `toml:"feedback_budget,omitempty"`
 }
 
@@ -66,10 +66,6 @@ const (
 	ChatFeedbackAsk = "ask"
 	ChatFeedbackOff = "off"
 )
-
-// DefaultFeedbackBudget is the feedback turns a chain gets when none is
-// configured (D5).
-const DefaultFeedbackBudget = 3
 
 // ChatConfig returns the [chat] settings, the zero value when there are none.
 func (c *UserConfig) ChatConfig() ChatConfig {
