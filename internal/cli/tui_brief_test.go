@@ -20,12 +20,12 @@ func TestHomeAwayBrief(t *testing.T) {
 	h := testHome(100)
 	now := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
 	h.now = func() time.Time { return now }
-	h.away.last = now
+	h.absence.last = now
 
 	// A cut waits at its tamper Gate in a live process.
 	h.root = t.TempDir()
-	h.away.private = t.TempDir()
-	dir := filepath.Join(h.away.private, "runs", "20261101T090000-abcdef")
+	h.absence.private = t.TempDir()
+	dir := filepath.Join(h.absence.private, "runs", "20261101T090000-abcdef")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestHomeAwayFocus(t *testing.T) {
 	}
 	now = now.Add(3 * time.Minute)
 	h.Update(tea.FocusMsg{})
-	b := h.away.back
+	b := h.absence.back
 	if b == nil || !b.Window.From.Equal(left) || b.Away() != 12*time.Minute {
 		t.Fatalf("focus-in: brief = %+v, want one from %v", b, left)
 	}
@@ -138,7 +138,7 @@ func TestHomeAwayFocus(t *testing.T) {
 	h.Update(tea.BlurMsg{})
 	now = now.Add(30 * time.Minute)
 	h.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if b := h.away.back; b == nil || b.Away() != 30*time.Minute {
+	if b := h.absence.back; b == nil || b.Away() != 30*time.Minute {
 		t.Fatalf("resize: brief = %+v", b)
 	}
 	// A short blur is no absence.
@@ -146,8 +146,8 @@ func TestHomeAwayFocus(t *testing.T) {
 	h.Update(tea.BlurMsg{})
 	now = now.Add(time.Minute)
 	h.Update(tea.FocusMsg{})
-	if h.away.back != nil {
-		t.Errorf("a minute's blur made a brief: %+v", h.away.back)
+	if h.absence.back != nil {
+		t.Errorf("a minute's blur made a brief: %+v", h.absence.back)
 	}
 }
 

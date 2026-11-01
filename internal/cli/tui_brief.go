@@ -38,8 +38,8 @@ type awayState struct {
 func (h *home) noteInput(msg tea.Msg) {
 	switch msg.(type) {
 	case tea.BlurMsg:
-		if h.away.blurred.IsZero() {
-			h.away.blurred = h.clock()
+		if h.absence.blurred.IsZero() {
+			h.absence.blurred = h.clock()
 		}
 		return
 	case tea.KeyPressMsg, tea.MouseMsg, tea.FocusMsg, tea.WindowSizeMsg:
@@ -49,18 +49,18 @@ func (h *home) noteInput(msg tea.Msg) {
 	now := h.clock()
 	if from := h.awayFrom(); !from.IsZero() && wallSince(from, now) >= awayMin {
 		b := h.buildBrief(awayWindow(from, now))
-		h.away.back = &b
+		h.absence.back = &b
 	}
-	h.away.last, h.away.blurred = now, time.Time{}
+	h.absence.last, h.absence.blurred = now, time.Time{}
 }
 
 // awayFrom is when the absence under way started: when focus was lost,
 // else the last input. Zero before any input.
 func (h *home) awayFrom() time.Time {
-	if !h.away.blurred.IsZero() && !h.away.last.IsZero() {
-		return h.away.blurred
+	if !h.absence.blurred.IsZero() && !h.absence.last.IsZero() {
+		return h.absence.blurred
 	}
-	return h.away.last
+	return h.absence.last
 }
 
 // awayWindow is the window from the last input to now. The machine's
@@ -86,8 +86,8 @@ func wallSince(from, to time.Time) time.Duration {
 // human came back from, else the one under way. ok is false when
 // neither is awayMin long.
 func (h *home) brief() (b run.Brief, ok bool) {
-	if h.away.back != nil {
-		return *h.away.back, true
+	if h.absence.back != nil {
+		return *h.absence.back, true
 	}
 	now := h.clock()
 	from := h.awayFrom()
@@ -99,12 +99,12 @@ func (h *home) brief() (b run.Brief, ok bool) {
 
 // clearBrief drops the brief of the absence the human came back from:
 // they sent a message, or the Inbox showed it.
-func (h *home) clearBrief() { h.away.back = nil }
+func (h *home) clearBrief() { h.absence.back = nil }
 
 // briefLine is the header's line for the absence the human came back
 // from: "while you were away · 2h 14m · ▲1 ✗1 ✓2"; "" when there is none.
 func (h *home) briefLine() string {
-	b := h.away.back
+	b := h.absence.back
 	if b == nil {
 		return ""
 	}
@@ -143,8 +143,8 @@ func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 		chats = append(chats, bc)
 	}
 	var runs []run.BriefRun
-	if h.away.private != "" && h.root != "" {
-		runs, _ = runsSince(h.away.private, h.root, w.From)
+	if h.absence.private != "" && h.root != "" {
+		runs, _ = runsSince(h.absence.private, h.root, w.From)
 	}
 	return run.BuildBrief(w, chats, runs)
 }

@@ -443,8 +443,9 @@ type home struct {
 	deskStale  time.Duration
 	herdr      herdr.Reporter
 	herdrState herdr.State
-	// away is the away window and the return brief (tui_brief.go).
-	away awayState
+	// absence is the away window and the return brief (tui_brief.go); a
+	// Chat's own away (tui_since.go) is chatView.away.
+	absence awayState
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -1813,11 +1814,11 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, herdr: u.herdr, redraw: tea.Tick}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
-	h.away.last = h.clock()
+	h.absence.last = h.clock()
 	h.views = []*chatView{h.chatView}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
-		h.away.private = filepath.Dir(histDir)
+		h.absence.private = filepath.Dir(histDir)
 	}
 	h.getenv = env.Getenv
 	h.shell = runShell
