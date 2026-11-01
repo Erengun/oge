@@ -105,3 +105,47 @@ func TestAwayWindowWallClock(t *testing.T) {
 		t.Errorf("the window keeps a monotonic reading: %v – %v", w.From, w.To)
 	}
 }
+
+// Focus lost starts away at once; focus regained or a resize (a
+// reattach) ends it without a key.
+func TestHomeAwayFocus(t *testing.T) {
+	h := testHome(100)
+	now := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	h.now = func() time.Time { return now }
+	h.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+
+	// Read for five minutes without a key, then leave.
+	now = now.Add(5 * time.Minute)
+	left := now
+	h.Update(tea.BlurMsg{})
+	now = now.Add(9 * time.Minute)
+	if _, ok := h.brief(); ok {
+		t.Fatal("nine minutes since focus was lost is no absence yet")
+	}
+	now = now.Add(3 * time.Minute)
+	h.Update(tea.FocusMsg{})
+	b := h.away.back
+	if b == nil || !b.Window.From.Equal(left) || b.Away() != 12*time.Minute {
+		t.Fatalf("focus-in: brief = %+v, want one from %v", b, left)
+	}
+	if h.briefLine() != "while you were away · 12m" {
+		t.Errorf("line = %q", h.briefLine())
+	}
+
+	// A reattach's resize ends away as well.
+	h.clearBrief()
+	h.Update(tea.BlurMsg{})
+	now = now.Add(30 * time.Minute)
+	h.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if b := h.away.back; b == nil || b.Away() != 30*time.Minute {
+		t.Fatalf("resize: brief = %+v", b)
+	}
+	// A short blur is no absence.
+	h.clearBrief()
+	h.Update(tea.BlurMsg{})
+	now = now.Add(time.Minute)
+	h.Update(tea.FocusMsg{})
+	if h.away.back != nil {
+		t.Errorf("a minute's blur made a brief: %+v", h.away.back)
+	}
+}

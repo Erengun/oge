@@ -367,6 +367,7 @@ func (h *home) compose(v tea.View) tea.View {
 	out := tea.NewView(b.String())
 	out.AltScreen = true
 	out.MouseMode = tea.MouseModeCellMotion
+	out.ReportFocus = true
 	if v.Cursor != nil && curY >= 0 {
 		c := tea.NewCursor(left+curX, t.top+vh+curY)
 		c.Blink = false

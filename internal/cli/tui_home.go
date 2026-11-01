@@ -1319,6 +1319,7 @@ func (h *home) view() tea.View {
 	c := tea.NewCursor(x, y)
 	c.Blink = false
 	v.Cursor = c
+	v.ReportFocus = true // focus lost starts away; regained ends it
 	if h.wantsMouse() {
 		v.MouseMode = tea.MouseModeCellMotion
 	}

@@ -16,8 +16,13 @@ const awayMin = 10 * time.Minute
 
 // awayState is the home's away window.
 type awayState struct {
-	// last is the last key or mouse event's time, on the home's clock.
+	// last is the last key, mouse, focus-in or resize event's time, on
+	// the home's clock.
 	last time.Time
+	// blurred is when the terminal reported focus lost: away starts then,
+	// not ten minutes on. Zero while focused, or when the terminal sends
+	// no focus reports.
+	blurred time.Time
 	// back is the brief of the absence the human came back from, built
 	// once on the key that ended it; nil once seen or none.
 	back *run.Brief
@@ -26,20 +31,36 @@ type awayState struct {
 	private string
 }
 
-// noteInput moves the away window on a key or mouse event. One that ends
-// an absence of awayMin or more builds that absence's brief.
+// noteInput moves the away window (docs/ux/away.md, §Away). Away starts
+// when the terminal reports focus lost, or after awayMin with no key; a
+// key, a mouse event, focus regained or a resize (a reattach) ends it.
+// One that ends an absence of awayMin or more builds its brief.
 func (h *home) noteInput(msg tea.Msg) {
 	switch msg.(type) {
-	case tea.KeyPressMsg, tea.MouseMsg:
+	case tea.BlurMsg:
+		if h.away.blurred.IsZero() {
+			h.away.blurred = h.clock()
+		}
+		return
+	case tea.KeyPressMsg, tea.MouseMsg, tea.FocusMsg, tea.WindowSizeMsg:
 	default:
 		return
 	}
 	now := h.clock()
-	if last := h.away.last; !last.IsZero() && wallSince(last, now) >= awayMin {
-		b := h.buildBrief(awayWindow(last, now))
+	if from := h.awayFrom(); !from.IsZero() && wallSince(from, now) >= awayMin {
+		b := h.buildBrief(awayWindow(from, now))
 		h.away.back = &b
 	}
-	h.away.last = now
+	h.away.last, h.away.blurred = now, time.Time{}
+}
+
+// awayFrom is when the absence under way started: when focus was lost,
+// else the last input. Zero before any input.
+func (h *home) awayFrom() time.Time {
+	if !h.away.blurred.IsZero() && !h.away.last.IsZero() {
+		return h.away.blurred
+	}
+	return h.away.last
 }
 
 // awayWindow is the window from the last input to now. The machine's
@@ -69,10 +90,11 @@ func (h *home) brief() (b run.Brief, ok bool) {
 		return *h.away.back, true
 	}
 	now := h.clock()
-	if h.away.last.IsZero() || wallSince(h.away.last, now) < awayMin {
+	from := h.awayFrom()
+	if from.IsZero() || wallSince(from, now) < awayMin {
 		return run.Brief{}, false
 	}
-	return h.buildBrief(awayWindow(h.away.last, now)), true
+	return h.buildBrief(awayWindow(from, now)), true
 }
 
 // clearBrief drops the brief of the absence the human came back from:
