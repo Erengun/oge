@@ -63,6 +63,11 @@ type tui struct {
 	notify *notifier
 	// herdr is released when the program exits (nil: not under herdr).
 	herdr herdr.Reporter
+	// reachCmd and reachTitles are [notify] command and titles; reachRun
+	// runs the argv (nil: exec, without a shell).
+	reachCmd    []string
+	reachTitles bool
+	reachRun    argvRunner
 }
 
 const (

@@ -356,6 +356,9 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	user := userForNotify(env)
 	u.notify = notifierFor(env, f, user)
 	u.herdr = startHerdr(env)
+	if c := user.NotifyConfig(); c != nil {
+		u.reachCmd, u.reachTitles = c.Command, c.Titles
+	}
 	u.m.st.setTheme(user.ThemeName())
 	u.vim = user.VimMode()
 	u.vimEscape = user.VimEscapeKeys()

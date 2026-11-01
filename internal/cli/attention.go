@@ -165,6 +165,7 @@ func (h *home) attend() tea.Cmd {
 	if len(h.parked) > 0 && !h.composing() && h.toast == nil {
 		cmds = append(cmds, h.release())
 	}
+	cmds = append(cmds, h.reachCheck(now))
 	h.reportDesk()
 	return tea.Batch(cmds...)
 }
@@ -269,7 +270,7 @@ func (h *home) reportDesk() {
 		return
 	}
 	if h.run != nil {
-		h.herdrState = ""
+		h.herdrState, h.herdrMsg = "", ""
 		return
 	}
 	marks := make([]string, 0, len(h.views))
@@ -277,14 +278,19 @@ func (h *home) reportDesk() {
 		marks = append(marks, v.attnMark)
 	}
 	s := deskState(marks)
-	if s == h.herdrState || h.herdrState == "" && s == herdr.Idle {
+	msg := ""
+	switch {
+	case s == herdr.Blocked && h.reachDesk != nil && h.reachDesk.herdrNeed != "":
+		msg = h.reachDesk.herdrNeed // away: the fixed text with the count
+	case s == herdr.Blocked:
+		msg = notifyWaiting
+	case s == herdr.Idle && h.reachDesk != nil:
+		msg = h.reachDesk.herdrSettled
+	}
+	if s == h.herdrState && msg == h.herdrMsg || h.herdrState == "" && s == herdr.Idle && msg == "" {
 		return
 	}
-	h.herdrState = s
-	msg := ""
-	if s == herdr.Blocked {
-		msg = notifyWaiting
-	}
+	h.herdrState, h.herdrMsg = s, msg
 	h.herdr.Report(s, msg)
 }
 

@@ -220,6 +220,12 @@ type NotifyConfig struct {
 	Attention *bool `toml:"attention,omitempty"` // the Run needs you (a Gate)
 	RunEnd    *bool `toml:"run_end,omitempty"`   // the Run ended, any outcome
 	Bell      *bool `toml:"bell,omitempty"`      // ring the bell with either
+	// Command is an argv that carries the away messages off the terminal
+	// (docs/ux/away.md, A8): run without a shell, the text its last
+	// argument. Titles adds the Chat's title to a message; off by default,
+	// because a title is the human's own Task text.
+	Command []string `toml:"command,omitempty"`
+	Titles  bool     `toml:"titles,omitempty"`
 }
 
 // NotifyConfig returns the [notify] settings, or nil when there are none.
@@ -328,6 +334,17 @@ func (c *UserConfig) validate() []Problem {
 			if credentialValue.MatchString(v) || strings.HasPrefix(strings.TrimSpace(v), "sk-") {
 				add("advisor."+field, "looks like a credential; Öge never takes credentials in config (ADR-0006)")
 			}
+		}
+	}
+	if n := c.Notify; n != nil && n.Command != nil {
+		switch first := n.Command[0:min(1, len(n.Command))]; {
+		case len(first) == 0 || strings.TrimSpace(first[0]) == "":
+			add("notify.command", "must be an argv list whose first element is the program, such as [\"ntfy\", \"publish\", \"my-topic\"]")
+		case strings.ContainsAny(first[0], " \t\n"):
+			add("notify.command", "the first element is the program alone; put each argument in its own element (Öge runs no shell)")
+		}
+		if slices.ContainsFunc(n.Command, func(a string) bool { return strings.ContainsRune(a, 0) }) {
+			add("notify.command", "must not contain NUL")
 		}
 	}
 	if ch := c.Chat; ch != nil {
