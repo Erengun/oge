@@ -134,3 +134,20 @@ func (i *interrupts) why() string {
 	}
 	return ""
 }
+
+// hangUp ends the session as a SIGHUP would, for a terminal read that
+// failed with EIO: it runs i.hangup unless a SIGHUP already did, then
+// cancels without counting an interrupt, so a late SIGHUP doesn't force.
+func (i *interrupts) hangUp() {
+	i.mu.Lock()
+	f := i.hangup
+	if i.hungUp {
+		f = nil
+	}
+	i.hungUp, i.stopped = true, true
+	i.mu.Unlock()
+	if f != nil {
+		f()
+	}
+	i.cancel()
+}

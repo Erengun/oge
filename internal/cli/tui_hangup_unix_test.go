@@ -154,3 +154,22 @@ func TestRedirectFDs(t *testing.T) {
 		t.Errorf("fresh runner.log: %v %v", st, err)
 	}
 }
+
+// A tty read's EIO ends the session as a hangup, once: the SIGHUP that
+// follows neither runs the hangup again nor forces.
+func TestInterruptsEIOThenSIGHUP(t *testing.T) {
+	t.Parallel()
+	cancelled, hangups := 0, 0
+	in := newInterrupts(func() { cancelled++ })
+	in.hangup = func() { hangups++ }
+	in.hangUp()
+	in.signalled(syscall.SIGHUP)
+	if hangups != 1 || cancelled == 0 || in.why() != "hangup" {
+		t.Errorf("hangups %d, cancelled %d, why %q", hangups, cancelled, in.why())
+	}
+	select {
+	case <-in.forced:
+		t.Error("the late SIGHUP forced the stop")
+	default:
+	}
+}

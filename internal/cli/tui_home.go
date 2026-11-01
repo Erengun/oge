@@ -1884,6 +1884,12 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
 	err = u.program(in, h)
+	if ctx.Err() == nil && errors.Is(err, syscall.EIO) {
+		// The terminal read EIO: it hung up, and its SIGHUP may not have
+		// arrived yet. The session ends as on a hangup.
+		in.hangUp()
+		err = nil
+	}
 	if ctx.Err() != nil {
 		// A signal ended the session (a hangup, SIGTERM): every Chat
 		// stops as an interrupt does, and keeps its Workspace.
