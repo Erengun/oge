@@ -302,7 +302,11 @@ func (h *home) sendAdvice() tea.Cmd {
 	a := h.adv
 	if h.chat == nil || h.chat.get() != a.chat {
 		h.adv = nil // a Consultation of a Chat that has gone
-		h.msg = []string{"oge: that advice was for a Chat that has ended; nothing was sent"}
+		gone := "oge: that advice was for a Chat that has ended; nothing was sent"
+		if h.background {
+			return h.problem(gone) // into that Chat's transcript, not the focused box
+		}
+		h.msg = []string{gone}
 		return nil
 	}
 	h.adv = nil
@@ -315,6 +319,9 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 	res, problem := h.resolve(h.sel)
 	switch {
 	case problem != nil:
+		if h.background {
+			return h.problem(problem...)
+		}
 		h.msg = problem
 		return nil
 	}

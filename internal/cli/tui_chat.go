@@ -442,6 +442,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return h.chatKey(msg)
 	case tea.PasteMsg:
+		if h.chats != nil {
+			break // the /chats picker has the screen; a paste never lands behind it
+		}
 		if a := h.ask(); a == nil || a.Questions != nil {
 			h.comp.insertPaste(msg.Content)
 		}
