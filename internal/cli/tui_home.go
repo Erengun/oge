@@ -358,8 +358,8 @@ type home struct {
 	save   func() (string, error)
 	note   string // what happened, shown under the box (a save)
 	ctx    context.Context
-	// exiting is closed once Öge is exiting: the view has ended, by a
-	// quit or a signal. A cut's Gate still waiting then parks.
+	// exiting is closed once Öge is exiting: a hangup or SIGTERM came, or
+	// the view ended. A Gate still waiting then parks.
 	exiting <-chan struct{}
 	// msg is what stops or went wrong, shown under the box.
 	msg  []string
