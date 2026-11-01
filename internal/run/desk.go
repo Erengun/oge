@@ -35,6 +35,7 @@ const (
 	// (docs/ux/sessions.md). Only what the rail shows is kept.
 	RecSessionAdded    = "SessionAdded"
 	RecSessionArchived = "SessionArchived"
+	RecSessionSeen     = "SessionSeen" // a row's title and age refreshed in place
 	RecDeskClosed      = "DeskClosed"
 )
 
@@ -225,6 +226,10 @@ func (d *Desk) Seen(chat, run string) {
 // SessionAdded records a native session put on the Desk.
 func (d *Desk) SessionAdded(s SessionAdded) { _ = d.append(RecSessionAdded, s) }
 
+// SessionSeen records a row's refreshed title and last activity. Replay
+// updates the row where it is.
+func (d *Desk) SessionSeen(s SessionAdded) { _ = d.append(RecSessionSeen, s) }
+
 // SessionArchived records a session taken off the Desk.
 func (d *Desk) SessionArchived(provider, id string) {
 	_ = d.append(RecSessionArchived, SessionArchived{Provider: provider, ID: id})
@@ -245,6 +250,18 @@ func SessionsOnDesk(recs []DeskRecord) []SessionAdded {
 			if json.Unmarshal(r.Data, &s) == nil && s.Provider != "" && s.ID != "" {
 				drop(s.Provider, s.ID)
 				out = append(out, s)
+			}
+		case RecSessionSeen:
+			var s SessionAdded
+			if json.Unmarshal(r.Data, &s) == nil {
+				for i := range out {
+					if out[i].Provider == s.Provider && out[i].ID == s.ID {
+						out[i].Last = s.Last
+						if s.Title != "" {
+							out[i].Title = s.Title
+						}
+					}
+				}
 			}
 		case RecSessionArchived:
 			var s SessionArchived

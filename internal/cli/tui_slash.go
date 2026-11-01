@@ -101,6 +101,9 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		h.msg = []string{word + ": unknown command · /help lists commands"}
 		return nil, true
 	}
+	if word != "/close" {
+		h.selSess, h.sessNote = "", "" // only /close acts on a clicked row
+	}
 	h.dropAdviceEdit() // a command replaced what the box held
 	v := h.chatView    // the Chat it was typed in: /new and /chats move the focus
 	cmd, problem := c.run(h, args)

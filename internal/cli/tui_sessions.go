@@ -179,9 +179,13 @@ func (h *home) sessionsFound(m sessionsMsg) {
 	for _, s := range m.found.sessions {
 		for i, d := range h.onDesk {
 			if d.provider == s.Provider && d.id == s.ID && !s.LastActive.IsZero() {
-				h.onDesk[i].last = s.LastActive
+				title := h.onDesk[i].title
 				if s.Title != "" {
-					h.onDesk[i].title = s.Title
+					title = s.Title
+				}
+				if !s.LastActive.Equal(d.last) || title != d.title {
+					h.onDesk[i].last, h.onDesk[i].title = s.LastActive, title
+					h.deskRecord().SessionSeen(run.SessionAdded{Provider: d.provider, ID: d.id, Title: title, Last: s.LastActive})
 				}
 			}
 		}

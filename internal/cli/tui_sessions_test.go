@@ -302,3 +302,46 @@ func TestSessionAgeRefreshesOnlyWhenSessionsRerun(t *testing.T) {
 		t.Error("the last activity moved without a rerun")
 	}
 }
+
+func TestStaleRowSelectionDoesNotTakeOverClose(t *testing.T) {
+	h, _ := sessionsHome(t, "")
+	slash(h, "/sessions")
+	typeText(h, "a")
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
+	h.views = append(h.views, h.newView())
+	y := rowY(t, h, "◌ ")
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y})
+	if h.selSess == "" {
+		t.Fatal("row not selected")
+	}
+	// Another command, then /close: the Chat closes, the row stays.
+	slash(h, "/help")
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
+	n, rows := len(h.views), len(h.onDesk)
+	slash(h, "/close")
+	if len(h.views) != n-1 || len(h.onDesk) != rows {
+		t.Errorf("Chats %d -> %d, rows %d -> %d", n, len(h.views), rows, len(h.onDesk))
+	}
+}
+
+func TestSessionRefreshSurvivesARestart(t *testing.T) {
+	private := t.TempDir()
+	d, err := run.OpenDesk(private, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _ := sessionsHome(t, "")
+	h.chat.desk = d
+	slash(h, "/sessions")
+	typeText(h, "a")
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
+	h.onDesk[0].last = h.onDesk[0].last.Add(-72 * time.Hour) // as if added 3d ago
+	want := h.onDesk[0].last.Add(72 * time.Hour)
+	slash(h, "/sessions")
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
+	d.Close(true)
+	got := restoreSessions(private)
+	if len(got) != 1 || !got[0].last.Equal(want) {
+		t.Errorf("restored %+v, want last %v", got, want)
+	}
+}

@@ -688,6 +688,7 @@ func (h *home) railClick(x, y int) {
 			h.sessionRowClick(hit.sess)
 			return
 		}
+		h.selSess, h.sessNote = "", "" // any other hit leaves the row alone
 		if hit.open != "" {
 			h.openProject(hit.open)
 			return

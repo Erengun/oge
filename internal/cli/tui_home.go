@@ -1045,6 +1045,9 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 		h.tr.latest()
 	}
 	h.cleared, h.queuedText = "", ""
+	if strings.TrimSpace(text) != "/close" {
+		h.selSess, h.sessNote = "", "" // only /close acts on a clicked row
+	}
 	h.collapseSince() // sent: the card has done its work
 	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
 		// Sent as it was: still the advice turn, outside the Task.
