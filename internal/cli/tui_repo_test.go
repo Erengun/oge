@@ -144,3 +144,39 @@ func mkRepo(t *testing.T, dir string) {
 	}
 	initRepo(t, dir)
 }
+
+// The @file picker offers the focused Chat's repo's files: after /new
+// <path>, by moving an idle Chat or opening another, and back again.
+func TestAtPickerFollowsTheChatsRepo(t *testing.T) {
+	for _, opened := range []bool{false, true} {
+		h, _, b, _ := twoRepoHome(t)
+		first := h.chatView
+		h.listFiles = func() ([]string, error) { return []string{"alpha_only.go"}, nil }
+		h.repoFor = func(root string) (*repoCtx, []string) {
+			return &repoCtx{root: root, hist: &history{}, hc: &homeChat{},
+				listFiles: func() ([]string, error) { return []string{"beta_only.go"}, nil }}, nil
+		}
+		typeText(h, "@")
+		if got := h.trackedFiles(); len(got) != 1 || got[0] != "alpha_only.go" {
+			t.Fatalf("in alpha: %v", got)
+		}
+		h.comp.set("")
+		if !opened {
+			h.chat.c = nil // opened nothing: /new moves this Chat rather than opening another
+		}
+		submit(h, "/new "+b)
+		if h.root != repoRoot(t, b) || (h.chatView == first) != !opened {
+			t.Fatalf("opened %v: root %q, views %v", opened, h.root, nums(h))
+		}
+		typeText(h, "@")
+		if got := h.trackedFiles(); len(got) != 1 || got[0] != "beta_only.go" {
+			t.Errorf("opened %v: in beta the picker offers %v", opened, got)
+		}
+		if opened {
+			h.switchTo(first)
+			if got := h.trackedFiles(); len(got) != 1 || got[0] != "alpha_only.go" {
+				t.Errorf("back in alpha the picker offers %v", got)
+			}
+		}
+	}
+}

@@ -34,6 +34,7 @@ type atState struct {
 	offText    string
 	files      []string // the tracked files, loaded once per composer open
 	filesReady bool
+	filesOf    *repoCtx // the repo they were listed in
 }
 
 type fileItem struct{ path string }
@@ -75,10 +76,11 @@ func mentionable(p string) bool {
 	return !strings.ContainsFunc(p, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
 
-// trackedFiles loads the list once; it is kept until the next Run starts.
+// trackedFiles loads the list once; it is kept until the next Run starts
+// or the focus moves to a Chat in another repo.
 func (h *home) trackedFiles() []string {
-	if !h.at.filesReady {
-		h.at.filesReady = true
+	if !h.at.filesReady || h.at.filesOf != h.repoCtx {
+		h.at.files, h.at.filesReady, h.at.filesOf = nil, true, h.repoCtx
 		if h.listFiles != nil {
 			if files, err := h.listFiles(); err == nil {
 				for _, f := range files {
