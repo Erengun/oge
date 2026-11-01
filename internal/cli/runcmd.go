@@ -53,14 +53,20 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // each repo's config, setup, history and Chat are its own (repoCtx),
 // opened once, the first time a Chat goes there.
 func startHome(env Env, f runFlags, root string, first *resolved) int {
+	state, code := openState(env, root)
+	if code != ExitOK {
+		return code
+	}
+	// One Desk per user: a second bare oge only says where it is.
+	desk, code, done := openDesk(env, state)
+	if done {
+		return code
+	}
+	defer desk.Release()
 	if first != nil {
 		if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
 			return code
 		}
-	}
-	state, code := openState(env, root)
-	if code != ExitOK {
-		return code
 	}
 	histDir := filepath.Join(state.Private, "history")
 	// With no project config (first is nil), the Checks section holds
@@ -71,6 +77,7 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 		frozen = res.frozen
 	}
 	u := selectView(env, f, task.Task{}, frozen).(*tui)
+	u.desk = desk
 	rc, refused := openRepo(env, f, u, histDir, root, setup, res)
 	if rc == nil {
 		fmt.Fprintf(env.Stderr, "oge: %s\n", refused)

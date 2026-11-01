@@ -162,8 +162,7 @@ func TestBareOgePasteWithHiddenCharacter(t *testing.T) {
 		if hiddenCount(got) != 0 || !strings.Contains(got, "zerowidth") || strings.Count(got, "Add returns 0") != 60 {
 			t.Fatalf("the recorded Task:\n%s", got)
 		}
-		s.type_("\x03")
-		s.wait()
+		s.quitClosing("\x03")
 		return
 	}
 	t.Fatal("no RunStarted record")

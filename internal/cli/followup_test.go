@@ -131,8 +131,7 @@ func TestBareOgeFollowUpContinuesTheCandidate(t *testing.T) {
 	s.composer()
 	s.type_("fix Add\r")
 	s.expect("ÖGE RECEIPT")
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	runs = followRuns(t, f)
@@ -168,8 +167,7 @@ func TestBareOgeFollowUpKeepsHeldOutTestsOut(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, "notes.txt"), []byte("the user's notes\n"))
 	s.type_("add Sub too\r")
 	s.expect("· rebased onto the current repository")
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(f.repo), "out", "leak")); err == nil {
@@ -249,8 +247,7 @@ func TestBareOgeFollowUpRebasesOntoTheUsersChange(t *testing.T) {
 	if got := readFile(t, filepath.Join(f.repo, "notes.txt")); got != "the user's notes\n" {
 		t.Errorf("the user's edit is lost: %q", got)
 	}
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	for _, r := range followRuns(t, f) {
@@ -286,8 +283,7 @@ func TestBareOgeFollowUpRefusesAConflictingChange(t *testing.T) {
 	s.type_("add Sub too\r")
 	s.expect("Continues     Run ")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	runs := followRuns(t, f)
@@ -361,8 +357,7 @@ func TestBareOgeRejectEndsTheThread(t *testing.T) {
 	s.expect("Result gate")
 	s.type_("t\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	runs := followRuns(t, f)
@@ -393,8 +388,7 @@ func TestBareOgeFollowUpRefusesAnInheritedProtectedEdit(t *testing.T) {
 	s.type_("add Sub too\r")
 	s.expect("its result now touches protected add.go; /new for a fresh task")
 	s.composer()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitRefused {
+	if code := s.quitClosing("\x03"); code != ExitRefused {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(f.repo), "out", "implementer-2.turn")); err == nil {

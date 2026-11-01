@@ -199,8 +199,7 @@ func TestSetupPicksAProfileRunsAndSaves(t *testing.T) {
 	s.expect("default in your user config")
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	recs, err := ledger.Replay(f.onlyRun(t))
@@ -456,8 +455,7 @@ func TestHomeLoggedOutDefaultOpensComposerAndPicksAnother(t *testing.T) {
 	s.type_("n")
 	s.type_("\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }

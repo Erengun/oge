@@ -42,8 +42,7 @@ func homeTurn(t *testing.T, f *runFixture, script, text string, args ...string) 
 	s.type_("yo\r")
 	s.expect(text)
 	s.mark = len(s.out.String())
-	s.type_("\x03")
-	s.wait()
+	s.quitClosing("\x03")
 	return f.onlyRun(t)
 }
 
@@ -82,8 +81,7 @@ func TestHomeRepliedSkipsQAAndCheck(t *testing.T) {
 	}
 	s.type_("yo\r")
 	s.repliedThenComposer() // the home isn't waiting
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	got := s.out.String()

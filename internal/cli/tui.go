@@ -37,6 +37,9 @@ type tui struct {
 	deskQuiet    time.Duration
 	deskStale    time.Duration // [desk] stale_gate
 	deskProjects []string      // [desk] projects, ~ expanded
+	// desk is the user's Desk record (docs/ux/away.md), the home's to
+	// write; nil records nothing.
+	desk *run.Desk
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}

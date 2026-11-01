@@ -485,6 +485,27 @@ func (s *homeSession) type_(keys string) {
 	}
 }
 
+// quitClosing types keys that quit, answers the quit ask with c (close
+// the Chats) when it comes, and returns the exit code.
+func (s *homeSession) quitClosing(keys string) int {
+	s.t.Helper()
+	s.type_(keys)
+	asked := false
+	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		select {
+		case code := <-s.exit:
+			return code
+		default:
+		}
+		if !asked && strings.Contains(s.screen(s.out.String()), "k keep · c close") {
+			asked = true
+			s.type_("c")
+		}
+	}
+	s.t.Fatalf("oge never exited\n%s", s.out.String())
+	return -1
+}
+
 func (s *homeSession) wait() int {
 	s.t.Helper()
 	select {
@@ -508,8 +529,7 @@ func TestBareOgeComposesRunsAndLoops(t *testing.T) {
 	// The whole scrollback now, on an 80x24 terminal (the pipe reports no
 	// size): the transcript of the Run, and the composer back, empty.
 	got := normHome(s.settledScreen())
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if n := len(runDirs(t, f)); n != 1 {
@@ -544,8 +564,7 @@ func TestBareOgeStashAndBackslashNewline(t *testing.T) {
 	s.expectScreen("│ ❯ half a thought zq7")
 	s.type_("\\\rmore")
 	s.expectScreen("│   more")
-	s.type_("\x03\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d", code)
 	}
 }
@@ -569,8 +588,7 @@ func TestBareOgeRunsASecondTaskFromTheEditor(t *testing.T) {
 	s.expectScreen("second task zq7") // the box shows what the editor left
 	s.type_("\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if len(edited) != 1 || !strings.Contains(edited[0], "<!--") {
@@ -615,8 +633,8 @@ func TestBareOgeTwoTasksInOneProgram(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(f.repo, "add.go")); !strings.Contains(string(b), "return a + b") {
 		t.Errorf("[a] didn't apply the Candidate: add.go is\n%s", b)
 	}
-	s.type_("\x03\x03") // back to the composer, then leave
-	if code := s.wait(); code != ExitOK {
+	// back to the composer, then leave
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if n := len(runDirs(t, f)); n != 2 {
@@ -655,8 +673,7 @@ func TestBareOgeBranchCommand(t *testing.T) {
 	}
 	s.type_("/branch try1\r")
 	s.expect("branch try1 already exists")
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }
@@ -673,8 +690,7 @@ func TestBareOgeGateInTheTranscript(t *testing.T) {
 	s.type_("t\r")
 	s.ended()
 	got := normHome(s.settledScreen())
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	golden(t, "home-gate", got)
@@ -796,8 +812,8 @@ func TestBareOgeRefusesAConfigEditedWhileComposing(t *testing.T) {
 	writeFile(t, filepath.Join(f.repo, ".oge", "oge.toml"), []byte(cfg))
 	s.type_("fix Add\r")
 	s.expect("this Run isn't valid")
-	s.type_("\x03\x03") // clear the Task, then leave
-	if code := s.wait(); code != ExitOK {
+	// clear the Task, then leave
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if n := len(runDirs(t, f)); n != 0 {
@@ -843,8 +859,7 @@ func TestBareOgeStatusLineAndCtrlO(t *testing.T) {
 	s.type_("\x0f")
 	s.type_("t\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }
@@ -873,8 +888,7 @@ func TestBareOgeHistoryRecallAndSearch(t *testing.T) {
 	s.expectScreen("(reverse-i-search)'zq7': add tests zq7")
 	s.type_("\r") // accepts into the box, doesn't submit
 	s.expectScreen("│ ❯ add tests zq7")
-	s.type_("\x03\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if n := len(runDirs(t, f)); n != 2 {
@@ -900,8 +914,7 @@ func TestBareOgeComposerKillYankUndoAndSubmit(t *testing.T) {
 	s.type_("fix Add stale\x17x\x19\x1f\x19\r")
 	s.expect("> fix Add xstale")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }

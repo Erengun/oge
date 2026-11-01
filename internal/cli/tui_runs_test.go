@@ -199,8 +199,7 @@ func TestRunPickerEndToEnd(t *testing.T) {
 	if b := readFile(t, filepath.Join(f.repo, "add.go")); b != fxFixed {
 		t.Errorf("add.go after the apply:\n%s", b)
 	}
-	s.type_("\x03\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }

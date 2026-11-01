@@ -65,8 +65,8 @@ func TestBareOgeInterruptInPagerOrEditorIsTheirs(t *testing.T) {
 	}
 	s.type_("still here")
 	s.expect("still here")
-	s.type_("\x03\x03") // clear it, then leave
-	if code := s.wait(); code != ExitOK {
+	// clear it, then leave
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if n := len(runDirs(t, f)); n != 1 {

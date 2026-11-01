@@ -31,8 +31,7 @@ func TestBareOgeShowsAnInfrastructureStopUnderATallFrame(t *testing.T) {
 	s.expect("ÖGE RECEIPT")
 	s.composer()
 	got := normHome(s.settledScreen())
-	s.type_("\x03")
-	s.wait()
+	s.quitClosing("\x03")
 	for _, bad := range []string{"reviewing", "Nothing needs you", "ctrl+o to collapse"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("%q after the stop:\n%s", bad, got)
