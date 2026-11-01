@@ -679,9 +679,8 @@ func TestRailNeedsRoomAndToggles(t *testing.T) {
 	}
 }
 
-// /new with max_active Chats working says so once, opens nothing that
-// time, and never refuses: /new again opens one, and later ones say
-// nothing more.
+// /new with max_active Chats working opens the Chat and says so once,
+// in place of the usual note; later ones say nothing more.
 func TestNewPastTheCapWarnsOnce(t *testing.T) {
 	h := deskHome()
 	h.turn = &chatTurn{}
@@ -689,18 +688,14 @@ func TestNewPastTheCapWarnsOnce(t *testing.T) {
 		h.views = append(h.views, &chatView{num: len(h.views) + 1, turn: &chatTurn{}})
 	}
 	submit(h, "/new")
-	if len(h.views) != 3 || !strings.Contains(h.note, "3 Chats are working") || !strings.Contains(h.note, "/new again opens another anyway") {
-		t.Fatalf("views %v, note %q", nums(h), h.note)
-	}
-	submit(h, "/new")
-	if len(h.views) != 4 || h.num != 4 || strings.Contains(h.note, "research") {
-		t.Fatalf("second /new: views %v, focused %d, note %q", nums(h), h.num, h.note)
+	if len(h.views) != 4 || h.num != 4 || !strings.Contains(h.note, "3 Chats are working") || strings.Contains(h.note, "again") {
+		t.Fatalf("first /new past the cap: views %v, focused %d, note %q", nums(h), h.num, h.note)
 	}
 	h.turn = &chatTurn{}
 	h.chat.c = &run.Chat{}
 	submit(h, "/new")
-	if len(h.views) != 5 || strings.Contains(h.note, "research") {
-		t.Errorf("a later /new: views %v, note %q", nums(h), h.note)
+	if len(h.views) != 5 || h.num != 5 || strings.Contains(h.note, "research") {
+		t.Errorf("a later /new: views %v, focused %d, note %q", nums(h), h.num, h.note)
 	}
 	// Under the cap, and with a cap set higher, nothing is said.
 	h = deskHome()
@@ -747,5 +742,136 @@ func TestDoneIsNotAnAppliedCut(t *testing.T) {
 	applied = true
 	if m, _ := glyph(v, now, pipeline.DefaultDeskQuiet); m != "○" {
 		t.Errorf("glyph = %s for an applied cut, want ○", m)
+	}
+}
+
+// redraws records the redraws the home asks for, firing none.
+type redraws struct {
+	d   []time.Duration
+	msg []tea.Msg
+}
+
+func (r *redraws) after(d time.Duration, fn func(time.Time) tea.Msg) tea.Cmd {
+	r.d = append(r.d, d)
+	r.msg = append(r.msg, fn(time.Time{}))
+	return func() tea.Msg { return nil }
+}
+
+// A Chat whose agent goes silent shows ? with no key pressed: one redraw
+// is asked for at the quiet deadline, and the frame after it shows it.
+func TestQuietIsDrawnWithNoMessage(t *testing.T) {
+	h, now := railHome(120, 2)
+	r := &redraws{}
+	h.redraw = r.after
+	two := h.views[1]
+	two.turn, two.lastEvent = &chatTurn{}, *now
+	h.Update(chatEvMsg{view: two, ev: agent.Event{}, ok: true})
+	if len(r.d) != 1 || r.d[0] != pipeline.DefaultDeskQuiet {
+		t.Fatalf("redraws %v, want one in %s", r.d, pipeline.DefaultDeskQuiet)
+	}
+	h.Update(chatEvMsg{view: two, ev: agent.Event{}, ok: true})
+	if len(r.d) != 1 {
+		t.Fatalf("a second event asked for another redraw: %v", r.d)
+	}
+	if col := strings.Join(railCol(h), "\n"); !strings.Contains(col, "2 ●") {
+		t.Fatalf("rail before the deadline:\n%s", col)
+	}
+	*now = now.Add(pipeline.DefaultDeskQuiet)
+	h.Update(r.msg[0])
+	if col := strings.Join(railCol(h), "\n"); !strings.Contains(col, "2 ?") {
+		t.Errorf("rail after the quiet redraw:\n%s", col)
+	}
+	if len(r.d) != 1 {
+		t.Errorf("a quiet turn asked for more redraws: %v", r.d)
+	}
+}
+
+// A ✓ in view for a second clears on screen with no key pressed.
+func TestSeenIsDrawnWithNoMessage(t *testing.T) {
+	h, now := railHome(120, 2)
+	r := &redraws{}
+	h.redraw = r.after
+	two := h.views[1]
+	two.name, two.last, two.side.outcome, two.doneAt = "docs", &lastRun{}, run.Accepted, *now
+	h.Update(alt('2'))
+	if h.num != 2 || len(r.d) != 1 || r.d[0] != seenAfter {
+		t.Fatalf("focused %d, redraws %v, want one in %s", h.num, r.d, seenAfter)
+	}
+	if got := ansi.Strip(h.header(200)); !strings.Contains(got, "✓1") {
+		t.Fatalf("header before a second in view: %q", got)
+	}
+	*now = now.Add(seenAfter)
+	h.Update(r.msg[0])
+	if got := ansi.Strip(h.header(200)); strings.Contains(got, "✓") {
+		t.Errorf("header after the seen redraw: %q", got)
+	}
+}
+
+// Passing through a ✓ Chat for less than a second leaves it unseen: the
+// key that leaves it is not a key in it.
+func TestSwitchingThroughKeepsTheDoneUnseen(t *testing.T) {
+	h, now := railHome(120, 3)
+	two := h.views[1]
+	two.last, two.side.outcome, two.doneAt = &lastRun{}, run.Accepted, *now
+	h.Update(alt('2'))
+	*now = now.Add(seenAfter / 2)
+	h.Update(alt('1'))
+	if m, _ := h.mark(two); h.num != 1 || m != "✓" {
+		t.Errorf("focused %d, Chat 2 is %s after half a second in view, want ✓", h.num, m)
+	}
+	h.Update(alt('2'))
+	h.Update(alt('3'))
+	if m, _ := h.mark(two); h.num != 3 || m != "✓" {
+		t.Errorf("focused %d, Chat 2 is %s after passing through, want ✓", h.num, m)
+	}
+}
+
+// Advice the human sends after a failed Check is working while it runs;
+// a send-back still held is ✗ again once it ends with no cut. Advice sent
+// on its own answers nothing: the failure stays news.
+func TestFailedCheckAndAdviceTurns(t *testing.T) {
+	h := deskHome()
+	c := &run.Chat{}
+	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
+	h.pendingFB = &pendingFeedback{text: "1 failing"}
+	h.sendAdviceTurn(c, &run.Advice{ID: "a1", Text: "try the other path"}, false)
+	if m, _ := h.mark(h.chatView); h.turn == nil || m != "●" {
+		t.Fatalf("glyph = %s during the advice turn, want ●", m)
+	}
+	h.turn = nil // it ended; no cut
+	if m, _ := h.mark(h.chatView); m != "✗" {
+		t.Errorf("glyph = %s with the send-back still held, want ✗", m)
+	}
+
+	h = deskHome()
+	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
+	h.sendAdviceTurn(c, &run.Advice{ID: "a2", Text: "try the other path"}, true)
+	if m, _ := h.mark(h.chatView); h.turn == nil || m != "●" {
+		t.Fatalf("glyph = %s during the automatic advice turn, want ●", m)
+	}
+	h.turn = nil
+	if m, _ := h.mark(h.chatView); m != "✗" {
+		t.Errorf("glyph = %s after an automatic turn with no cut, want ✗", m)
+	}
+}
+
+// Öge's own feedback turn ([chat] feedback = "on") answers nothing either;
+// the human's send-back does.
+func TestFeedbackTurnsAndTheFailure(t *testing.T) {
+	h := deskHome()
+	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
+	h.feedbackSubmit("1 failing", nil, nil)
+	h.turn = nil
+	if m, _ := h.mark(h.chatView); m != "✗" {
+		t.Errorf("glyph = %s after the automatic feedback turn, want ✗", m)
+	}
+	h.pendingFB = &pendingFeedback{text: "1 failing"}
+	submit(h, "/feedback")
+	if h.turn == nil || !h.answered {
+		t.Fatal("/feedback started no turn")
+	}
+	h.turn = nil
+	if m, _ := h.mark(h.chatView); m != "○" {
+		t.Errorf("glyph = %s after the human's send-back, want ○", m)
 	}
 }

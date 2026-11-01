@@ -404,10 +404,13 @@ type home struct {
 	deskMax   int
 	deskQuiet time.Duration
 	capNoted  bool
-	toast     *toast
-	toastSeq  int
-	run       *model    // nil while composing
-	notify    *notifier // the session's alerts; nil when silent (#170)
+	// redraw schedules a redraw (tea.Tick); nil schedules none, as in
+	// tests that drive the home by hand.
+	redraw   func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
+	toast    *toast
+	toastSeq int
+	run      *model    // nil while composing
+	notify   *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -589,11 +592,13 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if h.full {
 		if cmd, ok := h.fullUpdate(msg); ok {
+			cmd = withTick(cmd, h.deskTick())
 			restore()
 			return h, cmd
 		}
 	}
 	m, cmd := h.update(msg)
+	cmd = withTick(cmd, h.deskTick())
 	if h.adviceEdit != nil && h.comp != nil && h.comp.empty() {
 		h.dropAdviceEdit() // emptied: what is typed next isn't the advice
 	}
@@ -628,6 +633,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatStepMsg:
 		return h, h.cutStepped(m)
+	case deskTickMsg:
+		if h.tickAt.Equal(m.at) {
+			h.tickAt = time.Time{} // drawn again now; Update asks for the next
+		}
+		return h, nil
 	case verifyTickMsg:
 		if h.verify != nil && h.verify.seq == m.seq {
 			return h, verifyTick(h.chatView, m.seq)
@@ -1760,7 +1770,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
-	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, redraw: tea.Tick}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}

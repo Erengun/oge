@@ -1053,7 +1053,11 @@ func (h *home) sendBack() (tea.Cmd, string) {
 		return nil, "/feedback: a newer cut is verifying"
 	}
 	h.pendingFB = nil
-	return h.feedbackSubmit(p.text, p.frozen, nil), ""
+	cmd := h.feedbackSubmit(p.text, p.frozen, nil)
+	if h.turn != nil {
+		h.answered = true // the human's own send-back answers the failure
+	}
+	return cmd, ""
 }
 
 // feedbackCmd is /feedback.
@@ -1079,7 +1083,7 @@ func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) 
 	}
 	first, _, _ := strings.Cut(text, "\n")
 	h.turn = &chatTurn{text: first, frozen: f, queued: queued, oge: true}
-	h.lastEvent, h.answered = h.clock(), true
+	h.lastEvent = h.clock()
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	ctx, v := h.ctx, h.chatView
 	return func() tea.Msg {

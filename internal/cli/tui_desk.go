@@ -29,15 +29,15 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 	if h.chat == nil || (h.turn == nil && h.verify == nil && h.chat.get() == nil) {
 		return h.resetView(), ""
 	}
-	if n := h.working(); n >= h.maxActive() && !h.capNoted {
-		h.capNoted = true
-		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of · /new again opens another anyway", n)
-		return nil, ""
-	}
-	old, v := h.num, h.newView()
+	n, old, v := h.working(), h.num, h.newView()
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
+	if n >= h.maxActive() && !h.capNoted {
+		// Said once, in place of that: the Chat opens all the same.
+		h.capNoted = true
+		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
+	}
 	return nil, ""
 }
 
@@ -285,15 +285,17 @@ const seenAfter = time.Second
 // Check, then a turn gone quiet for quiet (never shown as working), work,
 // an Accepted cut neither applied nor seen yet, and idle. It names no tool.
 //
-// A failed Check is news until a turn answers it: a message, send back or
-// advice sent after the cut. What that turn leads to is shown instead, so
-// a turn that ends without a cut leaves the Chat idle, not ✗ again; the
-// sidebar still says the Check failed until the next cut.
+// A failed Check is news until the human answers it: a message, send back
+// or advice they sent after the cut (an automatic turn answers nothing).
+// What that turn leads to is shown instead, so a turn that ends without a
+// cut leaves the Chat idle, not ✗ again; the sidebar still says the Check
+// failed until the next cut. A send-back still held is ✗ whenever no turn
+// or check runs, as the status line says.
 func glyph(v *chatView, now time.Time, quiet time.Duration) (mark, coarse string) {
 	switch {
 	case v.cutGate != nil, v.stale != nil, v.turn != nil && len(v.turn.asks) > 0:
 		return "▲", "needs you"
-	case v.pendingFB != nil, v.turn == nil && v.verify == nil && v.side.outcome == run.Failed && !v.answered:
+	case v.turn == nil && v.verify == nil && (v.pendingFB != nil || v.side.outcome == run.Failed && !v.answered):
 		return "✗", "check failed"
 	case v.turn != nil && !v.lastEvent.IsZero() && now.Sub(v.lastEvent) >= quiet:
 		return "?", "quiet"
@@ -303,6 +305,57 @@ func glyph(v *chatView, now time.Time, quiet time.Duration) (mark, coarse string
 		return "✓", "done"
 	}
 	return "○", "idle"
+}
+
+// deskTickMsg redraws the screen at when, the moment v's glyph changes
+// with no message to show it: a turn gone quiet, a ✓ in view seen.
+type deskTickMsg struct {
+	view *chatView
+	at   time.Time
+}
+
+// redrawAt is when v's glyph next changes on its own: its turn going
+// quiet, or its ✓ seen while it has the focus. Zero for never.
+func (h *home) redrawAt(v *chatView, now time.Time) time.Time {
+	var at time.Time
+	if v.turn != nil && !v.lastEvent.IsZero() {
+		if q := v.lastEvent.Add(h.quietAfter()); q.After(now) {
+			at = q
+		}
+	}
+	if !v.focusAt.IsZero() {
+		if m, _ := glyph(v, now, h.quietAfter()); m == "✓" {
+			if s := later(v.focusAt, v.doneAt).Add(seenAfter); at.IsZero() || s.Before(at) {
+				at = s
+			}
+		}
+	}
+	return at
+}
+
+// deskTick is the one redraw the Chat being handled needs next, when no
+// earlier one is due: nothing animates, the screen is only drawn again at
+// that moment.
+func (h *home) deskTick() tea.Cmd {
+	v := h.chatView
+	if h.redraw == nil || v == nil {
+		return nil
+	}
+	now := h.clock()
+	at := h.redrawAt(v, now)
+	if at.IsZero() || v.tickAt.After(now) && !v.tickAt.After(at) {
+		return nil
+	}
+	v.tickAt = at
+	return h.redraw(at.Sub(now), func(time.Time) tea.Msg { return deskTickMsg{view: v, at: at} })
+}
+
+// withTick adds a deskTick to cmd.
+func withTick(cmd, tick tea.Cmd) tea.Cmd {
+	if tick == nil {
+		return cmd
+	}
+	return tea.Batch(cmd, tick)
 }
 
 // seenBy reports whether the human has seen the Chat's Accepted cut by

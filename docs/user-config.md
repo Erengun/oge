@@ -68,7 +68,7 @@ max_active = 3   # working Chats /new opens another beside without a word; 0 or 
 quiet = "3m"     # a turn with no agent event for this long shows ? quiet, not ● working
 ```
 
-When `max_active` Chats or more are working, the first `/new` of the session opens nothing and says so: research puts what one person can keep track of at about 3. `/new` again opens the Chat anyway; it never refuses, and it doesn't say it twice. `quiet` takes a Go duration such as `"90s"` or `"5m"`.
+When `max_active` Chats or more are working, the first `/new` of the session opens the Chat and says once that research puts what one person can keep track of at about 3. `/new` never refuses, and it doesn't say it twice. `quiet` takes a Go duration such as `"90s"` or `"5m"`.
 
 **Advisor.** `[advisor] auto` says what happens when a chain's feedback budget is spent: `ask` (the default) shows the advice first, `on` sends it, `off` never consults on its own.
 

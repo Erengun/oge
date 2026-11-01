@@ -79,9 +79,11 @@ type chatView struct {
 	// heard from the agent, or began; doneAt is when its cut was
 	// Accepted, seen once the human has looked at it; focusAt is when
 	// this Chat took the focus, zero while another one has it. answered
-	// is a turn sent since the last cut: a failed Check it followed is
-	// no longer news (glyph).
+	// is a turn the human sent since the last cut: a failed Check it
+	// followed is no longer news (glyph). tickAt is when the redraw for
+	// the glyph's next change is due (deskTick), zero for none.
 	lastEvent time.Time
+	tickAt    time.Time
 	doneAt    time.Time
 	seen      bool
 	focusAt   time.Time
@@ -189,6 +191,8 @@ func chatViewOf(msg tea.Msg) *chatView {
 	case askAdviceMsg:
 		return m.view
 	case askAdviceTickMsg:
+		return m.view
+	case deskTickMsg:
 		return m.view
 	}
 	return nil
