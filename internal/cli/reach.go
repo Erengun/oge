@@ -180,10 +180,17 @@ func (r *reach) settledText(chats, waiting []reachChat) string {
 	if ready > 0 {
 		parts = append(parts, strconv.Itoa(ready)+" ready")
 	}
-	if need == 1 && len(waiting) == 1 {
-		parts = append(parts, "Chat "+strconv.Itoa(waiting[0].num)+" needs you")
-	} else if need > 0 {
-		parts = append(parts, strconv.Itoa(need)+" needs you")
+	switch {
+	case need == 1 && len(waiting) == 1:
+		who := "Chat " + strconv.Itoa(waiting[0].num)
+		if t := r.title(waiting[0]); t != "" {
+			who += " " + t
+		}
+		parts = append(parts, who+" needs you")
+	case need == 1:
+		parts = append(parts, "1 needs you")
+	case need > 1:
+		parts = append(parts, strconv.Itoa(need)+" need you")
 	}
 	if failed > 0 {
 		parts = append(parts, strconv.Itoa(failed)+" failed")

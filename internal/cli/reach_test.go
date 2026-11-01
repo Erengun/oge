@@ -323,3 +323,27 @@ func TestReachStaleResendsCoalesceAtShippedDefault(t *testing.T) {
 		t.Fatalf("extra = %q", texts(out))
 	}
 }
+
+// settled carries the opt-in title like needs-you does, and counts more
+// than one waiting Chat in the plural.
+func TestReachSettledTitleAndPlural(t *testing.T) {
+	work := []reachChat{chatAt(1, "api", "a", "●"), chatAt(2, "api", "b", "●")}
+	for _, c := range []struct {
+		titles bool
+		marks  [2]string
+		want   string
+	}{
+		{true, [2]string{"✓", "▲"}, "oge · api · settled · 1 ready · Chat 2 b needs you"},
+		{false, [2]string{"▲", "▲"}, "oge · api · settled · 2 need you"},
+	} {
+		r := &reach{stale: time.Hour, titles: c.titles}
+		if out, _ := r.observe(reachT0, true, work); len(out) != 0 {
+			t.Fatalf("working = %q", texts(out))
+		}
+		done := []reachChat{chatAt(1, "api", "a", c.marks[0]), chatAt(2, "api", "b", c.marks[1])}
+		out, _ := r.observe(reachT0.Add(time.Minute), true, done)
+		if got := texts(out); len(got) == 0 || got[0] != c.want {
+			t.Errorf("titles=%v: %q, want %q", c.titles, got, c.want)
+		}
+	}
+}
