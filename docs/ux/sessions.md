@@ -49,7 +49,9 @@ A Discovered or On-the-Desk row never shows `▲ ● ✓ ✗`. Its glyph is `◌
 Choosing a session and adopting it resumes **that exact session**: Claude `--resume <id>` with the session's own cwd and profile; Codex `thread/resume` with its thread id and cwd. Native id, project, cwd, provider and history are preserved; Öge reconstructs nothing.
 
 - **One writer at a time.** If the session's file (Claude JSONL, Codex rollout `path`) was written within the last 2 minutes, adoption is refused: `written to 40s ago: close it there first`. No override.
-- **In place, not isolated.** The session's earlier turns already edited your real working tree, so adoption cannot isolate it after the fact. An adopted Chat continues in place, labelled `in place · not isolated`: no Workspace, no Candidate, no apply step. Checks run on demand against the working tree, and the Receipt's "Not covered" says the work was not isolated. *(Default pending the user's decision; see ADR-0025, Open question.)*
+- **Original settings (ADR-0025).** The session resumes with its own model, MCP servers, tools, permissions and cwd. Öge adds only one thing: permission prompts arrive as Gates where the agent supports that.
+- **Honest coverage, visible.** One line in the Chat says what Öge can gate, from what the agent reports at start: `gated: what your settings would ask · allowed without Öge: your allow rules`, or `not gated: bypassPermissions`. Öge never presents an adopted session as fully supervised when its permissions bypass Öge.
+- **In place, not isolated.** The session's earlier turns already edited your real working tree, so adoption cannot isolate it after the fact. `in place · not isolated` shows on its rail row and in its header for as long as it is open. No Workspace, no Candidate, no apply step. Checks run on demand against the working tree, and the Receipt's "Not covered" says the work was not isolated.
 - To get Öge's full isolation for new work, start a new Chat (`/new`) in the project: it gets its own Workspace as today.
 
 ## Commands and rail
@@ -68,7 +70,7 @@ Each is about 45 min / 150k tokens, fakes first (ADR-0017).
 | S1 | P0 | **Discover Claude sessions**: the metadata reader over every profile, fixtures, project association. |
 | S2 | P0 | **Discover Codex sessions**: `thread/list` through the adapter, a canned response in tests, project association. |
 | S3 | P1 | **`/sessions` catalog and On the Desk rows**: the picker, `◌` rows with age under their project, archive. |
-| S4 | P0 | **Adopt: resume the exact native session**, in place, with the two-writer refusal. Starts after the Open question in ADR-0025 is answered. |
+| S4 | P0 | **Adopt: resume the exact native session** with its original settings, in place, with the two-writer refusal and the coverage line. |
 | S5 | P2 | Search; more providers; opt-in hooks for exact outside state. |
 
 ## Not doing

@@ -1,5 +1,5 @@
 ---
-status: accepted (adoption mode: open question below)
+status: accepted
 ---
 
 # Native sessions are discovered, not owned; adoption resumes them in place
@@ -22,15 +22,19 @@ The Desk shows the Claude and Codex sessions a developer already has, including 
 - **One writer at a time.** Adoption is refused while the session's file was written within the last 2 minutes. Öge does not assume how Claude or Codex behave with two concurrent writers.
 - **An adopted session runs in place.** Its earlier turns already changed the real working tree; isolation cannot be added after the fact. It has no Workspace, Candidate or apply step, Checks run on demand against the working tree, and the Receipt's "Not covered" says the work was not isolated. Full isolation stays the default for new work (`/new`, ADR-0010).
 
-## Open question (the user's call)
+## Adopted sessions resume with their original settings (user, 2026-11-01)
 
-Under which settings does an adopted session resume?
+Adoption is continuation, not migration. An adopted session resumes with its native launch settings: provider configuration, model, MCP servers, tools, permissions and working directory, as the person ran it. Öge does not move an existing conversation into its own Launch profile, because changing tools or behaviour mid-conversation breaks what earlier turns assumed.
 
-- **(a) The agent as you ran it** (recommended): your own settings, MCP servers and tools, so resuming stays native. Öge routes permission prompts to Gates (`--permission-prompt-tool stdio`, Codex approvals), which is what gives it exact `▲` state.
-- **(b) Öge's Launch profile envelope**: `--setting-sources=`, strict MCP and Öge's tool list, as Öge Chats run today. Stronger control, but the agent's capabilities change mid-conversation, which cuts against "native resume stays native".
-- Not offered: forking into an isolated Workspace (`--fork-session`), because it creates a new id and is not the exact session.
+Three guarantees:
 
-Slice S4 (adoption) waits for this answer. Discovery (S1, S2) and the catalog (S3) do not depend on it.
+1. **Native continuity.** Öge never silently rewrites the session's environment. The only thing it adds is how permission prompts reach the person: through Öge Gates (Claude `--permission-prompt-tool stdio`, Codex approvals), where the agent supports that.
+2. **Honest supervision.** Öge says exactly what it can gate. Operations the original settings already allow never produce a prompt, so Öge never sees them before they run. The coverage comes from what the agent reports at start (Claude's init: permission mode and tools; Codex's resumed thread: approval policy and sandbox), not from reading config files. The Chat shows it in one line: for example `gated: what your settings would ask · allowed without Öge: your allow rules`, or `not gated: bypassPermissions`.
+3. **No false trust.** An adopted session is never shown or recorded as fully supervised when its permissions bypass Öge. With a bypass mode, nothing is gated and the label says so.
+
+The `in place · not isolated` label stays visible on the rail row and in the Chat's header for the session's whole life, not only in docs or the Receipt.
+
+Rejected: (b) resuming under Öge's Launch profile envelope, since it changes the agent's capabilities mid-conversation; and forking into an isolated Workspace (`--fork-session`), since it creates a new id and is not the exact session.
 
 ## Why this is still supervision
 
