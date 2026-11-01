@@ -149,11 +149,22 @@ func (h *home) attend() tea.Cmd {
 			h.parked = append(h.parked, p) // a breakpoint now: delivered below
 		}
 	}
-	if len(h.parked) > 0 && !h.composing() {
+	h.parked = slices.DeleteFunc(h.parked, func(p parked) bool {
+		g, ok := heldGlyph[p.ev]
+		return ok && p.v.attnMark != g
+	})
+	// A toast on screen is not replaced: what waits goes when it does.
+	if len(h.parked) > 0 && !h.composing() && h.toast == nil {
 		cmds = append(cmds, h.release())
 	}
 	h.reportDesk()
 	return tea.Batch(cmds...)
+}
+
+// heldGlyph is the glyph that keeps a held item true: an ask answered, a
+// turn ended or a ✓ seen while it waited needs no word.
+var heldGlyph = map[attnEvent]string{
+	evGate: "▲", evToolAsk: "▲", evAskUser: "▲", evCheckFailed: "✗", evAccepted: "✓",
 }
 
 // release shows what was held as one toast, the human's part first. A
@@ -223,14 +234,13 @@ func staleText(num int) string {
 	return "oge: Chat " + strconv.Itoa(num) + " is waiting for you"
 }
 
-// deskState is the Desk's state rolled up for herdr: blocked over done
-// over working over idle, done reported as idle (herdr has no done).
+// deskState is the Desk's state rolled up for herdr: blocked over working
+// over idle. herdr has no done, so a ✓ is idle and never hides a turn
+// that runs.
 func deskState(marks []string) herdr.State {
 	switch {
 	case slices.Contains(marks, "▲"):
 		return herdr.Blocked
-	case slices.Contains(marks, "✓"):
-		return herdr.Idle
 	case slices.Contains(marks, "●"), slices.Contains(marks, "?"):
 		return herdr.Working
 	}
@@ -238,9 +248,14 @@ func deskState(marks []string) herdr.State {
 }
 
 // reportDesk tells herdr the Desk's state when it changes. A Run in
-// flight reports its own.
+// flight reports its own on the same pane, so once it ends the Desk's
+// state is told again.
 func (h *home) reportDesk() {
-	if h.herdr == nil || h.run != nil {
+	if h.herdr == nil {
+		return
+	}
+	if h.run != nil {
+		h.herdrState = ""
 		return
 	}
 	marks := make([]string, 0, len(h.views))

@@ -130,19 +130,18 @@ func TestBackgroundAskHeldWhileTypingReleasedOnSend(t *testing.T) {
 // Several held items release as one toast on a cleared box, the human's
 // part first; a pause in typing releases nothing.
 func TestHeldItemsReleaseAsOneToastOnClear(t *testing.T) {
-	h, now := railHome(120, 3)
-	two, three := h.views[1], h.views[2]
-	two.name, three.name = "parser", "docs"
-	two.turn, three.turn = &chatTurn{}, &chatTurn{}
+	h, now := railHome(120, 4)
+	two, three, four := h.views[1], h.views[2], h.views[3]
+	two.name, three.name, four.name = "parser", "docs", "lexer"
+	two.turn, three.turn, four.turn = &chatTurn{}, &chatTurn{}, &chatTurn{}
 	h.Update(chatEvMsg{view: two, ok: true})
 	typeText(h, "draft")
-	// Chat 3's cut is Accepted, then Chat 2's Check fails, then 2 asks.
+	// Chat 3's cut is Accepted, then Chat 2's Check fails, then 4 asks.
 	three.turn, three.last, three.side.outcome, three.doneAt = nil, &lastRun{}, run.Accepted, *now
 	h.Update(deskTickMsg{view: three})
 	two.turn, two.side.outcome = nil, run.Failed
 	h.Update(deskTickMsg{view: two})
-	two.turn = &chatTurn{}
-	h.Update(askIn(two))
+	h.Update(askIn(four))
 	if len(h.parked) != 3 || h.toast != nil {
 		t.Fatalf("held %d, toast %+v", len(h.parked), h.toast)
 	}
@@ -155,9 +154,47 @@ func TestHeldItemsReleaseAsOneToastOnClear(t *testing.T) {
 	if !h.comp.empty() {
 		t.Fatalf("ctrl+c left %q", h.comp.text())
 	}
-	want := "3 new · ▲ 2 parser asks · ✗ 2 parser Check failed · ✓ 3 docs accepted"
+	want := "3 new · ▲ 4 lexer asks · ✗ 2 parser Check failed · ✓ 3 docs accepted"
 	if h.toast == nil || h.toast.text != want || !h.toast.plain {
 		t.Fatalf("toast %+v, want %q", h.toast, want)
+	}
+}
+
+// A held item no longer true when the box empties is dropped: the ask
+// was answered or the turn ended while the human typed.
+func TestHeldAskGoneIsNotReleased(t *testing.T) {
+	h, two, _ := attnHome(t)
+	typeText(h, "draft")
+	h.Update(askIn(two))
+	if len(h.parked) != 1 {
+		t.Fatalf("held %d", len(h.parked))
+	}
+	two.turn = nil
+	h.Update(deskTickMsg{view: two})
+	if top := boxTop(h); strings.Contains(top, "held") {
+		t.Errorf("box top %q after the ask went", top)
+	}
+	h.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if h.toast != nil {
+		t.Errorf("toast for a gone ask: %q", h.toast.text)
+	}
+}
+
+// A toast on screen is not replaced by the release; the held items go
+// when it does.
+func TestReleaseWaitsForAToast(t *testing.T) {
+	h, two, _ := attnHome(t)
+	typeText(h, "draft")
+	h.Update(askIn(two))
+	h.notice("copied the last reply (1 line)", false)
+	seq := h.toast.seq
+	h.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if h.toast == nil || h.toast.seq != seq || len(h.parked) != 1 {
+		t.Fatalf("toast %+v, held %d", h.toast, len(h.parked))
+	}
+	h.Update(toastGoneMsg{seq})
+	if h.toast == nil || h.toast.text != "▲ 2 parser asks" || len(h.parked) != 0 {
+		t.Errorf("toast %+v, held %d after the first went", h.toast, len(h.parked))
 	}
 }
 
@@ -251,6 +288,24 @@ func TestHerdrHearsTheDesk(t *testing.T) {
 	}
 }
 
+// A Run started from the home reports on the same pane and ends idle;
+// after it the Desk's state is told again.
+func TestHerdrHearsTheDeskAfterARun(t *testing.T) {
+	h, two, _ := attnHome(t)
+	f := &fakeReporter{}
+	h.herdr = f
+	h.Update(askIn(two))
+	h.run = &model{}
+	h.Update(staleTickMsg{})
+	f.Report(herdr.Working, "")
+	f.Report(herdr.Idle, "")
+	h.run = nil
+	h.Update(staleTickMsg{})
+	if n := len(f.got); n == 0 || f.got[n-1] != "blocked|"+notifyWaiting {
+		t.Errorf("herdr got %v, want blocked again after the Run", f.got)
+	}
+}
+
 func TestDeskStateRollup(t *testing.T) {
 	for _, c := range []struct {
 		marks []string
@@ -259,7 +314,8 @@ func TestDeskStateRollup(t *testing.T) {
 		{nil, herdr.Idle},
 		{[]string{"○", "●"}, herdr.Working},
 		{[]string{"?"}, herdr.Working},
-		{[]string{"●", "✓"}, herdr.Idle}, // done over working, reported idle
+		{[]string{"●", "✓"}, herdr.Working}, // done is idle: a turn shows over it
+		{[]string{"✓"}, herdr.Idle},
 		{[]string{"✓", "▲", "●"}, herdr.Blocked},
 		{[]string{"✗"}, herdr.Idle},
 	} {
