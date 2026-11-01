@@ -95,8 +95,11 @@ type chatView struct {
 
 // focus makes v the Chat the home shows and the keys go to.
 func (h *home) focus(v *chatView) {
-	if h.chatView != nil {
-		h.chatView.focusAt = time.Time{}
+	if old := h.chatView; old != nil {
+		if old.seenBy(h.clock()) {
+			old.seen = true // looked at long enough: its ✓ stays cleared after we leave
+		}
+		old.focusAt = time.Time{}
 	}
 	h.chatView = v
 	v.focusAt = h.clock()

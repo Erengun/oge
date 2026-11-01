@@ -498,3 +498,25 @@ func TestKeySeesTheDoneChat(t *testing.T) {
 		t.Fatalf("glyph = %s after a key, want ○", m)
 	}
 }
+
+// A ✓ looked at for long enough stays cleared after the human switches
+// away: leaving the Chat doesn't make it unseen again.
+func TestDoneStaysSeenAfterSwitchingAway(t *testing.T) {
+	h := deskHome()
+	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	h.now = func() time.Time { return now }
+	first := h.chatView
+	other := &chatView{num: 2}
+	h.views = append(h.views, other)
+	h.focus(other)
+	first.last, first.side.outcome, first.doneAt = &lastRun{}, run.Accepted, now
+	h.focus(first)
+	now = now.Add(5 * time.Second)
+	if m, _ := glyph(first, now); m != "○" {
+		t.Fatalf("glyph = %s after 5s in view, want ○", m)
+	}
+	h.focus(other)
+	if m, _ := glyph(first, now); m != "○" {
+		t.Fatalf("glyph = %s after switching away, want ○ (it was seen)", m)
+	}
+}
