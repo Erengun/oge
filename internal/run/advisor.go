@@ -384,7 +384,7 @@ func (r *adviceRecord) fill(ended map[string]any, c *Chat) {
 func (c *Chat) advise(ctx context.Context, sess agent.Session, st pipeline.Stage, id, brief string, rec *adviceRecord) (text, outcome, why string) {
 	rec.proc = sess.Process()
 	if err := c.log(RecProcessStarted, map[string]any{"chat": c.ID, "consultation": id,
-		"pid": rec.proc.PID, "pgid": rec.proc.PGID, "launch_profile": launchProfile(st)}); err != nil {
+		"pid": rec.proc.PID, "pgid": rec.proc.PGID, "start": processStart(rec.proc.PID), "launch_profile": launchProfile(st)}); err != nil {
 		return "", ConsultFailed, "chat_log_failed: " + err.Error()
 	}
 	if err := sess.Send(agent.Turn{Text: brief}); err != nil {
