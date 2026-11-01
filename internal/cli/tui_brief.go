@@ -119,7 +119,7 @@ func (h *home) briefLine() string {
 }
 
 // buildBrief builds the brief over w from the open Chats' logs and the
-// repository's newest Runs.
+// repository's Runs the window can hold.
 func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 	var chats []run.BriefChat
 	for _, v := range h.views {
@@ -144,7 +144,7 @@ func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 	}
 	var runs []run.BriefRun
 	if h.away.private != "" && h.root != "" {
-		runs, _ = repoRuns(h.away.private, h.root)
+		runs, _ = runsSince(h.away.private, h.root, w.From)
 	}
 	return run.BuildBrief(w, chats, runs)
 }

@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/erengun/oge/internal/delivery"
+	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/workspace"
 )
 
-// statusRuns is how many of the repository's newest Runs oge status reads.
-const statusRuns = 50
+// lastActRuns is how many of the repository's newest Runs oge status
+// reads for the human's last act. The brief itself reads every Run its
+// window needs (runsSince).
+const lastActRuns = 50
 
 const statusUsage = `Usage: oge status
 
@@ -42,21 +46,30 @@ func statusCommand(env Env, args []string) int {
 	if code != ExitOK {
 		return code
 	}
-	chats, runs, err := repoLogs(private, root)
+	chats, recent, err := repoLogs(private, root)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal
 	}
-	if len(chats) == 0 && len(runs) == 0 {
+	if len(chats) == 0 && len(recent) == 0 {
 		fmt.Fprintln(env.Stdout, "nothing to report: no Chats or Runs in this repository yet")
 		return ExitOK
 	}
 	now := time.Now()
 	// Another process can't know when the human left: the window starts
-	// at their last recorded act.
-	from := run.LastAct(chats, runs)
+	// at their last recorded act. An act in an older Run (a Gate decided
+	// late) can only move it later, once that Run is read.
+	from := run.LastAct(chats, recent)
 	if from.IsZero() || from.After(now) {
 		from = now
+	}
+	runs, err := runsSince(private, root, from)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
+		return ExitInternal
+	}
+	if last := run.LastAct(chats, runs); last.After(from) && !last.After(now) {
+		from = last
 	}
 	b := run.BuildBrief(run.BriefWindow{From: from, To: now, Basis: run.BasisLastAct}, chats, runs)
 	fmt.Fprint(env.Stdout, b.Text(time.Local))
@@ -93,23 +106,74 @@ func repoLogs(private, root string) ([]run.BriefChat, []run.BriefRun, error) {
 
 // repoRuns reads root's newest Runs' Ledgers, newest first.
 func repoRuns(private, root string) ([]run.BriefRun, error) {
-	recent, err := delivery.Recent(private, root, statusRuns)
+	recent, err := delivery.Recent(private, root, lastActRuns)
 	if err != nil {
 		return nil, err
 	}
 	var runs []run.BriefRun
 	for _, r := range recent {
-		log, err := run.ReadBriefLog(r.ID, r.Dir)
-		if err != nil {
-			continue
+		if br, ok := briefRun(r); ok {
+			runs = append(runs, br)
 		}
-		title := r.Title
-		if r.Label != "" {
-			title = r.Label
-		}
-		runs = append(runs, run.BriefRun{BriefLog: log, Title: title, Live: run.Live(r.Dir)})
 	}
 	return runs, nil
+}
+
+// runsSince reads every one of root's Runs a window from from can hold,
+// newest first: each live one, whatever its age, and each whose Ledger
+// was written at or after from. No count caps it: a Run left out would
+// be a Gate or an end the brief silently misses.
+func runsSince(private, root string, from time.Time) ([]run.BriefRun, error) {
+	dir := filepath.Join(private, "runs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	canon := canonicalDir(root)
+	var runs []run.BriefRun
+	for _, name := range names {
+		d := filepath.Join(dir, name)
+		if !run.Live(d) {
+			// A Ledger's time is its last append's: none of its records
+			// is newer.
+			fi, err := os.Stat(filepath.Join(d, ledger.LedgerFile))
+			if err != nil || fi.ModTime().Before(from) {
+				continue
+			}
+		}
+		r, err := delivery.Load(d)
+		if err != nil || canonicalDir(r.Source) != canon {
+			continue
+		}
+		if br, ok := briefRun(r); ok {
+			runs = append(runs, br)
+		}
+	}
+	return runs, nil
+}
+
+// briefRun is r's Ledger as the brief reads it, titled by its label or
+// its Task's title.
+func briefRun(r *delivery.Run) (run.BriefRun, bool) {
+	log, err := run.ReadBriefLog(r.ID, r.Dir)
+	if err != nil {
+		return run.BriefRun{}, false
+	}
+	title := r.Title
+	if r.Label != "" {
+		title = r.Label
+	}
+	return run.BriefRun{BriefLog: log, Title: title, Live: run.Live(r.Dir)}, true
 }
 
 func canonicalDir(p string) string {

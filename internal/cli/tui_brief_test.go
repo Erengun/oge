@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -147,5 +148,58 @@ func TestHomeAwayFocus(t *testing.T) {
 	h.Update(tea.FocusMsg{})
 	if h.away.back != nil {
 		t.Errorf("a minute's blur made a brief: %+v", h.away.back)
+	}
+}
+
+// The brief reads every Run its window can hold, not the newest few:
+// each live one whatever its age, and each written in the window.
+func TestRunsSince(t *testing.T) {
+	private, root, other := t.TempDir(), t.TempDir(), t.TempDir()
+	from := time.Now().Add(-time.Hour)
+	mk := func(id, source string, written time.Time, live bool) {
+		dir := filepath.Join(private, "runs", id)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		l, err := ledger.Create(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Append(run.RecRunStarted, map[string]any{"run": id, "source": source, "chat": "c1"}); err != nil {
+			t.Fatal(err)
+		}
+		l.Close()
+		if err := os.Chtimes(filepath.Join(dir, ledger.LedgerFile), written, written); err != nil {
+			t.Fatal(err)
+		}
+		if live {
+			if err := os.WriteFile(filepath.Join(dir, "live.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	old := from.Add(-24 * time.Hour)
+	mk("20261030T090000-aaaaaa", root, old, true)  // live, a day old: kept
+	mk("20261030T100000-bbbbbb", root, old, false) // dead before the window
+	mk("20261031T090000-cccccc", root, from.Add(time.Minute), false)
+	mk("20261031T100000-dddddd", other, from.Add(time.Minute), false) // another repository
+	// Enough newer Runs to push the live one past any cap of the newest.
+	for i := range 60 {
+		mk(fmt.Sprintf("20261101T09%04d-eeeeee", i), root, from.Add(2*time.Minute), false)
+	}
+	runs, err := runsSince(private, root, from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range runs {
+		got[r.ID] = true
+	}
+	if len(runs) != 62 || !got["20261030T090000-aaaaaa"] || !got["20261031T090000-cccccc"] ||
+		got["20261030T100000-bbbbbb"] || got["20261031T100000-dddddd"] {
+		t.Fatalf("runsSince read %d Runs: %v", len(runs), got)
+	}
+	if !runs[len(runs)-1].Live {
+		t.Errorf("the oldest, live Run isn't Live: %+v", runs[len(runs)-1])
 	}
 }
