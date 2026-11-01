@@ -1330,7 +1330,9 @@ func (h *home) withAsk(s string) string {
 
 func (h *home) view() tea.View {
 	if h.inbox != nil {
-		return h.inboxView()
+		v := h.inboxView()
+		v.Content = h.withAsk(v.Content)
+		return v
 	}
 	if h.chats != nil {
 		return tea.NewView(h.withAsk(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n")))
