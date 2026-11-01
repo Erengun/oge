@@ -38,8 +38,8 @@ func (h *home) openChats() int {
 }
 
 // quitAskKey answers the ask: k keeps the Chats, Workspaces and all; c
-// closes them as /close does; esc or ctrl+c goes back. Any other key,
-// Enter too, does nothing (ADR-0022).
+// closes them as /close does; esc goes back. Any other key, Enter and a
+// repeated ctrl+c too, does nothing (ADR-0022).
 func (h *home) quitAskKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "k", "K":
@@ -49,7 +49,7 @@ func (h *home) quitAskKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.quitAsk, h.msg = 0, nil
 		h.quit = true
 		return h, tea.Quit
-	case "esc", "ctrl+c":
+	case "esc":
 		h.quitAsk, h.msg = 0, nil
 	}
 	return h, nil

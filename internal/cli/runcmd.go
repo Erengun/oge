@@ -62,9 +62,10 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 	if done {
 		return code
 	}
-	defer desk.Release()
+	defer desk.Release() // a crash in the home leaves no DeskClosed
 	if first != nil {
 		if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
+			desk.Close(true)
 			return code
 		}
 	}
@@ -81,6 +82,7 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 	rc, refused := openRepo(env, f, u, histDir, root, setup, res)
 	if rc == nil {
 		fmt.Fprintf(env.Stderr, "oge: %s\n", refused)
+		desk.Close(true)
 		return ExitRefused
 	}
 	repos := map[string]*repoCtx{repoKey(root): rc}

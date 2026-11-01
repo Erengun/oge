@@ -267,7 +267,7 @@ func TestCtrlCWithAnotherChatWorkingAsksAgain(t *testing.T) {
 }
 
 // Quitting with Chats open asks whether to keep them (docs/ux/away.md,
-// A3). Enter alone, or any other key, decides nothing; esc goes back; k
+// A3). Enter alone, ctrl+c or any other key decides nothing; esc goes back; k
 // keeps them, c closes them.
 func TestQuitAsksToKeepOpenChats(t *testing.T) {
 	h := deskHome()
@@ -280,7 +280,7 @@ func TestQuitAsksToKeepOpenChats(t *testing.T) {
 	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "Keep 2 Chats for next time? k keep · c close · esc cancel") {
 		t.Errorf("the ask isn't on the screen:\n%s", got)
 	}
-	for _, k := range []tea.KeyPressMsg{enter(), runeKey('y'), runeKey('q'), {Code: tea.KeySpace}} {
+	for _, k := range []tea.KeyPressMsg{enter(), runeKey('y'), runeKey('q'), {Code: tea.KeySpace}, ctrlKey('c')} {
 		if h.Update(k); h.quit || h.quitAsk == 0 {
 			t.Fatalf("%q at the ask: quit %v, ask %d", k.String(), h.quit, h.quitAsk)
 		}
