@@ -140,7 +140,7 @@ func (b Brief) Empty() bool { return len(b.Chats) == 0 }
 func (b Brief) Away() time.Duration { return b.Window.To.Sub(b.Window.From) }
 
 // LastAct is the newest record of a human act in the logs: a user's
-// turn, a Gate decision or a delivery. Zero when there is none.
+// turn, a one-shot Run started, a Gate decision or a delivery. Zero when there is none.
 func LastAct(chats []BriefChat, runs []BriefRun) time.Time {
 	var last time.Time
 	note := func(r ledger.Record) {
@@ -152,6 +152,10 @@ func LastAct(chats []BriefChat, runs []BriefRun) time.Time {
 			human = d.By == ""
 		case RecGateDecided, RecDelivered, recDelivery:
 			human = true
+		case RecRunStarted:
+			var d struct{ Chat string }
+			_ = json.Unmarshal(r.Data, &d)
+			human = d.Chat == "" // a one-shot Run, not a cut
 		}
 		if human && r.At.After(last) {
 			last = r.At

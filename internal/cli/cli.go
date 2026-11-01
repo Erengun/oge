@@ -114,7 +114,7 @@ func runEditor(path string) error {
 // with that text; quoting a one-word Task that equals a command name would
 // need `oge run <word>`.
 var notYet = map[string]bool{
-	"doctor": true, "init": true, "resume": true, "cancel": true, "status": true,
+	"doctor": true, "init": true, "resume": true, "cancel": true,
 }
 
 const usage = `Usage:
@@ -142,6 +142,7 @@ const advancedUsage = `Advanced usage:
   oge apply [<run>]        apply an Accepted Candidate to your working tree
   oge branch [<name>] [<run>]   make a local branch with it, never checked out
   oge receipt [<run>] [--md|--json]   a Run's Receipt, from its Ledger
+  oge status               what your Chats and Runs did since you last acted
   oge --version
 
 Run flags:
@@ -194,6 +195,8 @@ func Main(env Env, args []string) int {
 			return deliverCommand(env, a, args[1:])
 		case a == "receipt":
 			return receiptCommand(env, args[1:])
+		case a == "status":
+			return statusCommand(env, args[1:])
 		case notYet[a]:
 			fmt.Fprintf(env.Stderr, "oge: %s isn't implemented yet; a Task starting with this word needs oge run \"<task>\"\n", a)
 			return ExitRefused
