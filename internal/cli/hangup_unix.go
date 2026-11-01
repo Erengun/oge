@@ -20,6 +20,11 @@ func redirectFDs(path string, fds ...int) error {
 		return err
 	}
 	defer f.Close()
+	// An older runner.log keeps its mode on open: tighten it, as the log can
+	// hold what the agents printed.
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
 	for _, fd := range fds {
 		if err := unix.Dup2(int(f.Fd()), fd); err != nil {
 			return err

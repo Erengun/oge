@@ -138,7 +138,7 @@ func TestRedirectFDs(t *testing.T) {
 	}
 	defer out.Close()
 	log := filepath.Join(dir, "runner.log")
-	if err := os.WriteFile(log, []byte("before\n"), 0o600); err != nil {
+	if err := os.WriteFile(log, []byte("before\n"), 0o644); err != nil { // an older, looser log
 		t.Fatal(err)
 	}
 	if err := redirectFDs(log, int(out.Fd())); err != nil {
@@ -150,6 +150,9 @@ func TestRedirectFDs(t *testing.T) {
 	b, _ := os.ReadFile(log)
 	if string(b) != "before\nafter\n" {
 		t.Errorf("runner.log: %q", b)
+	}
+	if fi, err := os.Stat(log); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("an older runner.log isn't tightened to 0600: %v %v", fi.Mode(), err)
 	}
 	fresh := filepath.Join(dir, "fresh.log")
 	if err := redirectFDs(fresh, int(out.Fd())); err != nil {
