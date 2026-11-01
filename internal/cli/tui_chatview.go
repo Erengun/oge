@@ -98,6 +98,9 @@ type chatView struct {
 	attnMark string
 	askedAt  time.Time
 	rang     bool
+	// away is what happened while another Chat had the focus, for the
+	// since-you-left card (tui_since.go).
+	away sinceState
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.
@@ -115,6 +118,7 @@ func (h *home) focus(v *chatView) {
 			old.seen = true // looked at long enough: its ✓ stays cleared after we leave
 		}
 		old.focusAt = time.Time{}
+		old.leave(h.clock())
 	}
 	h.chatView = v
 	v.focusAt = h.clock()

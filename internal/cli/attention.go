@@ -111,6 +111,9 @@ func (h *home) staleAfter() time.Duration {
 // composing reports whether the focused box holds a message being
 // written: everything below demand waits until it is sent or cleared.
 func (h *home) composing() bool {
+	if h.inbox != nil && !h.inbox.comp.empty() {
+		return true // a task typed in the Inbox
+	}
 	if h.run != nil {
 		// During a Run the human types the next message into the queue box.
 		return h.next != nil && h.next.comp != nil && !h.next.comp.empty()
@@ -135,6 +138,7 @@ func (h *home) attend() tea.Cmd {
 		}
 		ev := glyphEvent(v, v.attnMark, mark)
 		v.attnMark = mark
+		h.noteSince(v)
 		if mark == "▲" && !v.rang && !v.askedAt.IsZero() && now.Sub(v.askedAt) >= h.staleAfter() {
 			v.rang = true
 			cmds = append(cmds, h.ring(v))
@@ -225,17 +229,23 @@ func (h *home) heldNote() string {
 }
 
 // ring is the demand for v's stale Gate or ask: the bell and the OSC
-// notification, as [notify] attention allows. The text is fixed and names
-// the Chat's number only.
+// notification, as [notify] attention allows. The text is Öge's fixed
+// words with the Chat's number and title (G11, #336). The title is the
+// human's own first message, never the agent's text; it is cleaned of
+// control sequences and cut short.
 func (h *home) ring(v *chatView) tea.Cmd {
 	if levelOf(evStaleGate) < demand || h.notify == nil || !h.notify.attention {
 		return nil
 	}
-	return tea.Raw(h.notify.sequence(staleText(v.num)))
+	return tea.Raw(h.notify.sequence(staleText(v.num, v.name)))
 }
 
-func staleText(num int) string {
-	return "oge: Chat " + strconv.Itoa(num) + " is waiting for you"
+func staleText(num int, title string) string {
+	s := "oge: Chat " + strconv.Itoa(num)
+	if t := strings.TrimSpace(clean(title)); t != "" {
+		s += " (" + ansi.Truncate(t, 24, "…") + ")"
+	}
+	return s + " is waiting for you"
 }
 
 // deskState is the Desk's state rolled up for herdr: blocked over working

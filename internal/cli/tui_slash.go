@@ -57,6 +57,7 @@ func slashCommands() []slashCmd {
 		{name: "/copy", advanced: true, usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
 		{name: "/new", usage: "/new [path]", desc: "open another Chat; this one keeps working", run: (*home).newCmd},
 		{name: "/chats", usage: "/chats", desc: "switch to another Chat", run: (*home).chatsCmd},
+		{name: "/inbox", usage: "/inbox", desc: "what the Chats want from you (ctrl+space)", run: (*home).inboxCmd},
 		{name: "/close", advanced: true, usage: "/close", desc: "end this Chat", run: (*home).closeCmd},
 		{name: "/clear", advanced: true, usage: "/clear", desc: "start this Chat afresh", run: (*home).clearCmd},
 		{name: "/notify", advanced: true, usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},

@@ -174,6 +174,9 @@ func (h *home) statusParts() (left []string, right string) {
 		keys = append([]string{h.verifyNote()}, keys...)
 	}
 	left = []string{state}
+	if n := h.inboxHint(); n != "" {
+		keys = append([]string{n}, keys...) // what other Chats want, pulled when you choose
+	}
 	for _, k := range keys {
 		left = append(left, st.dim(k))
 	}
