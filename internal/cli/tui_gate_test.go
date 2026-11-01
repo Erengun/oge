@@ -271,3 +271,52 @@ func TestHomePrintsOnlyAfterAClosedGateSettles(t *testing.T) {
 		})
 	}
 }
+
+// A cut's Gate parks only when Öge exits. Its wait ending any other way
+// (a newer cut, Ctrl+C, /close) is the human's and abandons it, and a
+// wait nothing ends keeps waiting: a redraw is not an exit.
+func TestCutGatesParkOnlyOnExit(t *testing.T) {
+	t.Parallel()
+	decide := func(p cutGates, ctx context.Context) <-chan error {
+		out := make(chan error, 1)
+		go func() {
+			_, err := p.Decide(ctx, gate.Request{Name: "tamper"})
+			out <- err
+		}()
+		return out
+	}
+	for _, shown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shown=%v", shown), func(t *testing.T) {
+			t.Parallel()
+			reqs, exiting := make(chan chatGateMsg, 1), make(chan struct{})
+			if !shown {
+				reqs = make(chan chatGateMsg) // nobody takes it: the view has gone
+			}
+			p := cutGates{reqs: reqs, exiting: exiting}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			got := decide(p, ctx)
+			select {
+			case err := <-got:
+				t.Fatalf("the wait ended by itself: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			close(exiting)
+			if err := <-got; err != gate.ErrParked {
+				t.Fatalf("exiting: %v, want ErrParked", err)
+			}
+			// Closing the Chat on the way out cancels ctx too: still parked.
+			cancel()
+			if err := <-decide(p, ctx); err != gate.ErrParked {
+				t.Fatalf("exiting, then ctx: %v, want ErrParked", err)
+			}
+			// The human ending the wait abandons it.
+			ctx2, cancel2 := context.WithCancel(context.Background())
+			human := decide(cutGates{reqs: reqs, exiting: make(chan struct{})}, ctx2)
+			cancel2()
+			if err := <-human; err != context.Canceled {
+				t.Fatalf("cancelled: %v, want context.Canceled", err)
+			}
+		})
+	}
+}

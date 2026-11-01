@@ -691,6 +691,59 @@ func TestHomeChatTamperGateAtApply(t *testing.T) {
 	s.quitChat(f)
 }
 
+// Leaving while a cut waits at its delivery Gate parks it: nobody
+// decided, so the Run Ledger ends Parked, with a GateParked record that
+// keeps the Gate's pins, and no GateAbandoned (ADR-0008, Away slice 2).
+func TestHomeChatExitParksTheCutGate(t *testing.T) {
+	t.Parallel()
+	fixed := "package fx\n\nfunc Add(a, b int) int { return a + b }\n"
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "tampered", Writes: []multiturn.File{{Path: "add.go", Content: fixed}, {Path: "add_test.go", Content: "package fx\n"}}},
+	}}, nil)
+	s.composer()
+	s.type_("weaken the test\r")
+	s.expect("oge › … Waiting for you: the tamper Gate · /apply")
+	s.composer()
+	s.quitChat(f)
+	runs, _ := filepath.Glob(filepath.Join(f.state, "private", "runs", "*"))
+	if len(runs) != 1 {
+		t.Fatalf("want the cut's one Run, got %v", runs)
+	}
+	recs, err := ledger.Replay(runs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	var parked struct {
+		Pins struct {
+			Gate, Attempt, Candidate string
+			Verdicts                 []int
+			Tamper                   []string
+		}
+		Why string
+	}
+	for _, r := range recs {
+		types = append(types, r.Type)
+		if r.Type == run.RecGateParked {
+			if err := json.Unmarshal(r.Data, &parked); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	all := strings.Join(types, " ")
+	if strings.Contains(all, run.RecGateAbandoned) || !strings.HasSuffix(all, run.RecGateOpened+" "+run.RecGateParked+" "+run.RecRunParked) {
+		t.Fatalf("the Ledger doesn't end parked at the Gate: %s", all)
+	}
+	p := parked.Pins
+	if p.Gate != "gate.tamper" || p.Attempt == "" || p.Candidate == "" || len(p.Verdicts) != 1 || len(p.Tamper) != 1 || parked.Why == "" {
+		t.Errorf("GateParked lacks its pins: %+v", parked)
+	}
+	var end struct{ Gate string }
+	if err := json.Unmarshal(recs[len(recs)-1].Data, &end); err != nil || end.Gate != "gate.tamper" {
+		t.Errorf("RunParked names no Gate: %s", recs[len(recs)-1].Data)
+	}
+}
+
 // An Ambiguous file's Gate shows at /apply: promoting every file keeps
 // the Verdict and applies it; dropping one re-cuts without it, which is
 // checked again before it is applied.
