@@ -54,6 +54,9 @@ type homeChat struct {
 	// shown logs that ask advice was displayed (Chat.AdviceShown); a test
 	// seam, nil in the product.
 	shown func(c *run.Chat, consultation string)
+	// delivered stands in for the Chat's word on whether a cut was
+	// delivered (Chat.IsDelivered); a test seam, nil in the product.
+	delivered func(run string) bool
 
 	// mu is held only to read or swap c, never across opening one: /new
 	// and /close run while a first message opens its Chat. gen moves on
@@ -334,6 +337,7 @@ func agentLines(text string) string {
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.pendingFB = nil // a new turn of the human's: the old failure is theirs no more
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
+	h.lastEvent, h.answered = h.clock(), true
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	h.comp = h.composer()
 	edited := h.adviceEdit
@@ -447,6 +451,7 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nextEvent(h.chatView, msg.events)
 	case chatEvMsg:
+		h.lastEvent = h.clock()
 		if !msg.ok {
 			return h.turnEnded()
 		}
@@ -961,6 +966,7 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		l, h.last = h.chat.verdict(res, v.changed)
 		line = h.ogeLine(l)
 		h.side.verdict, h.side.outcome, h.side.changes = sideVerdict(l), res.Outcome, nil
+		h.doneAt, h.seen, h.answered = h.clock(), false, false
 		if res.Outcome == run.Accepted || res.Outcome == run.Failed {
 			diff = h.inlineDiff()
 		}
@@ -1047,7 +1053,11 @@ func (h *home) sendBack() (tea.Cmd, string) {
 		return nil, "/feedback: a newer cut is verifying"
 	}
 	h.pendingFB = nil
-	return h.feedbackSubmit(p.text, p.frozen, nil), ""
+	cmd := h.feedbackSubmit(p.text, p.frozen, nil)
+	if h.turn != nil {
+		h.answered = true // the human's own send-back answers the failure
+	}
+	return cmd, ""
 }
 
 // feedbackCmd is /feedback.
@@ -1073,6 +1083,7 @@ func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) 
 	}
 	first, _, _ := strings.Cut(text, "\n")
 	h.turn = &chatTurn{text: first, frozen: f, queued: queued, oge: true}
+	h.lastEvent = h.clock()
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	ctx, v := h.ctx, h.chatView
 	return func() tea.Msg {

@@ -168,7 +168,7 @@ func (h *home) flushAdvice() tea.Cmd {
 	block := h.println(h.adviceBlock(a.advice))
 	if a.auto && a.mode == pipeline.AdvisorAutoOn {
 		// Automatic (D-A3): printed, then sent as Öge's advice turn.
-		return tea.Sequence(block, h.sendAdvice())
+		return tea.Sequence(block, h.sendAdvice(false))
 	}
 	return block
 }
@@ -259,7 +259,7 @@ func (h *home) adviceKey(k tea.KeyPressMsg) (cmd tea.Cmd, ok bool) {
 	case !a.shown || !h.comp.empty():
 		return nil, false
 	case h.kb.resolve(ctxComposer, key) == actSubmit:
-		return h.sendAdvice(), true
+		return h.sendAdvice(true), true
 	case key == "e":
 		h.comp.set(a.advice.Text)
 		h.adviceEdit = &adviceEditState{id: a.advice.ID, text: a.advice.Text, chat: a.chat}
@@ -297,8 +297,9 @@ func (h *home) dropAdviceEdit() {
 
 // sendAdvice sends the advice shown to the agent, verbatim, as Öge's turn
 // (Chat.SendAdvice): dim, outside the Task and the feedback budget. The
-// turn is cut like any turn that changed something.
-func (h *home) sendAdvice() tea.Cmd {
+// turn is cut like any turn that changed something. human is the user's
+// ↵ on it, not [advisor] auto = "on" sending it as it lands.
+func (h *home) sendAdvice(human bool) tea.Cmd {
 	a := h.adv
 	if h.chat == nil || h.chat.get() != a.chat {
 		h.adv = nil // a Consultation of a Chat that has gone
@@ -310,12 +311,13 @@ func (h *home) sendAdvice() tea.Cmd {
 		return nil
 	}
 	h.adv = nil
-	return h.sendAdviceTurn(a.chat, a.advice, a.auto)
+	return h.sendAdviceTurn(a.chat, a.advice, a.auto, human)
 }
 
 // sendAdviceTurn sends adv as the advice turn of its Consultation. An
 // automatic one is refused if the user has turned since (a new chain).
-func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
+// human is the user sending it, which answers a failed Check (glyph).
+func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto, human bool) tea.Cmd {
 	res, problem := h.resolve(h.sel)
 	switch {
 	case problem != nil:
@@ -331,6 +333,10 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
+	h.lastEvent = h.clock()
+	if human {
+		h.answered = true // advice the human sent answers a failed Check; one sent on its own doesn't
+	}
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	ctx, v := h.ctx, h.chatView
 	if ctx == nil {

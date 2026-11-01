@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/BurntSushi/toml"
@@ -47,6 +48,42 @@ type UserConfig struct {
 	// Chat is how a Chat treats a failing Check (docs/ux/desk.md, U2).
 	// Global: whether Öge may prompt an agent for them is the person's.
 	Chat *ChatConfig `toml:"chat,omitempty"`
+	// Desk is how the full screen treats several Chats (docs/ux/desk.md).
+	// Global: how much a person can keep track of is theirs.
+	Desk *DeskConfig `toml:"desk,omitempty"`
+}
+
+// DeskConfig is the [desk] table.
+type DeskConfig struct {
+	// MaxActive is how many working Chats /new opens another beside
+	// without a word; past it, it says so once and never refuses. 0 is
+	// DefaultDeskMaxActive.
+	MaxActive int `toml:"max_active,omitempty"`
+	// Quiet is how long a turn may go without an agent event before its
+	// Chat shows quiet rather than working; "" is DefaultDeskQuiet.
+	Quiet string `toml:"quiet,omitempty"`
+}
+
+// The [desk] defaults: about 3 working Chats is what one person tracks
+// (docs/ux/desk.md, Research alignment), and 3 minutes of silence is quiet.
+const (
+	DefaultDeskMaxActive = 3
+	DefaultDeskQuiet     = 3 * time.Minute
+)
+
+// DeskLimits returns the [desk] settings with their defaults filled in.
+func (c *UserConfig) DeskLimits() (maxActive int, quiet time.Duration) {
+	maxActive, quiet = DefaultDeskMaxActive, DefaultDeskQuiet
+	if c == nil || c.Desk == nil {
+		return maxActive, quiet
+	}
+	if c.Desk.MaxActive > 0 {
+		maxActive = c.Desk.MaxActive
+	}
+	if d, err := parseDuration(c.Desk.Quiet); err == nil {
+		quiet = d
+	}
+	return maxActive, quiet
 }
 
 // ChatConfig is the [chat] table.
@@ -251,6 +288,16 @@ func (c *UserConfig) validate() []Problem {
 		}
 		if ch.FeedbackBudget < 0 {
 			add("chat.feedback_budget", "must be 0 or more")
+		}
+	}
+	if d := c.Desk; d != nil {
+		if d.MaxActive < 0 {
+			add("desk.max_active", "must be 0 or more")
+		}
+		if d.Quiet != "" {
+			if _, err := parseDuration(d.Quiet); err != nil {
+				add("desk.quiet", err.Error())
+			}
 		}
 	}
 	for _, name := range sortedKeys(c.Profiles) {

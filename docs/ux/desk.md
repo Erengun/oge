@@ -44,7 +44,7 @@ The Desk takes the other route:
 
 **Header.** Keeps `oge · repo · branch`, then adds the counts: needs you, working, done-unseen.
 
-**Rail** (left, 14 columns, from 100 columns up; toggled with the sidebar key)
+**Rail** (left, 14 columns, from 100 columns up, with two or more Chats open; toggled with the sidebar key)
 - Each row has: a stable number, a static glyph, a short title (from the Chat's first turn), and a coarse state with its age.
 - Glyphs:
 

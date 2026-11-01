@@ -395,10 +395,22 @@ type home struct {
 	full         bool
 	termW, termH int
 	sidebarOff   bool
-	toast        *toast
-	toastSeq     int
-	run          *model    // nil while composing
-	notify       *notifier // the session's alerts; nil when silent (#170)
+	// railHits are where the rail's last frame drew each Chat, for a
+	// click (tui_desk.go).
+	railHits []railHit
+	// deskMax and deskQuiet are [desk] max_active and quiet (0: the
+	// defaults); capNoted is /new having said once that the working
+	// Chats are past deskMax.
+	deskMax   int
+	deskQuiet time.Duration
+	capNoted  bool
+	// redraw schedules a redraw (tea.Tick); nil schedules none, as in
+	// tests that drive the home by hand.
+	redraw   func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
+	toast    *toast
+	toastSeq int
+	run      *model    // nil while composing
+	notify   *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -580,11 +592,13 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if h.full {
 		if cmd, ok := h.fullUpdate(msg); ok {
+			cmd = withTick(cmd, h.deskTick())
 			restore()
 			return h, cmd
 		}
 	}
 	m, cmd := h.update(msg)
+	cmd = withTick(cmd, h.deskTick())
 	if h.adviceEdit != nil && h.comp != nil && h.comp.empty() {
 		h.dropAdviceEdit() // emptied: what is typed next isn't the advice
 	}
@@ -619,6 +633,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatStepMsg:
 		return h, h.cutStepped(m)
+	case deskTickMsg:
+		if h.tickAt.Equal(m.at) {
+			h.tickAt = time.Time{} // drawn again now; Update asks for the next
+		}
+		return h, nil
 	case verifyTickMsg:
 		if h.verify != nil && h.verify.seq == m.seq {
 			return h, verifyTick(h.chatView, m.seq)
@@ -763,6 +782,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
+		h.seen = true // a key in this Chat: its ✓ has been seen
 		switch {
 		case h.job != nil:
 			// A shell command runs: Ctrl+C stops it (never Öge); other keys are dropped.
@@ -964,7 +984,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
 		// Sent as it was: still the advice turn, outside the Task.
 		h.adviceEdit = nil
-		if cmd := h.sendAdviceTurn(e.chat, &run.Advice{ID: e.id, Text: e.text}, false); cmd != nil {
+		if cmd := h.sendAdviceTurn(e.chat, &run.Advice{ID: e.id, Text: e.text}, false, true); cmd != nil {
 			return h, cmd
 		}
 		return h, nil
@@ -1231,6 +1251,9 @@ func (h *home) themeNotice() string {
 }
 
 func (h *home) View() tea.View {
+	if h.full && h.termW > 0 && h.width != h.mainWidth() {
+		h.layout() // a Chat opened or closed: the rail came or went
+	}
 	v := h.view()
 	if h.full {
 		return h.compose(v)
@@ -1747,8 +1770,9 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
-	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, redraw: tea.Tick}
 	h.chatView.num = 1
+	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")

@@ -330,6 +330,7 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	u.m.st.setTheme(user.ThemeName())
 	u.vim = user.VimMode()
 	u.vimEscape = user.VimEscapeKeys()
+	u.deskMax, u.deskQuiet = user.DeskLimits()
 	u.m.st.reloadCustomTheme(env.Getenv)
 	u.m.kb, _ = loadKeybindings(env.Getenv)
 	u.m.notify = u.notify
