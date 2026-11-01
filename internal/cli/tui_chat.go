@@ -268,23 +268,42 @@ type (
 
 // cutGates is a cut's Gate port: a Gate waits, never shown mid-turn,
 // until /apply or /branch opens it (Gates at delivery). A newer cut, or
-// the Chat closing, cancels the wait.
+// the Chat closing, cancels the wait. Öge exiting (exiting is closed: a
+// quit, a hangup or a signal ended the view) parks it instead, with its
+// pins: nobody decided. Nothing else parks it, so a redraw never does.
 type cutGates struct {
-	reqs chan<- chatGateMsg
+	reqs    chan<- chatGateMsg
+	exiting <-chan struct{}
 }
 
 func (p cutGates) Decide(ctx context.Context, r gate.Request) (gate.Decision, error) {
 	reply := make(chan gate.Decision, 1)
 	select {
 	case p.reqs <- chatGateMsg{req: r, reply: reply}:
+	case <-p.exiting:
+		return gate.Decision{}, gate.ErrParked
 	case <-ctx.Done():
-		return gate.Decision{}, ctx.Err()
+		return gate.Decision{}, p.ended(ctx)
 	}
 	select {
 	case d := <-reply:
 		return d, nil
+	case <-p.exiting:
+		return gate.Decision{}, gate.ErrParked
 	case <-ctx.Done():
-		return gate.Decision{}, ctx.Err()
+		return gate.Decision{}, p.ended(ctx)
+	}
+}
+
+// ended is why the wait's ctx ended: Öge exiting parks the Gate, since
+// closing the Chat on the way out cancels ctx too; anything else (a newer
+// cut, Ctrl+C, /close) is the human's and abandons it.
+func (p cutGates) ended(ctx context.Context) error {
+	select {
+	case <-p.exiting:
+		return gate.ErrParked
+	default:
+		return ctx.Err()
 	}
 }
 
@@ -676,7 +695,7 @@ func (h *home) cutWith(f *pipeline.Frozen, changed int) tea.Cmd {
 	reqs, done := make(chan chatGateMsg), make(chan chatCutMsg, 1)
 	steps := make(chan chatStepMsg, 16)
 	go func() {
-		res, err := hc.cut(ctx, c, f, cutGates{reqs}, func(ev run.Event) {
+		res, err := hc.cut(ctx, c, f, cutGates{reqs, h.exiting}, func(ev run.Event) {
 			// Only the events a step text consumes reach the pipe, so an
 			// agent's event burst can't fill it and drop a boundary one.
 			if ev.Kind != run.EvStage && ev.Kind != run.EvAttempt {

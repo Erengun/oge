@@ -9,20 +9,22 @@ import (
 )
 
 // live are the commands started and not yet waited for, so KillAll can
-// reach them when Öge has to stop without waiting.
+// reach them when Öge has to stop without waiting. Each holds what lets
+// its forking thread go once it is reaped (nil where there is none).
 var (
 	mu   sync.Mutex
-	live = map[*exec.Cmd]bool{}
+	live = map[*exec.Cmd]func(){}
 )
 
 // Start starts cmd in a new process group. Wait for it with Wait.
 func Start(cmd *exec.Cmd) error {
 	setGroup(cmd)
-	if err := cmd.Start(); err != nil {
+	release, err := forkStart(cmd)
+	if err != nil {
 		return err
 	}
 	mu.Lock()
-	live[cmd] = true
+	live[cmd] = release
 	mu.Unlock()
 	return nil
 }
@@ -31,8 +33,12 @@ func Start(cmd *exec.Cmd) error {
 func Wait(cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	mu.Lock()
+	release := live[cmd]
 	delete(live, cmd)
 	mu.Unlock()
+	if release != nil {
+		release()
+	}
 	return err
 }
 

@@ -47,18 +47,33 @@ func (u *tui) gate(ctx context.Context, r gate.Request) (gate.Decision, error) {
 		return d, nil
 	case <-u.gone:
 		return u.askPlain(ctx, r)
+	case <-u.exiting:
+		return gate.Decision{}, gate.ErrParked
 	case <-ctx.Done():
+		// Öge exiting cancels the Run too: that parks the Gate. Any other
+		// cancel (Ctrl+C) is the human's and abandons it.
+		select {
+		case <-u.exiting:
+			return gate.Decision{}, gate.ErrParked
+		default:
+		}
 		return gate.Decision{}, ctx.Err()
 	}
 }
 
+// exit marks Öge as exiting, once: a Gate still waiting parks.
+func (u *tui) exit() {
+	u.exitOnce.Do(func() { close(u.exiting) })
+}
+
 // askPlain asks a Gate in plain lines once the live view has gone, unless
 // the home is running: there it would leave a goroutine reading stdin for
-// the life of the process, and the next composer would lose keys to it. The
-// Gate then has no decision, as with a closed stdin.
+// the life of the process, and the next composer would lose keys to it.
+// The home has one program, so its view going is Öge exiting: the Gate
+// parks with its pins, undecided.
 func (u *tui) askPlain(ctx context.Context, r gate.Request) (gate.Decision, error) {
 	if u.noFallback {
-		return gate.Decision{}, gate.ErrNoDecision
+		return gate.Decision{}, gate.ErrParked
 	}
 	return u.plain.gate(ctx, r)
 }

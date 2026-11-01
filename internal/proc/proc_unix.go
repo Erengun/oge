@@ -13,6 +13,7 @@ func setGroup(cmd *exec.Cmd) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.Setpgid = true
+	setDeathSignal(cmd.SysProcAttr)
 }
 
 func killGroup(cmd *exec.Cmd) {

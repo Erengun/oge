@@ -26,6 +26,12 @@ type Port interface {
 // ErrNoDecision means the terminal went away before anyone decided.
 var ErrNoDecision = errors.New("no decision was made: the terminal closed")
 
+// ErrParked is a port's answer when Öge exits while the Gate waits (a
+// quit, a hangup or a termination signal): nobody decided, and nobody
+// will in this process. The Run parks at the Gate with its pins, as an
+// unattended Run does (ADR-0008); it is neither abandoned nor decided.
+var ErrParked = errors.New("parked: Öge exited before anyone decided")
+
 // Choice is one choice a Gate offers.
 type Choice struct {
 	Word string // as the graph names it and as typed in full

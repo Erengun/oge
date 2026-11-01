@@ -37,6 +37,9 @@ const (
 	// RecGateAbandoned closes a Gate nobody decided: the Run was cancelled
 	// or the terminal closed. Öge never decides in the human's place.
 	RecGateAbandoned = "GateAbandoned"
+	// RecGateParked is a Gate Öge exited at (gate.ErrParked): it records
+	// the pins the Gate waits on, and the Run ends Parked.
+	RecGateParked = "GateParked"
 )
 
 // gateSpec is how the Run words one Gate.
@@ -276,6 +279,14 @@ func (w *walk) decide(ctx context.Context, node string, r gate.Request) (gate.De
 		why := r.What
 		if len(r.Files) > 0 {
 			why = r.Need + ": " + strings.Join(r.Files, ", ")
+		}
+		return d, &step{gate: node, stop: Parked, why: []string{why}}, nil
+	case errors.Is(err, gate.ErrParked):
+		// Öge exited while the Gate waited: it parks with its pins, before
+		// the ctx check, since exiting also ends ctx. Nobody decided.
+		why := fmt.Sprintf("Öge exited at the %s Gate before anyone decided", r.Name)
+		if err := w.l.Append(RecGateParked, map[string]any{"pins": r.Pins, "why": why}); err != nil {
+			return d, nil, err
 		}
 		return d, &step{gate: node, stop: Parked, why: []string{why}}, nil
 	case ctx.Err() != nil, errors.Is(err, gate.ErrNoDecision):
