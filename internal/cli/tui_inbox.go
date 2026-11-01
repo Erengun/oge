@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
 )
 
@@ -38,6 +39,10 @@ type inboxState struct {
 	shown  time.Time
 	ticked time.Time // the shown its redraw was asked for
 	unread *chatView
+	// brief is the return brief of the absence the human came back from,
+	// the first card until tab moves on. It takes no key but tab: typing
+	// goes to the box, like the since-you-left card.
+	brief *run.Brief
 }
 
 // inboxItem is one card: a Chat, its glyph and when that began.
@@ -120,6 +125,12 @@ func (h *home) canOpenInbox() bool {
 // openInbox opens the Inbox on its first card.
 func (h *home) openInbox() {
 	h.inbox = &inboxState{comp: h.composer()}
+	// The brief of the absence they came back from is the first card; shown
+	// once, it is seen (docs/ux/desk.md, I4).
+	if b := h.absence.back; b != nil && !b.Empty() {
+		h.inbox.brief = b
+	}
+	h.clearBrief()
 	h.showCard()
 }
 
@@ -160,6 +171,9 @@ func (h *home) inboxTick() tea.Cmd {
 	if in == nil {
 		return nil
 	}
+	if in.brief != nil {
+		return nil // the first card is behind the brief: not on screen
+	}
 	h.showCard()
 	if in.cur == nil || in.mark != "✓" || in.cur.seen || in.unread == in.cur || h.redraw == nil || in.ticked.Equal(in.shown) {
 		return nil
@@ -171,7 +185,7 @@ func (h *home) inboxTick() tea.Cmd {
 
 // inboxSeen marks the ✓ card seen when it is still on screen.
 func (h *home) inboxSeen(m inboxSeenMsg) {
-	if in := h.inbox; in != nil && in.cur == m.v && in.shown.Equal(m.shown) && in.unread != m.v {
+	if in := h.inbox; in != nil && in.brief == nil && in.cur == m.v && in.shown.Equal(m.shown) && in.unread != m.v {
 		m.v.seen = true
 	}
 }
@@ -203,6 +217,17 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 			return h.inboxTask()
 		}
 		in.comp.key(msg)
+		return nil
+	}
+	if in.brief != nil {
+		switch key {
+		case "tab", "shift+tab":
+			in.brief = nil // on to the first card, shown from now
+			in.shown, in.ticked = h.clock(), time.Time{}
+		case "enter": // Enter alone decides nothing (ADR-0022)
+		default:
+			in.comp.key(msg)
+		}
 		return nil
 	}
 	it, i, n, ok := h.card()
@@ -386,6 +411,7 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 	if width <= 0 {
 		width = 80
 	}
+	in := h.inbox
 	fit := func(s string) string { return ansi.Truncate(s, width, "…") }
 	h.showCard()
 	it, i, n, ok := h.card()
@@ -393,9 +419,29 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 	if ok {
 		head += st.dim(" · " + strconv.Itoa(i+1) + " of " + strconv.Itoa(n))
 	}
+	if in.brief != nil {
+		head = " " + st.bold("Inbox") + st.dim(" · while you were away · "+run.Span(in.brief.Away()))
+	}
 	lines = append(lines, "", fit(head))
 	keys := "esc close"
-	if !ok {
+	if b := in.brief; b != nil {
+		// The brief is plain text from the records: Öge's words and the
+		// human's own, no colour to lose under NO_COLOR.
+		for _, l := range h.briefFit(b.Lines(time.Local)[1:]) {
+			switch {
+			case strings.HasPrefix(l, "  Your decisions: "):
+				// The newest act is last: a narrow screen cuts the oldest.
+				lines = append(lines, "   "+clean(truncLeft(strings.TrimPrefix(l, "  "), width-3)))
+			case strings.HasPrefix(l, "  "):
+				lines = append(lines, fit("   "+clean(strings.TrimPrefix(l, "  "))))
+			default:
+				lines = append(lines, fit(" "+st.bold(clean(l))))
+			}
+		}
+		if len(h.cards()) > 0 {
+			keys = "tab next · esc close"
+		}
+	} else if !ok {
 		lines = append(lines, fit(" "+st.dim("nothing needs you")))
 	} else {
 		v := it.v
@@ -487,4 +533,53 @@ func (h *home) inboxHint() string {
 		return "^space inbox (" + strconv.Itoa(n) + ")"
 	}
 	return ""
+}
+
+// truncLeft cuts s to width cells from its left, keeping the end.
+func truncLeft(s string, width int) string {
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	return "…" + ansi.TruncateLeft(s, ansi.StringWidth(s)-max(width-1, 0), "")
+}
+
+// briefFit is the brief's lines (after the summary) cut to the screen: the
+// first Chats while they fit, then "+N more Chats · oge status", and always
+// the last Next line, so the head and the first Chat's "You were" stay on
+// screen (compose keeps the bottom rows of a tall live area).
+func (h *home) briefFit(lines []string) []string {
+	// Rows the card keeps for the head, keys, note and the task box.
+	room := h.height - 9
+	if h.height <= 0 || room < 5 {
+		room = 5
+	}
+	var next string
+	if n := len(lines); n > 0 && strings.HasPrefix(lines[n-1], "Next: ") {
+		next, lines = lines[n-1], lines[:n-1]
+		room--
+	}
+	var groups [][]string
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "  ") || len(groups) == 0 {
+			groups = append(groups, nil)
+		}
+		groups[len(groups)-1] = append(groups[len(groups)-1], l)
+	}
+	var out []string
+	for i, g := range groups {
+		left := len(groups) - i - 1
+		need := len(g)
+		if left > 0 {
+			need++ // the "+N more" line
+		}
+		if i > 0 && len(out)+need > room {
+			out = append(out, "  +"+strconv.Itoa(len(groups)-i)+" more · oge status")
+			break
+		}
+		out = append(out, g...)
+	}
+	if next != "" {
+		out = append(out, next)
+	}
+	return out
 }

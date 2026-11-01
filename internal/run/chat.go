@@ -235,6 +235,8 @@ type queuedTurn struct {
 	// advice is the Consultation whose advice this turn carries or was
 	// edited from ("" for any other).
 	advice string
+	// human: the human asked for it (TurnStarted's sent_by).
+	human bool
 }
 
 // turnKind is who a turn is from and what it is: the user's, Öge's
@@ -246,6 +248,21 @@ const (
 	turnFeedback
 	turnAdvice
 )
+
+type humanSendKey struct{}
+
+// WithHumanSend marks ctx for a feedback or advice turn the human asked
+// for (s, /feedback, ↵ on advice): TurnStarted records sent_by "human", so
+// the brief can tell it from Öge's automatic send-back. Optional: a log
+// without it reads as an automatic turn.
+func WithHumanSend(ctx context.Context) context.Context {
+	return context.WithValue(ctx, humanSendKey{}, true)
+}
+
+func humanSent(ctx context.Context) bool {
+	v, _ := ctx.Value(humanSendKey{}).(bool)
+	return v
+}
 
 // ogeTurn: Öge sent it, so it is never the Task's (D7).
 func (k turnKind) ogeTurn() bool { return k != turnUser }
@@ -606,11 +623,11 @@ func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice st
 	// An advice turn is outside the budget: the automatic case fires
 	// exactly when the guard above trips.
 	if c.cur != nil {
-		c.queue = append(c.queue, queuedTurn{text, out, kind, advice})
+		c.queue = append(c.queue, queuedTurn{text, out, kind, advice, humanSent(ctx)})
 		c.mu.Unlock()
 		return out.ch, nil
 	}
-	err := c.start(text, out, kind, advice)
+	err := c.start(text, out, kind, advice, humanSent(ctx))
 	return out.ch, err
 }
 
@@ -670,7 +687,7 @@ func (c *Chat) reopen(ctx context.Context) error {
 
 // start begins a turn with c.mu held, and releases it. TurnStarted and
 // the turn's manifest are written ahead of the message.
-func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string) error {
+func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string, human bool) error {
 	oge := kind.ogeTurn()
 	c.turns++
 	n := c.turns
@@ -710,6 +727,9 @@ func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string) er
 		}
 		if advice != "" {
 			started["consultation"] = advice
+		}
+		if human {
+			started["sent_by"] = "human" // the human asked for this Öge turn
 		}
 		err = c.log(RecTurnStarted, started)
 	}
@@ -1176,7 +1196,7 @@ func (c *Chat) settled(t *turnOut) {
 	if len(c.queue) > 0 {
 		q := c.queue[0]
 		c.queue = c.queue[1:]
-		_ = c.start(q.text, q.out, q.kind, q.advice) // logs a failed advice dismissed
+		_ = c.start(q.text, q.out, q.kind, q.advice, q.human) // logs a failed advice dismissed
 		return
 	}
 	c.timer.Reset(c.idle)

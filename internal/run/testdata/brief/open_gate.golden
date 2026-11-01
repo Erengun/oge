@@ -1,3 +1,9 @@
 while you were away (2h): ▲ 2 needs you (Chat 3 parser: tamper Gate) · 1 turn settled
-  Chat 1 auth · ▲ 1 ask waiting · 1 turn settled
-  Chat 3 parser · ▲ tamper Gate since 00:40
+Chat 1 auth
+  Since you left: 1 turn settled
+  Your decisions: none in the cuts read
+  Waiting for you: ▲ 1 ask waiting
+Chat 3 parser
+  Your decisions: none in the cuts read
+  Waiting for you: ▲ tamper Gate since 00:40
+Next: Chat 3 parser · ▲ tamper Gate since 00:40

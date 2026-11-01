@@ -342,6 +342,9 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto, human bool) te
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if human {
+		ctx = run.WithHumanSend(ctx)
+	}
 	return func() tea.Msg {
 		if auto {
 			ch, err := c.SendAutoAdvice(ctx, adv)

@@ -6,9 +6,11 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/erengun/oge/internal/agent/fake/multiturn"
 	"github.com/erengun/oge/internal/ledger"
 )
 
@@ -29,7 +31,14 @@ func briefChat(id string, n int, title string, recs ...ledger.Record) BriefChat 
 }
 
 func briefCut(id, chat string, live bool, recs ...ledger.Record) BriefRun {
-	start := briefRec(-1, RecRunStarted, map[string]any{"run": id, "chat": chat})
+	return briefCutAt(1, id, chat, live, recs...)
+}
+
+// briefCutAt is a cut whose Task starts at turn first of its Chat: 1 for
+// the Chat's first cut, later after an apply.
+func briefCutAt(first int, id, chat string, live bool, recs ...ledger.Record) BriefRun {
+	start := briefRec(-1, RecRunStarted, map[string]any{"run": id, "chat": chat,
+		"task_turns": []map[string]any{{"turn": first, "sha256": "x"}}})
 	if len(recs) > 0 {
 		start.At = recs[0].At.Add(-time.Minute)
 	}
@@ -71,8 +80,12 @@ func TestBriefGolden(t *testing.T) {
 		{name: "open_gate",
 			// The Gate opened before the briefWindow and still needs you; an
 			// ask waits in another Chat.
-			chats: []BriefChat{briefChat("c3", 3, "parser"), func() BriefChat { c := briefChat("c1", 1, "auth", briefSettled(5, 2)); c.Asks = 1; return c }()},
-			runs:  []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))}},
+			chats: []BriefChat{briefChat("c3", 3, "parser"), func() BriefChat {
+				c := briefChat("c1", 1, "auth", briefSettled(5, 2))
+				c.Asks, c.AskedAt = 1, briefAt(10)
+				return c
+			}()},
+			runs: []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))}},
 		{name: "hangup",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1), briefRec(11, RecTurnStarted, map[string]any{"turn": 2}),
 				// The Chat ends the turn in flight before it records the hangup.
@@ -112,6 +125,133 @@ func TestBriefGolden(t *testing.T) {
 				briefCut("20261101T093000-0a0b0c", "20261101T080000-778899", true, briefGate(40, "gate.result")),
 				briefCut("20261101T092000-0d0e0f", "20261101T080000-778899", false, briefEnded(35, Accepted)),
 				briefCut("20261101T091000-101112", "", false, briefEnded(30, Failed))}},
+		{name: "five_parts",
+			// The Chat's intention, the human's decisions in order, a Gate
+			// still open and the first actionable card. The agent's words
+			// in the records never show.
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 1, "parser", briefSettled(10, 2))
+				c.First = "make the parser accept trailing commas\nand nested arrays"
+				return c
+			}()},
+			runs: []BriefRun{
+				briefCut("r1", "c1", false, briefGate(-50, "gate.tamper"),
+					briefRec(-40, RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.tamper"}, "actor": "human", "choice": "acknowledge", "reason": "agent text never shows"}),
+					briefEnded(-35, Accepted), briefRec(-30, recDelivery, map[string]any{"kind": "apply"})),
+				briefCut("r2", "c1", true, briefGate(20, "gate.result"))}},
+		{name: "no_decisions",
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 2, "auth", briefSettled(10, 1))
+				c.First = "fix the login redirect"
+				return c
+			}()},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "no_first_message",
+			// Nothing records the first message and no cut has a title: no
+			// "You were" line, and nothing is made up.
+			chats: []BriefChat{briefChat("c1", 1, "", briefSettled(10, 1))},
+			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Accepted))}},
+		{name: "first_from_cut_title",
+			// oge status has no screen: the oldest cut's Task title stands in.
+			chats: []BriefChat{briefChat("c1", 0, "", briefSettled(10, 1))},
+			runs: []BriefRun{func() BriefRun {
+				r := briefCut("r2", "c1", false, briefEnded(30, Accepted))
+				r.Title = "second try"
+				return r
+			}(),
+				func() BriefRun {
+					r := briefCut("r1", "c1", false, briefEnded(20, Failed))
+					r.Title = "fix the parser"
+					return r
+				}()}},
+		{name: "fixed_while_away",
+			// The Check failed, then the auto send-back's cut was accepted:
+			// the Inbox shows ✓ for the Chat, so nothing waits and Next is ✓.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCut("r2", "c1", false, briefEnded(30, Accepted)),
+				briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "apply_failed",
+			// Delivery is written before the repo changes: DeliveryFailed
+			// says nothing was applied, so the ✓ card still waits.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Accepted),
+				briefRec(25, recDelivery, map[string]any{"kind": "apply"}),
+				briefRec(26, recDeliveryFailed, map[string]any{"error": "agent text never shows"}))}},
+		{name: "first_not_read",
+			// The oldest cut read starts at turn 4, mid-Chat: no "You were".
+			chats: []BriefChat{briefChat("c1", 1, "", briefSettled(10, 4))},
+			runs: []BriefRun{func() BriefRun {
+				r := briefCutAt(4, "r2", "c1", false, briefEnded(20, Accepted))
+				r.Title = "now add docs"
+				return r
+			}()}},
+		{name: "next_ends_at_inbox_first",
+			// ▲ in Chat 1 and ✗ in Chat 2: the brief ends at Chat 1's ▲.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", true, briefGate(30, "gate.tamper")),
+				briefCut("r2", "c2", false, briefEnded(20, Failed))}},
+		{name: "decisions_newest",
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, func() []ledger.Record {
+				var out []ledger.Record
+				for i := 1; i <= 5; i++ {
+					out = append(out, briefRec(i*5, RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.result"}, "actor": "human", "choice": "accept"}))
+				}
+				return append(out, briefEnded(40, Accepted))
+			}()...)}},
+		{name: "next_order",
+			// A ✗ in Chat 1 and a ▲ in Chat 2: the Inbox's order puts ▲ first.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed)),
+				briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
+		{name: "next_ask_dated",
+			// The ask in Chat 1 came after Chat 2's Gate opened: Chat 2 first.
+			// With the ask older, Chat 1 would lead.
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 1, "auth", briefSettled(5, 1))
+				c.Asks, c.AskedAt = 1, briefAt(70)
+				return c
+			}(), briefChat("c2", 2, "parser", briefSettled(6, 1))},
+			runs: []BriefRun{briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
+		{name: "next_ask_older",
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 1, "auth", briefSettled(5, 1))
+				c.Asks, c.AskedAt = 1, briefAt(10)
+				return c
+			}(), briefChat("c2", 2, "parser", briefSettled(6, 1))},
+			runs: []BriefRun{briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
+		{name: "newest_cut_live",
+			// The cut that was accepted at 00:50 is not the Chat's card: the
+			// human's next message made a cut that is still verifying.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCutAt(2, "r2", "c1", true, briefRec(60, RecAttemptEnded, map[string]any{"turn": 2})),
+				briefCut("r1", "c1", false, briefEnded(50, Accepted))}},
+		{name: "failure_answered_by_message",
+			// The human asked why it failed; that turn settled with no cut.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecTurnStarted, map[string]any{"turn": 2}), briefSettled(70, 2))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "human_send_back_no_cut",
+			// The human sent the failed Check back (s): Öge's turn, asked for
+			// by them, so the ✗ is answered, as in the Inbox. No cut followed.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecTurnStarted, map[string]any{"turn": 2, "by": "oge", "sent_by": "human"}), briefSettled(70, 2))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "auto_send_back_keeps_failure",
+			// Öge's own send-back answers nothing: the ✗ stays.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecTurnStarted, map[string]any{"turn": 2, "by": "oge"}), briefSettled(70, 2))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "unlisted_chat_not_next",
+			// c9 is known only by its cut (open in another home): its older ✓
+			// is under Since, but the Inbox has no card for it, so no Next.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs:  []BriefRun{briefCut("r9", "c9", false, briefEnded(20, Accepted))}},
+		{name: "apply_from_chat_log",
+			// The cut's Ledger was not read: the Chat log still records the apply.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecDelivered, map[string]any{"run": "r2", "how": "apply"}))},
+			runs: []BriefRun{briefCut("r2", "c1", false, briefEnded(50, Accepted))}},
 		{name: "empty",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(-30, 1))},
 			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(-20, Accepted))}},
@@ -230,7 +370,7 @@ func TestBriefTornLog(t *testing.T) {
 	if len(brief.Chats) != 1 || !brief.Chats[0].Torn || brief.Totals.Ended != 0 || brief.Totals.Torn != 1 {
 		t.Fatalf("brief = %+v", brief)
 	}
-	briefGolden(t, filepath.Join("testdata", "brief", "torn.golden"), brief.Chats[0].line(time.UTC)+"\n")
+	briefGolden(t, filepath.Join("testdata", "brief", "torn.golden"), strings.Join(brief.Lines(time.UTC)[1:], "\n")+"\n")
 
 	if _, err := ReadBriefLog("none", t.TempDir()); err == nil || errors.Is(err, ledger.ErrTornTail) {
 		t.Fatalf("no log: err = %v", err)
@@ -256,5 +396,57 @@ func TestSpan(t *testing.T) {
 		if got := Span(d); got != want {
 			t.Errorf("Span(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+func TestBriefNext(t *testing.T) {
+	chats := []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))}
+	runs := []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed)), briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}
+	b := BuildBrief(briefWindow, chats, runs)
+	c, what, ok := b.Next(time.UTC)
+	if !ok || c.N != 2 || what != "▲ tamper Gate since 01:30" {
+		t.Fatalf("Next = %d %q %v", c.N, what, ok)
+	}
+	// A ✓ already applied is no card.
+	b = BuildBrief(briefWindow, chats[:1], []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Accepted), briefRec(25, recDelivery, map[string]any{"kind": "apply"}))})
+	if _, _, ok := b.Next(time.UTC); ok {
+		t.Errorf("an applied cut is next")
+	}
+}
+
+// A Chat's first message and a Gate's choice are cleaned: one line, no
+// control sequences, only Öge's own words for a choice.
+func TestBriefCleansText(t *testing.T) {
+	c := briefChat("c1", 1, "x", briefSettled(10, 1))
+	c.First = "\x1b[31mred\x1b]0;title\x07 " + strings.Repeat("long ", 40)
+	b := BuildBrief(briefWindow, []BriefChat{c}, []BriefRun{briefCut("r1", "c1", false,
+		briefRec(12, RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.tamper"}, "actor": "human", "choice": "x\x1b[31m"}))})
+	got := b.Text(time.UTC)
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 7) || !strings.Contains(got, "decided at tamper Gate") {
+		t.Errorf("text = %q", got)
+	}
+	if n := len([]rune(b.Chats[0].First)); n > firstMax {
+		t.Errorf("First has %d runes", n)
+	}
+}
+
+// A feedback or advice turn the human asked for logs sent_by "human"; an
+// automatic one does not (old logs never have it).
+func TestTurnStartedSentBy(t *testing.T) {
+	c := openCut(t, "", multiturn.Turn{Reply: "ok"}, multiturn.Turn{Reply: "ok"}, multiturn.Turn{Reply: "ok"})
+	drain(t, send(t, c, "yo"), nil)
+	ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	ch, err = c.SendFeedback(WithHumanSend(t.Context()), "Öge's Check failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	got := recordsOf(t, c, RecTurnStarted)
+	if len(got) != 3 || got[0]["sent_by"] != nil || got[1]["sent_by"] != nil || got[1]["by"] != "oge" || got[2]["sent_by"] != "human" || got[2]["by"] != "oge" {
+		t.Fatalf("TurnStarted %v", got)
 	}
 }

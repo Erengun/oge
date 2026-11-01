@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/run"
 )
@@ -201,5 +202,43 @@ func TestRunsSince(t *testing.T) {
 	}
 	if !runs[len(runs)-1].Live {
 		t.Errorf("the oldest, live Run isn't Live: %+v", runs[len(runs)-1])
+	}
+}
+
+// A tall brief is cut to the screen by whole Chats, the head and the first
+// Chat kept and the Next line last; a narrow screen cuts the oldest
+// decisions, not the newest.
+func TestBriefFitHeightAndDecisions(t *testing.T) {
+	h := &home{height: 20}
+	var lines []string
+	for i := 1; i <= 4; i++ {
+		n := strconv.Itoa(i)
+		lines = append(lines, "Chat "+n, "  You were: x", "  Since you left: y", "  Your decisions: none yet", "  Waiting for you: nothing")
+	}
+	lines = append(lines, "Next: Chat 1 · ✓ accepted, not applied")
+	got := h.briefFit(lines)
+	if len(got) > 11 || got[0] != "Chat 1" || got[1] != "  You were: x" {
+		t.Errorf("fit kept %d lines, first %q:\n%s", len(got), got[0], strings.Join(got, "\n"))
+	}
+	if !strings.HasPrefix(got[len(got)-1], "Next: ") || !strings.Contains(got[len(got)-2], "more · oge status") {
+		t.Errorf("tail = %q", got[len(got)-2:])
+	}
+	if got := truncLeft("… 2 earlier · a 01:00 · b 01:05 · c 01:10", 20); !strings.HasSuffix(got, "c 01:10") || ansi.StringWidth(got) > 20 {
+		t.Errorf("truncLeft = %q", got)
+	}
+}
+
+// withRecent keeps newest first, whatever order the two readings came in.
+func TestWithRecentNewestFirst(t *testing.T) {
+	mk := func(id string) run.BriefRun { return run.BriefRun{BriefLog: run.BriefLog{ID: id}} }
+	got := withRecent([]run.BriefRun{mk("20261101T090000-aa"), mk("20261031T090000-bb")},
+		[]run.BriefRun{mk("20261101T100000-cc"), mk("20261031T090000-bb"), mk("20261101T080000-dd")})
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	want := []string{"20261101T100000-cc", "20261101T090000-aa", "20261101T080000-dd", "20261031T090000-bb"}
+	if strings.Join(ids, " ") != strings.Join(want, " ") {
+		t.Fatalf("withRecent order %v, want %v", ids, want)
 	}
 }

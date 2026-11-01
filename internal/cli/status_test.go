@@ -20,7 +20,7 @@ func TestStatusBrief(t *testing.T) {
 		t.Fatalf("run: exit %d\n%s%s", code, out, errOut)
 	}
 	code, out, errOut = f.run(t, "", "status")
-	want := regexp.MustCompile(`^since you last acted \(\dm\): ✓ 1 accepted\n  Run \S+ fix Add · ✓ 1 accepted\n$`)
+	want := regexp.MustCompile(`^since you last acted \(\dm\): ✓ 1 accepted\nRun \S+ fix Add\n  You were: fix Add\n  Since you left: ✓ 1 accepted\n  Your decisions: none yet\n  Waiting for you: nothing\n$`)
 	if code != ExitOK || !want.MatchString(out) {
 		t.Fatalf("after an Accepted Run: exit %d: %q %s", code, out, errOut)
 	}

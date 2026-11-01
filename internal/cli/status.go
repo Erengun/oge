@@ -22,8 +22,10 @@ const lastActRuns = 50
 const statusUsage = `Usage: oge status
 
 Prints what this repository's Chats and Runs did since you last acted
-(a message, a Gate decision, an apply): what settled, what needs you,
-what failed. It is read from the records alone and starts nothing.
+(a message, a Gate decision, an apply). Per Chat: You were (your first
+message, when a record holds it), Since you left, Your decisions,
+Waiting for you, Next. It is read from the records alone: no model
+writes or recommends anything, and nothing is started.
 `
 
 // statusCommand is oge status: the return brief so far as plain text,
@@ -68,12 +70,32 @@ func statusCommand(env Env, args []string) int {
 		fmt.Fprintf(env.Stderr, "oge: internal error: %v\n", err)
 		return ExitInternal
 	}
+	runs = withRecent(runs, recent)
 	if last := run.LastAct(chats, runs); last.After(from) && !last.After(now) {
 		from = last
 	}
 	b := run.BuildBrief(run.BriefWindow{From: from, To: now, Basis: run.BasisLastAct}, chats, runs)
 	fmt.Fprint(env.Stdout, b.Text(time.Local))
 	return ExitOK
+}
+
+// withRecent adds the recent Runs the window's reading left out: the
+// human's decisions in a Chat's older cuts are part of its brief. The
+// window's counts and open Gates don't change by them. Order is kept,
+// newest first.
+func withRecent(runs, recent []run.BriefRun) []run.BriefRun {
+	have := map[string]bool{}
+	for _, r := range runs {
+		have[r.ID] = true
+	}
+	for _, r := range recent {
+		if !have[r.ID] {
+			runs = append(runs, r)
+		}
+	}
+	// Run IDs are named by their start time: newest first is descending.
+	sort.SliceStable(runs, func(i, j int) bool { return runs[i].ID > runs[j].ID })
+	return runs
 }
 
 // repoLogs reads root's Chat logs and its newest Runs' Ledgers from the

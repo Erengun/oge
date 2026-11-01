@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/erengun/oge/internal/ledger"
 )
@@ -23,6 +24,10 @@ const SleepFloor = 2 * time.Minute
 // recDelivery is delivery.RecDelivery (which imports this package): a
 // human applied or branched a Run.
 const recDelivery = "Delivery"
+
+// recDeliveryFailed is delivery.RecDeliveryFailed: the writes of the
+// Delivery before it failed, so nothing was applied.
+const recDeliveryFailed = "DeliveryFailed"
 
 // BriefLog is one Chat log or Run Ledger as read.
 type BriefLog struct {
@@ -49,9 +54,15 @@ type BriefChat struct {
 	N int
 	// Title is the user's own title for it ("" takes its newest cut's).
 	Title string
+	// First is the human's first message in it, as the caller has it ("" when
+	// no record or screen holds the text: the Chat log keeps hashes only).
+	First string
 	// Asks are the asks waiting now. No record holds them, so only the
 	// process that holds the Session knows: 0 anywhere else.
 	Asks int
+	// AskedAt is when the Chat last came to need the human, as the caller
+	// has it (zero when unknown): it dates an ask, which no record does.
+	AskedAt time.Time
 }
 
 // BriefRun is a Run's Ledger: a Chat's cut or a one-shot Run.
@@ -110,6 +121,23 @@ type ChatBrief struct {
 	N     int
 	Title string
 	Run   bool // a one-shot Run, not a Chat
+	// First is the human's first message (the intention), cut to one
+	// line; "" when nothing records it. Terminal only: never in a push (A8).
+	First string
+	// Decisions are the human's Gate decisions and applies in this Chat's
+	// cuts, oldest first, whenever they were made.
+	Decisions []Decision
+	// Delivered counts the applies and branches inside the window that
+	// were not followed by a DeliveryFailed.
+	Delivered int
+	// Newest is the outcome of the Chat's newest cut that ended in
+	// Accepted, Failed or Rejected, whenever it ended ("" when none read);
+	// NewestAt is when. The Inbox shows that cut's card, so Waiting and
+	// Next read it, not the window's counts.
+	Newest   Outcome
+	NewestAt time.Time
+	// NewestDelivered says that cut was applied or branched.
+	NewestDelivered bool
 	// Settled counts the turns that settled in the window; Unsettled the
 	// ones whose Attempt ended in a failure (an agent that died, a Chat
 	// stopped mid-turn).
@@ -120,6 +148,22 @@ type ChatBrief struct {
 	// Gates are the Gates open now, wherever they opened.
 	Gates []OpenGate
 	Asks  int
+	// AskedAt dates the asks, as the Inbox does (zero: unknown).
+	AskedAt time.Time
+	// newestSeen says the Chat's newest cut was read; newestOpen that it
+	// has not ended in an Accepted, Failed or Rejected (running, parked,
+	// stopped), so no older cut's end is its card. humanAt is the human's
+	// last message in the Chat log, which answers a failed Check.
+	newestSeen, newestOpen bool
+	newestRun              string
+	humanAt                time.Time
+	// Unlisted says the caller did not list this Chat (it is known only by
+	// its cuts, e.g. open in another home): the Inbox has no card for it,
+	// so it is never Next.
+	Unlisted bool
+	// logDelivered are the Chat log's own Delivered records: always fully
+	// read, so an apply is never missed for want of its cut's Ledger.
+	logDelivered []loggedDelivery
 	// Stopped counts the cuts that ended without an end recorded: their
 	// process is gone, or their Ledger is torn.
 	Stopped int
@@ -131,6 +175,21 @@ type ChatBrief struct {
 	// the Chat isn't live, that is a record still being written or one
 	// cut off: the records can't say which.
 	Torn bool
+}
+
+type loggedDelivery struct {
+	At  time.Time
+	Run string
+	How string
+}
+
+// Decision is one act of the human, in Öge's fixed words.
+type Decision struct {
+	At   time.Time
+	What string // "chose acknowledge at tamper Gate", "applied cut"
+	run  string // the Run whose Ledger records it, "" when from a Chat log
+	// Delivery is an apply or a branch, not a Gate decision.
+	Delivery bool
 }
 
 // NeedsYou counts what waits for the human: open Gates and asks.
@@ -192,10 +251,11 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 	byID := map[string]*ChatBrief{}
 	started := map[string]time.Time{}
 	shown := map[string]bool{}
+	oldest := map[string]string{} // a Chat's oldest cut's Task title
 	var order []*ChatBrief
 	var spans []sleepSpan
 	for _, c := range chats {
-		cb := &ChatBrief{ID: c.ID, N: c.N, Title: c.Title, Asks: c.Asks}
+		cb := &ChatBrief{ID: c.ID, N: c.N, Title: c.Title, Asks: c.Asks, AskedAt: c.AskedAt, First: oneLine(c.First)}
 		byID[c.ID], order = cb, append(order, cb)
 		newest := time.Time{}
 		for _, r := range c.Records {
@@ -223,8 +283,26 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 				if cb.Ended == "" {
 					cb.Ended = "interrupt"
 				}
+			case RecDelivered:
+				var d struct{ Run, How string }
+				_ = json.Unmarshal(r.Data, &d)
+				if d.How == "apply" || d.How == "branch" {
+					cb.logDelivered = append(cb.logDelivered, loggedDelivery{r.At, d.Run, d.How})
+				}
 			case RecTurnStarted, RecSessionReopened:
 				cb.Ended = "" // it went on after
+				if r.Type == RecTurnStarted {
+					var d struct {
+						By     string
+						SentBy string `json:"sent_by"`
+					}
+					_ = json.Unmarshal(r.Data, &d)
+					// The human's own message, or an Öge turn they asked for
+					// (a send-back, advice they sent): the Inbox counts both.
+					if d.By == "" || d.SentBy == "human" {
+						cb.humanAt = r.At
+					}
+				}
 			}
 		}
 		spans = append(spans, logSleeps(c.Records)...)
@@ -249,7 +327,7 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 			if id == "" {
 				id = r.ID
 			}
-			cb = &ChatBrief{ID: id, Title: r.Title, Run: chat == ""}
+			cb = &ChatBrief{ID: id, Title: r.Title, Run: chat == "", Unlisted: chat != ""}
 			if len(r.Records) > 0 {
 				started[id] = r.Records[0].At
 			}
@@ -257,6 +335,32 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 			byID[id] = cb
 		} else if cb.Title == "" && r.Title != "" {
 			cb.Title = r.Title // the newest cut's: Runs come newest first
+		}
+		// Each older cut replaces it. A cut's Task starts at the Chat's
+		// first turn only for its first cut: a later one starts after an
+		// apply, mid-Chat, so its title is no intention (nothing is shown
+		// rather than a guess).
+		if r.Title != "" && (chat == "" || rs.fromStart) {
+			oldest[cb.ID] = r.Title
+		} else {
+			delete(oldest, cb.ID)
+		}
+		if !cb.newestSeen && !cb.Run { // Runs come newest first
+			// The newest cut is the Chat's card, whatever state it is in:
+			// one still running or parked hides an older cut's end.
+			cb.newestSeen = true
+			if rs.final != "" {
+				cb.Newest, cb.NewestAt, cb.NewestDelivered, cb.newestRun = rs.final, rs.finalAt, rs.delivered, r.ID
+			} else {
+				cb.newestOpen = true
+			}
+		}
+		for _, d := range rs.decided {
+			d.run = r.ID
+			cb.Decisions = append(cb.Decisions, d)
+			if d.Delivery && in(d.At) {
+				cb.Delivered++
+			}
 		}
 		cb.Accepted += rs.accepted
 		cb.Failed += rs.failed
@@ -266,6 +370,30 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		cb.Gates = append(cb.Gates, rs.gates...)
 		if rs.accepted+rs.failed+rs.rejected+rs.parked+rs.stopped+len(rs.gates) > 0 {
 			shown[cb.ID] = true
+		}
+	}
+	for _, cb := range order {
+		if cb.Newest == Failed && cb.humanAt.After(cb.NewestAt) {
+			cb.Newest = "" // the human's message answered it, as the Inbox shows
+		}
+		// The Chat log's applies and branches the Ledgers read did not hold.
+		have := map[string]bool{}
+		for _, d := range cb.Decisions {
+			if d.Delivery {
+				have[d.run] = true
+			}
+		}
+		for _, d := range cb.logDelivered {
+			if d.Run == cb.newestRun {
+				cb.NewestDelivered = true
+			}
+			if have[d.Run] {
+				continue
+			}
+			cb.Decisions = append(cb.Decisions, Decision{At: d.At, What: map[string]string{"apply": "applied", "branch": "branched"}[d.How] + " cut", Delivery: true, run: d.Run})
+			if in(d.At) {
+				cb.Delivered++
+			}
 		}
 	}
 	sort.SliceStable(order, func(i, j int) bool {
@@ -280,6 +408,12 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 			continue
 		}
 		sort.Slice(cb.Gates, func(i, j int) bool { return cb.Gates[i].Since.Before(cb.Gates[j].Since) })
+		sort.SliceStable(cb.Decisions, func(i, j int) bool { return cb.Decisions[i].At.Before(cb.Decisions[j].At) })
+		if cb.First == "" {
+			// The Chat log keeps hashes only: the Task title of the oldest
+			// cut read is the human's first message, cut short.
+			cb.First = oneLine(oldest[cb.ID])
+		}
 		b.Chats = append(b.Chats, *cb)
 		t := &b.Totals
 		t.Settled += cb.Settled
@@ -305,27 +439,72 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 type runState struct {
 	accepted, failed, rejected, parked, stopped int
 	gates                                       []OpenGate
+	decided                                     []Decision
+	// final is the outcome it ended in (Accepted, Failed, Rejected) and
+	// finalAt when; delivered says an apply or branch of it went through.
+	final     Outcome
+	finalAt   time.Time
+	delivered bool
+	// fromStart says its Task begins at the Chat's turn 1.
+	fromStart bool
 }
 
 // read reads a Run's Ledger: its Chat ("" for a one-shot Run), the end it
 // reached in the window, and its Gate still open.
 func (r BriefRun) read(in func(time.Time) bool) (chat string, s runState) {
 	var open *OpenGate
+	var decided []Decision
 	ended := false
+	var final Outcome
+	var finalAt time.Time
+	delivered, fromStart := false, false
+	defer func() {
+		s.decided, s.final, s.finalAt, s.delivered, s.fromStart = decided, final, finalAt, delivered, fromStart
+	}()
 	for _, rec := range r.Records {
 		switch rec.Type {
+		case recDelivery:
+			var d struct{ Kind string }
+			_ = json.Unmarshal(rec.Data, &d)
+			if d.Kind == "apply" || d.Kind == "branch" {
+				decided = append(decided, Decision{At: rec.At, What: map[string]string{"apply": "applied", "branch": "branched"}[d.Kind] + " cut", Delivery: true})
+				delivered = true
+			}
+		case recDeliveryFailed:
+			// The Delivery record comes before the writes: when they fail
+			// nothing was applied, and the brief says no more.
+			if n := len(decided); n > 0 && decided[n-1].Delivery {
+				decided[n-1].What = strings.Replace(strings.Replace(decided[n-1].What, "applied", "apply failed for", 1), "branched", "branch failed for", 1)
+				decided[n-1].Delivery = false
+			}
+			delivered = false
 		case RecRunStarted:
-			var d struct{ Chat string }
+			var d struct {
+				Chat      string
+				TaskTurns []struct{ Turn int } `json:"task_turns"`
+			}
 			_ = json.Unmarshal(rec.Data, &d)
 			chat = d.Chat
+			fromStart = len(d.TaskTurns) > 0 && d.TaskTurns[0].Turn == 1
 		case RecGateOpened:
 			var d struct{ Pins struct{ Gate string } }
 			_ = json.Unmarshal(rec.Data, &d)
 			open = &OpenGate{Run: r.ID, Gate: gateWord(d.Pins.Gate), Since: rec.At}
 		case RecGateDecided, RecGateParked, RecGateAbandoned:
+			if rec.Type == RecGateDecided {
+				var d struct {
+					Pins   struct{ Gate string }
+					Actor  string
+					Choice string
+				}
+				_ = json.Unmarshal(rec.Data, &d)
+				if d.Actor == "" || d.Actor == "human" {
+					decided = append(decided, Decision{At: rec.At, What: decisionWords(d.Choice, gateWord(d.Pins.Gate))})
+				}
+			}
 			open = nil
 		case RecRunParked:
-			open, ended = nil, true
+			open, ended, final = nil, true, ""
 			s = runState{}
 			if in(rec.At) {
 				s.parked = 1
@@ -338,6 +517,11 @@ func (r BriefRun) read(in func(time.Time) bool) (chat string, s runState) {
 			}
 			_ = json.Unmarshal(rec.Data, &d)
 			s = runState{}
+			if d.Outcome == Accepted || d.Outcome == Failed || d.Outcome == Rejected {
+				final, finalAt = d.Outcome, rec.At
+			} else {
+				final = ""
+			}
 			if !in(rec.At) {
 				continue
 			}
@@ -471,19 +655,200 @@ func sleptIn(spans []sleepSpan, w BriefWindow) time.Duration {
 	return total + group
 }
 
-// Text is the brief as plain lines: the summary, then one line per Chat.
-// Times are in loc.
+// Text is the brief as plain lines: the summary, then each Chat's five
+// parts. Times are in loc.
 func (b Brief) Text(loc *time.Location) string {
-	var lines []string
 	head := b.lead()
 	if b.Empty() {
 		return "nothing to report " + head + "\n"
 	}
-	lines = append(lines, head+": "+b.summary())
+	return strings.Join(b.Lines(loc), "\n") + "\n"
+}
+
+// Lines are Text's lines. Per Chat, in this order, rebuilding where the
+// human was rather than summing up activity (docs/ux/desk.md, I4): You
+// were, Since you left, Your decisions, Waiting for you. A part with
+// nothing to say is left out, except the decisions and the waiting, which
+// say so. The last line is Next, the Inbox's first card, so the brief ends
+// at the human's next act. Every word is Öge's or the human's own.
+func (b Brief) Lines(loc *time.Location) []string {
+	lines := []string{b.lead() + ": " + b.summary()}
 	for _, c := range b.Chats {
-		lines = append(lines, "  "+c.line(loc))
+		lines = append(lines, c.name())
+		if c.First != "" {
+			lines = append(lines, "  You were: "+c.First)
+		}
+		if s := c.since(loc); s != "" {
+			lines = append(lines, "  Since you left: "+s)
+		}
+		lines = append(lines, "  Your decisions: "+c.decisions(loc))
+		if w := c.waiting(loc); w != "" {
+			lines = append(lines, "  Waiting for you: "+w)
+		} else {
+			lines = append(lines, "  Waiting for you: nothing")
+		}
 	}
-	return strings.Join(lines, "\n") + "\n"
+	if c, what, ok := b.Next(loc); ok {
+		lines = append(lines, "Next: "+c.name()+" · "+what)
+	}
+	return lines
+}
+
+// Next is the Chat whose card the Inbox shows first and what it is, in the
+// Inbox's order: ▲, then ✗, then ✓, and within each the older first (a
+// Gate's Since, an ask's time, a cut's end), the earlier Chat on a tie or
+// when a card has no date. ok is false when
+// nothing is actionable. A one-shot Run has no card.
+func (b Brief) Next(loc *time.Location) (c ChatBrief, what string, ok bool) {
+	best := 3
+	var bestAt time.Time
+	for _, cc := range b.Chats {
+		r := cc.rank()
+		if r == 3 {
+			continue
+		}
+		at := cc.cardAt()
+		// An undated card keeps its place and never loses it to a dated
+		// one: the earlier Chat holds on a tie.
+		if r < best || r == best && !at.IsZero() && !bestAt.IsZero() && at.Before(bestAt) {
+			c, best, bestAt = cc, r, at
+		}
+	}
+	if best == 3 {
+		return ChatBrief{}, "", false
+	}
+	return c, c.Next(loc), true
+}
+
+// rank is the Inbox's order of the Chat's first card: 0 ▲, 1 ✗, 2 ✓, 3
+// none. The ✗ and ✓ read the newest cut that ended, as the Inbox does: a
+// Check that failed and was then fixed while away waits for nobody. A
+// rejection is no ✗ card, and a one-shot Run has none.
+func (c ChatBrief) rank() int {
+	if c.Run || c.Unlisted {
+		return 3
+	}
+	switch {
+	case c.NeedsYou() > 0:
+		return 0
+	case c.newestOpen:
+		return 3
+	case c.Newest == Failed:
+		return 1
+	case c.Newest == Accepted && !c.NewestDelivered:
+		return 2
+	}
+	return 3
+}
+
+// cardAt is when the Chat's first card began waiting: zero for an ask,
+// which no record dates.
+func (c ChatBrief) cardAt() time.Time {
+	if c.rank() == 0 {
+		if len(c.Gates) > 0 {
+			return c.Gates[0].Since
+		}
+		return c.AskedAt
+	}
+	return c.NewestAt
+}
+
+// Next is the Chat's first actionable card, "" when it has none.
+func (c ChatBrief) Next(loc *time.Location) string {
+	switch c.rank() {
+	case 0:
+		if len(c.Gates) > 0 {
+			g := c.Gates[0]
+			return "▲ " + g.Gate + " Gate since " + g.Since.In(loc).Format("15:04")
+		}
+		return "▲ " + plural(c.Asks, "ask") + " waiting"
+	case 1:
+		return "✗ Check failed"
+	case 2:
+		return "✓ accepted, not applied"
+	}
+	return ""
+}
+
+// decisionsShown is how many of the human's acts "Your decisions" names:
+// the newest, since the oldest are the least to rebuild from.
+const decisionsShown = 3
+
+// decisions are the human's acts in the Chat, oldest first.
+func (c ChatBrief) decisions(loc *time.Location) string {
+	if len(c.Decisions) == 0 {
+		if c.Run {
+			return "none yet" // its one Ledger was read whole
+		}
+		// A Chat's older cuts may be past what was read; its applies are
+		// never missed (its own log), a Gate decision in an unread cut is.
+		return "none in the cuts read"
+	}
+	var parts []string
+	ds := c.Decisions
+	if len(ds) > decisionsShown {
+		parts = append(parts, fmt.Sprintf("… %d earlier", len(ds)-decisionsShown))
+		ds = ds[len(ds)-decisionsShown:]
+	}
+	for _, d := range ds {
+		parts = append(parts, d.What+" "+d.At.In(loc).Format("15:04"))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// waiting is what waits for the human now: open Gates, asks, and a Check
+// that failed in the Chat's newest cut.
+func (c ChatBrief) waiting(loc *time.Location) string {
+	var parts []string
+	for _, g := range c.Gates {
+		parts = append(parts, "▲ "+g.Gate+" Gate since "+g.Since.In(loc).Format("15:04"))
+	}
+	if c.Asks > 0 {
+		parts = append(parts, "▲ "+plural(c.Asks, "ask")+" waiting")
+	}
+	if c.rank() == 1 {
+		parts = append(parts, "✗ Check failed")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// decisionWords is a Gate decision as a fixed phrase. A choice is one of
+// Öge's words; anything else is not repeated.
+func decisionWords(choice, gate string) string {
+	for _, r := range choice {
+		if !(r >= 'a' && r <= 'z' || r == '-') {
+			choice = ""
+			break
+		}
+	}
+	what := "decided"
+	if choice != "" {
+		what = "chose " + choice
+	}
+	if gate == "" {
+		return what + " at a Gate"
+	}
+	return what + " at " + gate + " Gate"
+}
+
+// firstMax is how long "You were" runs, in runes.
+const firstMax = 72
+
+// oneLine is s as one trimmed line cut to firstMax, control characters
+// (an escape sequence's) gone.
+func oneLine(s string) string {
+	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if rs := []rune(s); len(rs) > firstMax {
+		s = strings.TrimSpace(string(rs[:firstMax-1])) + "…"
+	}
+	return s
 }
 
 // lead names the window: "while you were away (2h 10m, slept about 40m)".
@@ -577,7 +942,8 @@ func (c ChatBrief) name() string {
 	return n
 }
 
-func (c ChatBrief) line(loc *time.Location) string {
+// since is the Chat's events in the window, "" when it had none.
+func (c ChatBrief) since(loc *time.Location) string {
 	var parts []string
 	switch c.Ended {
 	case "":
@@ -588,12 +954,6 @@ func (c ChatBrief) line(loc *time.Location) string {
 	}
 	if c.Torn {
 		parts = append(parts, "its log's last record is torn (still being written, or cut off)")
-	}
-	for _, g := range c.Gates {
-		parts = append(parts, "▲ "+g.Gate+" Gate since "+g.Since.In(loc).Format("15:04"))
-	}
-	if c.Asks > 0 {
-		parts = append(parts, "▲ "+plural(c.Asks, "ask")+" waiting")
 	}
 	if c.Failed > 0 {
 		parts = append(parts, "✗ "+plural(c.Failed, "Check")+" failed")
@@ -616,7 +976,7 @@ func (c ChatBrief) line(loc *time.Location) string {
 	if c.Unsettled > 0 {
 		parts = append(parts, plural(c.Unsettled, "turn")+" did not settle")
 	}
-	return c.name() + " · " + strings.Join(parts, " · ")
+	return strings.Join(parts, " · ")
 }
 
 func plural(n int, word string) string {

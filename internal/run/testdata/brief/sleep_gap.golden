@@ -1,2 +1,6 @@
 while you were away (2h, the machine slept about 40m): ✓ 1 accepted · 1 turn settled
-  Chat 1 parser · ✓ 1 accepted · 1 turn settled
+Chat 1 parser
+  Since you left: ✓ 1 accepted · 1 turn settled
+  Your decisions: none in the cuts read
+  Waiting for you: nothing
+Next: Chat 1 parser · ✓ accepted, not applied
