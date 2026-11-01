@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"22222222-bbbb","cwd":"/repo/a","gitBranch":"dev","isSidechain":false,"timestamp":"2026-10-31T09:00:00Z","message":{"content":"SENTINEL-MESSAGE-TEXT"}}
+{"type":"assistant","sessionId":"22222222-bbbb","cwd":"/repo/a","isSidechain":false,"timestamp":"2026-10-31T09:01:00Z","message":{"content":"SENTINEL-MESSAGE-TEXT"}}
