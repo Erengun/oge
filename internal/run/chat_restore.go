@@ -216,6 +216,7 @@ type restoredCut struct {
 	// verdict says a Verdict was recorded: its Check finished.
 	verdict bool
 	outcome Outcome
+	start   time.Time // the Run's first record
 }
 
 type cutEnd int
@@ -282,6 +283,7 @@ func readCut(dir string) (restoredCut, bool) {
 		c.at = rec.At
 		switch rec.Type {
 		case RecRunStarted:
+			c.start = rec.At
 			var d struct{ Turns struct{ To int } }
 			_ = json.Unmarshal(rec.Data, &d)
 			c.to = d.Turns.To
@@ -417,6 +419,10 @@ func restoreChat(c *RestoredChat, cutDirs []string, seen string) {
 	case covers && cut.state == cutParked:
 		c.State, c.Since = RestoredParked, cut.at
 		c.Card = &RestoredCard{Kind: CardParked, Gate: cut.gate, Verified: cut.verdict, At: cut.at}
+	case covers && cut.state == cutInterrupted && (intr == nil || intr.At.Before(cut.start)):
+		// The human cancelled the Check and oge's exit stopped nothing: no
+		// TurnInterrupted at or after the cut began.
+		c.State, c.Since, c.Word = RestoredIdle, cut.at, "cancelled"
 	case covers && (cut.state == cutOpen || cut.state == cutInterrupted):
 		// Its process is gone, or it was cancelled: a Check killed has no
 		// Verdict.

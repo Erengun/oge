@@ -98,8 +98,15 @@ func restoreFixture(t *testing.T) *ledger.StateRoot {
 	chat("c5", turnStarted(1, "ci", nil, t), settled(1, "ok"))
 	cut("20261101-0004-c5", "c5", 1, fixRec{RecVerdict, map[string]any{}}, fixRec{RecRunEnded, map[string]any{"outcome": Failed}})
 	// c6: oge exited while the Check ran: the Run was cancelled and ended.
-	chat("c6", turnStarted(1, "lint", nil, t), settled(1, "ok"), fixRec{RecTurnInterrupted, map[string]any{"turn": 1, "why": "hangup"}})
 	cut("20261101-0005-c6", "c6", 1, fixRec{RecCheckStarted, map[string]any{}},
+		fixRec{RecCheckEnded, map[string]any{"interrupted": true}},
+		fixRec{RecRunEnded, map[string]any{"outcome": InfrastructureStop, "why": []string{interrupted}}})
+	// The exit's TurnInterrupted lands after the cut began.
+	chat("c6", turnStarted(1, "lint", nil, t), settled(1, "ok"), fixRec{RecTurnInterrupted, map[string]any{"turn": 1, "why": "hangup"}})
+	// c12: the human cancelled the Check with Ctrl+C, then quit idle: the
+	// cut ends interrupted, but no TurnInterrupted follows.
+	chat("c12", turnStarted(1, "vet", nil, t), settled(1, "ok"))
+	cut("20261101-0007-c12", "c12", 1, fixRec{RecCheckStarted, map[string]any{}},
 		fixRec{RecCheckEnded, map[string]any{"interrupted": true}},
 		fixRec{RecRunEnded, map[string]any{"outcome": InfrastructureStop, "why": []string{interrupted}}})
 	// c10: oge was killed while the Check ran: its Run has no end.
@@ -115,7 +122,7 @@ func restoreFixture(t *testing.T) *ledger.StateRoot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, c := range []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11"} {
+	for i, c := range []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12"} {
 		d.ChatAdded(c, i+1, "chat "+c, "/repo/"+c)
 	}
 	d.ChatClosed("c7")
@@ -146,6 +153,7 @@ func TestRestoreDeskStates(t *testing.T) {
 		"c9":  {RestoredStopped, CardInterrupted, "/repo/c9"},
 		"c10": {RestoredStopped, CardCheckInterrupted, "/repo/c10"},
 		"c11": {RestoredStopped, CardInterrupted, "/repo/c11"},
+		"c12": {RestoredIdle, "", "/repo/c12"}, // a cancelled Check is no stop
 	}
 	if len(d.Chats) != len(cases) {
 		t.Fatalf("%d Chats restored, want %d (a closed Chat stays out)", len(d.Chats), len(cases))
