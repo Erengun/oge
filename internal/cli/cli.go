@@ -193,6 +193,8 @@ func Main(env Env, args []string) int {
 			args = args[1:]
 		case a == "diff" || a == "apply" || a == "branch":
 			return deliverCommand(env, a, args[1:])
+		case a == "add" && len(args) > 1:
+			return addCommand(env, args[1:])
 		case a == "receipt":
 			return receiptCommand(env, args[1:])
 		case a == "status":
