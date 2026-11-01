@@ -1739,7 +1739,13 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	in := newInterrupts(cancel)
-	defer in.watch(os.Interrupt, syscall.SIGTERM)()
+	if histDir != "" && env.Stdout == io.Writer(os.Stdout) {
+		// After a hangup there is no terminal: what the cleanup prints
+		// goes to the state root's runner.log instead.
+		private := filepath.Dir(histDir)
+		in.hangup = func() { _ = redirectStdio(filepath.Join(private, "runner.log")) }
+	}
+	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
 	h.chatView.num = 1
@@ -1878,6 +1884,23 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
 	err = u.program(in, h)
+	if ctx.Err() == nil && errors.Is(err, syscall.EIO) {
+		// The terminal read EIO: it hung up, and its SIGHUP may not have
+		// arrived yet. The session ends as on a hangup.
+		in.hangUp()
+		err = nil
+	}
+	if ctx.Err() != nil {
+		// A signal ended the session (a hangup, SIGTERM): every Chat
+		// stops as an interrupt does, and keeps its Workspace.
+		why := in.why()
+		for _, v := range h.views {
+			v.chat.stop(why)
+		}
+		for _, c := range h.closed {
+			c.stop(why)
+		}
+	}
 	// hc is the caller's to close; the other Chats are the home's.
 	for _, v := range h.views {
 		if v.chat != hc {

@@ -164,6 +164,8 @@ func (c *Chat) prepare(m *oracle.Manifest, snap string) {
 // that one returns ErrSuperseded, with its Run's Result if it had one.
 // Turns are never held up by a cut: Send doesn't wait on it.
 func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
+	c.cutting.Add(1)
+	defer c.cutting.Add(-1)
 	defer c.retryRefresh() // runs after cutMu is released: a deferred retake (D10)
 	if err := c.Err(); errors.Is(err, ErrChatClosed) {
 		return nil, err

@@ -6,7 +6,11 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"syscall"
 )
+
+// hangupSignal is the terminal closing.
+var hangupSignal os.Signal = syscall.SIGHUP
 
 // ExitInterrupted is the exit code when Öge stops without waiting for the
 // Run to end.
@@ -32,6 +36,11 @@ type interrupts struct {
 	// forward, when set, takes every interrupt instead: the home's session
 	// passes them to the Run it started.
 	forward *interrupts
+	// hangup, when set, runs once on the first SIGHUP, before that
+	// interrupt: the terminal is gone.
+	hangup  func()
+	hungUp  bool
+	stopped bool // ended by a signal rather than by the human
 }
 
 // forwardTo sends interrupts to r until it is called with nil.
@@ -81,8 +90,8 @@ func (i *interrupts) watch(sigs ...os.Signal) (stop func()) {
 	go func() {
 		for {
 			select {
-			case <-ch:
-				i.interrupt()
+			case sig := <-ch:
+				i.signalled(sig)
 			case <-done:
 				return
 			}
@@ -92,4 +101,58 @@ func (i *interrupts) watch(sigs ...os.Signal) (stop func()) {
 		signal.Stop(ch)
 		close(done)
 	}
+}
+
+// signalled is interrupt for a signal: a hangup first runs i.hangup.
+func (i *interrupts) signalled(sig os.Signal) {
+	i.mu.Lock()
+	i.stopped = true
+	f := i.hangup
+	if sig != hangupSignal || i.hungUp {
+		f = nil
+	}
+	if sig == hangupSignal {
+		i.hungUp = true
+	}
+	i.mu.Unlock()
+	if f != nil {
+		f()
+	}
+	i.interrupt()
+	if sig == hangupSignal {
+		// No terminal is left to come back to: a hangup ends the home even
+		// while interrupts go to a Run or an editor (forwarded or diverted).
+		i.cancel()
+	}
+}
+
+// why is how the session was ended by a signal: "hangup", "interrupt",
+// or "" when no signal came.
+func (i *interrupts) why() string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	switch {
+	case i.hungUp:
+		return "hangup"
+	case i.stopped:
+		return "interrupt"
+	}
+	return ""
+}
+
+// hangUp ends the session as a SIGHUP would, for a terminal read that
+// failed with EIO: it runs i.hangup unless a SIGHUP already did, then
+// cancels without counting an interrupt, so a late SIGHUP doesn't force.
+func (i *interrupts) hangUp() {
+	i.mu.Lock()
+	f := i.hangup
+	if i.hungUp {
+		f = nil
+	}
+	i.hungUp, i.stopped = true, true
+	i.mu.Unlock()
+	if f != nil {
+		f()
+	}
+	i.cancel()
 }

@@ -143,6 +143,18 @@ func (hc *homeChat) close() {
 	hc.closing.Wait()
 }
 
+// stop ends the Chat for Öge going away (run.Chat.Stop): its Workspace
+// is kept, and a turn or cut in flight is logged as interrupted, why.
+func (hc *homeChat) stop(why string) {
+	if hc == nil {
+		return
+	}
+	hc.closing.Wait() // a Chat still opening is closed by its opener
+	if c := hc.take(); c != nil {
+		_ = c.Stop(why)
+	}
+}
+
 // reset closes the Chat in the background, so the next message opens a
 // new one (/new): closing waits for a cut in flight to unwind. The
 // command's message is v's chatClosedMsg; nil when no Chat is open.

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
@@ -42,6 +43,9 @@ const (
 	RecTurnStarted     = "TurnStarted"
 	RecSessionReopened = "SessionReopened"
 	RecHeldOutViewed   = "HeldOutViewed"
+	// RecTurnInterrupted is the last record of a Chat that Stop ended
+	// while a turn or its cut was in flight. Its Workspace is kept.
+	RecTurnInterrupted = "TurnInterrupted"
 )
 
 // ChatFlag is the hidden escape hatch from the Chat: "0" refuses to open
@@ -62,8 +66,11 @@ var (
 	// A verifier's (QA's) Session is always fresh.
 	ErrSessionReuse = errors.New("only an implementer Session may be reused")
 	ErrChatClosed   = errors.New("the chat is closed")
-	ErrChatIdle     = errors.New("the chat Session was idle too long and was closed")
-	ErrChatLost     = errors.New("the chat Session ended")
+	// ErrChatStopped is a Stop (a hangup or a signal): it is a close, so
+	// every ErrChatClosed guard refuses a cut, refresh or Consultation after it.
+	ErrChatStopped = fmt.Errorf("the chat was stopped: Öge was interrupted: %w", ErrChatClosed)
+	ErrChatIdle    = errors.New("the chat Session was idle too long and was closed")
+	ErrChatLost    = errors.New("the chat Session ended")
 )
 
 // ChatParams is what a Chat opens from.
@@ -150,9 +157,13 @@ type Chat struct {
 	prepMu     sync.Mutex
 	prepClosed bool
 
-	cutMu   sync.Mutex // one cut at a time
-	lastCut *cutMark   // the last cut that reached a Run's walk; written under supersedeMu too
-	refused *Result    // the cut setup's failure refused
+	cutMu sync.Mutex // one cut at a time
+	// cutting counts the Cuts in flight (waiting for cutMu or holding it);
+	// a Snapshot refresh holding cutMu isn't one. Stop logs
+	// TurnInterrupted only for a turn or a cut in flight.
+	cutting atomic.Int32
+	lastCut *cutMark // the last cut that reached a Run's walk; written under supersedeMu too
+	refused *Result  // the cut setup's failure refused
 	// verified are the cuts' Check results by what they checked, for the
 	// Chat's lifetime: a cut of the same tree reuses its Verdict.
 	verified map[checkKey]checkedBy
@@ -1223,11 +1234,30 @@ func (c *Chat) Done() <-chan struct{} {
 
 // Close ends the Session and removes the Workspace, which is disposable.
 func (c *Chat) Close() error {
+	c.end(ErrChatClosed, "")
+	return nil
+}
+
+// Stop ends the Chat for Öge going away (a hangup or a termination
+// signal), as Close does: the turn in flight is interrupted, its
+// Session's process group killed after the grace period, its writes
+// scope-checked, and a cut in flight cancelled. Unlike Close it keeps the
+// Workspace, and when a turn or a cut was in flight the log ends in
+// TurnInterrupted, with why ("hangup" or "interrupt").
+func (c *Chat) Stop(why string) error {
+	c.end(ErrChatStopped, why)
+	return nil
+}
+
+// end is Close, or Stop when why is set.
+func (c *Chat) end(reason error, why string) {
 	c.closing.Do(func() {
 		c.reopening.Lock()
 		defer c.reopening.Unlock()
 		c.mu.Lock()
-		c.closed, c.err = true, ErrChatClosed
+		c.closed, c.err = true, reason
+		// Read before anything is cancelled: a cancelled cut unwinds fast.
+		turn, busy := c.turns, c.cur != nil || c.cutting.Load() > 0
 		c.timer.Stop()
 		unctx, sess, pumped := c.unctx, c.sess, c.pumped
 		c.mu.Unlock()
@@ -1247,10 +1277,14 @@ func (c *Chat) Close() error {
 		defer c.cutMu.Unlock()
 		c.prep.control.Stop()
 		c.prep.seed.Close()
+		if why != "" && busy {
+			_ = c.log(RecTurnInterrupted, map[string]any{"chat": c.ID, "turn": turn, "why": why})
+		}
 		c.logMu.Lock()
 		c.l.Close()
 		c.logMu.Unlock()
-		oracle.RemoveAll(c.work)
+		if why == "" {
+			oracle.RemoveAll(c.work)
+		}
 	})
-	return nil
 }
