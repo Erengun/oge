@@ -162,6 +162,7 @@ func (u *tui) program(in *interrupts, root tea.Model) error {
 		}
 	}()
 	_, err := p.Run()
+	u.send.Store(nil) // a closing Desk answers oge add at once
 	u.releaseHerdr()
 	close(u.gone)
 	return err

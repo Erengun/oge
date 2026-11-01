@@ -57,7 +57,15 @@ type DeskReply struct {
 	Opened *DeskOpened `json:"opened,omitempty"` // locate
 	N      int         `json:"n,omitempty"`      // add: the Chat's number
 	Repo   string      `json:"repo,omitempty"`   // add: the repo's name
+	// Unavailable marks a no that is not a decision: the Desk is starting
+	// or closing, or too busy to answer. The caller treats it as no Desk.
+	Unavailable bool `json:"unavailable,omitempty"`
 }
+
+// ErrDeskUnavailable is what a DeskAdder returns when the Desk can't take
+// the task now for a reason of its own timing (starting, closing, busy),
+// not because it said no. The client then runs the task itself.
+var ErrDeskUnavailable = errors.New("the Desk is not available")
 
 // DeskAdder lands a task as a new Chat's card in repo; the Chat's number
 // and the repo's name come back. A returned error is the one-line reason.
@@ -176,7 +184,7 @@ func (s *deskServer) answer(req DeskRequest) DeskReply {
 		}
 		n, name, err := s.s.Add(req.Repo, req.Task)
 		if err != nil {
-			return DeskReply{Error: squash(err.Error())}
+			return DeskReply{Error: squash(err.Error()), Unavailable: errors.Is(err, ErrDeskUnavailable)}
 		}
 		return DeskReply{OK: true, N: n, Repo: name}
 	}
@@ -223,33 +231,34 @@ type DeskRefused struct{ Reason string }
 
 func (e *DeskRefused) Error() string { return e.Reason }
 
-// deskHeld says whether a live process holds the Desk under private.
-func deskHeld(private string) bool {
+// deskGone says whether no live process holds the Desk under private,
+// and if so removes the dead Desk's socket while still holding the probe
+// lock, so a Desk starting right now can't have its new socket unlinked.
+func deskGone(private string) bool {
 	lock := filepath.Join(private, DeskDir, deskLock)
 	if _, err := os.Stat(lock); err != nil {
-		return false
-	}
-	f, err := lockDesk(lock)
-	if errors.Is(err, errDeskHeld) {
+		_ = os.Remove(filepath.Join(private, DeskDir, DeskSock))
 		return true
 	}
+	f, err := lockDesk(lock)
 	if err != nil {
-		return false
+		return false // held (or unreadable): not known to be dead
 	}
+	_ = os.Remove(filepath.Join(private, DeskDir, DeskSock))
 	unlockDesk(f)
-	return false
+	return true
 }
 
-// callDesk sends req to the live Desk's socket. With no Desk lock held,
-// the socket is a dead Desk's: it is removed and the error is ErrNoDesk.
+// callDesk sends req to the live Desk's socket. A dial that works is a
+// live Desk. When it fails with no Desk lock held, the socket is a dead
+// Desk's: it is removed and the error is ErrNoDesk.
 func callDesk(private string, req DeskRequest) (DeskReply, error) {
 	sock := filepath.Join(private, DeskDir, DeskSock)
-	if !deskHeld(private) {
-		_ = os.Remove(sock)
-		return DeskReply{}, ErrNoDesk
-	}
 	c, err := net.DialTimeout("unix", sock, 2*time.Second)
 	if err != nil {
+		if deskGone(private) {
+			return DeskReply{}, ErrNoDesk
+		}
 		return DeskReply{}, ErrDeskDeaf
 	}
 	defer c.Close()
@@ -261,6 +270,9 @@ func callDesk(private string, req DeskRequest) (DeskReply, error) {
 	var rep DeskReply
 	if err := json.NewDecoder(c).Decode(&rep); err != nil {
 		return DeskReply{}, ErrDeskDeaf
+	}
+	if rep.Unavailable {
+		return rep, ErrDeskDeaf
 	}
 	if !rep.OK {
 		return rep, &DeskRefused{Reason: rep.Error}

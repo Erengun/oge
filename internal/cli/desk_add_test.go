@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,7 +86,7 @@ func TestDeskAddStartsOnFocus(t *testing.T) {
 // What the box would hold back from the human's eyes is held back from
 // an added task too: a slash line is never run, hidden text is shown first.
 func TestDeskAddHoldsWhatTheBoxWouldHold(t *testing.T) {
-	for _, text := range []string{"/apply", "!rm -rf x", "fix it​​now"} {
+	for _, text := range []string{"/apply", "!rm -rf x", "fix it\u200b\u200bnow"} {
 		h := deskHome()
 		h.root = gitRepo(t)
 		h.repoCtx.root = h.root
@@ -187,5 +189,62 @@ func TestAddRefusedIsPrinted(t *testing.T) {
 	code, out, errOut := f.run(t, fixScript, "add", "x")
 	if code != ExitRefused || out != "" || !strings.HasPrefix(errOut, "oge add: 3 adds in 10 minutes is the limit") {
 		t.Errorf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// A task the socket's side gave up on is never made into a card later:
+// the client was told it failed, and a retry would double it.
+func TestDeskAddGivenUpMakesNoCard(t *testing.T) {
+	h := deskHome()
+	h.root = gitRepo(t)
+	h.repoCtx.root = h.root
+	msg := deskAddMsg{repo: h.root, task: "late", reply: make(chan deskAddReply, 1), state: new(atomic.Int32)}
+	msg.state.Store(addGaveUp)
+	h.update(msg)
+	if len(h.views) != 1 || len(msg.reply) != 0 {
+		t.Errorf("views %v, replies %d", nums(h), len(msg.reply))
+	}
+}
+
+// A Desk that can't answer in time, or is closing, reads as no Desk: the
+// task runs here, and no card appears.
+func TestAddUnavailableDeskRunsHere(t *testing.T) {
+	f := newRunFixture(t)
+	state, err := ledger.OpenStateRoot(f.state, f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := run.OpenDesk(state.Private, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Release()
+	if err := d.Serve(run.DeskServe{Add: func(string, string) (int, string, error) {
+		return 0, "", fmt.Errorf("%w: closing", run.ErrDeskUnavailable)
+	}}); err != nil {
+		t.Skipf("no socket here: %v", err)
+	}
+	code, out, errOut := f.run(t, fixScript, "add", "fix Add", "--fast", "--agent", "fake", "--unattended")
+	if code != ExitOK || !strings.Contains(errOut, "didn't take it: running it here") || strings.Contains(out, "added to the Desk") {
+		t.Errorf("exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+}
+
+// Closing a Chat focuses a neighbour the human didn't choose: an added
+// card there starts nothing.
+func TestCloseDoesNotStartAnAddedCard(t *testing.T) {
+	h := deskHome()
+	h.root = gitRepo(t)
+	h.repoCtx.root = h.root
+	reply := make(chan deskAddReply, 1)
+	h.update(deskAddMsg{repo: h.root, task: "do it", reply: reply})
+	<-reply
+	h.chat.c = nil
+	submit(h, "/close")
+	if len(h.views) != 2 || h.chatView.added != "" || h.turn != nil {
+		t.Fatalf("views %v, focus %d, turn %v", nums(h), h.num, h.turn != nil)
+	}
+	if h.views[0].added != "do it" {
+		t.Errorf("the card lost its task: %q", h.views[0].added)
 	}
 }

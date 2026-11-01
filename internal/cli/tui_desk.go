@@ -137,8 +137,26 @@ func (h *home) closeCmd(args []string) (tea.Cmd, string) {
 	if len(h.views) == 0 {
 		h.views = append(h.views, h.newView())
 	}
-	h.switchTo(h.views[min(i, len(h.views)-1)])
+	h.switchTo(h.afterClose(i))
 	return cmd, ""
+}
+
+// afterClose is the Chat to focus when the one at i went: the nearest one
+// that is not an oge add card, since a card starts its turn when a human
+// focuses it, and closing a neighbour is not choosing it. When only cards
+// are left, an empty Chat is added.
+func (h *home) afterClose(i int) *chatView {
+	at := min(i, len(h.views)-1)
+	for d := 0; d < len(h.views); d++ {
+		for _, j := range []int{at + d, at - d - 1} {
+			if j >= 0 && j < len(h.views) && h.views[j].added == "" {
+				return h.views[j]
+			}
+		}
+	}
+	v := h.newView()
+	h.views = append(h.views, v)
+	return v
 }
 
 // resetView starts the focused Chat afresh: the next message opens a new

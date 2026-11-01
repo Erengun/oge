@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -25,7 +26,17 @@ import (
 type deskAddMsg struct {
 	repo, task string
 	reply      chan deskAddReply
+	// state is claimed by whoever acts first: the home when it makes the
+	// card, the socket's side when it gives up waiting. A task the client
+	// was told failed is never made into a card later.
+	state *atomic.Int32
 }
+
+const (
+	addPending = iota
+	addTaken   // the home has it
+	addGaveUp  // the client was told no
+)
 
 type deskAddReply struct {
 	n    int
@@ -42,25 +53,39 @@ func (u *tui) serveAdd(ctx context.Context) {
 	_ = u.desk.Serve(run.DeskServe{Add: func(repo, text string) (int, string, error) {
 		send := u.send.Load()
 		if send == nil {
-			return 0, "", errors.New("the Desk is still starting; try again")
+			return 0, "", fmt.Errorf("%w: still starting or closing", run.ErrDeskUnavailable)
 		}
 		reply := make(chan deskAddReply, 1)
-		(*send)(deskAddMsg{repo: repo, task: text, reply: reply})
+		msg := deskAddMsg{repo: repo, task: text, reply: reply, state: new(atomic.Int32)}
+		(*send)(msg)
+		giveUp := func(why string) (int, string, error) {
+			if msg.state.CompareAndSwap(addPending, addGaveUp) {
+				return 0, "", fmt.Errorf("%w: %s", run.ErrDeskUnavailable, why)
+			}
+			r := <-reply // the home took it first: its answer is at hand
+			return r.n, r.name, r.err
+		}
 		select {
 		case r := <-reply:
 			return r.n, r.name, r.err
 		case <-ctx.Done():
-			return 0, "", errors.New("the Desk is closing")
-		case <-time.After(5 * time.Second):
-			return 0, "", errors.New("the Desk didn't answer in time")
+			return giveUp("the Desk is closing")
+		case <-time.After(addWait):
+			return giveUp("the Desk didn't answer in time")
 		}
 	}})
 }
+
+// addWait is how long the socket's side waits for the home's loop.
+var addWait = 5 * time.Second
 
 // deskAdd puts the task on a new Chat's card in the repo, by the same
 // path as /new <path>, and leaves the focus where it is.
 func (h *home) deskAdd(m deskAddMsg) {
 	reply := func(r deskAddReply) { m.reply <- r }
+	if m.state != nil && !m.state.CompareAndSwap(addPending, addTaken) {
+		return // the client gave up and was told so: no card
+	}
 	root, problem := projectRoot(m.repo, h.root, h.getenv)
 	if problem != "" {
 		reply(deskAddReply{err: errors.New(strings.TrimPrefix(problem, "/new: "))})

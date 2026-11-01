@@ -130,6 +130,12 @@ func OpenDesk(private string, getenv func(string) string) (*Desk, error) {
 	}
 	lock, err := lockDesk(filepath.Join(dir, deskLock))
 	if errors.Is(err, errDeskHeld) {
+		// A probe from oge add holds the lock for an instant; a second try
+		// tells it from a Desk that is really open.
+		time.Sleep(25 * time.Millisecond)
+		lock, err = lockDesk(filepath.Join(dir, deskLock))
+	}
+	if errors.Is(err, errDeskHeld) {
 		held := &DeskHeldError{}
 		if o, ok := lastOpened(dir); ok {
 			held.At = o
