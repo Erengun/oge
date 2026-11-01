@@ -1750,6 +1750,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
 	h.chatView.num = 1
+	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")

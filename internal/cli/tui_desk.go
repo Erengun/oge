@@ -252,7 +252,7 @@ func glyph(v *chatView, now time.Time) (mark, coarse string) {
 	switch {
 	case v.cutGate != nil, v.stale != nil, v.turn != nil && len(v.turn.asks) > 0:
 		return "▲", "needs you"
-	case v.pendingFB != nil, v.side.outcome == run.Failed:
+	case v.pendingFB != nil, v.turn == nil && v.verify == nil && v.side.outcome == run.Failed:
 		return "✗", "check failed"
 	case v.turn != nil && !v.lastEvent.IsZero() && now.Sub(v.lastEvent) >= deskQuiet:
 		return "?", "quiet"

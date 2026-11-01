@@ -425,6 +425,7 @@ func TestGlyphFollowsExactState(t *testing.T) {
 		{"stale", func(v *chatView) { v.stale = &staleAsk{} }, t0, "▲ needs you"},
 		{"feedback held", func(v *chatView) { v.pendingFB = &pendingFeedback{} }, t0, "✗ check failed"},
 		{"failed verdict", func(v *chatView) { v.side.outcome = run.Failed }, t0, "✗ check failed"},
+		{"working after a failed verdict", func(v *chatView) { v.side.outcome, v.turn, v.lastEvent = run.Failed, &chatTurn{}, t0 }, t0, "● working"},
 		{"gate over failed", func(v *chatView) { v.side.outcome, v.cutGate = run.Failed, &gateState{} }, t0, "▲ needs you"},
 		{"done in the background", accepted, t0.Add(time.Hour), "✓ done"},
 		{"done, focused under 1s", func(v *chatView) { accepted(v); v.focusAt = t0 }, t0.Add(seenAfter - 1), "✓ done"},
@@ -482,5 +483,18 @@ func TestHeaderCountsTheChats(t *testing.T) {
 	b.cutGate = nil
 	if got := ansi.Strip(h.header(200)); !strings.Contains(got, "●2 working · ✓1") || strings.Contains(got, "▲") {
 		t.Fatalf("header = %q, want ●2 working · ✓1 and no ▲", got)
+	}
+}
+
+// A key pressed in the focused Chat counts its ✓ as seen.
+func TestKeySeesTheDoneChat(t *testing.T) {
+	h := deskHome()
+	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Accepted, h.clock()
+	if m, _ := glyph(h.chatView, h.clock()); m != "✓" {
+		t.Fatalf("glyph = %s, want ✓", m)
+	}
+	h.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if m, _ := glyph(h.chatView, h.clock()); m != "○" {
+		t.Fatalf("glyph = %s after a key, want ○", m)
 	}
 }
