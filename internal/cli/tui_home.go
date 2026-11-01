@@ -676,6 +676,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		h.sessionsFound(m)
 		return h, nil
+	case adoptFoundMsg:
+		h.adoptFound(m)
+		return h, nil
+	case adoptedMsg:
+		return h, h.adopted(m)
 	case deskTickMsg:
 		if h.tickAt.Equal(m.at) {
 			h.tickAt = time.Time{} // drawn again now; Update asks for the next
@@ -1429,6 +1434,9 @@ func (h *home) boxLines(width int, blank string) (lines []string, curRow, curCol
 	rows, cr, cc := h.comp.layout(inner)
 	empty := len(h.comp.lines) == 1 && len(h.comp.lines[0]) == 0
 	title := " " + h.title + " "
+	if h.inPlace {
+		title = " " + h.title + " · in place · not isolated "
+	}
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
 		title = " shell · " + h.title + " " // not a Task: it never reaches an agent
 	}

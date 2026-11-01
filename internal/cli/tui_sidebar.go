@@ -249,6 +249,8 @@ func (h *home) sidebar(width, height int) []string {
 		}
 		body = append(body, st.dim("verdict"))
 		wrap(v, paint, 4)
+	} else if h.inPlace {
+		body = append(body, st.dim("no cut: in place"))
 	} else if h.verify == nil {
 		body = append(body, st.dim("no cut yet"))
 	}
@@ -311,6 +313,10 @@ func (h *home) sidebar(width, height int) []string {
 		if held > 0 {
 			body = append(body, st.warn("⚠")+" "+st.dim(plural(held, "file")+" held back"))
 		}
+	case h.inPlace:
+		// Nothing compares the working tree to a Snapshot: Öge can't say
+		// what changed, so it doesn't say "no changes".
+		body = append(body, st.dim("in place · not tracked"))
 	default:
 		body = append(body, st.dim("no changes"))
 	}

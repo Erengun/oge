@@ -77,6 +77,12 @@ type ChatAdded struct {
 	N     int    `json:"n"`
 	Title string `json:"title"`
 	Repo  string `json:"repo"`
+	// Provider and NativeID name an adopted native session, and InPlace
+	// says it runs on the user's working tree with no Workspace: a
+	// restore shows it so, and never as an isolated Chat (#361).
+	Provider string `json:"provider,omitempty"`
+	NativeID string `json:"native_id,omitempty"`
+	InPlace  bool   `json:"in_place,omitempty"`
 }
 
 // ChatClosed is a Chat the human closed: its Workspace goes, and a
@@ -211,6 +217,11 @@ func deskHost(getenv func(string) string) DeskOpened {
 // ChatAdded records Chat n, opened in repo by a message titled title.
 func (d *Desk) ChatAdded(chat string, n int, title, repo string) {
 	_ = d.append(RecChatAdded, ChatAdded{Chat: chat, N: n, Title: title, Repo: repo})
+}
+
+// ChatAddedInPlace records Chat n as an adopted native session, in place.
+func (d *Desk) ChatAddedInPlace(chat string, n int, title, repo, provider, nativeID string) {
+	_ = d.append(RecChatAdded, ChatAdded{Chat: chat, N: n, Title: title, Repo: repo, Provider: provider, NativeID: nativeID, InPlace: true})
 }
 
 // ChatClosed records the Chat closed, ahead of its closing.

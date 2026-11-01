@@ -56,7 +56,15 @@ type LaunchSpec struct {
 	// and work roots), wherever they are. Under AutoPermissions the
 	// sandbox denies reading them, reopening only the Workspace and cache.
 	StateRoots []string
+	// Resume, when set, opens the agent's own session by id with its
+	// original settings, in Workspace (its real cwd) and Profile: an
+	// adopted session (ADR-0025). No Launch profile applies, and Role,
+	// Permissions and the other Launch fields are ignored.
+	Resume *Resume
 }
+
+// Resume names the native session an adapter resumes.
+type Resume struct{ ID string }
 
 // AutoPermissions is LaunchSpec.Permissions for the agent's auto mode.
 const AutoPermissions = "auto"
@@ -377,6 +385,11 @@ type SessionInfo struct {
 	// AuthSource is the kind of authentication the agent reports, never
 	// a credential (ADR-0006).
 	AuthSource string `json:",omitempty"`
+	// PermissionMode, ApprovalPolicy and Sandbox are what a resumed
+	// session reports of its own settings (Claude's permission mode;
+	// Codex's approval policy and sandbox): the source of the coverage
+	// line. Empty for a session Öge launched itself.
+	PermissionMode, ApprovalPolicy, Sandbox string `json:",omitempty"`
 	// Residue is what an isolated launch still loads and the user can't
 	// remove from it, such as organisation-managed plugins and skills.
 	Residue *Residue `json:",omitempty"`

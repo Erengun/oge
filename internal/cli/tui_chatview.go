@@ -64,6 +64,10 @@ type chatView struct {
 	// for a late Tamper event asks for the cut again.
 	cutFrozen *pipeline.Frozen
 	recut     bool
+	// inPlace: an adopted native session on the user's working tree
+	// (tui_adopt.go). It is labelled so on the rail and in the header for
+	// its whole life; /clear and /close end it.
+	inPlace bool
 	// resetting: /new is closing the old Chat.
 	resetting bool
 

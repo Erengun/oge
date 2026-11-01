@@ -226,6 +226,9 @@ func (h *home) layout() {
 func (h *home) header(width int) string {
 	st := h.st
 	title := h.title
+	if h.inPlace {
+		title += " · in place · not isolated"
+	}
 	first, rest, ok := strings.Cut(title, " · ")
 	line := " " + st.bold(first)
 	if ok {
@@ -464,8 +467,7 @@ func (h *home) fullMouse(msg tea.Msg) (tea.Cmd, bool) {
 	case tea.MouseClickMsg:
 		mm := m.Mouse()
 		if mm.Button == tea.MouseLeft && mm.X < t.left {
-			h.railClick(mm.X, mm.Y)
-			return nil, true
+			return h.railClick(mm.X, mm.Y), true
 		}
 		if mm.Button != tea.MouseLeft || !inPane(mm) {
 			return nil, true

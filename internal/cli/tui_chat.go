@@ -59,6 +59,9 @@ type homeChat struct {
 	delivered func(run string) bool
 	// desk is the Desk record: the Chats it holds (ChatAdded, ChatClosed).
 	desk *run.Desk
+	// adopt resumes a native session in place (run.OpenInPlaceChat); nil
+	// where adoption isn't offered.
+	adopt func(s agent.NativeSession) (*run.Chat, error)
 
 	// mu is held only to read or swap c, never across opening one: /new
 	// and /close run while a first message opens its Chat. gen moves on
@@ -127,7 +130,7 @@ func (hc *homeChat) clone() *homeChat {
 	if hc == nil {
 		return nil
 	}
-	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown, desk: hc.desk}
+	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown, desk: hc.desk, adopt: hc.adopt}
 }
 
 func (hc *homeChat) get() *run.Chat {
@@ -584,6 +587,10 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		}
 		if ev.CostUSD != nil {
 			h.side.cost = ev.CostUSD
+		}
+	case agent.SessionOpened:
+		if h.inPlace && ev.Session != nil {
+			return h.coverage(ev.Session)
 		}
 	case agent.HostRequest:
 		if hd := ev.Host; hd != nil && hd.Decision == "cancel" && hd.By == "agent" {
