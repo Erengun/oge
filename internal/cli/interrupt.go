@@ -41,6 +41,10 @@ type interrupts struct {
 	hangup  func()
 	hungUp  bool
 	stopped bool // ended by a signal rather than by the human
+	// exit, when set, runs on a hangup or SIGTERM before that interrupt
+	// is passed on: Öge is exiting, so a Gate waiting in a forwarded Run
+	// parks rather than being abandoned by the Run's cancel.
+	exit func()
 }
 
 // forwardTo sends interrupts to r until it is called with nil.
@@ -105,6 +109,7 @@ func (i *interrupts) watch(sigs ...os.Signal) (stop func()) {
 
 // signalled is interrupt for a signal: a hangup first runs i.hangup.
 func (i *interrupts) signalled(sig os.Signal) {
+	exiting := sig == hangupSignal || sig == syscall.SIGTERM
 	i.mu.Lock()
 	i.stopped = true
 	f := i.hangup
@@ -114,14 +119,19 @@ func (i *interrupts) signalled(sig os.Signal) {
 	if sig == hangupSignal {
 		i.hungUp = true
 	}
+	exit := i.exit
 	i.mu.Unlock()
 	if f != nil {
 		f()
 	}
+	if exiting && exit != nil {
+		exit()
+	}
 	i.interrupt()
-	if sig == hangupSignal {
-		// No terminal is left to come back to: a hangup ends the home even
-		// while interrupts go to a Run or an editor (forwarded or diverted).
+	if exiting {
+		// Öge is exiting: a hangup leaves no terminal to come back to, and
+		// SIGTERM asks Öge to end. Either ends the home even while
+		// interrupts go to a Run or an editor (forwarded or diverted).
 		i.cancel()
 	}
 }
@@ -150,9 +160,13 @@ func (i *interrupts) hangUp() {
 		f = nil
 	}
 	i.hungUp, i.stopped = true, true
+	exit := i.exit
 	i.mu.Unlock()
 	if f != nil {
 		f()
+	}
+	if exit != nil {
+		exit()
 	}
 	i.cancel()
 }

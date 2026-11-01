@@ -1216,6 +1216,12 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 		// verified Candidate can still be applied (#254).
 		h.last = last
 	}
+	if h.ctx != nil && h.ctx.Err() != nil {
+		// A signal ended the session during the Run (its ctxDoneMsg went to
+		// the Run's view): the session ends once the Run has.
+		h.quit = true
+		return h, tea.Sequence(h.println(text), tea.Quit)
+	}
 	h.reopen()
 	h.takeQueue()
 	return h, h.println(text)
@@ -1765,6 +1771,8 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	in := newInterrupts(cancel)
+	u.exiting = make(chan struct{})
+	in.exit = u.exit
 	if histDir != "" && env.Stdout == io.Writer(os.Stdout) {
 		// After a hangup there is no terminal: what the cleanup prints
 		// goes to the state root's runner.log instead.
@@ -1800,10 +1808,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	h.save = sel.save
 	u.noFallback = true
-	if u.gone == nil {
-		u.gone = make(chan struct{})
-	}
-	h.exiting = u.gone // the home's one program: its end is Öge's
+	h.exiting = u.exiting
 	h.full = true
 	h.st = h.st.warm()
 	var (
@@ -1915,6 +1920,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
 	err = u.program(in, h)
+	u.exit() // the home's one program: its end is Öge's
 	if ctx.Err() == nil && errors.Is(err, syscall.EIO) {
 		// The terminal read EIO: it hung up, and its SIGHUP may not have
 		// arrived yet. The session ends as on a hangup.

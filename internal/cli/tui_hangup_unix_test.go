@@ -202,3 +202,74 @@ func TestSIGHUPWhileForwardedEndsTheHome(t *testing.T) {
 		t.Errorf("diverted %d, home cancelled %d", diverted, homeCancelled)
 	}
 }
+
+// A hangup or SIGTERM while a live Run waits at its Gate is Öge exiting:
+// the Gate parks with its pins and the Run ends Parked. Nobody decided, so
+// no GateAbandoned (Away slice 2).
+func TestHomeExitParksTheLiveGate(t *testing.T) {
+	// Sequential: it signals the test process.
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGTERM} {
+		t.Run(sig.String(), func(t *testing.T) {
+			f := newRunFixture(t)
+			s := startHomeSession(t, f, "--fast", "--agent", "fake", "--confirm")
+			s.composer()
+			s.type_("fix Add\r")
+			s.expect("Result gate")
+			if err := syscall.Kill(os.Getpid(), sig); err != nil {
+				t.Fatal(err)
+			}
+			s.wait()
+			runs := runDirs(t, f)
+			if len(runs) != 1 {
+				t.Fatalf("want one Run, got %v", runs)
+			}
+			recs, err := ledger.Replay(runs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var types []string
+			var parked struct {
+				Pins struct{ Gate, Attempt, Candidate string }
+			}
+			for _, r := range recs {
+				types = append(types, r.Type)
+				if r.Type == run.RecGateParked {
+					if err := json.Unmarshal(r.Data, &parked); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			all := strings.Join(types, " ")
+			if strings.Contains(all, run.RecGateAbandoned) || !strings.HasSuffix(all, run.RecGateOpened+" "+run.RecGateParked+" "+run.RecRunParked) {
+				t.Fatalf("the Ledger doesn't end parked at the Gate: %s", all)
+			}
+			if p := parked.Pins; p.Gate == "" || p.Attempt == "" || p.Candidate == "" {
+				t.Errorf("GateParked lacks its pins: %+v", parked)
+			}
+		})
+	}
+}
+
+// A hangup or SIGTERM marks Öge as exiting before the forwarded Run is
+// cancelled, so the Run's Gate parks; a signalled SIGINT is a Ctrl+C and
+// does neither.
+func TestExitRunsBeforeTheForwardedCancel(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		sig  syscall.Signal
+		exit bool
+	}{{syscall.SIGHUP, true}, {syscall.SIGTERM, true}, {syscall.SIGINT, false}} {
+		var order []string
+		in := newInterrupts(func() { order = append(order, "home") })
+		in.exit = func() { order = append(order, "exit") }
+		in.forwardTo(newInterrupts(func() { order = append(order, "run") }))
+		in.signalled(c.sig)
+		want := "run"
+		if c.exit {
+			want = "exit run home"
+		}
+		if got := strings.Join(order, " "); got != want {
+			t.Errorf("%v: %q, want %q", c.sig, got, want)
+		}
+	}
+}

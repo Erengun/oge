@@ -38,6 +38,10 @@ type tui struct {
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}
+	// exiting, when set, is closed once Öge is exiting (the home only: a
+	// hangup, SIGTERM or the view ending). A Gate still waiting parks.
+	exiting  chan struct{}
+	exitOnce sync.Once
 	// started: a Run was started (the home starts it only on Enter).
 	started bool
 	// noFallback: a Gate opened after the view has gone is refused rather
