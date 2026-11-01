@@ -67,8 +67,7 @@ func TestNewPathOpensAChatInThatRepo(t *testing.T) {
 	if len(*ran) != 2 || (*ran)[0] != repoRoot(t, b) || (*ran)[1] != a {
 		t.Errorf("!pwd ran in %q, want beta then alpha", *ran)
 	}
-	// Back in beta, /new alone stays in beta; /new to beta again opens it
-	// once (repoFor caches).
+	// Back in beta, /new alone stays in beta.
 	h.switchTo(h.viewNum(2))
 	h.chat.c = first.chat.get() // opened: /new opens another rather than starting afresh
 	submit(h, "/new")

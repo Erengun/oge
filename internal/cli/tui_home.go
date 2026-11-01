@@ -1871,7 +1871,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		}
 		var text string
 		var l *lastRun
-		text, l, last = u.summary(env, used.flags, runRoot, e.res, h.hold)
+		text, l, last = u.summary(envAt(env, runRoot), used.flags, runRoot, e.res, h.hold)
 		h.thread = nextThread(h.thread, cur, e.res, used.flags)
 		return text, l, false
 	}
@@ -1893,12 +1893,12 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 				p.endScreen(res)
 				return b.String()
 			}
-			l, err := takeRun(env, root, res, h.hold, receiptText)
+			l, err := takeRun(envAt(env, root), root, res, h.hold, receiptText)
 			if err != nil {
 				return line + "\noge: reading the Run for delivery: " + clean(err.Error()), nil
 			}
 			c := h.chat.get() // the Chat the cut is of: route focused it
-			l.apply = func() string { return h.chatApply(env, root, c, res) }
+			l.apply = func() string { return h.chatApply(envAt(env, root), root, c, res) }
 			branch := l.branch
 			l.branch = func(name string) string {
 				// A branch moves the Task's window too: never past a late
@@ -1993,7 +1993,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 			if err != nil {
 				return 0, err
 			}
-			if code := afterRun(env, used.flags, u.plain, runRoot, out); code != ExitOK {
+			if code := afterRun(envAt(env, runRoot), used.flags, u.plain, runRoot, out); code != ExitOK {
 				return code, nil
 			}
 			return outcomeCode(env, out), nil
