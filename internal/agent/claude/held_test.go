@@ -170,7 +170,7 @@ func recordedHeldAsk(t *testing.T, file string, minHold float64) {
 				continue
 			}
 		}
-		// claude's rate_limit_event comes in the same instant as the ask.
+		// claude may send a rate_limit_event within a moment of the ask.
 		if asked != 0 && answered == 0 && !(typ == "rate_limit_event" && f.T-asked < 2) {
 			during = append(during, f.Dir+" "+typ)
 		}
