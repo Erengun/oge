@@ -66,9 +66,12 @@ With `ask`, a failed Check shows `✗ Check failed` under the box and sends noth
 [desk]
 max_active = 3   # working Chats /new opens another beside without a word; 0 or absent is 3
 quiet = "3m"     # a turn with no agent event for this long shows ? quiet, not ● working
+stale_gate = "5m" # a Gate or ask waiting this long rings the bell, even while you type
 ```
 
-When `max_active` Chats or more are working, the first `/new` of the session opens the Chat and says once that research puts what one person can keep track of at about 3. `/new` never refuses, and it doesn't say it twice. `quiet` takes a Go duration such as `"90s"` or `"5m"`.
+When `max_active` Chats or more are working, the first `/new` of the session opens the Chat and says once that research puts what one person can keep track of at about 3. `/new` never refuses, and it doesn't say it twice. `quiet` and `stale_gate` take a Go duration such as `"90s"` or `"5m"`.
+
+While you type in one Chat, what another Chat brings is held: the box's top border says `N held`, and sending or clearing the box shows it all as one toast. A Gate or an ask from another Chat shows as a toast once the box is empty; Öge never moves the focus. Only a Gate or an ask open longer than `stale_gate` rings now, even while you type, with a fixed text that names the Chat's number and nothing else.
 
 **Advisor.** `[advisor] auto` says what happens when a chain's feedback budget is spent: `ask` (the default) shows the advice first, `on` sends it, `off` never consults on its own.
 
