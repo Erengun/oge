@@ -1319,24 +1319,35 @@ func (h *home) View() tea.View {
 	return v
 }
 
+// withAsk adds the quit ask under a view that doesn't go through render(),
+// so no screen can hide it while its keys are the ask's.
+func (h *home) withAsk(s string) string {
+	if h.quitAsk > 0 {
+		s += "\n " + h.st.bad(quitAskLine(h.quitAsk))
+	}
+	return s
+}
+
 func (h *home) view() tea.View {
 	if h.inbox != nil {
 		return h.inboxView()
 	}
 	if h.chats != nil {
-		return tea.NewView(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n"))
+		return tea.NewView(h.withAsk(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n")))
 	}
 	if h.turn != nil {
-		return tea.NewView(h.turnView())
+		return tea.NewView(h.withAsk(h.turnView()))
 	}
 	if h.stale != nil {
-		return tea.NewView(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait")))
+		return tea.NewView(h.withAsk(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait"))))
 	}
 	if h.cutGate != nil {
-		return tea.NewView(strings.Join(gateView(h.st, h.cutGate), "\n"))
+		return tea.NewView(h.withAsk(strings.Join(gateView(h.st, h.cutGate), "\n")))
 	}
 	if h.run != nil {
-		return h.queueView()
+		v := h.queueView()
+		v.Content = h.withAsk(v.Content)
+		return v
 	}
 	if h.quit {
 		return tea.NewView("")

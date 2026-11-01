@@ -1005,3 +1005,20 @@ func TestQuitAskSurvivesARailClick(t *testing.T) {
 		t.Errorf("the ask left the screen:\n%s", got)
 	}
 }
+
+// ctrl+c twice in a stopped turn opens the ask, and the turn's own view
+// shows it (no screen skips the ask while its keys are the ask's).
+func TestQuitAskShowsOnTheTurnView(t *testing.T) {
+	for _, rows := range []int{2, 3} {
+		h, _ := railHome(120, rows)
+		h.chat = &homeChat{}
+		h.turn = &chatTurn{stopped: true}
+		h.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+		if h.quitAsk == 0 {
+			t.Fatalf("rows %d: ctrl+c opened no ask", rows)
+		}
+		if got := ansi.Strip(h.View().Content); !strings.Contains(got, "for next time?") {
+			t.Errorf("rows %d: the ask is not on the turn view:\n%s", rows, got)
+		}
+	}
+}
