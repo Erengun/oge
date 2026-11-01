@@ -273,14 +273,25 @@ func cardOn(t *testing.T, h *home, n int) {
 	t.Fatalf("no card for Chat %d", n)
 }
 
+// typeSpaced types s one key every gap, as a human at ordinary speed.
+func typeSpaced(h *home, now *time.Time, s string, gap time.Duration) {
+	for i, r := range s {
+		if i > 0 {
+			*now = now.Add(gap)
+		}
+		h.Update(letter(r))
+	}
+}
+
 // A task typed on an ask's card begins with o: the Chat opens, and the
-// rest of the word ("kay") reaches no ask: its y doesn't allow the tool.
-// Once actionsArm has passed, y is the ask's again.
+// rest of the word ("kay") reaches no ask, even typed at 150ms a key,
+// past actionsArm from the o: its y doesn't allow the tool. After a
+// pause of actionsArm, y is the ask's again.
 func TestInboxLetterCarriesIntoNoAsk(t *testing.T) {
 	h, now := inboxHome(t)
 	h.Update(ctrlSpace())
 	cardOn(t, h, 3)
-	typeText(h, "okay")
+	typeSpaced(h, now, "okay", 150*time.Millisecond)
 	three := h.views[2]
 	if h.inbox != nil || h.num != 3 {
 		t.Fatalf("o: inbox open %v, focused %d, want Chat 3", h.inbox != nil, h.num)
@@ -290,20 +301,21 @@ func TestInboxLetterCarriesIntoNoAsk(t *testing.T) {
 	}
 	*now = now.Add(actionsArm)
 	if h.inboxCarry(letter('y')) {
-		t.Error("y is still dropped once actionsArm has passed")
+		t.Error("y is still dropped after a pause of actionsArm")
 	}
 }
 
-// On a stale card, "okay" opens the Chat; its a doesn't deliver the cut.
+// On a stale card, "okay" at 150ms a key opens the Chat; its a doesn't
+// deliver the cut.
 func TestInboxLetterCarriesIntoNoStaleChoice(t *testing.T) {
-	h, _ := inboxHome(t)
+	h, now := inboxHome(t)
 	five := h.views[4]
 	five.cutGate, five.last = nil, &lastRun{id: "r5"}
 	five.stale = &staleAsk{key: "a", last: five.last}
 	h.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	h.Update(ctrlSpace())
 	cardOn(t, h, 5)
-	typeText(h, "okay")
+	typeSpaced(h, now, "okay", 150*time.Millisecond)
 	if h.num != 5 || five.stale == nil {
 		t.Fatalf("focused %d, stale choice open %v: a after o decided it", h.num, five.stale != nil)
 	}

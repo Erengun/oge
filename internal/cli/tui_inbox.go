@@ -264,8 +264,9 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // seeOn focuses v: the switch the human asked for from the Inbox. The
-// letter may have begun a word: what follows it for actionsArm reaches
-// no ask, stale choice or Gate (see inboxCarry).
+// letter may have begun a word: what follows it, until the typing
+// pauses for actionsArm, reaches no ask, stale choice or Gate (see
+// inboxCarry).
 func (h *home) seeOn(v *chatView) {
 	if slices.Contains(h.views, v) {
 		h.switchTo(v)
@@ -274,20 +275,21 @@ func (h *home) seeOn(v *chatView) {
 }
 
 // inboxCarry reports whether k was typed on from an Inbox letter into
-// the Chat it focused, and so is dropped: for actionsArm, while that Chat
-// has an ask, a stale choice or a Gate open, as queueKey drops keys under
-// a Gate that opened during typing. Ctrl+C is never dropped, nor the
-// Inbox's own key.
+// the Chat it focused, and so is dropped: while that Chat has an ask, a
+// stale choice or a Gate open, as queueKey drops keys under a Gate that
+// opened during typing. Each dropped key restarts the window, so a word
+// typed on at any speed is dropped whole; the first key after a pause of
+// actionsArm is the Chat's. Ctrl+C is never dropped, nor the Inbox's own
+// key.
 func (h *home) inboxCarry(k tea.KeyPressMsg) bool {
 	if h.inboxArm.IsZero() || h.clock().Sub(h.inboxArm) >= actionsArm || k.String() == "ctrl+c" || inboxKey(k.String()) {
 		return false
 	}
 	switch {
-	case h.stale != nil, h.cutGate != nil:
-		return true
-	case h.verify != nil && h.verify.gate != nil, h.run != nil && h.run.gate != nil:
-		return true
-	case h.turn != nil && len(h.turn.asks) > 0:
+	case h.stale != nil, h.cutGate != nil,
+		h.verify != nil && h.verify.gate != nil, h.run != nil && h.run.gate != nil,
+		h.turn != nil && len(h.turn.asks) > 0:
+		h.inboxArm = h.clock()
 		return true
 	}
 	return false
