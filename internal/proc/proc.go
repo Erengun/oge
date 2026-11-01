@@ -4,47 +4,41 @@ package proc
 
 import (
 	"os/exec"
-	"runtime"
 	"sync"
 	"time"
 )
 
 // live are the commands started and not yet waited for, so KillAll can
-// reach them when Öge has to stop without waiting.
+// reach them when Öge has to stop without waiting. Each holds what lets
+// its forking thread go once it is reaped (nil where there is none).
 var (
 	mu   sync.Mutex
-	live = map[*exec.Cmd]bool{}
+	live = map[*exec.Cmd]func(){}
 )
 
 // Start starts cmd in a new process group. Wait for it with Wait.
 func Start(cmd *exec.Cmd) error {
 	setGroup(cmd)
-	if err := forkStart(cmd); err != nil {
+	release, err := forkStart(cmd)
+	if err != nil {
 		return err
 	}
 	mu.Lock()
-	live[cmd] = true
+	live[cmd] = release
 	mu.Unlock()
 	return nil
-}
-
-// forkStart starts cmd on a thread locked for the fork. On Linux the
-// child's death signal (proc_linux.go) is tied to the thread that forked
-// it, not to the process (go.dev/issue/27505). The lock keeps the fork on
-// one thread, and is released after it: Go ends a thread only when a
-// goroutine exits still locked to it, which Öge's code never does.
-func forkStart(cmd *exec.Cmd) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	return cmd.Start()
 }
 
 // Wait waits for cmd, then forgets it.
 func Wait(cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	mu.Lock()
+	release := live[cmd]
 	delete(live, cmd)
 	mu.Unlock()
+	if release != nil {
+		release()
+	}
 	return err
 }
 
