@@ -42,6 +42,11 @@ func (h *home) fullBox(width int, blank string) (lines []string, curRow, curCol 
 		border = st.accent
 	}
 	top := "╭" + strings.Repeat("─", max(width-2, 0)) + "╮"
+	if held := h.heldNote(); held != "" {
+		// What other Chats brought waits for this message (attention.go).
+		label := " " + held + " "
+		top = "╭─" + label + strings.Repeat("─", max(width-3-len(label), 0)) + "╮"
+	}
 	if _, shell := shellLine(h.comp.expanded()); shell || h.job != nil {
 		label := " shell "
 		border = st.warn // not a Task: it never reaches an agent

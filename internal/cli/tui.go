@@ -35,6 +35,7 @@ type tui struct {
 	// deskMax and deskQuiet are [desk] max_active and quiet (user config).
 	deskMax   int
 	deskQuiet time.Duration
+	deskStale time.Duration // [desk] stale_gate
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}

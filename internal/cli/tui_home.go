@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/erengun/oge/internal/delivery"
+	"github.com/erengun/oge/internal/herdr"
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
@@ -450,6 +451,14 @@ type home struct {
 	background bool
 	// dropped counts messages for a Chat no longer in views.
 	dropped int
+	// parked is what other Chats brought while the human typed, released
+	// as one toast when the box is sent or cleared (attention.go).
+	// deskStale is [desk] stale_gate (0: the default). herdr is told the
+	// Desk's state, herdrState, when no Run reports its own.
+	parked     []parked
+	deskStale  time.Duration
+	herdr      herdr.Reporter
+	herdrState herdr.State
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -584,6 +593,14 @@ func (h *home) Init() tea.Cmd {
 }
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(staleTickMsg); ok {
+		return h, h.attend()
+	}
+	m, cmd := h.routed(msg)
+	return m, withTick(cmd, h.attend())
+}
+
+func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// A Chat's message is handled with that Chat focused, the whole update
 	// through; one for a Chat the home no longer has is dropped.
 	restore, ok := h.route(msg)
@@ -1781,7 +1798,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
-	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, redraw: tea.Tick}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, herdr: u.herdr, redraw: tea.Tick}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}

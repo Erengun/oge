@@ -88,6 +88,12 @@ type chatView struct {
 	seen      bool
 	focusAt   time.Time
 	answered  bool
+	// The attention router (attention.go): attnMark is the glyph it last
+	// saw, askedAt when the Chat last came to need the human, and rang
+	// that its stale Gate or ask has rung.
+	attnMark string
+	askedAt  time.Time
+	rang     bool
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.
