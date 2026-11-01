@@ -75,6 +75,17 @@ func repoConfig(env Env, f runFlags, root string, first *resolved) (setup *setup
 	return setup, res, problem
 }
 
+// elsewhere is the command line's flags for another repo than the one oge
+// started in. The session's stay: agents, mode, --require. The start
+// repo's own go: --check, --tests and --output name that repo's commands
+// and paths, and --apply was asked for its Runs. Another repo's come from
+// its own config, and Öge proposes Checks when it has none.
+func elsewhere(f runFlags) runFlags {
+	f.o.Checks, f.o.Tests, f.o.Outputs = nil, nil, nil
+	f.apply = false
+	return f
+}
+
 // openRepo is the repoCtx of the repo at root, on its config (repoConfig),
 // with u as the view of its one-shot Runs. It is nil when the state root
 // refuses the repo; problem says why.

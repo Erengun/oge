@@ -84,8 +84,9 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 		if r, ok := repos[repoKey(root)]; ok {
 			return r, nil
 		}
-		setup, res, problem := repoConfig(env, f, root, nil)
-		r, refused := openRepo(env, f, u, histDir, root, setup, res)
+		g := elsewhere(f)
+		setup, res, problem := repoConfig(env, g, root, nil)
+		r, refused := openRepo(env, g, u, histDir, root, setup, res)
 		if r == nil {
 			return nil, []string{"/new: " + refused}
 		}

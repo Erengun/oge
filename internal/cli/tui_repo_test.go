@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,5 +179,44 @@ func TestAtPickerFollowsTheChatsRepo(t *testing.T) {
 				t.Errorf("back in alpha the picker offers %v", got)
 			}
 		}
+	}
+}
+
+// A Chat in another repo than the one oge started in resolves on that
+// repo's config: the command line's --check, --tests, --output and
+// --apply were the start repo's, and stay there. The session's agent and
+// mode come along.
+func TestAnotherRepoLeavesTheStartReposFlags(t *testing.T) {
+	f := newRunFixture(t)
+	f.interactive = true                                                                  // the home is attended
+	env := f.envWithFake(filepath.Join(f.repo, "..", "agent.sh"), io.Discard, io.Discard) // never run
+	fl, _, err := parseRunFlags([]string{"--fast", "--agent", "fake", "--check", "npm test", "--tests", "spec/**", "--output", "dist/**", "--apply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(res *resolved) bool {
+		for _, c := range res.frozen.Checks {
+			if c.Run == "npm test" {
+				return true
+			}
+		}
+		return false
+	}
+	if _, res, problem := repoConfig(env, fl, f.repo, nil); res == nil || !has(res) {
+		t.Fatalf("the start repo lost its --check: %v", problem)
+	}
+	_, res, problem := repoConfig(env, elsewhere(fl), f.repo, nil)
+	if res == nil {
+		t.Fatalf("doesn't resolve: %v", problem)
+	}
+	if has(res) || res.flags.apply || len(res.flags.o.Tests)+len(res.flags.o.Outputs) > 0 {
+		t.Errorf("the start repo's flags reached another repo: checks %v, apply %v, tests %v, outputs %v",
+			res.frozen.Checks, res.flags.apply, res.flags.o.Tests, res.flags.o.Outputs)
+	}
+	if len(res.frozen.Checks) != 1 || res.frozen.Checks[0].Run != "go test -json ./..." {
+		t.Errorf("not the repo's own Checks: %v", res.frozen.Checks)
+	}
+	if len(res.flags.o.Agents) != 1 || res.flags.o.Agents[0] != "fake" || !res.flags.o.Fast {
+		t.Errorf("the session's agent and mode didn't come along: %v, fast %v", res.flags.o.Agents, res.flags.o.Fast)
 	}
 }
