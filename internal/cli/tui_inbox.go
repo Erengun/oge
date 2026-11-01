@@ -324,7 +324,7 @@ func (h *home) inboxTask() tea.Cmd {
 	}
 	fresh := h.turn == nil && h.verify == nil && h.comp.empty() && (h.chat == nil || h.chat.get() == nil)
 	if !fresh {
-		h.openView()
+		h.openView(h.repoCtx)
 	}
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "!") {

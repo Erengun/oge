@@ -81,6 +81,7 @@ func TestSinceCardSwallowsNoKey(t *testing.T) {
 	h.chat = &homeChat{c: &run.Chat{}}
 	h.hist, h.sel = &history{}, &setupState{}
 	two := h.views[1]
+	two.repoCtx = h.repoCtx // one repo: its history and setup are Chat 1's (#374)
 	two.chat = &homeChat{c: &run.Chat{}}
 	two.side.steps, two.side.step = 1, "edit a.go"
 	h.Update(chatEvMsg{view: two, ok: true})

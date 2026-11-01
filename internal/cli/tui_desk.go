@@ -52,13 +52,13 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		}
 		return cmd, ""
 	}
-	h.openView()
+	h.openView(rc)
 	return nil, ""
 }
 
-// openView opens another Chat, focused, and says the old one stays open:
-// /new's, and the Inbox's for a task.
-func (h *home) openView() {
+// openView opens another Chat in the repo rc, focused, and says the old
+// one stays open: /new's, and the Inbox's for a task.
+func (h *home) openView(rc *repoCtx) {
 	n, old, v := h.working(), h.num, h.newView()
 	if rc != h.repoCtx {
 		v = h.newViewIn(rc)
