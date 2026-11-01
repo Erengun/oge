@@ -227,3 +227,18 @@ func TestBriefFitHeightAndDecisions(t *testing.T) {
 		t.Errorf("truncLeft = %q", got)
 	}
 }
+
+// withRecent keeps newest first, whatever order the two readings came in.
+func TestWithRecentNewestFirst(t *testing.T) {
+	mk := func(id string) run.BriefRun { return run.BriefRun{BriefLog: run.BriefLog{ID: id}} }
+	got := withRecent([]run.BriefRun{mk("20261101T090000-aa"), mk("20261031T090000-bb")},
+		[]run.BriefRun{mk("20261101T100000-cc"), mk("20261031T090000-bb"), mk("20261101T080000-dd")})
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	want := []string{"20261101T100000-cc", "20261101T090000-aa", "20261101T080000-dd", "20261031T090000-bb"}
+	if strings.Join(ids, " ") != strings.Join(want, " ") {
+		t.Fatalf("withRecent order %v, want %v", ids, want)
+	}
+}

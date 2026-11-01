@@ -1081,7 +1081,7 @@ func (h *home) sendBack() (tea.Cmd, string) {
 		return nil, "/feedback: a newer cut is verifying"
 	}
 	h.pendingFB = nil
-	cmd := h.feedbackSubmit(p.text, p.frozen, nil)
+	cmd := h.feedbackSubmitBy(p.text, p.frozen, nil, true)
 	if h.turn != nil {
 		h.answered = true // the human's own send-back answers the failure
 	}
@@ -1101,6 +1101,12 @@ func (h *home) feedbackCmd(args []string) (tea.Cmd, string) {
 // criterion ids. The composer keeps the human's draft; its changes cut
 // as any turn's do.
 func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) tea.Cmd {
+	return h.feedbackSubmitBy(text, f, queued, false)
+}
+
+// feedbackSubmitBy is feedbackSubmit; human says the human asked for it
+// (s, /feedback), which the Chat log records.
+func (h *home) feedbackSubmitBy(text string, f *pipeline.Frozen, queued []string, human bool) tea.Cmd {
 	c := h.chat.get()
 	if c == nil {
 		if len(queued) > 0 {
@@ -1115,6 +1121,9 @@ func (h *home) feedbackSubmit(text string, f *pipeline.Frozen, queued []string) 
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	ctx, v := h.ctx, h.chatView
 	return func() tea.Msg {
+		if human {
+			ctx = run.WithHumanSend(ctx)
+		}
 		ch, err := c.SendFeedback(ctx, text)
 		return chatSentMsg{view: v, events: ch, err: err}
 	}

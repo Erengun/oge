@@ -157,6 +157,10 @@ type ChatBrief struct {
 	newestSeen, newestOpen bool
 	newestRun              string
 	humanAt                time.Time
+	// Unlisted says the caller did not list this Chat (it is known only by
+	// its cuts, e.g. open in another home): the Inbox has no card for it,
+	// so it is never Next.
+	Unlisted bool
 	// logDelivered are the Chat log's own Delivered records: always fully
 	// read, so an apply is never missed for want of its cut's Ledger.
 	logDelivered []loggedDelivery
@@ -288,9 +292,14 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 			case RecTurnStarted, RecSessionReopened:
 				cb.Ended = "" // it went on after
 				if r.Type == RecTurnStarted {
-					var d struct{ By string }
+					var d struct {
+						By     string
+						SentBy string `json:"sent_by"`
+					}
 					_ = json.Unmarshal(r.Data, &d)
-					if d.By == "" {
+					// The human's own message, or an Öge turn they asked for
+					// (a send-back, advice they sent): the Inbox counts both.
+					if d.By == "" || d.SentBy == "human" {
 						cb.humanAt = r.At
 					}
 				}
@@ -318,7 +327,7 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 			if id == "" {
 				id = r.ID
 			}
-			cb = &ChatBrief{ID: id, Title: r.Title, Run: chat == ""}
+			cb = &ChatBrief{ID: id, Title: r.Title, Run: chat == "", Unlisted: chat != ""}
 			if len(r.Records) > 0 {
 				started[id] = r.Records[0].At
 			}
@@ -716,7 +725,7 @@ func (b Brief) Next(loc *time.Location) (c ChatBrief, what string, ok bool) {
 // Check that failed and was then fixed while away waits for nobody. A
 // rejection is no ✗ card, and a one-shot Run has none.
 func (c ChatBrief) rank() int {
-	if c.Run {
+	if c.Run || c.Unlisted {
 		return 3
 	}
 	switch {

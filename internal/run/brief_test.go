@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/erengun/oge/internal/agent/fake/multiturn"
 	"github.com/erengun/oge/internal/ledger"
 )
 
@@ -230,6 +231,22 @@ func TestBriefGolden(t *testing.T) {
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
 				briefRec(30, RecTurnStarted, map[string]any{"turn": 2}), briefSettled(70, 2))},
 			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "human_send_back_no_cut",
+			// The human sent the failed Check back (s): Öge's turn, asked for
+			// by them, so the ✗ is answered, as in the Inbox. No cut followed.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecTurnStarted, map[string]any{"turn": 2, "by": "oge", "sent_by": "human"}), briefSettled(70, 2))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "auto_send_back_keeps_failure",
+			// Öge's own send-back answers nothing: the ✗ stays.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecTurnStarted, map[string]any{"turn": 2, "by": "oge"}), briefSettled(70, 2))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "unlisted_chat_not_next",
+			// c9 is known only by its cut (open in another home): its older ✓
+			// is under Since, but the Inbox has no card for it, so no Next.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs:  []BriefRun{briefCut("r9", "c9", false, briefEnded(20, Accepted))}},
 		{name: "apply_from_chat_log",
 			// The cut's Ledger was not read: the Chat log still records the apply.
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
@@ -410,5 +427,26 @@ func TestBriefCleansText(t *testing.T) {
 	}
 	if n := len([]rune(b.Chats[0].First)); n > firstMax {
 		t.Errorf("First has %d runes", n)
+	}
+}
+
+// A feedback or advice turn the human asked for logs sent_by "human"; an
+// automatic one does not (old logs never have it).
+func TestTurnStartedSentBy(t *testing.T) {
+	c := openCut(t, "", multiturn.Turn{Reply: "ok"}, multiturn.Turn{Reply: "ok"}, multiturn.Turn{Reply: "ok"})
+	drain(t, send(t, c, "yo"), nil)
+	ch, err := c.SendFeedback(t.Context(), "Öge's Check failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	ch, err = c.SendFeedback(WithHumanSend(t.Context()), "Öge's Check failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, ch, nil)
+	got := recordsOf(t, c, RecTurnStarted)
+	if len(got) != 3 || got[0]["sent_by"] != nil || got[1]["sent_by"] != nil || got[1]["by"] != "oge" || got[2]["sent_by"] != "human" || got[2]["by"] != "oge" {
+		t.Fatalf("TurnStarted %v", got)
 	}
 }

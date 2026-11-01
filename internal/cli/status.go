@@ -93,6 +93,8 @@ func withRecent(runs, recent []run.BriefRun) []run.BriefRun {
 			runs = append(runs, r)
 		}
 	}
+	// Run IDs are named by their start time: newest first is descending.
+	sort.SliceStable(runs, func(i, j int) bool { return runs[i].ID > runs[j].ID })
 	return runs
 }
 
