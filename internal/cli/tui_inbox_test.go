@@ -339,3 +339,82 @@ func TestInboxTaskNotesTheCap(t *testing.T) {
 		t.Errorf("focused %d, note %q: want Chat 6 and the cap note", h.num, h.note)
 	}
 }
+
+// briefOf is a return brief with a Gate waiting in Chat 5 and the human's
+// first message in Chat 1.
+func briefOf(h *home) *run.Brief {
+	t0 := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	b := run.Brief{Window: run.BriefWindow{From: t0, To: t0.Add(20 * time.Minute), Basis: run.BasisAway},
+		Chats: []run.ChatBrief{
+			{ID: "c1", N: 1, Title: "parser", First: "SECRET-INTENT make the parser accept trailing commas", Accepted: 1,
+				Decisions: []run.Decision{{At: t0.Add(-time.Hour), What: "chose acknowledge at tamper Gate"}}},
+			{ID: "c5", N: 5, Title: "docs", Gates: []run.OpenGate{{Gate: "tamper", Since: t0.Add(5 * time.Minute)}}},
+		}}
+	b.Totals = run.BriefTotals{Accepted: 1, NeedsYou: 1}
+	return &b
+}
+
+// After an absence the brief is the Inbox's first card, once: it takes no
+// key but tab, typing goes to the box, and the next opening has no brief.
+func TestInboxBriefIsFirstCard(t *testing.T) {
+	h, _ := inboxHome(t)
+	h.absence.back = briefOf(h)
+	h.Update(ctrlSpace())
+	if h.inbox == nil || h.inbox.brief == nil {
+		t.Fatal("the Inbox didn't open on the brief")
+	}
+	if h.absence.back != nil {
+		t.Error("the brief is seen but not cleared")
+	}
+	screen := ansi.Strip(strings.Join(screenLines(h), "\n"))
+	since := time.Date(2026, 11, 1, 9, 5, 0, 0, time.UTC).In(time.Local).Format("15:04")
+	for _, want := range []string{"while you were away", "You were: SECRET-INTENT", "Your decisions: chose acknowledge at tamper Gate",
+		"Waiting for you: ▲ tamper Gate since " + since, "Next: ▲ tamper Gate", "tab next"} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the card lacks %q:\n%s", want, screen)
+		}
+	}
+	// Typing goes to the box; Enter alone does nothing.
+	h.Update(letter('o'))
+	h.Update(letter('k'))
+	if got := h.inbox.comp.expanded(); got != "ok" || h.inbox.brief == nil {
+		t.Fatalf("typed %q, brief %v", got, h.inbox.brief)
+	}
+	h.inbox.comp.set("")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if h.inbox == nil || h.inbox.brief == nil {
+		t.Fatal("Enter moved the brief")
+	}
+	// tab goes on to the first real card.
+	h.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if h.inbox.brief != nil {
+		t.Fatal("tab kept the brief")
+	}
+	if it, _, _, ok := h.card(); !ok || it.v.num != 5 {
+		t.Errorf("first card after the brief = %v", it.v.num)
+	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	h.Update(ctrlSpace())
+	if h.inbox.brief != nil {
+		t.Error("the brief came back on the next opening")
+	}
+}
+
+// With NO_COLOR the card carries no escape sequence, and the text of "You
+// were" never reaches a notification (A8): the bell says the Chat's number.
+func TestInboxBriefPlainAndQuiet(t *testing.T) {
+	h, _ := inboxHome(t)
+	h.st = newStyles(false)
+	h.absence.back = briefOf(h)
+	h.Update(ctrlSpace())
+	if s := strings.Join(screenLines(h), "\n"); strings.ContainsRune(s, 0x1b) {
+		t.Errorf("escape sequence in the plain card: %q", s)
+	}
+	for _, c := range briefOf(h).Chats {
+		for _, got := range []string{staleText(c.N, c.First), staleText(c.N, c.Title)} {
+			if strings.Contains(got, "SECRET") || strings.Contains(got, c.First) && c.First != "" {
+				t.Errorf("the notification carries the intention: %q", got)
+			}
+		}
+	}
+}

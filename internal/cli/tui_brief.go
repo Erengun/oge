@@ -136,7 +136,9 @@ func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 		}
 		// This process writes it: a torn tail is a record mid-write.
 		log.Torn = false
-		bc := run.BriefChat{BriefLog: log, N: v.num, Title: v.name}
+		// The Chat log keeps hashes only: the first message's title is what
+		// the home holds of it, the human's own words.
+		bc := run.BriefChat{BriefLog: log, N: v.num, Title: v.name, First: v.name}
 		if v.turn != nil {
 			bc.Asks = len(v.turn.asks)
 		}
@@ -145,6 +147,8 @@ func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 	var runs []run.BriefRun
 	if h.absence.private != "" && h.root != "" {
 		runs, _ = runsSince(h.absence.private, h.root, w.From)
+		recent, _ := repoRuns(h.absence.private, h.root)
+		runs = withRecent(runs, recent)
 	}
 	return run.BuildBrief(w, chats, runs)
 }

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,50 @@ func TestBriefGolden(t *testing.T) {
 				briefCut("20261101T093000-0a0b0c", "20261101T080000-778899", true, briefGate(40, "gate.result")),
 				briefCut("20261101T092000-0d0e0f", "20261101T080000-778899", false, briefEnded(35, Accepted)),
 				briefCut("20261101T091000-101112", "", false, briefEnded(30, Failed))}},
+		{name: "five_parts",
+			// The Chat's intention, the human's decisions in order, a Gate
+			// still open and the first actionable card. The agent's words
+			// in the records never show.
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 1, "parser", briefSettled(10, 2))
+				c.First = "make the parser accept trailing commas\nand nested arrays"
+				return c
+			}()},
+			runs: []BriefRun{
+				briefCut("r1", "c1", false, briefGate(-50, "gate.tamper"),
+					briefRec(-40, RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.tamper"}, "actor": "human", "choice": "acknowledge", "reason": "agent text never shows"}),
+					briefEnded(-35, Accepted), briefRec(-30, recDelivery, map[string]any{"kind": "apply"})),
+				briefCut("r2", "c1", true, briefGate(20, "gate.result"))}},
+		{name: "no_decisions",
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 2, "auth", briefSettled(10, 1))
+				c.First = "fix the login redirect"
+				return c
+			}()},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "no_first_message",
+			// Nothing records the first message and no cut has a title: no
+			// "You were" line, and nothing is made up.
+			chats: []BriefChat{briefChat("c1", 1, "", briefSettled(10, 1))},
+			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Accepted))}},
+		{name: "first_from_cut_title",
+			// oge status has no screen: the oldest cut's Task title stands in.
+			chats: []BriefChat{briefChat("c1", 0, "", briefSettled(10, 1))},
+			runs: []BriefRun{func() BriefRun {
+				r := briefCut("r2", "c1", false, briefEnded(30, Accepted))
+				r.Title = "second try"
+				return r
+			}(),
+				func() BriefRun {
+					r := briefCut("r1", "c1", false, briefEnded(20, Failed))
+					r.Title = "fix the parser"
+					return r
+				}()}},
+		{name: "next_order",
+			// A ✗ in Chat 1 and a ▲ in Chat 2: the Inbox's order puts ▲ first.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed)),
+				briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
 		{name: "empty",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(-30, 1))},
 			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(-20, Accepted))}},
@@ -230,7 +275,7 @@ func TestBriefTornLog(t *testing.T) {
 	if len(brief.Chats) != 1 || !brief.Chats[0].Torn || brief.Totals.Ended != 0 || brief.Totals.Torn != 1 {
 		t.Fatalf("brief = %+v", brief)
 	}
-	briefGolden(t, filepath.Join("testdata", "brief", "torn.golden"), brief.Chats[0].line(time.UTC)+"\n")
+	briefGolden(t, filepath.Join("testdata", "brief", "torn.golden"), strings.Join(brief.Lines(time.UTC)[1:], "\n")+"\n")
 
 	if _, err := ReadBriefLog("none", t.TempDir()); err == nil || errors.Is(err, ledger.ErrTornTail) {
 		t.Fatalf("no log: err = %v", err)
@@ -256,5 +301,36 @@ func TestSpan(t *testing.T) {
 		if got := Span(d); got != want {
 			t.Errorf("Span(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+func TestBriefNext(t *testing.T) {
+	chats := []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))}
+	runs := []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed)), briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}
+	b := BuildBrief(briefWindow, chats, runs)
+	c, what, ok := b.Next(time.UTC)
+	if !ok || c.N != 2 || what != "▲ tamper Gate since 01:30" {
+		t.Fatalf("Next = %d %q %v", c.N, what, ok)
+	}
+	// A ✓ already applied is no card.
+	b = BuildBrief(briefWindow, chats[:1], []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Accepted), briefRec(25, recDelivery, map[string]any{"kind": "apply"}))})
+	if _, _, ok := b.Next(time.UTC); ok {
+		t.Errorf("an applied cut is next")
+	}
+}
+
+// A Chat's first message and a Gate's choice are cleaned: one line, no
+// control sequences, only Öge's own words for a choice.
+func TestBriefCleansText(t *testing.T) {
+	c := briefChat("c1", 1, "x", briefSettled(10, 1))
+	c.First = "\x1b[31mred\x1b]0;title\x07 " + strings.Repeat("long ", 40)
+	b := BuildBrief(briefWindow, []BriefChat{c}, []BriefRun{briefCut("r1", "c1", false,
+		briefRec(12, RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.tamper"}, "actor": "human", "choice": "x\x1b[31m"}))})
+	got := b.Text(time.UTC)
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 7) || !strings.Contains(got, "decided at tamper Gate") {
+		t.Errorf("text = %q", got)
+	}
+	if n := len([]rune(b.Chats[0].First)); n > firstMax {
+		t.Errorf("First has %d runes", n)
 	}
 }

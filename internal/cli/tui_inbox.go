@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
 )
 
@@ -38,6 +39,10 @@ type inboxState struct {
 	shown  time.Time
 	ticked time.Time // the shown its redraw was asked for
 	unread *chatView
+	// brief is the return brief of the absence the human came back from,
+	// the first card until tab moves on. It takes no key but tab: typing
+	// goes to the box, like the since-you-left card.
+	brief *run.Brief
 }
 
 // inboxItem is one card: a Chat, its glyph and when that began.
@@ -120,6 +125,12 @@ func (h *home) canOpenInbox() bool {
 // openInbox opens the Inbox on its first card.
 func (h *home) openInbox() {
 	h.inbox = &inboxState{comp: h.composer()}
+	// The brief of the absence they came back from is the first card; shown
+	// once, it is seen (docs/ux/desk.md, I4).
+	if b := h.absence.back; b != nil && !b.Empty() {
+		h.inbox.brief = b
+	}
+	h.clearBrief()
 	h.showCard()
 }
 
@@ -203,6 +214,16 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 			return h.inboxTask()
 		}
 		in.comp.key(msg)
+		return nil
+	}
+	if in.brief != nil {
+		switch key {
+		case "tab", "shift+tab":
+			in.brief = nil // on to the first card
+		case "enter": // Enter alone decides nothing (ADR-0022)
+		default:
+			in.comp.key(msg)
+		}
 		return nil
 	}
 	it, i, n, ok := h.card()
@@ -386,6 +407,7 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 	if width <= 0 {
 		width = 80
 	}
+	in := h.inbox
 	fit := func(s string) string { return ansi.Truncate(s, width, "…") }
 	h.showCard()
 	it, i, n, ok := h.card()
@@ -393,9 +415,25 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 	if ok {
 		head += st.dim(" · " + strconv.Itoa(i+1) + " of " + strconv.Itoa(n))
 	}
+	if in.brief != nil {
+		head = " " + st.bold("Inbox") + st.dim(" · while you were away · "+run.Span(in.brief.Away()))
+	}
 	lines = append(lines, "", fit(head))
 	keys := "esc close"
-	if !ok {
+	if b := in.brief; b != nil {
+		// The brief is plain text from the records: Öge's words and the
+		// human's own, no colour to lose under NO_COLOR.
+		for _, l := range b.Lines(time.Local)[1:] {
+			if strings.HasPrefix(l, "  ") {
+				lines = append(lines, fit("   "+clean(strings.TrimPrefix(l, "  "))))
+			} else {
+				lines = append(lines, fit(" "+st.bold(clean(l))))
+			}
+		}
+		if len(h.cards()) > 0 {
+			keys = "tab next · esc close"
+		}
+	} else if !ok {
 		lines = append(lines, fit(" "+st.dim("nothing needs you")))
 	} else {
 		v := it.v
