@@ -1271,7 +1271,7 @@ func (c *Chat) Close() error {
 // Session's process group killed after the grace period, its writes
 // scope-checked, and a cut in flight cancelled. Unlike Close it keeps the
 // Workspace, and when a turn or a cut was in flight the log ends in
-// TurnInterrupted, with why ("hangup" or "interrupt").
+// TurnInterrupted, with why ("hangup", "interrupt", "stop" or "quit").
 func (c *Chat) Stop(why string) error {
 	c.end(ErrChatStopped, why)
 	return nil

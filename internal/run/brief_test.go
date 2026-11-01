@@ -111,6 +111,10 @@ func TestBriefGolden(t *testing.T) {
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefRec(11, RecTurnStarted, map[string]any{"turn": 1}),
 				briefRec(30, RecAttemptEnded, map[string]any{"turn": 1, "failure": "chat_ended: agent text never shows"}),
 				briefRec(30, RecTurnInterrupted, map[string]any{"turn": 1, "why": "interrupt"}))}},
+		{name: "stopped_by_stop",
+			// /stop mid-turn: said as /stop, not as a signal.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefRec(11, RecTurnStarted, map[string]any{"turn": 1}),
+				briefRec(30, RecTurnInterrupted, map[string]any{"turn": 1, "why": "stop"}))}},
 		{name: "turn_failed",
 			// The agent died mid-turn and the Chat went on.
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefRec(11, RecAttemptEnded, map[string]any{"turn": 1, "failure": "agent text never shows"}),

@@ -67,6 +67,7 @@ func slashCommands() []slashCmd {
 			return nil, "/resume: not built yet (#55)"
 		}},
 		{name: "/quit", usage: "/quit", desc: "leave", run: (*home).quitCmd},
+		{name: "/stop", advanced: true, usage: "/stop", desc: "stop every Chat, keep them, leave", run: (*home).stopCmd},
 	}
 }
 
@@ -185,6 +186,16 @@ func (h *home) quitCmd(args []string) (tea.Cmd, string) {
 		return nil, usageOf("/quit")
 	}
 	return h.quitOrAsk(), ""
+}
+
+// stopCmd is "keep everything, stop now" (docs/ux/away.md, A2): it never
+// asks. Every turn in flight is interrupted, Gates park, Workspaces stay.
+func (h *home) stopCmd(args []string) (tea.Cmd, string) {
+	if len(args) > 0 {
+		return nil, usageOf("/stop")
+	}
+	h.stopped, h.keep, h.quitAsk, h.quit = true, true, 0, true
+	return tea.Quit, ""
 }
 
 func (h *home) setupCmd(args []string) (tea.Cmd, string) {
