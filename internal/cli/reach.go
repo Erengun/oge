@@ -94,33 +94,39 @@ func (r *reach) observe(now time.Time, away bool, chats []reachChat) (out []reac
 	var needText string
 	if len(need) > 0 {
 		fresh := slices.ContainsFunc(need, func(c reachChat) bool { return !r.told[c.num] })
-		stale := false
+		staleNew := false
+		isStale := func(c reachChat) bool {
+			return !c.askedAt.IsZero() && r.stale > 0 && now.Sub(c.askedAt) >= r.stale
+		}
 		for _, c := range need {
-			if !c.askedAt.IsZero() && r.stale > 0 && now.Sub(c.askedAt) >= r.stale && !r.staled[c.num] {
-				stale = true
-				if r.staled == nil {
-					r.staled = map[int]bool{}
-				}
-				r.staled[c.num] = true
+			if isStale(c) && !r.staled[c.num] {
+				staleNew = true
 			}
 		}
 		due := r.lastNeed.IsZero() || now.Sub(r.lastNeed) >= reachCoalesce
 		switch {
-		case fresh && due, stale:
+		case (fresh || staleNew) && due:
 			needText = r.needText(need)
 			r.lastNeed = now
 			r.told = map[int]bool{}
+			if r.staled == nil {
+				r.staled = map[int]bool{}
+			}
 			for _, c := range need {
 				r.told[c.num] = true
+				// A Gate already stale when told is not re-sent again.
+				if isStale(c) {
+					r.staled[c.num] = true
+				}
 			}
-		case fresh:
+		case fresh || staleNew:
 			wake = r.lastNeed.Add(reachCoalesce).Sub(now)
 		}
 	}
 	if r.worked && !working && !r.settledSent {
 		r.settledSent = true
-		out = append(out, reachText{r.settledText(chats), false})
-		// The settled message already counts what needs the human.
+		out = append(out, reachText{r.settledText(chats, need), len(need) > 0})
+		// The settled message already says what needs the human.
 		if len(need) > 0 {
 			needText = ""
 			r.lastNeed, r.told = now, map[int]bool{}
@@ -157,7 +163,8 @@ func (r *reach) title(c reachChat) string {
 }
 
 // settledText is "oge · api · settled · 2 ready · 1 needs you · 1 failed".
-func (r *reach) settledText(chats []reachChat) string {
+// With exactly one Chat waiting it names the Chat: "settled · Chat 3 needs you".
+func (r *reach) settledText(chats, waiting []reachChat) string {
 	var ready, need, failed int
 	for _, c := range chats {
 		switch c.mark {
@@ -173,7 +180,9 @@ func (r *reach) settledText(chats []reachChat) string {
 	if ready > 0 {
 		parts = append(parts, strconv.Itoa(ready)+" ready")
 	}
-	if need > 0 {
+	if need == 1 && len(waiting) == 1 {
+		parts = append(parts, "Chat "+strconv.Itoa(waiting[0].num)+" needs you")
+	} else if need > 0 {
 		parts = append(parts, strconv.Itoa(need)+" needs you")
 	}
 	if failed > 0 {
@@ -344,9 +353,13 @@ func (h *home) reachCheck(now time.Time) tea.Cmd {
 		}
 	}
 	var cmds []tea.Cmd
-	if f := d.out.failure(); f != "" {
-		cmds = append(cmds, h.notice(f, false))
-		h.toast.plain = true
+	// The failure waits until the human is back to see it, and never
+	// replaces a toast already up.
+	if !away && h.toast == nil {
+		if f := d.out.failure(); f != "" {
+			cmds = append(cmds, h.notice(f, false))
+			h.toast.plain = true
+		}
 	}
 	if wake > 0 && h.redraw != nil && now.Add(wake).After(d.wakeAt) {
 		d.wakeAt = now.Add(wake)

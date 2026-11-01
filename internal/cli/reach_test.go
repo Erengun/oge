@@ -88,9 +88,9 @@ func TestReachSettledOnceAfterWork(t *testing.T) {
 	done := []reachChat{chatAt(1, "api", "a", "✓"), chatAt(2, "api", "b", "✓"), chatAt(3, "api", "c", "✗"), chatAt(4, "api", "d", "○")}
 	done[3].mark = "▲"
 	out, _ := r.observe(reachT0.Add(2*time.Minute), true, done)
-	want := "oge · api · settled · 2 ready · 1 needs you · 1 failed"
+	want := "oge · api · settled · 2 ready · Chat 4 needs you · 1 failed"
 	// The settled text already counts the Chat that needs the human.
-	if got := texts(out); len(got) != 1 || got[0] != want {
+	if got := texts(out); len(got) != 1 || got[0] != want || !out[0].blocked {
 		t.Fatalf("settled = %q", got)
 	}
 	if out, _ = r.observe(reachT0.Add(3*time.Minute), true, done); len(out) != 0 {
@@ -296,5 +296,30 @@ func TestHomeReachHerdrCarriesTheAwayText(t *testing.T) {
 	want := []string{"blocked|" + notifyWaiting, "blocked|oge · api · Chat 1 needs you"}
 	if len(rec.logs) != 2 || rec.logs[0] != want[0] || rec.logs[1] != want[1] {
 		t.Fatalf("herdr = %q", rec.logs)
+	}
+}
+
+func TestReachStaleResendsCoalesceAtShippedDefault(t *testing.T) {
+	r := &reach{stale: 5 * time.Minute}
+	c1 := chatAt(1, "api", "a", "▲")
+	c1.askedAt = reachT0
+	c2 := chatAt(2, "api", "b", "●")
+	c3 := chatAt(3, "api", "c", "●") // keeps the Desk from settling
+	if out, _ := r.observe(reachT0, true, []reachChat{c1, c2, c3}); len(out) != 1 {
+		t.Fatalf("first = %q", texts(out))
+	}
+	c2.mark, c2.askedAt = "▲", reachT0.Add(time.Minute)
+	both := []reachChat{c1, c2, c3}
+	for _, m := range []int{1, 5, 6, 14} {
+		if out, _ := r.observe(reachT0.Add(time.Duration(m)*time.Minute), true, both); len(out) != 0 {
+			t.Fatalf("minute %d sent %q", m, texts(out))
+		}
+	}
+	out, _ := r.observe(reachT0.Add(15*time.Minute), true, both)
+	if got := texts(out); len(got) != 1 || got[0] != "oge · api · 2 Chats need you" {
+		t.Fatalf("coalesced = %q", got)
+	}
+	if out, _ = r.observe(reachT0.Add(45*time.Minute), true, both); len(out) != 0 {
+		t.Fatalf("extra = %q", texts(out))
 	}
 }

@@ -525,6 +525,9 @@ func TestLoadUserConfigNotifyCommand(t *testing.T) {
 			t.Errorf("%s was accepted", bad)
 		}
 	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\n[notify]\ncommand = [\"/Applications/My Notifier.app/notifier\", \"x\"]\n")); len(probs) != 0 {
+		t.Errorf("a program path with a space was refused: %v", probs)
+	}
 	if c, _ := LoadUserConfig([]byte("schema = 1\n[notify]\nattention = false\n")); c.NotifyConfig().Titles || c.NotifyConfig().Command != nil {
 		t.Error("titles or command on by default")
 	}

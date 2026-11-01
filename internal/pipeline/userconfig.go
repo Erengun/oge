@@ -340,8 +340,8 @@ func (c *UserConfig) validate() []Problem {
 		switch first := n.Command[0:min(1, len(n.Command))]; {
 		case len(first) == 0 || strings.TrimSpace(first[0]) == "":
 			add("notify.command", "must be an argv list whose first element is the program, such as [\"ntfy\", \"publish\", \"my-topic\"]")
-		case strings.ContainsAny(first[0], " \t\n"):
-			add("notify.command", "the first element is the program alone; put each argument in its own element (Öge runs no shell)")
+		case len(n.Command) == 1 && strings.ContainsAny(first[0], " \t\n"):
+			add("notify.command", "a single element with spaces looks like a shell line; put each argument in its own element (Öge runs no shell)")
 		}
 		if slices.ContainsFunc(n.Command, func(a string) bool { return strings.ContainsRune(a, 0) }) {
 			add("notify.command", "must not contain NUL")
