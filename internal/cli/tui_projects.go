@@ -43,12 +43,24 @@ func (h *home) pinned() []string {
 	if !h.pinsRead {
 		h.pinsRead = true
 		for _, p := range h.deskProjects {
-			if r := gitRoot(p); r != "" && repoKey(r) == repoKey(p) && !slices.ContainsFunc(h.pins, func(q string) bool { return repoKey(q) == repoKey(r) }) {
+			if r := gitRoot(p); r != "" && sameDir(r, p) && !slices.ContainsFunc(h.pins, func(q string) bool { return repoKey(q) == repoKey(r) }) {
 				h.pins = append(h.pins, r)
 			}
 		}
 	}
 	return h.pins
+}
+
+// sameDir reports whether a and b are the same directory on disk. It
+// compares the files, not the strings: on a case-insensitive filesystem
+// git prints the on-disk case while a configured path may differ.
+func sameDir(a, b string) bool {
+	x, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	y, err := os.Stat(b)
+	return err == nil && os.SameFile(x, y)
 }
 
 // opened reports whether a Chat is open in the repo at root.
@@ -182,7 +194,7 @@ func recentRoots(private string, n int) []string {
 		}
 		keys = append(keys, k)
 		tried++
-		if r := gitRoot(s.root); r != "" && repoKey(r) == repoKey(s.root) && !slices.ContainsFunc(out, func(o string) bool { return repoKey(o) == repoKey(r) }) {
+		if r := gitRoot(s.root); r != "" && sameDir(r, s.root) && !slices.ContainsFunc(out, func(o string) bool { return repoKey(o) == repoKey(r) }) {
 			out = append(out, r)
 		}
 	}

@@ -267,6 +267,20 @@ func TestPinInsideAnotherRepoIsLeftOut(t *testing.T) {
 	}
 }
 
+// A pin spelled in another case than the directory on disk is still the
+// repo on a case-insensitive filesystem (macOS by default).
+func TestPinInAnotherCaseIsKept(t *testing.T) {
+	h, roots := reposHome(t, "Alpha")
+	other := filepath.Join(filepath.Dir(roots["Alpha"]), "alpha")
+	if _, err := os.Stat(other); err != nil {
+		t.Skip("case-sensitive filesystem")
+	}
+	pin(h, []string{other})
+	if got := h.pinned(); len(got) != 1 {
+		t.Errorf("pinned %v, want the repo", got)
+	}
+}
+
 func TestProjectsWithNothingSaysSo(t *testing.T) {
 	h, _ := reposHome(t, "alpha")
 	submit(h, "/projects")
