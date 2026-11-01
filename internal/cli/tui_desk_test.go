@@ -239,6 +239,9 @@ func TestCtrlCWithAnotherChatWorkingAsksAgain(t *testing.T) {
 	if h.quit {
 		t.Fatal("a stopped turn's ctrl+c quit with Chat 1 verifying")
 	}
+	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "ctrl+c again quits and stops it") {
+		t.Errorf("the turn's screen doesn't say why it didn't quit:\n%s", got)
+	}
 	h.Update(ctrlC)
 	if !h.quit {
 		t.Error("a second ctrl+c didn't quit")

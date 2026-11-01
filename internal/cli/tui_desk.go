@@ -201,7 +201,7 @@ func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 // names no tool (docs/ux/desk.md).
 func (v *chatView) state() (glyph, word string) {
 	switch {
-	case v.turn != nil && len(v.turn.asks) > 0, v.stale != nil, v.pendingFB != nil:
+	case v.turn != nil && len(v.turn.asks) > 0, v.cutGate != nil, v.stale != nil, v.pendingFB != nil:
 		return "▲", "needs you"
 	case v.turn != nil, v.verify != nil:
 		return "●", "working"
