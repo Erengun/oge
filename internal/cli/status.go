@@ -87,9 +87,15 @@ func repoLogs(private, root string) ([]run.BriefChat, []run.BriefRun, error) {
 		}
 		chats = append(chats, run.BriefChat{BriefLog: log})
 	}
+	runs, err := repoRuns(private, root)
+	return chats, runs, err
+}
+
+// repoRuns reads root's newest Runs' Ledgers, newest first.
+func repoRuns(private, root string) ([]run.BriefRun, error) {
 	recent, err := delivery.Recent(private, root, statusRuns)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var runs []run.BriefRun
 	for _, r := range recent {
@@ -103,7 +109,7 @@ func repoLogs(private, root string) ([]run.BriefChat, []run.BriefRun, error) {
 		}
 		runs = append(runs, run.BriefRun{BriefLog: log, Title: title, Live: run.Live(r.Dir)})
 	}
-	return chats, runs, nil
+	return runs, nil
 }
 
 func canonicalDir(p string) string {

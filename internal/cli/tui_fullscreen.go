@@ -234,6 +234,9 @@ func (h *home) header(width int) string {
 	if c := h.deskCounts(); c != "" {
 		line += "  " + c
 	}
+	if b := h.briefLine(); b != "" {
+		line += "  " + st.dim(b)
+	}
 	return ansi.Truncate(line, width, "…")
 }
 

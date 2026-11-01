@@ -443,6 +443,8 @@ type home struct {
 	deskStale  time.Duration
 	herdr      herdr.Reporter
 	herdrState herdr.State
+	// away is the away window and the return brief (tui_brief.go).
+	away awayState
 }
 
 // actionsArm is how long the action row ignores its keys once focused.
@@ -594,6 +596,7 @@ func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() != "ctrl+c" {
 		h.quitArmed = false // only the very next key quits
 	}
+	h.noteInput(msg)
 	if h.full {
 		if cmd, ok := h.fullUpdate(msg); ok {
 			cmd = withTick(cmd, h.deskTick())
@@ -1023,6 +1026,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.sel.syncFrom(res)
 	h.at.files, h.at.filesReady = nil, false // listed again for the next composer
 	h.hist.add(text)                         // what the human typed, never the agent's output
+	h.clearBrief()                           // they are back at work
 	if h.name == "" {
 		h.name = task.Parse(text).Title
 	}
@@ -1808,9 +1812,11 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, herdr: u.herdr, redraw: tea.Tick}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
+	h.away.last = h.clock()
 	h.views = []*chatView{h.chatView}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
+		h.away.private = filepath.Dir(histDir)
 	}
 	h.getenv = env.Getenv
 	h.shell = runShell
