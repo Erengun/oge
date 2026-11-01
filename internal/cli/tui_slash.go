@@ -56,6 +56,7 @@ func slashCommands() []slashCmd {
 		{name: "/export", advanced: true, usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
 		{name: "/copy", advanced: true, usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
 		{name: "/new", usage: "/new [path]", desc: "open another Chat; this one keeps working", run: (*home).newCmd},
+		{name: "/projects", usage: "/projects", desc: "open a Chat in another project", run: (*home).projectsCmd},
 		{name: "/chats", usage: "/chats", desc: "switch to another Chat", run: (*home).chatsCmd},
 		{name: "/inbox", usage: "/inbox", desc: "what the Chats want from you (ctrl+space)", run: (*home).inboxCmd},
 		{name: "/close", advanced: true, usage: "/close", desc: "end this Chat", run: (*home).closeCmd},
@@ -565,7 +566,8 @@ func (h *home) syncMenu() {
 // menuKey is a key while the menu is open; handled is false when the key
 // is the composer's. Tab or Enter complete the highlighted command into
 // the box and never run it: Enter runs only a command already typed whole
-// (and one that needs arguments is completed, ready for them).
+// (and one that needs arguments is completed, ready for them). Tab on
+// /new typed whole opens the project picker instead.
 func (h *home) menuKey(msg tea.KeyPressMsg) (handled bool) {
 	sel, _ := h.menu.SelectedItem().(slashItem)
 	text := h.comp.text()
@@ -587,6 +589,19 @@ func (h *home) menuKey(msg tea.KeyPressMsg) (handled bool) {
 		l, _ := h.menu.Update(msg)
 		h.menu = &l
 	case "tab":
+		if text == "/new" && sel.cmd.name == "/new" {
+			// /new typed whole and Tab: the project picker, as with the space
+			// With nothing to pick, keep "/new " ready for a typed path.
+			if _, p := h.projectsCmd(nil); h.projectPicker() {
+				h.comp.set("")
+			} else {
+				h.comp.set("/new ")
+				if p != "" {
+					h.msg = []string{p}
+				}
+			}
+			return true
+		}
 		complete()
 	case "esc":
 		h.menuOff, h.menuOffText = true, text

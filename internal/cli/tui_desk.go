@@ -63,6 +63,8 @@ func (h *home) openView(rc *repoCtx) {
 	if rc != h.repoCtx {
 		v = h.newViewIn(rc)
 	}
+	h.place(h.repoCtx.root) // the focused Chat's repo comes first
+	h.place(v.root)
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
@@ -76,6 +78,7 @@ func (h *home) openView(rc *repoCtx) {
 // moveTo puts the focused Chat, idle and opened nothing, in the repo rc:
 // its Chat, header, setup and history are rc's from now on.
 func (h *home) moveTo(rc *repoCtx) {
+	h.place(rc.root)
 	if h.chat != nil {
 		h.closed = append(h.closed, h.chat) // quitting waits for its closing
 	}
@@ -190,7 +193,7 @@ func (h *home) leave() bool {
 // Chat's turn is in flight, rather than being queued as a message.
 func slashDuringTurn(word string) bool {
 	switch word {
-	case "/advise", "/new", "/chats", "/close", "/inbox":
+	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects":
 		return true
 	}
 	return false
@@ -272,27 +275,35 @@ func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 
 // chatsKey is a key while /chats is open: Enter or a Chat's number
 // focuses it; Esc closes the picker.
-func (h *home) chatsKey(msg tea.KeyPressMsg) {
+func (h *home) chatsKey(msg tea.KeyPressMsg) tea.Cmd {
 	key := msg.String()
+	projects := h.projectPicker()
 	if n, err := strconv.Atoi(key); err == nil {
-		if v := h.viewNum(n); v != nil {
+		if v := h.viewNum(n); v != nil && !projects {
 			h.chats = nil
 			h.switchTo(v)
 		}
-		return
+		return nil
 	}
 	switch key {
 	case "esc", "ctrl+c":
 		h.chats = nil
 	case "enter":
-		if it, ok := h.chats.SelectedItem().(chatItem); ok && slices.Contains(h.views, it.v) {
+		switch it := h.chats.SelectedItem().(type) {
+		case chatItem:
+			if slices.Contains(h.views, it.v) {
+				h.chats = nil
+				h.switchTo(it.v)
+			}
+		case projectItem:
 			h.chats = nil
-			h.switchTo(it.v)
+			return h.openProject(it.root)
 		}
 	default:
 		l, _ := h.chats.Update(msg)
 		h.chats = &l
 	}
+	return nil
 }
 
 // chatsLines draws /chats under the box.
@@ -303,6 +314,9 @@ func (h *home) chatsLines() []string {
 		if strings.TrimSpace(l) != "" {
 			out = append(out, ansi.Truncate(strings.TrimRight(l, " "), max(h.width, 20), "…"))
 		}
+	}
+	if h.projectPicker() {
+		return append(out, " "+st.dim("⏎ opens a Chat there · esc"))
 	}
 	return append(out, " "+st.dim("⏎ or a number switches · esc"))
 }
@@ -457,15 +471,17 @@ const (
 )
 
 // railOn reports whether the rail is drawn. With one Chat it would say
-// nothing the screen doesn't, as the header counts don't.
+// nothing the screen doesn't, as the header counts don't, unless a pinned
+// project has no Chat yet.
 func (h *home) railOn() bool {
-	return h.full && !h.sidebarOff && h.termW >= railMinCols && len(h.views) > 1
+	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.views) > 1 || len(h.unopened()) > 0)
 }
 
 // railHit is where the rail drew a Chat: screen row y, columns x0 to x1.
 type railHit struct {
 	y, x0, x1 int
 	v         *chatView
+	open      string // a pinned project's root, with no Chat (v is nil)
 }
 
 // rail draws the column, height rows tall, each railWidth wide. Chats
@@ -495,30 +511,46 @@ func (h *home) rail(height int) []string {
 	}
 	var body []string
 	var hits []railHit
-	var folded []*chatView
-	for _, v := range h.views {
-		mark, coarse := glyph(v, now, quiet)
-		if mark == "✓" || mark == "○" {
-			folded = append(folded, v)
+	groups, roots := h.railGroups()
+	heads := len(groups) > 1
+	labels := projectLabels(roots)
+	for gi, g := range groups {
+		if len(g) == 0 { // a pinned project with no Chat: a dim row, a click opens one
+			body = append(body, st.dim(ansi.Truncate("+ "+clean(labels[gi]), inner, "…")))
+			hits = append(hits, railHit{y: len(body) - 1, x1: inner, open: roots[gi]})
 			continue
 		}
-		head := strconv.Itoa(v.num) + " " + mark + " "
-		room := inner - ansi.StringWidth(head)
-		tail := ""
-		if v == h.chatView {
-			tail, room = "◀", room-1
+		if heads {
+			body = append(body, st.dim(ansi.Truncate(clean(labels[gi]), inner, "…")))
 		}
-		title := ansi.Truncate(clean(v.caption()), max(room, 0), "…")
-		title += strings.Repeat(" ", max(room-ansi.StringWidth(title), 0))
-		if v == h.chatView {
-			title = st.bold(title)
+		var folded []*chatView
+		active := 0
+		for _, v := range g {
+			mark, coarse := glyph(v, now, quiet)
+			if mark == "✓" || mark == "○" {
+				folded = append(folded, v)
+				continue
+			}
+			active++
+			head := strconv.Itoa(v.num) + " " + mark + " "
+			room := inner - ansi.StringWidth(head)
+			tail := ""
+			if v == h.chatView {
+				tail, room = "◀", room-1
+			}
+			title := ansi.Truncate(clean(v.caption()), max(room, 0), "…")
+			title += strings.Repeat(" ", max(room-ansi.StringWidth(title), 0))
+			if v == h.chatView {
+				title = st.bold(title)
+			}
+			y := len(body)
+			body = append(body, strconv.Itoa(v.num)+" "+paint(mark)+" "+title+st.accent(tail), st.dim(railState(coarse, railAge(now, v.since(mark)), inner)))
+			hits = append(hits, railHit{y: y, x1: inner, v: v}, railHit{y: y + 1, x1: inner, v: v})
 		}
-		y := len(body)
-		body = append(body, strconv.Itoa(v.num)+" "+paint(mark)+" "+title+st.accent(tail), st.dim(railState(coarse, railAge(now, v.since(mark)), inner)))
-		hits = append(hits, railHit{y, 0, inner, v}, railHit{y + 1, 0, inner, v})
-	}
-	if len(folded) > 0 {
-		if len(body) > 0 {
+		if len(folded) == 0 {
+			continue
+		}
+		if active > 0 {
 			body = append(body, st.border(strings.Repeat("─", inner)))
 		}
 		line, w := "", 0
@@ -536,12 +568,11 @@ func (h *home) rail(height int) []string {
 			if w > 0 {
 				line, w = line+" ", w+1
 			}
-			hits = append(hits, railHit{len(body), w, w + tw, v})
+			hits = append(hits, railHit{y: len(body), x0: w, x1: w + tw, v: v})
 			line, w = line+painted, w+tw
 		}
 		body = append(body, line)
 	}
-
 	// The box: the top border names it; rows and hits move in by one.
 	b := st.border
 	out := make([]string, 0, height)
@@ -557,7 +588,7 @@ func (h *home) rail(height int) []string {
 	h.railHits = h.railHits[:0]
 	for _, hit := range hits {
 		if hit.y < height-2 {
-			h.railHits = append(h.railHits, railHit{hit.y + 1, hit.x0 + 1, hit.x1 + 1, hit.v})
+			h.railHits = append(h.railHits, railHit{hit.y + 1, hit.x0 + 1, hit.x1 + 1, hit.v, hit.open})
 		}
 	}
 	return out[:min(height, len(out))]
@@ -618,7 +649,14 @@ func (h *home) railClick(x, y int) {
 		return
 	}
 	for _, hit := range h.railHits {
-		if hit.y == y && x >= hit.x0 && x < hit.x1 && slices.Contains(h.views, hit.v) {
+		if hit.y != y || x < hit.x0 || x >= hit.x1 {
+			continue
+		}
+		if hit.open != "" {
+			h.openProject(hit.open)
+			return
+		}
+		if slices.Contains(h.views, hit.v) {
 			h.switchTo(hit.v)
 			return
 		}

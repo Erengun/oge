@@ -67,7 +67,10 @@ With `ask`, a failed Check shows `✗ Check failed` under the box and sends noth
 max_active = 3   # working Chats /new opens another beside without a word; 0 or absent is 3
 quiet = "3m"     # a turn with no agent event for this long shows ? quiet, not ● working
 stale_gate = "5m" # a Gate or ask waiting this long rings the bell, even while you type
+projects = ["~/dev/api", "/work/web"] # repos pinned in the rail, with no Chat open
 ```
+
+`projects` pins repos: each shows in the rail as a dim `+ name` row until a Chat is open there, and clicking it (or choosing it in `/projects`) opens one. Entries are absolute paths or start with `~/`; anything else is a Problem. A path that is gone or is not a git repo is left out of the rail and the picker. `/projects` (or `/new` then Tab) lists these and your recent repos, read from the Runs and Chats in the state root; Enter opens a Chat there, as `/new <path>` does.
 
 When `max_active` Chats or more are working, the first `/new` of the session opens the Chat and says once that research puts what one person can keep track of at about 3. `/new` never refuses, and it doesn't say it twice. `quiet` and `stale_gate` take a Go duration such as `"90s"` or `"5m"`.
 

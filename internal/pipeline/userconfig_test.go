@@ -179,6 +179,20 @@ func resolveProbs(cfg *Config, o Overrides) []Problem {
 	return probs
 }
 
+func TestDeskProjectsProblems(t *testing.T) {
+	for _, bad := range []string{`"rel/path"`, `""`} {
+		_, probs := LoadUserConfig([]byte("schema = 1\n[desk]\nprojects = [" + bad + "]\n"))
+		if len(probs) != 1 || probs[0].Key != "desk.projects" {
+			t.Errorf("%s: problems %v", bad, probs)
+		}
+	}
+	for _, ok := range []string{`"~/x"`, `"~"`, "'" + t.TempDir() + "'"} {
+		if _, probs := LoadUserConfig([]byte("schema = 1\n[desk]\nprojects = [" + ok + "]\n")); len(probs) != 0 {
+			t.Errorf("%s: problems %v", ok, probs)
+		}
+	}
+}
+
 func TestUserBindingProblems(t *testing.T) {
 	for name, agent := range map[string]string{"unknown agent": "nope@x", "codex profile": "codex@foo", "unknown profile": "claude@zz", "bare at": "claude@"} {
 		u := &RepoDefaults{}
