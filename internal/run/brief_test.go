@@ -75,17 +75,33 @@ func TestBriefGolden(t *testing.T) {
 			runs:  []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))}},
 		{name: "hangup",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1), briefRec(11, RecTurnStarted, map[string]any{"turn": 2}),
+				// The Chat ends the turn in flight before it records the hangup.
+				briefRec(30, RecAttemptEnded, map[string]any{"turn": 2, "failure": "chat_ended: agent text never shows"}),
 				briefRec(30, RecTurnInterrupted, map[string]any{"turn": 2, "why": "hangup"}))},
 			runs: []BriefRun{briefCut("r1", "c1", false, briefGate(25, "gate.result"))}},
 		{name: "sleep_gap",
-			// A Check's first command took 1m by the monotonic clock, yet
-			// the next started 41m later by the wall clock.
+			// An agent answered 1m after its launch by the monotonic clock,
+			// yet 41m later by the wall clock. A Check's commands look the
+			// same, but their duration is wall clock too: no sleep in them.
 			w:     BriefWindow{From: briefT0, To: briefAt(120), Basis: BasisAway, Slept: 10 * time.Minute},
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(5, 1))},
-			runs: []BriefRun{briefCut("r1", "c1", false, briefRec(10, RecCheckStarted, map[string]any{}),
-				briefRec(60, RecCheckEnded, map[string]any{"result": map[string]any{"commands": []map[string]any{
-					{"started_at": briefAt(10), "duration_ms": 60_000}, {"started_at": briefAt(51), "duration_ms": 1000}}}}),
-				briefEnded(61, Accepted))}},
+			runs: []BriefRun{briefCut("r1", "c1", false,
+				briefRec(10, RecProcessStarted, map[string]any{"attempt": "a1"}),
+				briefRec(51, RecObservation, map[string]any{"attempt": "a1", "kind": "responsiveness", "duration_ms": 60_000}),
+				briefRec(52, RecCheckStarted, map[string]any{}),
+				briefRec(90, RecCheckEnded, map[string]any{"result": map[string]any{"commands": []map[string]any{
+					{"started_at": briefAt(52), "duration_ms": 1000}, {"started_at": briefAt(89), "duration_ms": 1000}}}}),
+				briefEnded(91, Accepted))}},
+		{name: "interrupt",
+			// SIGTERM while away: the turn in flight is cut off, and neither
+			// it nor its failure reads as settled.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefRec(11, RecTurnStarted, map[string]any{"turn": 1}),
+				briefRec(30, RecAttemptEnded, map[string]any{"turn": 1, "failure": "chat_ended: agent text never shows"}),
+				briefRec(30, RecTurnInterrupted, map[string]any{"turn": 1, "why": "interrupt"}))}},
+		{name: "turn_failed",
+			// The agent died mid-turn and the Chat went on.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefRec(11, RecAttemptEnded, map[string]any{"turn": 1, "failure": "agent text never shows"}),
+				briefSettled(20, 2))}},
 		{name: "empty",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(-30, 1))},
 			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(-20, Accepted))}},
@@ -140,11 +156,16 @@ func TestBriefTotals(t *testing.T) {
 	if b.Totals.NeedsYou != 1 || len(b.Chats) != 1 || b.Chats[0].Gates[0].Gate != "tamper" || b.Counts() != "▲1" {
 		t.Fatalf("brief = %+v, counts %q", b, b.Counts())
 	}
-	// The same Gate in a Run no process runs any more needs nobody: the
-	// cut stopped without an end.
+	// The same Gate in a Run no process runs any more needs nobody. When
+	// that cut stopped the records can't say, so no window counts it.
 	b = BuildBrief(briefWindow, []BriefChat{briefChat("c3", 3, "parser")}, []BriefRun{briefCut("r3", "c3", false, briefGate(-20, "gate.tamper"))})
-	if b.Totals.NeedsYou != 0 || b.Totals.Stopped != 1 || b.Totals.Ended != 0 {
-		t.Fatalf("dead Run's Gate: totals = %+v", b.Totals)
+	if b.Totals != (BriefTotals{}) || !b.Empty() {
+		t.Fatalf("dead Run's old Gate: brief = %+v", b)
+	}
+	// One whose last record is in the window stopped in it.
+	b = BuildBrief(briefWindow, []BriefChat{briefChat("c3", 3, "parser")}, []BriefRun{briefCut("r3", "c3", false, briefGate(20, "gate.tamper"))})
+	if b.Totals.NeedsYou != 0 || b.Totals.Stopped != 1 {
+		t.Fatalf("dead Run's Gate in the window: totals = %+v", b.Totals)
 	}
 }
 
@@ -196,7 +217,7 @@ func TestBriefTornLog(t *testing.T) {
 	}
 	now := time.Now()
 	brief := BuildBrief(BriefWindow{From: now.Add(-time.Hour), To: now.Add(time.Minute)}, []BriefChat{{BriefLog: log, N: 1, Title: "parser"}}, nil)
-	if len(brief.Chats) != 1 || brief.Chats[0].Ended != "torn" {
+	if len(brief.Chats) != 1 || !brief.Chats[0].Torn || brief.Totals.Ended != 0 || brief.Totals.Torn != 1 {
 		t.Fatalf("brief = %+v", brief)
 	}
 	briefGolden(t, filepath.Join("testdata", "brief", "torn.golden"), brief.Chats[0].line(time.UTC)+"\n")

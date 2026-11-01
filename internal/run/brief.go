@@ -67,7 +67,8 @@ type BriefRun struct {
 type Basis string
 
 const (
-	// BasisAway: no key or mouse in the home over the window.
+	// BasisAway: the home had no key, mouse, focus or resize over the
+	// window, or its terminal reported focus lost.
 	BasisAway Basis = "away"
 	// BasisLastAct: the window starts at the human's last recorded act
 	// (a message, a Gate decision, a delivery). Another process can't
@@ -96,9 +97,11 @@ type Brief struct {
 
 // BriefTotals add up the Chats.
 type BriefTotals struct {
-	Settled, Accepted, Failed, Rejected, Parked, NeedsYou, Stopped int
-	// Ended counts the Chats that ended unexpectedly.
+	Settled, Unsettled, Accepted, Failed, Rejected, Parked, NeedsYou, Stopped int
+	// Ended counts the Chats a signal stopped with work in flight.
 	Ended int
+	// Torn counts the Chats whose log ends torn.
+	Torn int
 }
 
 // ChatBrief is one Chat's part, or a one-shot Run's (Run set).
@@ -107,8 +110,10 @@ type ChatBrief struct {
 	N     int
 	Title string
 	Run   bool // a one-shot Run, not a Chat
-	// Settled counts the turns that settled in the window.
-	Settled int
+	// Settled counts the turns that settled in the window; Unsettled the
+	// ones whose Attempt ended in a failure (an agent that died, a Chat
+	// stopped mid-turn).
+	Settled, Unsettled int
 	// Accepted, Failed, Rejected and Parked count the cuts and Runs that
 	// ended so in it.
 	Accepted, Failed, Rejected, Parked int
@@ -118,10 +123,14 @@ type ChatBrief struct {
 	// Stopped counts the cuts that ended without an end recorded: their
 	// process is gone, or their Ledger is torn.
 	Stopped int
-	// Ended says how the Chat ended unexpectedly: "hangup" (its terminal
-	// closed with work in flight), "torn" (its log's last record died
-	// mid-write); "" when it didn't.
+	// Ended says how a signal stopped the Chat with work in flight, as its
+	// TurnInterrupted says: "hangup" (its terminal closed), "interrupt" (a
+	// second Ctrl-C or SIGTERM); "" when none did.
 	Ended string
+	// Torn says its log's last record is torn. Unless the caller knows
+	// the Chat isn't live, that is a record still being written or one
+	// cut off: the records can't say which.
+	Torn bool
 }
 
 // NeedsYou counts what waits for the human: open Gates and asks.
@@ -197,30 +206,37 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 			case RecChatStarted:
 				started[c.ID] = r.At
 			case RecAttemptEnded:
-				if in(r.At) {
+				// Only whether it failed is read, never the failure.
+				var d struct{ Failure string }
+				_ = json.Unmarshal(r.Data, &d)
+				switch {
+				case !in(r.At):
+				case d.Failure != "":
+					cb.Unsettled++
+				default:
 					cb.Settled++
 				}
 			case RecTurnInterrupted:
 				var d struct{ Why string }
 				_ = json.Unmarshal(r.Data, &d)
-				if d.Why == "hangup" {
-					cb.Ended = "hangup"
+				cb.Ended = d.Why
+				if cb.Ended == "" {
+					cb.Ended = "interrupt"
 				}
 			case RecTurnStarted, RecSessionReopened:
 				cb.Ended = "" // it went on after
 			}
 		}
 		spans = append(spans, logSleeps(c.Records)...)
-		if c.Torn {
-			cb.Ended = "torn"
-		}
-		if cb.Ended != "" && !in(newest) {
+		if !in(newest) {
 			cb.Ended = "" // ended before the window: old news
+		} else {
+			cb.Torn = c.Torn
 		}
 		if _, ok := started[c.ID]; !ok && len(c.Records) > 0 {
 			started[c.ID] = c.Records[0].At
 		}
-		shown[c.ID] = cb.Settled > 0 || cb.Asks > 0 || cb.Ended != ""
+		shown[c.ID] = cb.Settled+cb.Unsettled+cb.Asks > 0 || cb.Ended != "" || cb.Torn
 	}
 	for _, r := range runs {
 		chat, rs := r.read(in)
@@ -255,24 +271,15 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		}
 		return started[a.ID].Before(started[c.ID])
 	})
-	n := 0
-	for _, cb := range order {
-		if cb.N > n {
-			n = cb.N
-		}
-	}
 	for _, cb := range order {
 		if !shown[cb.ID] {
 			continue
-		}
-		if cb.N == 0 && !cb.Run {
-			n++
-			cb.N = n
 		}
 		sort.Slice(cb.Gates, func(i, j int) bool { return cb.Gates[i].Since.Before(cb.Gates[j].Since) })
 		b.Chats = append(b.Chats, *cb)
 		t := &b.Totals
 		t.Settled += cb.Settled
+		t.Unsettled += cb.Unsettled
 		t.Accepted += cb.Accepted
 		t.Failed += cb.Failed
 		t.Rejected += cb.Rejected
@@ -281,6 +288,9 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		t.Stopped += cb.Stopped
 		if cb.Ended != "" {
 			t.Ended++
+		}
+		if cb.Torn {
+			t.Torn++
 		}
 	}
 	b.Slept = max(w.Slept, sleptIn(spans, w))
@@ -347,7 +357,9 @@ func (r BriefRun) read(in func(time.Time) bool) (chat string, s runState) {
 	case !ended && !r.Live:
 		// Gone without an end, its tail torn or not: whatever it waited
 		// at waits no more. A live one's torn tail is a record mid-write.
-		if last := r.last(); in(last) || open != nil {
+		// When it died the records can't say, so it counts only when its
+		// last record is in the window, not in every window after.
+		if in(r.last()) {
 			s.stopped = 1
 		}
 	case open != nil:
@@ -380,8 +392,10 @@ type sleepSpan struct {
 // clocks: their records' times are wall clock, their durations monotonic,
 // and monotonic time stops while the machine sleeps. The pairs:
 //   - an agent's ProcessStarted and its responsiveness Observation;
-//   - a ConsultationStarted and its ConsultationEnded;
-//   - one Check command's start and the next one's.
+//   - a ConsultationStarted and its ConsultationEnded.
+//
+// A Check command's duration is no such measure: its start is stored in
+// UTC, which drops the monotonic reading, so its duration is wall clock.
 func logSleeps(recs []ledger.Record) []sleepSpan {
 	var out []sleepSpan
 	add := func(from, to time.Time, ms int64) {
@@ -422,20 +436,6 @@ func logSleeps(recs []ledger.Record) []sleepSpan {
 			}
 			_ = json.Unmarshal(r.Data, &d)
 			add(consults[d.Consultation], r.At, d.DurationMs)
-		case RecCheckEnded:
-			var d struct {
-				Result struct {
-					Commands []struct {
-						StartedAt  time.Time `json:"started_at"`
-						DurationMs int64     `json:"duration_ms"`
-					}
-				}
-			}
-			_ = json.Unmarshal(r.Data, &d)
-			cmds := d.Result.Commands
-			for i := 0; i+1 < len(cmds); i++ {
-				add(cmds[i].StartedAt, cmds[i+1].StartedAt, cmds[i].DurationMs)
-			}
 		}
 	}
 	return out
@@ -521,13 +521,19 @@ func (b Brief) summary() string {
 		parts = append(parts, fmt.Sprintf("%d parked", t.Parked))
 	}
 	if t.Ended > 0 {
-		parts = append(parts, plural(t.Ended, "Chat")+" ended unexpectedly")
+		parts = append(parts, plural(t.Ended, "Chat")+" stopped with work in flight")
+	}
+	if t.Torn > 0 {
+		parts = append(parts, plural(t.Torn, "Chat log")+" torn")
 	}
 	if t.Stopped > 0 {
 		parts = append(parts, plural(t.Stopped, "cut")+" stopped")
 	}
 	if t.Settled > 0 {
 		parts = append(parts, plural(t.Settled, "turn")+" settled")
+	}
+	if t.Unsettled > 0 {
+		parts = append(parts, plural(t.Unsettled, "turn")+" did not settle")
 	}
 	return strings.Join(parts, " · ")
 }
@@ -551,10 +557,15 @@ func (b Brief) Counts() string {
 	return strings.Join(parts, " ")
 }
 
+// name is "Chat 3 parser" on the Desk, which numbers its Chats. Elsewhere
+// no record holds that number, so none is made up: "Chat <id> parser".
 func (c ChatBrief) name() string {
 	n := "Chat " + fmt.Sprint(c.N)
-	if c.Run {
+	switch {
+	case c.Run:
 		n = "Run " + shortID(c.ID)
+	case c.N == 0:
+		n = "Chat " + shortID(c.ID)
 	}
 	if c.Title != "" {
 		n += " " + c.Title
@@ -565,10 +576,14 @@ func (c ChatBrief) name() string {
 func (c ChatBrief) line(loc *time.Location) string {
 	var parts []string
 	switch c.Ended {
+	case "":
 	case "hangup":
 		parts = append(parts, "stopped when its terminal closed")
-	case "torn":
-		parts = append(parts, "ended unexpectedly: its log's last record is torn")
+	default:
+		parts = append(parts, "stopped by an interrupt (a second Ctrl-C or SIGTERM)")
+	}
+	if c.Torn {
+		parts = append(parts, "its log's last record is torn (still being written, or cut off)")
 	}
 	for _, g := range c.Gates {
 		parts = append(parts, "▲ "+g.Gate+" Gate since "+g.Since.In(loc).Format("15:04"))
@@ -593,6 +608,9 @@ func (c ChatBrief) line(loc *time.Location) string {
 	}
 	if c.Settled > 0 {
 		parts = append(parts, plural(c.Settled, "turn")+" settled")
+	}
+	if c.Unsettled > 0 {
+		parts = append(parts, plural(c.Unsettled, "turn")+" did not settle")
 	}
 	return c.name() + " · " + strings.Join(parts, " · ")
 }
