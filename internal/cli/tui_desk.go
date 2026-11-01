@@ -187,8 +187,8 @@ func (chatDelegate) Spacing() int                        { return 0 }
 func (chatDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	v := it.(chatItem).v
-	glyph, state := v.state()
-	line := fmt.Sprintf("%d %s %s  %s", v.num, glyph, clean(v.caption()), d.h.st.dim(state))
+	mark, state := glyph(v, d.h.clock())
+	line := fmt.Sprintf("%d %s %s  %s", v.num, mark, clean(v.caption()), d.h.st.dim(state))
 	if v == d.h.chatView {
 		line += d.h.st.dim("  (this one)")
 	}
@@ -197,19 +197,6 @@ func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 		return
 	}
 	fmt.Fprint(w, "   "+line)
-}
-
-// state is the Chat's coarse state, glyph and word, as /chats shows it:
-// waiting on the human first, then at work, else idle. It is static and
-// names no tool (docs/ux/desk.md).
-func (v *chatView) state() (glyph, word string) {
-	switch {
-	case v.turn != nil && len(v.turn.asks) > 0, v.cutGate != nil, v.stale != nil, v.pendingFB != nil:
-		return "▲", "needs you"
-	case v.turn != nil, v.verify != nil:
-		return "●", "working"
-	}
-	return "○", "idle"
 }
 
 // chatsKey is a key while /chats is open: Enter or a Chat's number
