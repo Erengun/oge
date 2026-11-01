@@ -370,3 +370,32 @@ func TestSlashMenuYieldsToHistoryAndFitsEverydayCommands(t *testing.T) {
 		t.Errorf("everyday commands should fit without scrolling:\n%s", frame(h))
 	}
 }
+
+// /stop is "keep everything, stop now" (docs/ux/away.md, A2): it never
+// asks. Enter on the menu's highlight only completes it.
+func TestSlashStop(t *testing.T) {
+	h := deskHome()
+	submit(h, "/new")
+	h.chat = &homeChat{c: &run.Chat{}}
+	typeText(h, "/sto")
+	if h.menu == nil {
+		t.Fatal("no menu after /sto")
+	}
+	h.Update(enter())
+	if h.quit || h.stopped {
+		t.Fatal("Enter on the highlight ran /stop")
+	}
+	if _, cmd := h.Update(enter()); !h.quit || !h.keep || !h.stopped || h.quitAsk != 0 || cmd == nil {
+		t.Fatalf("/stop with Chats open: quit %v, keep %v, stopped %v, ask %d", h.quit, h.keep, h.stopped, h.quitAsk)
+	}
+	h = testHome(80)
+	submit(h, "/stop")
+	if !h.quit || !h.stopped {
+		t.Errorf("/stop with nothing open: quit %v", h.quit)
+	}
+	h = testHome(80)
+	submit(h, "/stop now")
+	if h.quit {
+		t.Error("/stop with an argument left")
+	}
+}

@@ -420,6 +420,7 @@ type home struct {
 	// (tui_away.go); keep: the answer kept them.
 	quitAsk int
 	keep    bool
+	stopped bool // /stop: keep everything and stop now (A2), never asking
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -2015,6 +2016,9 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		// kept the Chats: every Chat stops as an interrupt does, and keeps
 		// its Workspace for next time.
 		why := "quit"
+		if h.stopped {
+			why = "stop"
+		}
 		if ctx.Err() != nil {
 			why = in.why()
 		}

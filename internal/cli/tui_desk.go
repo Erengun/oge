@@ -193,7 +193,7 @@ func (h *home) leave() bool {
 // Chat's turn is in flight, rather than being queued as a message.
 func slashDuringTurn(word string) bool {
 	switch word {
-	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects":
+	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop":
 		return true
 	}
 	return false

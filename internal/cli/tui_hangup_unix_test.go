@@ -317,3 +317,55 @@ func TestExitRunsBeforeTheForwardedCancel(t *testing.T) {
 		}
 	}
 }
+
+// /stop mid-turn ends everything now and keeps it: the turn is
+// interrupted as why=stop, the Workspace stays, desk.log has no ChatClosed
+// and a clean DeskClosed, and the exit is 0. It never asks keep or close.
+func TestStopMidTurnKeepsTheChat(t *testing.T) {
+	t.Parallel()
+	s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+		{Reply: "working on it", Writes: []multiturn.File{{Path: "add.go", Content: "package fx\n"}}, Hold: true},
+	}}, nil)
+	s.composer()
+	s.type_("long job\r")
+	s.expect("working on it")
+	time.Sleep(100 * time.Millisecond)
+	s.type_("/stop\r")
+	if code := s.wait(); code != ExitOK {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
+	}
+	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
+	if len(logs) != 1 {
+		t.Fatalf("Chat logs: %v", logs)
+	}
+	recs, err := ledger.Replay(logs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := recs[len(recs)-1]; last.Type != run.RecTurnInterrupted || !strings.Contains(string(last.Data), `"stop"`) {
+		t.Errorf("last record %s %s", last.Type, last.Data)
+	}
+	if work, _ := filepath.Glob(filepath.Join(f.state, "work", "chats", "*", "implement", "add.go")); len(work) != 1 {
+		t.Error("the Workspace wasn't kept with add.go in it")
+	}
+	state, err := ledger.OpenStateRoot(f.state, f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desk, err := run.ReadDesk(state.Private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	for _, r := range desk {
+		types = append(types, r.Type)
+	}
+	if got, want := strings.Join(types, " "), strings.Join([]string{run.RecDeskOpened, run.RecChatAdded, run.RecDeskClosed}, " "); got != want {
+		t.Fatalf("desk.log %s, want %s", got, want)
+	}
+	var c run.DeskClosed
+	_ = json.Unmarshal(desk[len(desk)-1].Data, &c)
+	if !c.Clean {
+		t.Error("/stop wrote an unclean DeskClosed")
+	}
+}
