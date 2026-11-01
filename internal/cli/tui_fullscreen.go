@@ -234,6 +234,9 @@ func (h *home) header(width int) string {
 	if c := h.deskCounts(); c != "" {
 		line += "  " + c
 	}
+	if b := h.briefLine(); b != "" {
+		line += "  " + st.dim(b)
+	}
 	return ansi.Truncate(line, width, "…")
 }
 
@@ -364,6 +367,7 @@ func (h *home) compose(v tea.View) tea.View {
 	out := tea.NewView(b.String())
 	out.AltScreen = true
 	out.MouseMode = tea.MouseModeCellMotion
+	out.ReportFocus = true
 	if v.Cursor != nil && curY >= 0 {
 		c := tea.NewCursor(left+curX, t.top+vh+curY)
 		c.Blink = false
