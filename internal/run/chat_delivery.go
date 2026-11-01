@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/erengun/oge/internal/ledger"
 )
@@ -29,12 +30,16 @@ func (c *Chat) Delivered(run, how, rev string) error {
 	if moved {
 		c.delivered = m.turn
 	}
+	prev, prevRun := c.applied, c.appliedRun
 	if ok && how == "apply" {
 		c.applied, c.appliedRun = rev, m.dir
 	}
 	c.supersedeMu.Unlock()
 	if !ok {
 		return fmt.Errorf("run %s is no verified cut of this Chat", run)
+	}
+	if how == "apply" {
+		c.forgetWritten(prev, prevRun, rev, m.dir)
 	}
 	if !moved {
 		return nil
@@ -58,6 +63,62 @@ func (c *Chat) Applied() (rev, runDir string) {
 	c.supersedeMu.Lock()
 	defer c.supersedeMu.Unlock()
 	return c.applied, c.appliedRun
+}
+
+// ApplyBase is what the next apply of a cut made on snapshot (its Run's
+// Snapshot) merges on, and the directory whose repo.git holds it: the
+// commit last applied (Applied), or the Chat's Snapshot when it was
+// retaken on that commit and the cut was made on it. A sibling Chat's
+// apply taken in that retake is then in the base, so the merge never
+// writes it as this Chat's, nor brings back a file the user removed.
+func (c *Chat) ApplyBase(snapshot string) (rev, from string) {
+	rev, from = c.Applied()
+	c.scopeMu.Lock()
+	defer c.scopeMu.Unlock()
+	if rev != "" && c.retakenOn == rev && snapshot == c.Snapshot {
+		return c.Snapshot, c.Dir
+	}
+	return rev, from
+}
+
+// forgetWritten drops what sibling Chats wrote to the paths this Chat's
+// apply of rev changed, from prev (applied from the Run in prevRun): those
+// bytes are this Chat's delivery now, or the user's merge, never the
+// sibling's. When the paths can't be read, all of it is dropped: a path
+// then reads as outside Öge, never the other way.
+func (c *Chat) forgetWritten(prev, prevRun, rev, runDir string) {
+	c.supersedeMu.Lock()
+	n := len(c.siblings)
+	c.supersedeMu.Unlock()
+	if n == 0 {
+		return
+	}
+	c.scopeMu.Lock()
+	from := prev
+	if c.retakenOn == prev {
+		from = c.Snapshot // what was delivered: the Snapshot retaken on prev, or the first
+	}
+	c.scopeMu.Unlock()
+	paths, err := func() ([]string, error) {
+		if _, err := c.repo.TreeOf(from); err != nil {
+			if err := c.repo.Import(filepath.Join(prevRun, "repo.git"), from, "refs/oge/chat/applied"); err != nil {
+				return nil, err
+			}
+		}
+		if err := c.repo.Import(filepath.Join(runDir, "repo.git"), rev, "refs/oge/chat/applied"); err != nil {
+			return nil, err
+		}
+		return c.repo.ChangedFiles(from, rev)
+	}()
+	c.supersedeMu.Lock()
+	defer c.supersedeMu.Unlock()
+	if err != nil {
+		c.siblings = nil
+		return
+	}
+	for _, p := range paths {
+		delete(c.siblings, p)
+	}
 }
 
 // Deliverable refuses delivering the cut run when its turns since the

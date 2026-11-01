@@ -332,3 +332,76 @@ func TestSiblingRetakeWriteFailsCleanly(t *testing.T) {
 		t.Error("the base, the Workspace's commit or the log moved")
 	}
 }
+
+// A sibling's write this Chat's own apply wrote over, merged, is not the
+// sibling's any more: the user putting the sibling's bytes back by hand
+// is outside Öge, and the base keeps this Chat's line.
+func TestSiblingWriteIsForgottenOnOwnApply(t *testing.T) {
+	top, tail := "// top\n"+refreshSub, refreshSub+"// tail\n"
+	c := appliedSub(t, multiturn.Turn{Reply: "top", Writes: []multiturn.File{{Path: "add.go", Content: top}}})
+	drain(t, send(t, c, "a line on top"), nil)
+	res := cut(t, c)
+	if got, err := sibling(t, c, map[string]string{"add.go": tail}); err != nil || got != RefreshConflict {
+		t.Fatalf("sibling apply: %v %v, want RefreshConflict", got, err)
+	}
+	applyTo(t, c, res, map[string]string{"add.go": "// top\n" + tail}) // merged with the sibling's tail
+	c.supersedeMu.Lock()
+	_, kept := c.siblings["add.go"]
+	c.supersedeMu.Unlock()
+	if kept {
+		t.Error("the sibling's add.go is still noted after this Chat's apply wrote it")
+	}
+	if got, err := c.RefreshSnapshot(); err != nil || got != RefreshOutside {
+		t.Fatalf("own refresh: %v %v, want RefreshOutside", got, err)
+	}
+	old := c.snapshot()
+	if err := os.WriteFile(filepath.Join(c.source, "add.go"), []byte(tail), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.RefreshSnapshot(); err != nil || got != RefreshOutside {
+		t.Fatalf("%v %v, want RefreshOutside", got, err)
+	}
+	if c.snapshot() != old {
+		t.Error("the base moved on the user's revert")
+	}
+	wsHas(t, c, "add.go", top)
+}
+
+// A sibling's write stays Öge's across an outside change elsewhere: once
+// the user undoes theirs, the retake goes on. A path a refresh found
+// holding other bytes is forgotten: putting the sibling's back by hand is
+// the user's edit.
+func TestSiblingWriteAcrossAnOutsideChange(t *testing.T) {
+	for _, edited := range []bool{false, true} {
+		c := appliedSub(t)
+		mine := filepath.Join(c.source, "mine.go")
+		if err := os.WriteFile(mine, []byte("package fx\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := sibling(t, c, map[string]string{"x.go": siblingX}); err != nil || got != RefreshOutside {
+			t.Fatalf("%v %v, want RefreshOutside", got, err)
+		}
+		x := filepath.Join(c.source, "x.go")
+		if edited {
+			if err := os.WriteFile(x, []byte(siblingX+"// mine\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := c.RefreshSnapshot(); err != nil || got != RefreshOutside {
+				t.Fatalf("edited: %v %v, want RefreshOutside", got, err)
+			}
+			if err := os.WriteFile(x, []byte(siblingX), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Remove(mine); err != nil {
+			t.Fatal(err)
+		}
+		want := RefreshDone
+		if edited {
+			want = RefreshOutside
+		}
+		if got, err := c.RefreshSnapshot(); err != nil || got != want {
+			t.Fatalf("edited %v: %v %v, want %v", edited, got, err, want)
+		}
+	}
+}

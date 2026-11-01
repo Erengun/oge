@@ -144,7 +144,9 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 		c.setRefreshDue(false)
 		c.forgetSiblings() // what they wrote is in the base, or was changed since
 		return RefreshNone, nil
-	case have != want:
+	case have == want:
+		c.forgetSiblings() // no path holds what a sibling wrote
+	default:
 		if sibling, err = c.siblingPaths(base, commit); err != nil {
 			return RefreshNone, err
 		}
@@ -267,6 +269,8 @@ func (c *Chat) forgetSiblings() {
 // siblingPaths are the paths the tree of commit, the user's repository
 // now, differs from base's on, when each is one a sibling Chat's apply
 // wrote and holds exactly what it wrote. nil: some other change is in it.
+// A path that no longer holds what a sibling wrote is forgotten: putting
+// those bytes back by hand later is the user's edit, never Öge's.
 func (c *Chat) siblingPaths(base, commit string) ([]string, error) {
 	changes, err := c.repo.Changes(base, commit)
 	if err != nil {
@@ -275,12 +279,24 @@ func (c *Chat) siblingPaths(base, commit string) ([]string, error) {
 	c.supersedeMu.Lock()
 	defer c.supersedeMu.Unlock()
 	var paths []string
+	other := false
+	holds := map[string]bool{}
 	for _, ch := range changes {
 		w, ok := c.siblings[ch.Path]
 		if !ok || w.Mode != ch.NewMode || w.OID != ch.NewOID {
-			return nil, nil
+			other = true
+			continue
 		}
+		holds[ch.Path] = true
 		paths = append(paths, ch.Path)
+	}
+	for p := range c.siblings {
+		if !holds[p] {
+			delete(c.siblings, p)
+		}
+	}
+	if other {
+		return nil, nil
 	}
 	return paths, nil
 }
