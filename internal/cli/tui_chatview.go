@@ -173,6 +173,7 @@ func (h *home) switchTo(v *chatView) {
 	}
 	h.navigating, h.visual = false, 0
 	h.msg, h.note, h.cleared = nil, "", ""
+	h.selSess, h.sessNote = "", "" // a clicked session row is not the Chat to /close
 	h.focus(v)
 	if h.full {
 		h.layout()

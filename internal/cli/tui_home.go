@@ -394,9 +394,17 @@ type home struct {
 	// ones that are git repos (tui_projects.go). order is the repos in the
 	// order their first Chat opened, which the rail never changes.
 	deskProjects []string
-	pins         []string
-	pinsRead     bool
-	order        []string
+	// onDesk are the native sessions added to the Desk, in the order they
+	// were added; catalog is the open /sessions (tui_sessions.go).
+	onDesk   []deskSession
+	catalog  *sessionCatalog
+	discover sessionDiscover // nil: Claude's files and Codex's app-server
+	sessSeq  int
+	selSess  string // the session row last clicked, for /close
+	sessNote string // a dim line under the box
+	pins     []string
+	pinsRead bool
+	order    []string
 	// redraw schedules a redraw (tea.Tick); nil schedules none, as in
 	// tests that drive the home by hand.
 	redraw func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
@@ -665,6 +673,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatStepMsg:
 		return h, h.cutStepped(m)
+	case sessionsMsg:
+		h.sessionsFound(m)
+		return h, nil
 	case deskTickMsg:
 		if h.tickAt.Equal(m.at) {
 			h.tickAt = time.Time{} // drawn again now; Update asks for the next
@@ -827,7 +838,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.comp.set(msg.text)
 		}
 	case tea.KeyPressMsg:
-		h.msg, h.note = nil, ""
+		h.msg, h.note, h.sessNote = nil, "", ""
 		h.seen = true // a key in this Chat: its ✓ has been seen
 		switch {
 		case h.job != nil:
@@ -1537,6 +1548,9 @@ func (h *home) render() (string, int, int) {
 	if h.note != "" {
 		lines = append(lines, " "+st.ok(h.note))
 	}
+	if h.sessNote != "" {
+		lines = append(lines, " "+st.dim(h.sessNote))
+	}
 	if h.stash != "" {
 		lines = append(lines, " "+st.dim("stashed · ctrl+s restores it on an empty box"))
 	}
@@ -1866,6 +1880,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 		h.absence.private = filepath.Dir(histDir)
+		h.onDesk = restoreSessions(h.absence.private)
 	}
 	h.getenv = env.Getenv
 	h.shell = runShell

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,11 @@ const (
 	RecChatAdded  = "ChatAdded"
 	RecChatClosed = "ChatClosed"
 	RecSeen       = "Seen"
-	RecDeskClosed = "DeskClosed"
+	// A native session put on the Desk with a, and taken off it again
+	// (docs/ux/sessions.md). Only what the rail shows is kept.
+	RecSessionAdded    = "SessionAdded"
+	RecSessionArchived = "SessionArchived"
+	RecDeskClosed      = "DeskClosed"
 )
 
 // The hosts a Desk can live under (docs/ux/away.md, A1).
@@ -83,6 +88,25 @@ type ChatClosed struct {
 type Seen struct {
 	Chat string `json:"chat"`
 	Upto string `json:"upto"`
+}
+
+// SessionAdded is a native session the human put on the Desk: the rail
+// row's title and last known activity, and where it lives. It holds no
+// transcript text.
+type SessionAdded struct {
+	Provider string    `json:"provider"`
+	ID       string    `json:"id"`
+	Profile  string    `json:"profile,omitempty"`
+	Repo     string    `json:"repo"`
+	Title    string    `json:"title,omitempty"`
+	Last     time.Time `json:"last,omitzero"`
+}
+
+// SessionArchived is a session taken off the Desk; the native session is
+// untouched.
+type SessionArchived struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
 }
 
 // DeskClosed is the Desk's process ending: clean on /quit, not on a
@@ -196,6 +220,40 @@ func (d *Desk) ChatClosed(chat string) {
 // Seen records the Chat's ✓ seen, up to the Run run.
 func (d *Desk) Seen(chat, run string) {
 	_ = d.append(RecSeen, Seen{Chat: chat, Upto: run})
+}
+
+// SessionAdded records a native session put on the Desk.
+func (d *Desk) SessionAdded(s SessionAdded) { _ = d.append(RecSessionAdded, s) }
+
+// SessionArchived records a session taken off the Desk.
+func (d *Desk) SessionArchived(provider, id string) {
+	_ = d.append(RecSessionArchived, SessionArchived{Provider: provider, ID: id})
+}
+
+// SessionsOnDesk replays recs: the sessions added and not archived since,
+// in the order they were added. A session added again after its archive
+// goes to the end.
+func SessionsOnDesk(recs []DeskRecord) []SessionAdded {
+	var out []SessionAdded
+	drop := func(provider, id string) {
+		out = slices.DeleteFunc(out, func(s SessionAdded) bool { return s.Provider == provider && s.ID == id })
+	}
+	for _, r := range recs {
+		switch r.Type {
+		case RecSessionAdded:
+			var s SessionAdded
+			if json.Unmarshal(r.Data, &s) == nil && s.Provider != "" && s.ID != "" {
+				drop(s.Provider, s.ID)
+				out = append(out, s)
+			}
+		case RecSessionArchived:
+			var s SessionArchived
+			if json.Unmarshal(r.Data, &s) == nil {
+				drop(s.Provider, s.ID)
+			}
+		}
+	}
+	return out
 }
 
 // Close records DeskClosed, clean or not, and lets the Desk go.

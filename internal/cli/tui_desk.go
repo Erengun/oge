@@ -124,6 +124,9 @@ func (h *home) closeCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/close")
 	}
+	if h.closeSession() {
+		return nil, ""
+	}
 	v := h.chatView
 	cmd := h.resetView()
 	if v.chat != nil {
@@ -193,7 +196,7 @@ func (h *home) leave() bool {
 // Chat's turn is in flight, rather than being queued as a message.
 func slashDuringTurn(word string) bool {
 	switch word {
-	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop":
+	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop", "/sessions":
 		return true
 	}
 	return false
@@ -276,6 +279,9 @@ func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 // chatsKey is a key while /chats is open: Enter or a Chat's number
 // focuses it; Esc closes the picker.
 func (h *home) chatsKey(msg tea.KeyPressMsg) tea.Cmd {
+	if h.catalog != nil {
+		return h.catalogKey(msg)
+	}
 	key := msg.String()
 	projects := h.projectPicker()
 	if n, err := strconv.Atoi(key); err == nil {
@@ -308,6 +314,9 @@ func (h *home) chatsKey(msg tea.KeyPressMsg) tea.Cmd {
 
 // chatsLines draws /chats under the box.
 func (h *home) chatsLines() []string {
+	if h.catalog != nil {
+		return h.catalogLines()
+	}
 	st := h.st
 	var out []string
 	for _, l := range strings.Split(h.chats.View(), "\n") {
@@ -474,7 +483,7 @@ const (
 // nothing the screen doesn't, as the header counts don't, unless a pinned
 // project has no Chat yet.
 func (h *home) railOn() bool {
-	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.views) > 1 || len(h.unopened()) > 0)
+	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.views) > 1 || len(h.unopened()) > 0 || len(h.onDesk) > 0)
 }
 
 // railHit is where the rail drew a Chat: screen row y, columns x0 to x1.
@@ -482,6 +491,7 @@ type railHit struct {
 	y, x0, x1 int
 	v         *chatView
 	open      string // a pinned project's root, with no Chat (v is nil)
+	sess      string // a session row's key (v is nil)
 }
 
 // rail draws the column, height rows tall, each railWidth wide. Chats
@@ -515,7 +525,8 @@ func (h *home) rail(height int) []string {
 	heads := len(groups) > 1
 	labels := projectLabels(roots)
 	for gi, g := range groups {
-		if len(g) == 0 { // a pinned project with no Chat: a dim row, a click opens one
+		ss := h.sessionsIn(roots[gi])
+		if len(g) == 0 && len(ss) == 0 { // a pinned project with no Chat: a dim row, a click opens one
 			body = append(body, st.dim(ansi.Truncate("+ "+clean(labels[gi]), inner, "…")))
 			hits = append(hits, railHit{y: len(body) - 1, x1: inner, open: roots[gi]})
 			continue
@@ -547,7 +558,7 @@ func (h *home) rail(height int) []string {
 			body = append(body, strconv.Itoa(v.num)+" "+paint(mark)+" "+title+st.accent(tail), st.dim(railState(coarse, railAge(now, v.since(mark)), inner)))
 			hits = append(hits, railHit{y: y, x1: inner, v: v}, railHit{y: y + 1, x1: inner, v: v})
 		}
-		if len(folded) == 0 {
+		if len(folded) == 0 && len(ss) == 0 {
 			continue
 		}
 		if active > 0 {
@@ -571,7 +582,28 @@ func (h *home) rail(height int) []string {
 			hits = append(hits, railHit{y: len(body), x0: w, x1: w + tw, v: v})
 			line, w = line+painted, w+tw
 		}
-		body = append(body, line)
+		if w > 0 {
+			body = append(body, line)
+		}
+		// Sessions on the Desk fold with the idle Chats: ◌ title and the
+		// age of their last activity, in the order they were added. Never a
+		// state glyph: Öge does not drive them.
+		for _, s := range ss {
+			age := ""
+			if a := railAge(now, s.last); a != "" {
+				age = " " + a
+			}
+			title := s.title
+			if title == "" {
+				title = "(untitled)"
+			}
+			title = ansi.Truncate(clean(title), max(inner-2-ansi.StringWidth(age), 1), "…")
+			if s.key() == h.selSess {
+				title = st.bold(title)
+			}
+			body = append(body, st.dim("◌")+" "+title+st.dim(age))
+			hits = append(hits, railHit{y: len(body) - 1, x1: inner, sess: s.key()})
+		}
 	}
 	// The box: the top border names it; rows and hits move in by one.
 	b := st.border
@@ -588,7 +620,7 @@ func (h *home) rail(height int) []string {
 	h.railHits = h.railHits[:0]
 	for _, hit := range hits {
 		if hit.y < height-2 {
-			h.railHits = append(h.railHits, railHit{hit.y + 1, hit.x0 + 1, hit.x1 + 1, hit.v, hit.open})
+			h.railHits = append(h.railHits, railHit{hit.y + 1, hit.x0 + 1, hit.x1 + 1, hit.v, hit.open, hit.sess})
 		}
 	}
 	return out[:min(height, len(out))]
@@ -651,6 +683,10 @@ func (h *home) railClick(x, y int) {
 	for _, hit := range h.railHits {
 		if hit.y != y || x < hit.x0 || x >= hit.x1 {
 			continue
+		}
+		if hit.sess != "" {
+			h.sessionRowClick(hit.sess)
+			return
 		}
 		if hit.open != "" {
 			h.openProject(hit.open)
