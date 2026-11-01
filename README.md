@@ -1,8 +1,8 @@
 # Öge
 
-**Öge makes delegation actually feel like delegation.**
+**One Desk for everything you're building.**
 
-Öge is the supervision layer for coding agents. Give it a task: it runs your coding agent, checks the work, and brings you in when your judgment is needed.
+AI multiplied execution; your attention is the bottleneck now. Öge runs the coding agents you already use across your projects, checks their work, and brings you in only at a natural breakpoint, with the evidence and the context to resume at once.
 
 > **Status: pre-alpha.** Claude Code, Codex, and Google Antigravity (`agy`) runs, interactive chat, independent QA, repair loops, Receipts, and local delivery are implemented. Follow [milestone M1](https://github.com/Erengun/oge/milestone/1) for the first usable release.
 

@@ -39,6 +39,31 @@ What changes:
 - The soft cap (`max_active`) counts working Chats across all projects: the attention limit is the person's, not the repo's.
 - The Desk record (Away 3) and the `oge add` socket (#338) are **per user**, not per repo.
 
+## Intake and resume (user, 2026-11-01)
+
+The attention review ([`positioning.md`](../positioning.md), Identity): starting work is cheap, so committing attention must be intentional, and coming back must not mean rebuilding context.
+
+| # | Decision |
+|---|---|
+| I1 | **Later: get an idea out of your head without committing to it now.** A Later item is text and nothing else: no agent, no Chat, no Workspace. It is an attention mechanism, not task management. |
+| I2 | **Capture costs less than opening a Chat.** One keystroke or one command, no metadata: no priority, label, deadline, project choice or workflow state. The repo it was captured in is remembered for you, not asked. |
+| I3 | **Promotion is deliberate.** A Later item never becomes a running Chat on its own: not at a free slot, not on a timer, not when the cap clears. You promote it with an explicit key or command; it then opens a Chat with that text as its first message, like `/new`. |
+| I4 | **The return brief rebuilds context, it does not summarise activity.** Per Chat, in this order: **You were** (your first message: the intention), **Since you left** (events recorded while away), **Your decisions** (Gate decisions and applies, from the Ledger), **Waiting for you** (open Gates, asks, failed Checks), **Next** (the first actionable Inbox card). All deterministic and record-backed; no model writes it and no model recommends. |
+
+Where the work stands, at a glance:
+
+| State | On the Desk |
+|---|---|
+| Want to do | `◇` Later, a count in the rail fold (`◇ 4 later`); listed by `/later` |
+| Started | `○` idle Chat |
+| Executing | `●` working |
+| Waiting for you | `▲` / `✗`, an Inbox card |
+| Finished | `✓` |
+
+Why (research): making a plan for an unfinished goal stops it intruding on your thoughts (Masicampo & Baumeister 2011; their manipulation was a specific plan, so bare capture is the weaker form, measured in the Evaluation rather than assumed), and a ready-to-resume note reduces attention residue (Leroy & Glomb 2018). Resumption cues that end at the next goal cut resumption time (Altmann & Trafton 2002; Parnin & DeLine 2010). Both serve the north star, useful agent work per minute of human attention, more than any extra parallelism does.
+
+Rejected: Later as a backlog. Priorities, labels, deadlines, filters, sorting or states on Later items would make Öge a project-management tool and turn captured ideas back into obligations. The soft cap (`max_active`) stays experimental, validated in the Evaluation below.
+
 ## Layout
 
 ```
@@ -198,4 +223,6 @@ If the Desk is not better on both time and stress, the defaults change (for exam
 - An operator or routing agent, or LLM triage.
 - Agent-to-agent messaging.
 - Hosting shells or panes.
+- A backlog: priorities, labels, deadlines or filters on Later items (I1).
+- A model-written brief, summary or "what to do next" recommendation (I4).
 - A daemon or detach (#55).

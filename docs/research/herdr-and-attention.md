@@ -113,6 +113,7 @@ In use, the user's verdict was that this "returned to us as more output token us
 ### Attention residue
 - **Leroy 2009** [A], *OBHDP* 109(2):168–181. Attention stays partly on a task you left. Finishing under time pressure reduced that residue.
 - **Leroy & Glomb 2018** [A], *Organization Science* 29(3):380–397. A brief "ready-to-resume plan" (where to resume, what remains) reduced residue and protected performance on the next task.
+- **Masicampo & Baumeister 2011** [A], *JPSP* 101(4):667–683, doi:10.1037/a0024192. Unfulfilled goals keep intruding on thought (the Zeigarnik effect); letting people formulate a specific plan for them eliminated the activation and interference effects. Caveat for Later (desk.md I1): the manipulation was plan making, not bare capture, so a one-line Later item is a weaker form; and their 2012 follow-up (*Social Cognition*) found specific plans can narrow attention to alternatives.
 
 ### Capacity: how many agents
 - **Olsen & Wood 2004** [P], CHI, [10.1145/985692.985722](https://doi.org/10.1145/985692.985722). Fan-out = activity time ÷ interaction time: how long a robot works alone between human touches, divided by how long each touch takes.
