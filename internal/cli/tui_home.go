@@ -956,8 +956,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "tab":
 			if h.comp.text() == "/new " {
-				_, p := h.projectsCmd(nil) // /new and Tab: the project picker
-				if h.comp.set(""); p != "" {
+				// /new and Tab: the project picker; with nothing to pick,
+				// "/new " stays for a typed path.
+				if _, p := h.projectsCmd(nil); h.projectPicker() {
+					h.comp.set("")
+				} else if p != "" {
 					h.msg = []string{p}
 				}
 			} else if p := h.openSetup(); p != "" {

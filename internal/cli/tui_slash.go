@@ -566,7 +566,8 @@ func (h *home) syncMenu() {
 // menuKey is a key while the menu is open; handled is false when the key
 // is the composer's. Tab or Enter complete the highlighted command into
 // the box and never run it: Enter runs only a command already typed whole
-// (and one that needs arguments is completed, ready for them).
+// (and one that needs arguments is completed, ready for them). Tab on
+// /new typed whole opens the project picker instead.
 func (h *home) menuKey(msg tea.KeyPressMsg) (handled bool) {
 	sel, _ := h.menu.SelectedItem().(slashItem)
 	text := h.comp.text()
@@ -590,10 +591,15 @@ func (h *home) menuKey(msg tea.KeyPressMsg) (handled bool) {
 	case "tab":
 		if text == "/new" && sel.cmd.name == "/new" {
 			// /new typed whole and Tab: the project picker, as with the space
-			if _, p := h.projectsCmd(nil); p != "" {
-				h.msg = []string{p}
+			// With nothing to pick, keep "/new " ready for a typed path.
+			if _, p := h.projectsCmd(nil); h.projectPicker() {
+				h.comp.set("")
+			} else {
+				h.comp.set("/new ")
+				if p != "" {
+					h.msg = []string{p}
+				}
 			}
-			h.comp.set("")
 			return true
 		}
 		complete()

@@ -289,6 +289,18 @@ func TestProjectsWithNothingSaysSo(t *testing.T) {
 	}
 }
 
+// With nothing to pick, /new and Tab keep "/new " for a typed path.
+func TestNewThenTabWithNothingKeepsTheBox(t *testing.T) {
+	for _, typed := range []string{"/new ", "/new"} {
+		h, _ := reposHome(t, "alpha")
+		typeText(h, typed)
+		h.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		if got := h.comp.text(); got != "/new " || h.projectPicker() {
+			t.Errorf("%q then Tab: box %q, picker %v", typed, got, h.projectPicker())
+		}
+	}
+}
+
 func TestDeskProjectsConfig(t *testing.T) {
 	c := &pipeline.UserConfig{Desk: &pipeline.DeskConfig{Projects: []string{"~/dev/api", "/work/web", "/work/web"}}}
 	if got := c.DeskProjects("/home/u"); !slices.Equal(got, []string{"/home/u/dev/api", "/work/web"}) {
