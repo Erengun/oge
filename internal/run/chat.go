@@ -179,6 +179,9 @@ type Chat struct {
 	delivered  int
 	applied    string
 	appliedRun string // the directory of the Run applied
+	// siblings is what sibling Chats' applies wrote into the same
+	// repository, by path, the newest write of each (NoteDelivered).
+	siblings map[string]Wrote
 
 	mu     sync.Mutex
 	sess   agent.Session
@@ -1174,6 +1177,7 @@ func (c *Chat) settled(t *turnOut) {
 	}
 	c.timer.Reset(c.idle)
 	c.mu.Unlock()
+	c.retryRefresh() // a retake a turn in flight deferred
 }
 
 // drop settles the turn in flight and every queued one as failed, with

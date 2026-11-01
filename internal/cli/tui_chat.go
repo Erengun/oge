@@ -1478,6 +1478,19 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 			note += "\n" + h.ogeLine("✗ retaking the Snapshot: "+clean(err.Error()))
 		case r == run.RefreshOutside:
 			note += "\n" + h.ogeLine(h.st.dim(run.OutsideNote))
+		case r == run.RefreshConflict:
+			note += "\n" + h.ogeLine(h.st.dim(run.ConflictNote))
+		}
+		// The other Chats (a home is one repository) take what this
+		// apply wrote as Öge's, not as an outside change.
+		for _, v := range h.views {
+			if wrote := p.Wrote(); v.chat != nil && len(wrote) > 0 {
+				if s := v.chat.get(); s != nil && s != c {
+					if r, _ := s.NoteDelivered(wrote); r == run.RefreshConflict {
+						note += "\n" + h.ogeLine(h.st.dim(fmt.Sprintf("Chat %d is editing files this apply changed; its Snapshot is kept", v.num)))
+					}
+				}
+			}
 		}
 	}
 	files := p.Paths()

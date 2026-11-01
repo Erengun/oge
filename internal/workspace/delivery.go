@@ -1,9 +1,21 @@
 package workspace
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
+
+// BlobOID is the git blob id of data, as the Run repository (sha1, the
+// default object format: no user config reaches it) names it. A tree diff
+// then says whether a path holds exactly these bytes, without reading it.
+func BlobOID(data []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", len(data))
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // Change is one path that differs between two commits of the Run
 // repository, as delivery needs it (#54).

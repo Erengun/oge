@@ -3,7 +3,10 @@ package run
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/erengun/oge/internal/oracle"
 	"github.com/erengun/oge/internal/workspace"
@@ -29,19 +32,62 @@ const (
 	// RefreshOutside: the user's repository isn't what the Chat
 	// delivered, so it changed outside Öge. Nothing was merged or moved.
 	RefreshOutside
+	// RefreshConflict: a sibling Chat's apply changed a file this Chat
+	// has edited since its own apply. Nothing was merged or moved.
+	RefreshConflict
 )
 
 // OutsideNote is the one line shown when the repository changed outside
 // Öge and can't be taken as the new base.
 const OutsideNote = "repo changed outside Öge; not merged"
 
+// ConflictNote is the one line shown when another Chat's apply changed
+// files this Chat is editing.
+const ConflictNote = "another Chat's apply changed files this Chat is editing; not merged"
+
+// Wrote is one path an apply wrote into the user's repository: its mode
+// and the git blob id of the bytes written, both "" for a path the apply
+// deleted.
+type Wrote struct {
+	Path string `json:"path"`
+	Mode string `json:"mode,omitempty"`
+	OID  string `json:"oid,omitempty"`
+}
+
+// NoteDelivered tells the Chat what a sibling Chat's apply on the same
+// repository wrote, and retakes the Snapshot on it if it can. Only a
+// Chat that has applied retakes: its next apply merges on what it
+// applied, so a sibling's write never needs to be in its base before.
+// A path the sibling wrote counts as Öge's only while it holds exactly
+// those bytes; the newest write of a path is the one kept.
+func (c *Chat) NoteDelivered(wrote []Wrote) (Refresh, error) {
+	c.supersedeMu.Lock()
+	if c.siblings == nil {
+		c.siblings = map[string]Wrote{}
+	}
+	for _, w := range wrote {
+		c.siblings[w.Path] = w
+	}
+	c.supersedeMu.Unlock()
+	return c.RefreshSnapshot()
+}
+
 // RefreshSnapshot retakes the Chat's Snapshot after an apply (D10), but
-// only when the user's repository is exactly what the Chat delivered: its
-// Snapshot tree equals the tree of the commit last applied (Delivered's
-// rev). The Workspace holds no edit of the user's, and Öge never merges
-// one in, so any other tree is an outside change: RefreshOutside, and
-// nothing moves. Taking it as the base would turn the user's own edit into
-// a diff the Implementer appears to have made.
+// only when the user's repository is what Öge delivered: the tree of the
+// commit last applied (Delivered's rev), but for paths a sibling Chat's
+// apply wrote (NoteDelivered), each holding exactly the bytes it wrote.
+// The Workspace holds no edit of the user's, and Öge never merges one in,
+// so any other tree is an outside change: RefreshOutside, and nothing
+// moves. Taking it as the base would turn the user's own edit into a diff
+// the Implementer appears to have made.
+//
+// The Workspace is carried onto the new base: what the Chat edited since
+// its apply stays, and a sibling's paths are written in, so neither reads
+// as the Implementer's on the next turn. A sibling's path this Chat has
+// edited differently is RefreshConflict, and nothing is written or moved.
+// Neither is a pending edit to a path the new base protects (it would
+// read as Tamper): the base is kept, and the next apply evens it out. A
+// turn in flight may be writing the Workspace, so the retake waits for it.
 //
 // A cut in flight keeps its base (it captured the old Snapshot, Oracle and
 // Preflight by value) and the retake is deferred: Cut retries it once it
@@ -84,13 +130,19 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	if err != nil {
 		return RefreshNone, err
 	}
+	var sibling []string // the paths a sibling Chat's apply wrote
 	switch {
 	case have == curTree:
 		c.setRefreshDue(false)
 		return RefreshNone, nil
 	case have != want:
-		c.setRefreshDue(false)
-		return RefreshOutside, nil
+		if sibling, err = c.siblingPaths(rev, commit); err != nil {
+			return RefreshNone, err
+		}
+		if sibling == nil {
+			c.setRefreshDue(false)
+			return RefreshOutside, nil
+		}
 	}
 	if !c.cutMu.TryLock() {
 		c.setRefreshDue(true)
@@ -124,17 +176,36 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	} else if now == have {
 		return RefreshNone, nil
 	}
-	lastTree, err := c.repo.TreeOf(c.last)
-	if err != nil {
-		return RefreshNone, err
+	protected := implementerScope(m, c.frozen)
+	last, write, r, err := c.rebaseWorkspace(rev, commit, sibling, protected)
+	if err != nil || r != RefreshDone {
+		return r, err
 	}
-	if lastTree != want {
-		return RefreshNone, nil
-	}
-	// Written ahead: the record says what the new base is before it is.
-	if err := c.log(RecSnapshotRefreshed, map[string]any{"commit": commit, "prev": cur, "applied": rev, "run": filepath.Base(runDir),
+	rec := map[string]any{"commit": commit, "prev": cur, "applied": rev, "run": filepath.Base(runDir),
 		"head": info.Head, "branch": info.Branch, "modified": info.Modified, "untracked": info.Untracked,
-		"oracle_version": m.Version, "manifest": mBlob, "tests": len(m.Tests), "prev_head": snap.Head}); err != nil {
+		"oracle_version": m.Version, "manifest": mBlob, "tests": len(m.Tests), "prev_head": snap.Head}
+	if len(sibling) > 0 {
+		rec["sibling"], rec["last"] = sibling, last
+	}
+	if len(write) > 0 {
+		// The Workspace is written with no turn in flight, and none
+		// starts until it is.
+		c.mu.Lock()
+		if c.cur != nil {
+			c.mu.Unlock()
+			c.setRefreshDue(true)
+			return RefreshDeferred, nil
+		}
+		// Written ahead: the record says what the new base is before it is.
+		err := c.log(RecSnapshotRefreshed, rec)
+		if err == nil {
+			err = writeWorkspace(c.Workspace, write)
+		}
+		c.mu.Unlock()
+		if err != nil {
+			return RefreshNone, err
+		}
+	} else if err := c.log(RecSnapshotRefreshed, rec); err != nil {
 		return RefreshNone, err
 	}
 	if err := c.repo.SetRef(workspace.SnapshotRef, commit); err != nil {
@@ -145,9 +216,172 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	c.prep.control.Stop()
 	c.prep.seed.Close()
 	c.prep, c.refused = chatPrep{}, nil
-	c.Snapshot, c.info, c.v0, c.protected = commit, info, mBlob, implementerScope(m, c.frozen)
+	c.Snapshot, c.info, c.v0, c.protected, c.last = commit, info, mBlob, protected, last
 	c.prepare(m, commit)
 	return RefreshDone, nil
+}
+
+// siblingPaths are the paths the tree of commit, the user's repository
+// now, differs from rev's on, when each is one a sibling Chat's apply
+// wrote and holds exactly what it wrote. nil: some other change is in it.
+func (c *Chat) siblingPaths(rev, commit string) ([]string, error) {
+	changes, err := c.repo.Changes(rev, commit)
+	if err != nil {
+		return nil, err
+	}
+	c.supersedeMu.Lock()
+	defer c.supersedeMu.Unlock()
+	var paths []string
+	for _, ch := range changes {
+		w, ok := c.siblings[ch.Path]
+		if !ok || w.Mode != ch.NewMode || w.OID != ch.NewOID {
+			return nil, nil
+		}
+		paths = append(paths, ch.Path)
+	}
+	return paths, nil
+}
+
+// rebaseWorkspace carries the Workspace, last committed as c.last, from
+// rev, the commit last applied, onto commit, the new base, with scopeMu
+// held. last is the Workspace's commit on the new base, and write what
+// the Workspace needs written to hold it: the sibling's paths. r is
+// RefreshDone when the retake can go on.
+func (c *Chat) rebaseWorkspace(rev, commit string, sibling []string, protected func(string) string) (last string, write []wsWrite, r Refresh, err error) {
+	lastTree, err := c.repo.TreeOf(c.last)
+	if err != nil {
+		return "", nil, RefreshNone, err
+	}
+	want, err := c.repo.TreeOf(rev)
+	if err != nil {
+		return "", nil, RefreshNone, err
+	}
+	last = c.last
+	switch {
+	case lastTree == want && len(sibling) == 0:
+		return last, nil, RefreshDone, nil
+	case lastTree == want:
+		last = commit // nothing pending: the Workspace is the new base
+	default:
+		if len(sibling) > 0 {
+			// A sibling's path this Chat edited too, and to other bytes, is
+			// never merged.
+			mine, err := c.repo.ChangedFiles(rev, c.last)
+			if err != nil {
+				return "", nil, RefreshNone, err
+			}
+			differ, err := c.repo.ChangedFiles(c.last, commit)
+			if err != nil {
+				return "", nil, RefreshNone, err
+			}
+			if overlap(sibling, mine, differ) {
+				return "", nil, RefreshConflict, nil
+			}
+		}
+		moved, _, conflicted, err := c.repo.Rebase(rev, commit, c.last)
+		switch {
+		case errors.Is(err, workspace.ErrGitTooOld):
+			return "", nil, RefreshNone, nil // keep the base; the next apply evens it out
+		case err != nil:
+			return "", nil, RefreshNone, err
+		case conflicted:
+			return "", nil, RefreshConflict, nil
+		}
+		pending, err := c.repo.ChangedFiles(commit, moved)
+		if err != nil {
+			return "", nil, RefreshNone, err
+		}
+		for _, p := range pending {
+			if protected(p) != "" {
+				return "", nil, RefreshNone, nil
+			}
+		}
+		last = moved
+	}
+	changes, err := c.repo.Changes(c.last, last)
+	if err != nil {
+		return "", nil, RefreshNone, err
+	}
+	for _, ch := range changes {
+		if wsPathBad(c.Workspace, ch.Path) {
+			return "", nil, RefreshConflict, nil
+		}
+		w := wsWrite{path: ch.Path, mode: ch.NewMode}
+		if ch.NewMode != "" {
+			if w.data, err = c.repo.Blob(ch.NewOID); err != nil {
+				return "", nil, RefreshNone, err
+			}
+		}
+		write = append(write, w)
+	}
+	return last, write, RefreshDone, nil
+}
+
+// overlap reports whether a path is in each of the lists.
+func overlap(a, b, c []string) bool {
+	in := func(l []string, p string) bool { return slices.Contains(l, p) }
+	for _, p := range a {
+		if in(b, p) && in(c, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// wsWrite is one path rebaseWorkspace writes into the Workspace: its
+// mode and bytes (a link's target), or no mode to delete it.
+type wsWrite struct {
+	path, mode string
+	data       []byte
+}
+
+// wsPathBad reports whether rel can't be written in the Workspace at ws:
+// a directory on the way that is a link, or no directory, could lead the
+// write elsewhere, and a directory at rel isn't Öge's to remove.
+func wsPathBad(ws, rel string) bool {
+	parts := strings.Split(rel, "/")
+	dir := ws
+	for _, part := range parts[:len(parts)-1] {
+		dir = filepath.Join(dir, part)
+		fi, err := os.Lstat(dir)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return false
+		case err != nil || !fi.IsDir():
+			return true
+		}
+	}
+	fi, err := os.Lstat(filepath.Join(ws, filepath.FromSlash(rel)))
+	return err == nil && fi.IsDir()
+}
+
+// writeWorkspace makes the writes in the Workspace at ws.
+func writeWorkspace(ws string, writes []wsWrite) error {
+	for _, w := range writes {
+		full := filepath.Join(ws, filepath.FromSlash(w.path))
+		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if w.mode == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		var err error
+		switch w.mode {
+		case "120000":
+			err = os.Symlink(filepath.FromSlash(string(w.data)), full)
+		case "100755":
+			err = os.WriteFile(full, w.data, 0o755)
+		default:
+			err = os.WriteFile(full, w.data, 0o644)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Chat) setRefreshDue(v bool) {

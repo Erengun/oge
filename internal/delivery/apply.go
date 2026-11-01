@@ -104,6 +104,22 @@ type Plan struct {
 // Writes is how many paths applying the plan changes.
 func (p *Plan) Writes() int { return len(p.actions) }
 
+// Wrote is what applying the plan writes, path by path: each path's mode
+// and the git blob id of the bytes written (a merged write's, not the
+// Candidate's), or no mode for a path it deletes. A sibling Chat on the
+// same repository tells Öge's own write from an outside change by it.
+func (p *Plan) Wrote() []run.Wrote {
+	var out []run.Wrote
+	for _, a := range p.actions {
+		w := run.Wrote{Path: a.path}
+		if a.to.present {
+			w.Mode, w.OID = a.to.mode, workspace.BlobOID(a.to.data)
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
 // Deletes is how many of them it deletes.
 func (p *Plan) Deletes() int {
 	n := 0
@@ -577,7 +593,7 @@ func ApplyOnto(r *Run, target string, c Choice, base Base) (*Applied, error) {
 		betweenPlanAndWrite(r)
 	}
 	note := map[string]any{"kind": "apply", "candidate": r.Candidate, "outcome": r.Outcome, "flag": c.Outcome,
-		"files": p.Writes(), "merged": p.Merged, "target": target}
+		"files": p.Writes(), "merged": p.Merged, "target": target, "wrote": p.Wrote()}
 	if base.Rev != "" {
 		note["base"] = from // what the change was merged on: the Candidate last applied
 	}
