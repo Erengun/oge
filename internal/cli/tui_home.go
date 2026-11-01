@@ -312,6 +312,7 @@ type home struct {
 	next       *queued
 	queuedText string
 	gateArm    time.Time // when a Gate opened while a next Task was being typed
+	inboxArm   time.Time // when an Inbox letter focused a Chat: see inboxCarry
 	// getenv reads the environment for /terminal; nil reads nothing.
 	getenv func(string) string
 	// vim is the composer's vim mode (#156); normal is its NORMAL state.
@@ -688,6 +689,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd, ok := h.inboxInput(msg); ok {
 			return h, cmd
 		}
+	} else if k, ok := msg.(tea.KeyPressMsg); ok && h.inboxCarry(k) {
+		return h, nil
 	} else if k, ok := msg.(tea.KeyPressMsg); ok && inboxKey(k.String()) && h.canOpenInbox() && h.kb.actionFor(ctxComposer, k.String()) == "" {
 		h.openInbox()
 		return h, nil

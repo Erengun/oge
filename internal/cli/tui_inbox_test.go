@@ -260,3 +260,70 @@ func TestInboxHintInTheBox(t *testing.T) {
 		t.Error("/inbox opened no Inbox")
 	}
 }
+
+// cardOn tabs the open Inbox to Chat n's card.
+func cardOn(t *testing.T, h *home, n int) {
+	t.Helper()
+	for range 8 {
+		if it, _, _, ok := h.card(); ok && it.v.num == n {
+			return
+		}
+		h.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	}
+	t.Fatalf("no card for Chat %d", n)
+}
+
+// A task typed on an ask's card begins with o: the Chat opens, and the
+// rest of the word ("kay") reaches no ask: its y doesn't allow the tool.
+// Once actionsArm has passed, y is the ask's again.
+func TestInboxLetterCarriesIntoNoAsk(t *testing.T) {
+	h, now := inboxHome(t)
+	h.Update(ctrlSpace())
+	cardOn(t, h, 3)
+	typeText(h, "okay")
+	three := h.views[2]
+	if h.inbox != nil || h.num != 3 {
+		t.Fatalf("o: inbox open %v, focused %d, want Chat 3", h.inbox != nil, h.num)
+	}
+	if len(three.turn.asks) != 1 {
+		t.Fatal("keys typed after o answered Chat 3's ask")
+	}
+	*now = now.Add(actionsArm)
+	if h.inboxCarry(letter('y')) {
+		t.Error("y is still dropped once actionsArm has passed")
+	}
+}
+
+// On a stale card, "okay" opens the Chat; its a doesn't deliver the cut.
+func TestInboxLetterCarriesIntoNoStaleChoice(t *testing.T) {
+	h, _ := inboxHome(t)
+	five := h.views[4]
+	five.cutGate, five.last = nil, &lastRun{id: "r5"}
+	five.stale = &staleAsk{key: "a", last: five.last}
+	h.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	h.Update(ctrlSpace())
+	cardOn(t, h, 5)
+	typeText(h, "okay")
+	if h.num != 5 || five.stale == nil {
+		t.Fatalf("focused %d, stale choice open %v: a after o decided it", h.num, five.stale != nil)
+	}
+}
+
+// A task from the Inbox opens its Chat as /new does: past [desk]
+// max_active it says so, once.
+func TestInboxTaskNotesTheCap(t *testing.T) {
+	h, _ := inboxHome(t)
+	h.chat = &homeChat{c: &run.Chat{}}
+	h.hist, h.sel = &history{}, &setupState{}
+	h.start = func(tk task.Task, _ *resolved, _, _ int) (*model, tea.Cmd) {
+		return newModel(tk, homeFrozen(), newStyles(false), time.Now), nil
+	}
+	h.deskMax = 1       // Chat 3's turn is working
+	h.comp.set("draft") // Chat 1 isn't fresh
+	h.Update(ctrlSpace())
+	typeText(h, "fix the docs")
+	h.Update(enter())
+	if h.num != 6 || !strings.Contains(h.note, "research says") {
+		t.Errorf("focused %d, note %q: want Chat 6 and the cap note", h.num, h.note)
+	}
+}

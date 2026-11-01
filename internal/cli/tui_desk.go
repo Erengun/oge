@@ -52,6 +52,13 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		}
 		return cmd, ""
 	}
+	h.openView()
+	return nil, ""
+}
+
+// openView opens another Chat, focused, and says the old one stays open:
+// /new's, and the Inbox's for a task.
+func (h *home) openView() {
 	n, old, v := h.working(), h.num, h.newView()
 	if rc != h.repoCtx {
 		v = h.newViewIn(rc)
@@ -64,7 +71,6 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		h.capNoted = true
 		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
 	}
-	return nil, ""
 }
 
 // moveTo puts the focused Chat, idle and opened nothing, in the repo rc:

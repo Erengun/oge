@@ -263,11 +263,34 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// seeOn focuses v: the switch the human asked for from the Inbox.
+// seeOn focuses v: the switch the human asked for from the Inbox. The
+// letter may have begun a word: what follows it for actionsArm reaches
+// no ask, stale choice or Gate (see inboxCarry).
 func (h *home) seeOn(v *chatView) {
 	if slices.Contains(h.views, v) {
 		h.switchTo(v)
+		h.inboxArm = h.clock()
 	}
+}
+
+// inboxCarry reports whether k was typed on from an Inbox letter into
+// the Chat it focused, and so is dropped: for actionsArm, while that Chat
+// has an ask, a stale choice or a Gate open, as queueKey drops keys under
+// a Gate that opened during typing. Ctrl+C is never dropped, nor the
+// Inbox's own key.
+func (h *home) inboxCarry(k tea.KeyPressMsg) bool {
+	if h.inboxArm.IsZero() || h.clock().Sub(h.inboxArm) >= actionsArm || k.String() == "ctrl+c" || inboxKey(k.String()) {
+		return false
+	}
+	switch {
+	case h.stale != nil, h.cutGate != nil:
+		return true
+	case h.verify != nil && h.verify.gate != nil, h.run != nil && h.run.gate != nil:
+		return true
+	case h.turn != nil && len(h.turn.asks) > 0:
+		return true
+	}
+	return false
 }
 
 // on runs f as Chat v's, as route runs a background Chat's message: the
@@ -294,11 +317,7 @@ func (h *home) inboxTask() tea.Cmd {
 	}
 	fresh := h.turn == nil && h.verify == nil && h.comp.empty() && (h.chat == nil || h.chat.get() == nil)
 	if !fresh {
-		old := h.num
-		v := h.newView()
-		h.views = append(h.views, v)
-		h.switchTo(v)
-		h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
+		h.openView()
 	}
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "!") {
