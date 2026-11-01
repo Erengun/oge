@@ -45,7 +45,7 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 			defer func() { h.msg = append(h.msg, lines...) }() // its config's problem, under its box
 		}
 	}
-	if h.chat == nil || (h.turn == nil && h.verify == nil && h.chat.get() == nil) {
+	if h.rest == nil && (h.chat == nil || (h.turn == nil && h.verify == nil && h.chat.get() == nil)) {
 		cmd := h.resetView()
 		if rc != h.repoCtx {
 			h.moveTo(rc)
@@ -147,6 +147,14 @@ func (h *home) closeCmd(args []string) (tea.Cmd, string) {
 // resetView starts the focused Chat afresh: the next message opens a new
 // Session, and the old one's cut in flight ends unshown.
 func (h *home) resetView() tea.Cmd {
+	if r := h.rest; r != nil {
+		// A restored Chat closes as an open one does: its ChatClosed, then
+		// its Workspace. The view is an empty Chat from here.
+		run.CloseRestored(r.desk, r.RestoredChat)
+		h.rest = nil
+		h.name, h.tr.entries, h.tr.gen = "", nil, h.tr.gen+1
+		h.side.outcome, h.doneRun, h.seenRun = "", "", ""
+	}
 	h.last, h.thread = nil, nil
 	h.side.verdict, h.side.outcome, h.side.changes, h.side.tokens, h.side.cost = "", "", nil, nil, nil
 	h.side.took, h.side.turns, h.side.steps, h.side.ctx = 0, 0, 0, nil
@@ -360,6 +368,9 @@ const seenAfter = time.Second
 // failed until the next cut. A send-back still held is ✗ whenever no turn
 // or check runs, as the status line says.
 func glyph(v *chatView, now time.Time, quiet time.Duration) (mark, coarse string) {
+	if v.rest != nil {
+		return v.rest.mark(v.seenBy(now))
+	}
 	switch {
 	case v.cutGate != nil, v.stale != nil, v.turn != nil && len(v.turn.asks) > 0:
 		return "▲", "needs you"
@@ -538,7 +549,7 @@ func (h *home) rail(height int) []string {
 		active := 0
 		for _, v := range g {
 			mark, coarse := glyph(v, now, quiet)
-			if mark == "✓" || mark == "○" {
+			if mark == "✓" || mark == "○" && !stoppedMark(mark, coarse) {
 				folded = append(folded, v)
 				continue
 			}
@@ -665,6 +676,9 @@ func railAge(now, since time.Time) string {
 // start for work, its cut's end for done and failed, and its last agent
 // event for a quiet turn or an ask.
 func (v *chatView) since(mark string) time.Time {
+	if v.rest != nil {
+		return v.rest.Since
+	}
 	switch mark {
 	case "●":
 		return v.side.since

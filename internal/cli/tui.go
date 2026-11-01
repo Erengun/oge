@@ -40,6 +40,10 @@ type tui struct {
 	// desk is the user's Desk record (docs/ux/away.md), the home's to
 	// write; nil records nothing.
 	desk *run.Desk
+	// restored is the Desk's list read at startup (tui_restore.go), nil
+	// when there was none; restoreProblem says why it can't be read.
+	restored       *run.RestoredDesk
+	restoreProblem string
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}

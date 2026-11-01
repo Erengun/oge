@@ -431,6 +431,8 @@ type home struct {
 	quitAsk int
 	keep    bool
 	stopped bool // /stop: keep everything and stop now (A2), never asking
+	// closeAll: the human answered c at the quit ask: restored Chats close.
+	closeAll bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -1041,6 +1043,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // submit starts the Run (or the follow-up) for text, which is final: slash
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
+	if h.rest != nil {
+		// A restored Chat has no Session, and a message must never open a
+		// fresh Chat in its place: the draft stays.
+		h.msg = append(h.msg, "this Chat's Session isn't open yet: reopening it comes next · /new starts another Chat")
+		return h, nil
+	}
 	if h.full {
 		h.tr.latest()
 	}
@@ -2025,6 +2033,15 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
+	if u.restoreProblem != "" {
+		h.msg = append(h.msg, u.restoreProblem)
+	}
+	if d := u.restored; d != nil && len(d.Chats) > 0 {
+		// The Desk's list from last time replaces the empty first Chat.
+		// Nothing starts: a restored Chat has no Session.
+		h.views = h.restoreViews(d, u.desk, h.repoFor)
+		h.focus(h.views[0])
+	}
 	err = u.program(in, h)
 	u.exit() // the home's one program: its end is Öge's
 	if ctx.Err() == nil && errors.Is(err, syscall.EIO) {
@@ -2053,6 +2070,8 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		if in.terminated() {
 			h.reachStopped()
 		}
+	} else if h.closeAll {
+		h.closeRestored() // the human chose to close them
 	}
 	// Every Chat left closes here, the caller's hc too, so that desk.log
 	// has its ChatClosed ahead of DeskClosed. A Chat stopped above is

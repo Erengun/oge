@@ -31,6 +31,8 @@ const (
 	RecChatAdded  = "ChatAdded"
 	RecChatClosed = "ChatClosed"
 	RecSeen       = "Seen"
+	// RecResidueSwept: a restore killed a process group the last oge left.
+	RecResidueSwept = "ResidueSwept"
 	// A native session put on the Desk with a, and taken off it again
 	// (docs/ux/sessions.md). Only what the rail shows is kept.
 	RecSessionAdded    = "SessionAdded"
@@ -221,6 +223,12 @@ func (d *Desk) ChatClosed(chat string) {
 // Seen records the Chat's ✓ seen, up to the Run run.
 func (d *Desk) Seen(chat, run string) {
 	_ = d.append(RecSeen, Seen{Chat: chat, Upto: run})
+}
+
+// ResidueSwept records a process group a restore killed for chat, so the
+// kill leaves a trace.
+func (d *Desk) ResidueSwept(chat string, pid, pgid int) {
+	_ = d.append(RecResidueSwept, map[string]any{"chat": chat, "pid": pid, "pgid": pgid})
 }
 
 // SessionAdded records a native session put on the Desk.
