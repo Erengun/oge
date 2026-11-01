@@ -240,12 +240,12 @@ func (h *home) ring(v *chatView) tea.Cmd {
 	return tea.Raw(h.notify.sequence(staleText(v.num, v.name)))
 }
 
-func staleText(num int, title string) string {
-	s := "oge: Chat " + strconv.Itoa(num)
-	if t := strings.TrimSpace(clean(title)); t != "" {
-		s += " (" + ansi.Truncate(t, 24, "…") + ")"
-	}
-	return s + " is waiting for you"
+// staleText is the bell/OSC text for a stale Gate. A desktop notification
+// leaves the terminal, so it carries the Chat's number only, never its
+// title, which is the human's Task text (A8, #354). Titles there are an
+// opt-in that comes with Away 8 (#365).
+func staleText(num int, _ string) string {
+	return "oge: Chat " + strconv.Itoa(num) + " is waiting for you"
 }
 
 // deskState is the Desk's state rolled up for herdr: blocked over working

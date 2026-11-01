@@ -285,6 +285,11 @@ func (h *home) inboxCarry(k tea.KeyPressMsg) bool {
 	if h.inboxArm.IsZero() || h.clock().Sub(h.inboxArm) >= actionsArm || k.String() == "ctrl+c" || inboxKey(k.String()) {
 		return false
 	}
+	// Only a key that could type a word or decide something carries: the
+	// human can scroll the transcript above the ask at once.
+	if k.Text == "" && k.String() != "enter" {
+		return false
+	}
 	switch {
 	case h.stale != nil, h.cutGate != nil,
 		h.verify != nil && h.verify.gate != nil, h.run != nil && h.run.gate != nil,
