@@ -135,3 +135,29 @@ func TestDiscoverSessionsLargeContentLines(t *testing.T) {
 		t.Fatalf("16MB of content lines took %v", d)
 	}
 }
+
+func preambleLines() []string {
+	var l []string
+	l = append(l, `{"type":"ai-title","aiTitle":"t","sessionId":"s1"}`)
+	for i := 0; i < 20; i++ {
+		l = append(l, `{"type":"file-history-snapshot","sessionId":"s1"}`)
+	}
+	return l
+}
+
+func TestDiscoverSessionsLongMetadataPreamble(t *testing.T) {
+	lines := append(preambleLines(),
+		`{"type":"attachment","sessionId":"s1","cwd":"/r/app","isSidechain":false,"timestamp":"2026-10-30T10:00:00Z"}`)
+	got := DiscoverSessions(writeSession(t, lines...))
+	if len(got) != 1 || got[0].ID != "s1" || got[0].Cwd != "/r/app" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestDiscoverSessionsSidechainAfterMetadataPreamble(t *testing.T) {
+	lines := append(preambleLines(),
+		`{"type":"user","sessionId":"s1","cwd":"/r/app","isSidechain":true,"timestamp":"2026-10-30T10:00:00Z"}`)
+	if got := DiscoverSessions(writeSession(t, lines...)); len(got) != 0 {
+		t.Fatalf("sidechain listed: %+v", got)
+	}
+}

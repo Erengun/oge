@@ -22,7 +22,7 @@ type sessionRecord struct {
 	Cwd         string `json:"cwd"`
 	Timestamp   string `json:"timestamp"`
 	GitBranch   string `json:"gitBranch"`
-	IsSidechain bool   `json:"isSidechain"`
+	IsSidechain *bool  `json:"isSidechain"`
 	Type        string `json:"type"`
 	// The title of a title record, by its type.
 	CustomTitle string `json:"customTitle"`
@@ -62,33 +62,36 @@ func readSession(path, profile string) (agent.NativeSession, bool) {
 	}
 	s := agent.NativeSession{Provider: Name, Profile: profile, Path: path, Written: st.ModTime()}
 	titleRank := 0
-	var first, parsed int // identity lines tried; first is 1 once a main record was seen
+	var scanned int // bytes read so far, bounds the identity search
+	decided := false
 	rd := bufio.NewReaderSize(f, 64<<10)
 	for {
 		line, err := rd.ReadBytes('\n')
 		if len(line) > 0 {
 			// Content lines are megabytes and never parsed: identity comes
 			// from the first records, titles from short title lines only.
-			if (s.ID == "" || s.Cwd == "") && parsed < maxIdentityLines && len(line) <= maxParsedLine {
-				parsed++
+			if (s.ID == "" || s.Cwd == "") && scanned < maxIdentityBytes && len(line) <= maxParsedLine && bytes.Contains(line, sessionIDMark) {
 				var r sessionRecord
 				if json.Unmarshal(line, &r) == nil && r.SessionID != "" {
-					// A sidechain file is one from its first record; a main
-					// file with a later sidechain record stays listed.
-					if first == 0 && r.IsSidechain {
-						return agent.NativeSession{}, false
+					// Metadata lines (titles, modes, snapshots) carry no cwd
+					// or isSidechain. The first record that does decides:
+					// a sidechain file is one from there, a main file with a
+					// later sidechain record stays listed.
+					if !decided && (r.Cwd != "" || r.IsSidechain != nil) {
+						decided = true
+						if r.IsSidechain != nil && *r.IsSidechain {
+							return agent.NativeSession{}, false
+						}
 					}
-					first = 1
-					if !r.IsSidechain {
-						if s.ID == "" {
-							s.ID = r.SessionID
-						}
-						if s.Cwd == "" {
-							s.Cwd = r.Cwd
-						}
+					if s.ID == "" {
+						s.ID = r.SessionID
+					}
+					if s.Cwd == "" {
+						s.Cwd = r.Cwd
 					}
 				}
 			}
+			scanned += len(line)
 			if len(line) <= maxParsedLine && isTitleLine(line) {
 				var r sessionRecord
 				if json.Unmarshal(line, &r) == nil {
@@ -124,10 +127,12 @@ func readSession(path, profile string) (agent.NativeSession, bool) {
 }
 
 const (
-	maxIdentityLines = 16
+	maxIdentityBytes = 1 << 20
 	maxParsedLine    = 256 << 10
 	tailBytes        = 256 << 10
 )
+
+var sessionIDMark = []byte(`"sessionId"`)
 
 var titleMarks = [][]byte{[]byte(`"type":"custom-title"`), []byte(`"type":"ai-title"`), []byte(`"type":"summary"`)}
 
