@@ -111,7 +111,11 @@ func (h *home) staleAfter() time.Duration {
 // composing reports whether the focused box holds a message being
 // written: everything below demand waits until it is sent or cleared.
 func (h *home) composing() bool {
-	return h.run == nil && h.comp != nil && !h.comp.empty()
+	if h.run != nil {
+		// During a Run the human types the next message into the queue box.
+		return h.next != nil && h.next.comp != nil && !h.next.comp.empty()
+	}
+	return h.comp != nil && !h.comp.empty()
 }
 
 // attend runs after every update: it routes what changed in each Chat,

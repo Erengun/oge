@@ -330,3 +330,22 @@ func TestStaleGateDefault(t *testing.T) {
 		t.Error("stale_gate default")
 	}
 }
+
+// Typing a follow-up into the queue box during a Run holds what other
+// Chats bring, as the composer does (U3).
+func TestQueueBoxHoldsDuringARun(t *testing.T) {
+	h, two, _ := attnHome(t)
+	h.run = &model{}
+	q := h.composer()
+	q.set("a follow-up for after the Run")
+	h.next = &queued{comp: q}
+	if !h.composing() {
+		t.Fatal("a non-empty queue box during a Run isn't composing")
+	}
+	h.next.comp.set("")
+	if h.composing() {
+		t.Fatal("an empty queue box during a Run is composing")
+	}
+	h.run, h.next = nil, nil
+	_ = two
+}
