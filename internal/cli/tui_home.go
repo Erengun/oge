@@ -395,10 +395,19 @@ type home struct {
 	full         bool
 	termW, termH int
 	sidebarOff   bool
-	toast        *toast
-	toastSeq     int
-	run          *model    // nil while composing
-	notify       *notifier // the session's alerts; nil when silent (#170)
+	// railHits are where the rail's last frame drew each Chat, for a
+	// click (tui_desk.go).
+	railHits []railHit
+	// deskMax and deskQuiet are [desk] max_active and quiet (0: the
+	// defaults); capNoted is /new having said once that the working
+	// Chats are past deskMax.
+	deskMax   int
+	deskQuiet time.Duration
+	capNoted  bool
+	toast     *toast
+	toastSeq  int
+	run       *model    // nil while composing
+	notify    *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -1232,6 +1241,9 @@ func (h *home) themeNotice() string {
 }
 
 func (h *home) View() tea.View {
+	if h.full && h.termW > 0 && h.width != h.mainWidth() {
+		h.layout() // a Chat opened or closed: the rail came or went
+	}
 	v := h.view()
 	if h.full {
 		return h.compose(v)
@@ -1748,7 +1760,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
-	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}

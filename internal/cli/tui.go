@@ -32,6 +32,9 @@ type tui struct {
 	vim    bool // the composer's vim mode (user config, #156)
 	// vimEscape is the INSERT sequence that acts as Esc (user config, #158).
 	vimEscape string
+	// deskMax and deskQuiet are [desk] max_active and quiet (user config).
+	deskMax   int
+	deskQuiet time.Duration
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}

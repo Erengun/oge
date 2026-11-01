@@ -331,7 +331,7 @@ func (h *home) sendAdviceTurn(c *run.Chat, adv *run.Advice, auto bool) tea.Cmd {
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(adv.Text), "\n")
 	h.turn = &chatTurn{text: run.AdvicePrefix + first, frozen: res.frozen, oge: true, advice: true}
-	h.lastEvent = h.clock()
+	h.lastEvent, h.answered = h.clock(), true
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	ctx, v := h.ctx, h.chatView
 	if ctx == nil {

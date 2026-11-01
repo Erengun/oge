@@ -78,11 +78,14 @@ type chatView struct {
 	// The rail's glyph (tui_desk.go): lastEvent is when the turn last
 	// heard from the agent, or began; doneAt is when its cut was
 	// Accepted, seen once the human has looked at it; focusAt is when
-	// this Chat took the focus, zero while another one has it.
+	// this Chat took the focus, zero while another one has it. answered
+	// is a turn sent since the last cut: a failed Check it followed is
+	// no longer news (glyph).
 	lastEvent time.Time
 	doneAt    time.Time
 	seen      bool
 	focusAt   time.Time
+	answered  bool
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.

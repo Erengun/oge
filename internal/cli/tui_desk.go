@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -28,11 +29,36 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 	if h.chat == nil || (h.turn == nil && h.verify == nil && h.chat.get() == nil) {
 		return h.resetView(), ""
 	}
+	if n := h.working(); n >= h.maxActive() && !h.capNoted {
+		h.capNoted = true
+		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of · /new again opens another anyway", n)
+		return nil, ""
+	}
 	old, v := h.num, h.newView()
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
 	return nil, ""
+}
+
+// working counts the open Chats with a turn or a check in flight.
+func (h *home) working() int {
+	n := 0
+	for _, v := range h.views {
+		if v.turn != nil || v.verify != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// maxActive is [desk] max_active: past it, /new says once that more
+// working Chats are more than one person tracks, and never refuses.
+func (h *home) maxActive() int {
+	if h.deskMax > 0 {
+		return h.deskMax
+	}
+	return pipeline.DefaultDeskMaxActive
 }
 
 // clearCmd is /clear: this Chat starts afresh; its old Session closes.
@@ -187,7 +213,7 @@ func (chatDelegate) Spacing() int                        { return 0 }
 func (chatDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	v := it.(chatItem).v
-	mark, state := glyph(v, d.h.clock())
+	mark, state := d.h.mark(v)
 	line := fmt.Sprintf("%d %s %s  %s", v.num, mark, clean(v.caption()), d.h.st.dim(state))
 	if v == d.h.chatView {
 		line += d.h.st.dim("  (this one)")
@@ -236,9 +262,19 @@ func (h *home) chatsLines() []string {
 	return append(out, " "+st.dim("⏎ or a number switches · esc"))
 }
 
-// deskQuiet is how long a turn may go without an agent event before its
-// Chat shows quiet rather than working ([desk] quiet).
-const deskQuiet = 3 * time.Minute
+// quietAfter is [desk] quiet: how long a turn may go without an agent
+// event before its Chat shows quiet rather than working.
+func (h *home) quietAfter() time.Duration {
+	if h.deskQuiet > 0 {
+		return h.deskQuiet
+	}
+	return pipeline.DefaultDeskQuiet
+}
+
+// mark is v's glyph now.
+func (h *home) mark(v *chatView) (mark, coarse string) {
+	return glyph(v, h.clock(), h.quietAfter())
+}
 
 // seenAfter is how long a Chat holds the focus before its ✓ counts as
 // seen; a key pressed in it counts at once (docs/ux/desk.md, G1).
@@ -246,19 +282,24 @@ const seenAfter = time.Second
 
 // glyph is the Chat's exact state for the rail and the header counts: the
 // mark and its coarse word. The human's part comes first, then a failed
-// Check, then a turn gone quiet (never shown as working), work, an
-// Accepted cut not seen yet, and idle. It names no tool.
-func glyph(v *chatView, now time.Time) (mark, coarse string) {
+// Check, then a turn gone quiet for quiet (never shown as working), work,
+// an Accepted cut neither applied nor seen yet, and idle. It names no tool.
+//
+// A failed Check is news until a turn answers it: a message, send back or
+// advice sent after the cut. What that turn leads to is shown instead, so
+// a turn that ends without a cut leaves the Chat idle, not ✗ again; the
+// sidebar still says the Check failed until the next cut.
+func glyph(v *chatView, now time.Time, quiet time.Duration) (mark, coarse string) {
 	switch {
 	case v.cutGate != nil, v.stale != nil, v.turn != nil && len(v.turn.asks) > 0:
 		return "▲", "needs you"
-	case v.pendingFB != nil, v.turn == nil && v.verify == nil && v.side.outcome == run.Failed:
+	case v.pendingFB != nil, v.turn == nil && v.verify == nil && v.side.outcome == run.Failed && !v.answered:
 		return "✗", "check failed"
-	case v.turn != nil && !v.lastEvent.IsZero() && now.Sub(v.lastEvent) >= deskQuiet:
+	case v.turn != nil && !v.lastEvent.IsZero() && now.Sub(v.lastEvent) >= quiet:
 		return "?", "quiet"
 	case v.turn != nil, v.verify != nil:
 		return "●", "working"
-	case v.last != nil && v.side.outcome == run.Accepted && !v.seenBy(now):
+	case v.last != nil && v.side.outcome == run.Accepted && !v.seenBy(now) && !v.cutDelivered():
 		return "✓", "done"
 	}
 	return "○", "idle"
@@ -290,10 +331,9 @@ func (h *home) deskCounts() string {
 	if len(h.views) < 2 {
 		return ""
 	}
-	now := h.clock()
 	n := map[string]int{}
 	for _, v := range h.views {
-		m, _ := glyph(v, now)
+		m, _ := h.mark(v)
 		n[m]++
 	}
 	st := h.st
@@ -308,4 +348,181 @@ func (h *home) deskCounts() string {
 		parts = append(parts, st.ok(fmt.Sprintf("✓%d", n["✓"])))
 	}
 	return strings.Join(parts, st.dim(" · "))
+}
+
+// Rail geometry (docs/ux/desk.md, Layout): a column railWidth wide at
+// the screen's left, from railMinCols columns up, with several Chats open.
+// Ctrl+T turns it off with the sidebar.
+const (
+	railWidth   = 14
+	railMinCols = 100
+)
+
+// railOn reports whether the rail is drawn. With one Chat it would say
+// nothing the screen doesn't, as the header counts don't.
+func (h *home) railOn() bool {
+	return h.full && !h.sidebarOff && h.termW >= railMinCols && len(h.views) > 1
+}
+
+// railHit is where the rail drew a Chat: screen row y, columns x0 to x1.
+type railHit struct {
+	y, x0, x1 int
+	v         *chatView
+}
+
+// rail draws the column, height rows tall, each railWidth wide. Chats
+// that need you, failed, or are at work take two rows each, number and
+// glyph and title, then the coarse state and its age; done and idle ones
+// fold below a rule, a number and a glyph each. Both keep number order:
+// a row never moves for another Chat's sake. Nothing animates and no
+// tool is named.
+func (h *home) rail(height int) []string {
+	st := h.st
+	const inner = railWidth - 2
+	now, quiet := h.clock(), h.quietAfter()
+	paint := func(mark string) string {
+		switch mark {
+		case "▲":
+			return st.accent(mark)
+		case "✗":
+			return st.bad(mark)
+		case "?":
+			return st.warn(mark)
+		case "✓":
+			return st.ok(mark)
+		case "○":
+			return st.dim(mark)
+		}
+		return mark
+	}
+	var body []string
+	var hits []railHit
+	var folded []*chatView
+	for _, v := range h.views {
+		mark, coarse := glyph(v, now, quiet)
+		if mark == "✓" || mark == "○" {
+			folded = append(folded, v)
+			continue
+		}
+		head := strconv.Itoa(v.num) + " " + mark + " "
+		room := inner - ansi.StringWidth(head)
+		tail := ""
+		if v == h.chatView {
+			tail, room = "◀", room-1
+		}
+		title := ansi.Truncate(clean(v.caption()), max(room, 0), "…")
+		title += strings.Repeat(" ", max(room-ansi.StringWidth(title), 0))
+		if v == h.chatView {
+			title = st.bold(title)
+		}
+		y := len(body)
+		body = append(body, strconv.Itoa(v.num)+" "+paint(mark)+" "+title+st.accent(tail), st.dim(railState(coarse, railAge(now, v.since(mark)), inner)))
+		hits = append(hits, railHit{y, 0, inner, v}, railHit{y + 1, 0, inner, v})
+	}
+	if len(folded) > 0 {
+		if len(body) > 0 {
+			body = append(body, st.border(strings.Repeat("─", inner)))
+		}
+		line, w := "", 0
+		for _, v := range folded {
+			mark, _ := glyph(v, now, quiet)
+			tok, painted := strconv.Itoa(v.num)+mark, strconv.Itoa(v.num)+paint(mark)
+			if v == h.chatView {
+				tok, painted = tok+"◀", painted+st.accent("◀")
+			}
+			tw := ansi.StringWidth(tok)
+			if w > 0 && w+1+tw > inner {
+				body = append(body, line)
+				line, w = "", 0
+			}
+			if w > 0 {
+				line, w = line+" ", w+1
+			}
+			hits = append(hits, railHit{len(body), w, w + tw, v})
+			line, w = line+painted, w+tw
+		}
+		body = append(body, line)
+	}
+
+	// The box: the top border names it; rows and hits move in by one.
+	b := st.border
+	out := make([]string, 0, height)
+	out = append(out, b("╭ DESK "+strings.Repeat("─", railWidth-8)+"╮"))
+	for i := 0; i < height-2; i++ {
+		l := ""
+		if i < len(body) {
+			l = ansi.Truncate(body[i], inner, "…")
+		}
+		out = append(out, b("│")+l+strings.Repeat(" ", max(inner-ansi.StringWidth(l), 0))+b("│"))
+	}
+	out = append(out, b("╰"+strings.Repeat("─", railWidth-2)+"╯"))
+	h.railHits = h.railHits[:0]
+	for _, hit := range hits {
+		if hit.y < height-2 {
+			h.railHits = append(h.railHits, railHit{hit.y + 1, hit.x0 + 1, hit.x1 + 1, hit.v})
+		}
+	}
+	return out[:min(height, len(out))]
+}
+
+// railState is a rail row's second line: the coarse state and its age,
+// indented under the title while they fit in width, the age dropped
+// when even the word alone barely fits.
+func railState(coarse, age string, width int) string {
+	s := coarse
+	if age != "" {
+		s += " " + age
+	}
+	switch {
+	case ansi.StringWidth(s)+2 <= width:
+		return "  " + s
+	case ansi.StringWidth(s) <= width:
+		return s
+	}
+	return coarse
+}
+
+// railAge is how long a state has held, coarse: minutes, hours, days;
+// nothing under a minute, and nothing for an unknown start.
+func railAge(now, since time.Time) string {
+	if since.IsZero() {
+		return ""
+	}
+	switch d := now.Sub(since); {
+	case d < time.Minute:
+		return ""
+	case d < time.Hour:
+		return strconv.Itoa(int(d/time.Minute)) + "m"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d/time.Hour)) + "h"
+	default:
+		return strconv.Itoa(int(d/(24*time.Hour))) + "d"
+	}
+}
+
+// since is when v's glyph mark began, as near as the Chat knows: its turn's
+// start for work, its cut's end for done and failed, and its last agent
+// event for a quiet turn or an ask.
+func (v *chatView) since(mark string) time.Time {
+	switch mark {
+	case "●":
+		return v.side.since
+	case "✓", "✗":
+		return v.doneAt
+	}
+	return v.lastEvent
+}
+
+// railClick is a left click at x, y on the rail: the Chat drawn there
+// takes the focus, as alt+N would give it, and only when alt+N could.
+func (h *home) railClick(x, y int) {
+	if h.overlaid() || h.run != nil || h.job != nil {
+		return
+	}
+	for _, hit := range h.railHits {
+		if hit.y == y && x >= hit.x0 && x < hit.x1 && slices.Contains(h.views, hit.v) {
+			h.switchTo(hit.v)
+			return
+		}
+	}
 }

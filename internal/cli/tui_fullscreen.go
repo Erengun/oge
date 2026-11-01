@@ -47,6 +47,7 @@ type transcript struct {
 
 	// What the last view laid out, for the mouse.
 	top, vh, vw int // the viewport's screen rows and width
+	left        int // the viewport's first screen column: past the rail
 	start       int // index of its first line
 	chipX0      int // the chip's first column on the viewport's last row (0: none)
 	dragging    bool
@@ -193,17 +194,26 @@ func (h *home) sidebarOn() bool {
 // clipped content never touches the title.
 const headRows = 2
 
+// mainWidth is the main column's: the screen less the rail and the
+// sidebar.
+func (h *home) mainWidth() int {
+	w := h.termW
+	if h.railOn() {
+		w -= railWidth + 1
+	}
+	if h.sidebarOn() {
+		w -= sidebarWidth + 1
+	}
+	return w
+}
+
 // layout sets the content width and height from the terminal's: the main
-// column is the screen less the sidebar, and headRows go to the header.
+// column's width, and the height less the headRows of the header.
 func (h *home) layout() {
 	if !h.full {
 		return
 	}
-	w := h.termW
-	if h.sidebarOn() {
-		w -= sidebarWidth + 1
-	}
-	h.width, h.height = w, max(h.termH-headRows, 1)
+	h.width, h.height = h.mainWidth(), max(h.termH-headRows, 1)
 	if h.run != nil {
 		h.run.width, h.run.height = h.width, h.height
 	}
@@ -273,7 +283,11 @@ func (h *home) compose(v tea.View) tea.View {
 		curY -= drop
 	}
 	vh := max(H-headRows-len(live), 0)
-	t.top, t.vh, t.vw, t.chipX0 = headRows, vh, mainW, 0
+	left := 0
+	if h.railOn() {
+		left = railWidth + 1
+	}
+	t.top, t.vh, t.vw, t.left, t.chipX0 = headRows, vh, mainW, left, 0
 	var body []string
 	if len(t.entries) == 0 {
 		body = h.welcome()
@@ -316,7 +330,12 @@ func (h *home) compose(v tea.View) tea.View {
 		rows = append(rows, "")
 	}
 	rows = rows[:H]
-	var side []string
+	var rail, side []string
+	if left > 0 {
+		rail = h.rail(H)
+	} else {
+		h.railHits = nil
+	}
 	if h.sidebarOn() {
 		side = h.sidebar(sidebarWidth, H)
 	}
@@ -325,6 +344,9 @@ func (h *home) compose(v tea.View) tea.View {
 		r = ansi.Truncate(r, mainW, "…")
 		if side != nil {
 			r += strings.Repeat(" ", max(mainW-ansi.StringWidth(r), 0)) + " " + side[i]
+		}
+		if rail != nil {
+			r = rail[i] + " " + r
 		}
 		b.WriteString(r)
 		if i < len(rows)-1 {
@@ -335,7 +357,7 @@ func (h *home) compose(v tea.View) tea.View {
 	out.AltScreen = true
 	out.MouseMode = tea.MouseModeCellMotion
 	if v.Cursor != nil && curY >= 0 {
-		c := tea.NewCursor(curX, headRows+vh+curY)
+		c := tea.NewCursor(left+curX, headRows+vh+curY)
 		c.Blink = false
 		out.Cursor = c
 	}
@@ -345,8 +367,7 @@ func (h *home) compose(v tea.View) tea.View {
 // fullKey handles the keys that only move around the full screen. They
 // never reach an ask, a Gate or a delivery: none of them decides anything.
 func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	if h.keys != nil || h.picker != nil || h.chats != nil || h.diff != nil || h.panel != nil ||
-		h.search != nil || h.hidden != nil || h.saving || h.review != nil || (h.run != nil && h.run.expanded) {
+	if h.overlaid() {
 		return nil, false
 	}
 	t := h.tr
@@ -393,16 +414,26 @@ func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
+// overlaid reports whether something over the screen has the keys: a
+// panel, a picker, a prompt, an expanded Run.
+func (h *home) overlaid() bool {
+	return h.keys != nil || h.picker != nil || h.chats != nil || h.diff != nil || h.panel != nil ||
+		h.search != nil || h.hidden != nil || h.saving || h.review != nil || (h.run != nil && h.run.expanded)
+}
+
 // fullMouse handles the mouse over the transcript: the wheel scrolls it, a
-// drag selects within it (clamped to the pane) and copies on release.
+// drag selects within it (clamped to the pane) and copies on release. A
+// click on the rail focuses that Chat.
 func (h *home) fullMouse(msg tea.Msg) (tea.Cmd, bool) {
 	t := h.tr
 	clamp := func(m tea.Mouse) trPos {
 		y := min(max(m.Y-t.top, 0), max(t.vh-1, 0))
-		x := min(max(m.X, 0), max(t.vw-1, 0))
+		x := min(max(m.X-t.left, 0), max(t.vw-1, 0))
 		return trPos{t.start + y, x}
 	}
-	inPane := func(m tea.Mouse) bool { return m.Y >= t.top && m.Y < t.top+t.vh && m.X < t.vw }
+	inPane := func(m tea.Mouse) bool {
+		return m.Y >= t.top && m.Y < t.top+t.vh && m.X >= t.left && m.X < t.left+t.vw
+	}
 	switch m := msg.(type) {
 	case tea.MouseWheelMsg:
 		if h.menu != nil || h.picker != nil || h.diff != nil {
@@ -417,10 +448,14 @@ func (h *home) fullMouse(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, true
 	case tea.MouseClickMsg:
 		mm := m.Mouse()
+		if mm.Button == tea.MouseLeft && mm.X < t.left {
+			h.railClick(mm.X, mm.Y)
+			return nil, true
+		}
 		if mm.Button != tea.MouseLeft || !inPane(mm) {
 			return nil, true
 		}
-		if t.scroll && t.chipX0 > 0 && mm.Y == t.top+t.vh-1 && mm.X >= t.chipX0-1 {
+		if t.scroll && t.chipX0 > 0 && mm.Y == t.top+t.vh-1 && mm.X-t.left >= t.chipX0-1 {
 			t.latest()
 			return nil, true
 		}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -417,7 +418,7 @@ func TestGlyphFollowsExactState(t *testing.T) {
 		{"idle", func(*chatView) {}, t0, "○ idle"},
 		{"turn", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{}, t0 }, t0.Add(time.Minute), "● working"},
 		{"verify", func(v *chatView) { v.verify = &chatVerify{} }, t0, "● working"},
-		{"quiet", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{}, t0 }, t0.Add(deskQuiet), "? quiet"},
+		{"quiet", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{}, t0 }, t0.Add(pipeline.DefaultDeskQuiet), "? quiet"},
 		{"quiet verify alone is working", func(v *chatView) { v.verify, v.lastEvent = &chatVerify{}, t0 }, t0.Add(time.Hour), "● working"},
 		{"ask", func(v *chatView) { v.turn = &chatTurn{asks: []*agent.Ask{{}}} }, t0, "▲ needs you"},
 		{"quiet ask needs you", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{asks: []*agent.Ask{{}}}, t0 }, t0.Add(time.Hour), "▲ needs you"},
@@ -436,7 +437,7 @@ func TestGlyphFollowsExactState(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			v := &chatView{}
 			c.set(v)
-			if mark, coarse := glyph(v, c.now); mark+" "+coarse != c.want {
+			if mark, coarse := glyph(v, c.now, pipeline.DefaultDeskQuiet); mark+" "+coarse != c.want {
 				t.Errorf("glyph = %s %s, want %s", mark, coarse, c.want)
 			}
 		})
@@ -451,12 +452,12 @@ func TestGlyphQuietAfterTheLastEvent(t *testing.T) {
 	h.now = func() time.Time { return now }
 	h.turn = &chatTurn{}
 	h.lastEvent = now
-	now = now.Add(deskQuiet)
-	if m, _ := glyph(h.chatView, now); m != "?" {
-		t.Fatalf("glyph = %s after %s with no event, want ?", m, deskQuiet)
+	now = now.Add(pipeline.DefaultDeskQuiet)
+	if m, _ := glyph(h.chatView, now, pipeline.DefaultDeskQuiet); m != "?" {
+		t.Fatalf("glyph = %s after %s with no event, want ?", m, pipeline.DefaultDeskQuiet)
 	}
 	h.Update(chatEvMsg{view: h.chatView, ev: agent.Event{}, ok: true})
-	if m, _ := glyph(h.chatView, now); m != "●" {
+	if m, _ := glyph(h.chatView, now, pipeline.DefaultDeskQuiet); m != "●" {
 		t.Fatalf("glyph = %s right after an event, want ●", m)
 	}
 }
@@ -490,11 +491,11 @@ func TestHeaderCountsTheChats(t *testing.T) {
 func TestKeySeesTheDoneChat(t *testing.T) {
 	h := deskHome()
 	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Accepted, h.clock()
-	if m, _ := glyph(h.chatView, h.clock()); m != "✓" {
+	if m, _ := glyph(h.chatView, h.clock(), pipeline.DefaultDeskQuiet); m != "✓" {
 		t.Fatalf("glyph = %s, want ✓", m)
 	}
 	h.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
-	if m, _ := glyph(h.chatView, h.clock()); m != "○" {
+	if m, _ := glyph(h.chatView, h.clock(), pipeline.DefaultDeskQuiet); m != "○" {
 		t.Fatalf("glyph = %s after a key, want ○", m)
 	}
 }
@@ -512,11 +513,239 @@ func TestDoneStaysSeenAfterSwitchingAway(t *testing.T) {
 	first.last, first.side.outcome, first.doneAt = &lastRun{}, run.Accepted, now
 	h.focus(first)
 	now = now.Add(5 * time.Second)
-	if m, _ := glyph(first, now); m != "○" {
+	if m, _ := glyph(first, now, pipeline.DefaultDeskQuiet); m != "○" {
 		t.Fatalf("glyph = %s after 5s in view, want ○", m)
 	}
 	h.focus(other)
-	if m, _ := glyph(first, now); m != "○" {
+	if m, _ := glyph(first, now, pipeline.DefaultDeskQuiet); m != "○" {
 		t.Fatalf("glyph = %s after switching away, want ○ (it was seen)", m)
+	}
+}
+
+// railHome is a full-screen home w columns wide with Chats 1 to n open,
+// Chat 1 focused, on a clock the test moves.
+func railHome(w, n int) (*home, *time.Time) {
+	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	h := fullHome(w, 24)
+	h.now = func() time.Time { return now }
+	h.num, h.focusAt = 1, now
+	h.views = []*chatView{h.chatView}
+	for i := 2; i <= n; i++ {
+		h.views = append(h.views, &chatView{num: i, comp: newComposer(), tr: &transcript{}})
+	}
+	return h, &now
+}
+
+// railCol is the rail's column of the screen, its rows trimmed.
+func railCol(h *home) []string {
+	var out []string
+	for _, l := range screenLines(h) {
+		out = append(out, strings.TrimRight(ansi.Cut(ansi.Strip(l), 0, railWidth), " "))
+	}
+	return out
+}
+
+// railNums are the Chat numbers in the rail's order, top to bottom.
+func railNums(h *home) []int {
+	var out []int
+	for _, l := range railCol(h)[1:] {
+		for _, f := range strings.Fields(strings.Trim(l, "│")) {
+			n, err := strconv.Atoi(strings.TrimRight(f, "▲✗?●✓○◀"))
+			if err == nil {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// The rail at 120 columns: Chats at work or waiting on you get two rows,
+// the coarse state and its age; done and idle ones fold below a rule.
+func TestRailSnapshot(t *testing.T) {
+	h, now := railHome(120, 5)
+	t0 := *now
+	h.name, h.turn, h.side.since, h.lastEvent = "make the parser accept trailing commas", &chatTurn{}, t0, t0
+	two, three, four, five := h.views[1], h.views[2], h.views[3], h.views[4]
+	two.name, two.turn, two.lastEvent = "auth", &chatTurn{asks: []*agent.Ask{{}}}, t0
+	three.name, three.side.outcome, three.last, three.doneAt = "docs", run.Accepted, &lastRun{}, t0
+	four.name, four.side.outcome, four.doneAt = "ci-flake", run.Failed, t0
+	five.name = "spare"
+	*now = t0.Add(3*time.Minute - time.Second)
+	golden(t, "desk-rail-120", h.View().Content)
+	if h.width != 120-railWidth-1-sidebarWidth-1 {
+		t.Errorf("main column %d wide", h.width)
+	}
+	for i, l := range screenLines(h) {
+		if w := ansi.StringWidth(l); w > 120 {
+			t.Errorf("row %d is %d columns", i, w)
+		}
+	}
+}
+
+// Rows keep number order whatever the Chats do, and a /close leaves the
+// others' numbers and order alone.
+func TestRailOrderIsStable(t *testing.T) {
+	h, now := railHome(120, 4)
+	h.chat = &homeChat{c: &run.Chat{}}
+	for _, v := range h.views[1:] {
+		v.turn, v.lastEvent = &chatTurn{}, *now
+	}
+	h.turn, h.lastEvent = &chatTurn{}, *now
+	want := []int{1, 2, 3, 4}
+	if got := railNums(h); !slices.Equal(got, want) {
+		t.Fatalf("rail %v, want %v", got, want)
+	}
+	// Chat 3 asks, Chat 2 goes quiet, Chat 1 fails its Check: still 1 to 4.
+	h.views[2].turn.asks = []*agent.Ask{{}}
+	h.views[1].lastEvent = now.Add(-time.Hour)
+	h.views[3].turn.asks = []*agent.Ask{{}}
+	if got := railNums(h); !slices.Equal(got, want) {
+		t.Errorf("after state changes: rail %v, want %v", got, want)
+	}
+	h.Update(alt('2')) // quiet, not asking: the box takes /close
+	h.views[1].chat = nil
+	submit(h, "/close")
+	if got := railNums(h); !slices.Equal(got, []int{1, 3, 4}) || h.num != 3 {
+		t.Errorf("after closing 2: rail %v, focused %d", got, h.num)
+	}
+	// A Chat that settles folds below the rule; the others keep their order.
+	h.views[0].turn = nil
+	col := strings.Join(railCol(h), "\n")
+	if got := railNums(h); !slices.Equal(got, []int{3, 4, 1}) || !strings.Contains(col, "│1○ ") {
+		t.Errorf("after 1 settles: rail %v\n%s", got, col)
+	}
+}
+
+// Without colour, the rail paints nothing.
+func TestRailNoColour(t *testing.T) {
+	h, _ := railHome(120, 3)
+	h.views[1].turn = &chatTurn{asks: []*agent.Ask{{}}}
+	h.views[2].cutGate = &gateState{}
+	if got := h.View().Content; strings.Contains(got, "\x1b") || !strings.Contains(got, "DESK") {
+		t.Errorf("rail without colour:\n%q", got)
+	}
+}
+
+// Clicking a Chat's row focuses it; a click in the transcript still lands
+// where it points, past the rail.
+func TestRailClickSwitchesChat(t *testing.T) {
+	h, _ := railHome(120, 3)
+	h.views[1].turn = &chatTurn{}
+	col := railCol(h)
+	y := slices.IndexFunc(col, func(l string) bool { return strings.HasPrefix(l, "│2 ●") })
+	if y < 0 {
+		t.Fatalf("no row for Chat 2:\n%s", strings.Join(col, "\n"))
+	}
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y + 1}) // its second row
+	if h.num != 2 {
+		t.Fatalf("a click on Chat 2's row focused %d", h.num)
+	}
+	col = railCol(h)
+	y = slices.IndexFunc(col, func(l string) bool { return strings.Contains(l, "3○") })
+	x := ansi.StringWidth(col[y][:strings.Index(col[y], "3○")])
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: x, Y: y})
+	if h.num != 3 {
+		t.Fatalf("a click on Chat 3 in the fold focused %d", h.num)
+	}
+	h.tr.add(trEntry{text: "hello"})
+	h.View()
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: railWidth + 1, Y: headRows})
+	if h.tr.sel == nil || h.tr.sel[0].col != 0 || h.num != 3 {
+		t.Errorf("a click at the pane's first column: sel %v, focused %d", h.tr.sel, h.num)
+	}
+}
+
+// The rail needs 100 columns and a second Chat, and ctrl+t hides it with
+// the sidebar.
+func TestRailNeedsRoomAndToggles(t *testing.T) {
+	for _, w := range []int{80, 99} {
+		if h, _ := railHome(w, 3); h.railOn() || strings.Contains(h.View().Content, "DESK") || h.width != w {
+			t.Errorf("a rail at %d columns", w)
+		}
+	}
+	if h, _ := railHome(120, 1); h.railOn() || strings.Contains(h.View().Content, "DESK") {
+		t.Error("a rail with one Chat")
+	}
+	h, _ := railHome(100, 2)
+	if !strings.Contains(h.View().Content, "DESK") || h.width != 100-railWidth-1 {
+		t.Fatalf("no rail at 100 columns, or main column %d", h.width)
+	}
+	if c := h.View().Cursor; c == nil || c.X <= railWidth {
+		t.Errorf("the cursor isn't past the rail: %+v", c)
+	}
+	h.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	if strings.Contains(h.View().Content, "DESK") || h.width != 100 {
+		t.Error("ctrl+t did not hide the rail")
+	}
+}
+
+// /new with max_active Chats working says so once, opens nothing that
+// time, and never refuses: /new again opens one, and later ones say
+// nothing more.
+func TestNewPastTheCapWarnsOnce(t *testing.T) {
+	h := deskHome()
+	h.turn = &chatTurn{}
+	for range 2 {
+		h.views = append(h.views, &chatView{num: len(h.views) + 1, turn: &chatTurn{}})
+	}
+	submit(h, "/new")
+	if len(h.views) != 3 || !strings.Contains(h.note, "3 Chats are working") || !strings.Contains(h.note, "/new again opens another anyway") {
+		t.Fatalf("views %v, note %q", nums(h), h.note)
+	}
+	submit(h, "/new")
+	if len(h.views) != 4 || h.num != 4 || strings.Contains(h.note, "research") {
+		t.Fatalf("second /new: views %v, focused %d, note %q", nums(h), h.num, h.note)
+	}
+	h.turn = &chatTurn{}
+	h.chat.c = &run.Chat{}
+	submit(h, "/new")
+	if len(h.views) != 5 || strings.Contains(h.note, "research") {
+		t.Errorf("a later /new: views %v, note %q", nums(h), h.note)
+	}
+	// Under the cap, and with a cap set higher, nothing is said.
+	h = deskHome()
+	h.deskMax = 5
+	h.turn = &chatTurn{}
+	h.views = append(h.views, &chatView{num: 2, turn: &chatTurn{}}, &chatView{num: 3, turn: &chatTurn{}})
+	submit(h, "/new")
+	if len(h.views) != 4 || h.capNoted {
+		t.Errorf("max_active 5: views %v, noted %v", nums(h), h.capNoted)
+	}
+}
+
+// A turn sent after a failed Check answers its ✗: once that turn ends
+// without a cut the Chat is idle, not ✗ again. A new cut brings it back.
+func TestFailedCheckAnsweredByATurn(t *testing.T) {
+	h := deskHome()
+	h.hist, h.sel = &history{}, &setupState{}
+	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
+	if m, _ := h.mark(h.chatView); m != "✗" {
+		t.Fatalf("glyph = %s, want ✗", m)
+	}
+	submit(h, "why did it fail?")
+	if h.turn == nil || !h.answered {
+		t.Fatal("the message started no turn")
+	}
+	h.turn = nil // it ended; no cut
+	if m, _ := h.mark(h.chatView); m != "○" {
+		t.Errorf("glyph = %s after a turn answered the failure, want ○", m)
+	}
+	if text, _ := h.attention(); !strings.Contains(text, "Check failed") {
+		t.Errorf("the sidebar forgot the failure: %q", text)
+	}
+}
+
+// An Accepted cut that was applied is not done-unseen.
+func TestDoneIsNotAnAppliedCut(t *testing.T) {
+	applied := false
+	v := &chatView{last: &lastRun{id: "r1"}, chat: &homeChat{delivered: func(id string) bool { return applied && id == "r1" }}}
+	v.side.outcome = run.Accepted
+	now := time.Now()
+	if m, _ := glyph(v, now, pipeline.DefaultDeskQuiet); m != "✓" {
+		t.Fatalf("glyph = %s, want ✓", m)
+	}
+	applied = true
+	if m, _ := glyph(v, now, pipeline.DefaultDeskQuiet); m != "○" {
+		t.Errorf("glyph = %s for an applied cut, want ○", m)
 	}
 }

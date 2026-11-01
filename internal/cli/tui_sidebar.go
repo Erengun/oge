@@ -107,12 +107,15 @@ func (h *home) attention() (text string, needs bool) {
 
 // cutDelivered reports whether the Chat marked the last cut delivered, by
 // /apply, /branch or apply on accept: the Ledger's word, not the view's.
-func (h *home) cutDelivered() bool {
-	if h.chat == nil || h.last == nil {
+func (v *chatView) cutDelivered() bool {
+	if v.chat == nil || v.last == nil {
 		return false
 	}
-	c := h.chat.get()
-	return c != nil && c.IsDelivered(h.last.id)
+	if d := v.chat.delivered; d != nil {
+		return d(v.last.id)
+	}
+	c := v.chat.get()
+	return c != nil && c.IsDelivered(v.last.id)
 }
 
 // sidebar draws the pane at width and height: a rounded box of sections.
