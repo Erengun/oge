@@ -459,3 +459,28 @@ func TestGlyphQuietAfterTheLastEvent(t *testing.T) {
 		t.Fatalf("glyph = %s right after an event, want ●", m)
 	}
 }
+
+// With several Chats open the header tallies them, leaving out each zero
+// count; with one, it says nothing new.
+func TestHeaderCountsTheChats(t *testing.T) {
+	h := deskHome()
+	h.title = "oge · repo"
+	if got := ansi.Strip(h.header(200)); strings.Contains(got, "working") || strings.Contains(got, "needs you") {
+		t.Fatalf("one Chat: header = %q, want no counts", got)
+	}
+	h.turn = &chatTurn{}
+	h.lastEvent = h.clock()
+	b := &chatView{num: 2, cutGate: &gateState{}}
+	c := &chatView{num: 3, verify: &chatVerify{}}
+	d := &chatView{num: 4}
+	h.views = append(h.views, b, c, d)
+	got := ansi.Strip(h.header(200))
+	if !strings.Contains(got, "▲1 needs you · ●2 working") || strings.Contains(got, "✓") {
+		t.Fatalf("header = %q, want ▲1 needs you · ●2 working and no ✓", got)
+	}
+	d.last, d.side.outcome, d.doneAt = &lastRun{}, run.Accepted, h.clock()
+	b.cutGate = nil
+	if got := ansi.Strip(h.header(200)); !strings.Contains(got, "●2 working · ✓1") || strings.Contains(got, "▲") {
+		t.Fatalf("header = %q, want ●2 working · ✓1 and no ▲", got)
+	}
+}

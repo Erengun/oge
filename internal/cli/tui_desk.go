@@ -296,3 +296,29 @@ func later(a, b time.Time) time.Time {
 	}
 	return b
 }
+
+// deskCounts is the header's tally over the open Chats, with several
+// open: ▲N needs you · ●N working · ✓N, each zero count left out.
+func (h *home) deskCounts() string {
+	if len(h.views) < 2 {
+		return ""
+	}
+	now := h.clock()
+	n := map[string]int{}
+	for _, v := range h.views {
+		m, _ := glyph(v, now)
+		n[m]++
+	}
+	st := h.st
+	var parts []string
+	if n["▲"] > 0 {
+		parts = append(parts, st.accent(fmt.Sprintf("▲%d needs you", n["▲"])))
+	}
+	if n["●"] > 0 {
+		parts = append(parts, fmt.Sprintf("●%d working", n["●"]))
+	}
+	if n["✓"] > 0 {
+		parts = append(parts, st.ok(fmt.Sprintf("✓%d", n["✓"])))
+	}
+	return strings.Join(parts, st.dim(" · "))
+}
