@@ -44,3 +44,7 @@ Bare `oge` becomes a **Desk**: several independent Chats in one full-screen home
 
 - The dogfood comparison in `desk.md` shows the Desk is not better than one Chat on either wall time to Accepted or stress. In that case the cap drops, or the Desk becomes opt-in.
 - Measured data shows that automatic feedback turns save more human attention than they cost in tokens and time. In that case `feedback` defaults back to `on`.
+
+## Amendment (2026-11-01)
+
+The Desk spans **projects**: one `oge` holds Chats from several repositories, grouped by project in the rail, with one Inbox and one attention router across them (`docs/ux/desk.md`, "Projects", P1–P2). Each Chat keeps its own repo root, Snapshot, Workspace and delivery target; nothing is shared across repos. The Desk record and the `oge add` socket are per user. It is still supervision, not orchestration: Chats in different projects never talk to each other either.

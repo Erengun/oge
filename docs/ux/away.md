@@ -66,11 +66,11 @@ The table above keeps the options and the reasoning.
 ## Model
 
 **Processes.**
-- There is one `oge` process per repo Desk, as today. It owns every Chat's implementer Session and every cut's QA and Check processes.
+- There is one `oge` process per user Desk (desk.md P1: one Desk for all projects). It owns every Chat's implementer Session and every cut's QA and Check processes.
 - The host (herdr server, tmux server, screen) owns only the pty.
 - There is no daemon, attach protocol or second process.
 
-**Desk record.** It lives under the state root's Private tree (0700, never the temp dir, so it survives a reboot), at `<Private>/desks/<repo-key>/`:
+**Desk record.** It lives under the state root's Private tree (0700, never the temp dir, so it survives a reboot), at `<Private>/desk/` (one per user, desk.md P1):
 - **`desk.log`**, written ahead, with these records:
   - `DeskOpened{pid, start identity, host: herdr|tmux|screen|none, TMUX/STY/HERDR_PANE_ID, tmux session}`;
   - `ChatAdded{chat, n, title}`;
@@ -103,7 +103,7 @@ Three rules keep this path from destroying the state that restore needs:
 
 It never changes trust, spend or Gates.
 
-**Restore.** When `oge` starts in a repo whose Desk record has open Chats and whose lock is free, it:
+**Restore.** When `oge` starts and the Desk record has open Chats and whose lock is free, it:
 1. reads each Chat log;
 2. sweeps residue: it kills recorded process groups whose identity still matches, and records anything that escaped as residue (ADR-0012). This happens **before** it touches a Workspace;
 3. rebuilds a missing Workspace from the last turn ref. A dirty Workspace with no `TurnInterrupted` gets the scope check and a `found_on_restore` Checkpoint;

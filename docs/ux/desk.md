@@ -24,6 +24,21 @@ The Desk takes the other route:
 | U3 | **While you're typing, everything is held except a stale Gate.** Held items are released when you send or clear the input. Only a Gate open longer than T, or an approval about to expire, rings while you type. |
 | U4 | **New Chats come from** `/new`, a task typed into the Inbox, or `oge add "task"` from another terminal. `oge "task"` keeps its standalone Run and exit-code contract (ADR-0015). |
 
+## Projects (user, 2026-11-01)
+
+The goal's "herdr side" means managing **several projects** with AI from one place. herdr-the-tool integration is not the point (#351 stays as an optional extra).
+
+| # | Decision |
+|---|---|
+| P1 | **One Desk for all projects.** One `oge` holds Chats from any number of repos. The rail groups them by project (a header line per repo); the Inbox and attention routing span every project. |
+| P2 | **Adding a project.** `/new` opens a picker of recent repos plus a path (`/new ~/dev/api` works); `oge add "task"` from any repo joins the open Desk as a card for that project (A7); `[desk] projects` in the user config pins projects in the rail even with no Chat open. |
+
+What changes:
+- Each Chat carries its own repo root: Snapshot, Workspace, apply/branch target, header (`oge · repo · branch` follows the focused Chat), and sibling refresh (#344) only among Chats of the same repo.
+- Rail numbers stay stable and global across projects; project headers never reorder (first-opened first).
+- The soft cap (`max_active`) counts working Chats across all projects: the attention limit is the person's, not the repo's.
+- The Desk record (Away 3) and the `oge add` socket (#338) are **per user**, not per repo.
+
 ## Layout
 
 ```
@@ -164,7 +179,7 @@ Each slice is small, fakes-first (ADR-0017), and leaves `main` shippable.
    - A lock on the target working tree around `delivery.ApplyOnto`.
    - Siblings refresh after an Öge apply instead of reporting `RefreshOutside`.
    - A real conflict becomes a `✗` card.
-6. **`oge add "task"`:** a per-repo Desk socket, a Chat-level `live.pid`, and a standalone fallback when no Desk is open.
+6. **`oge add "task"`:** a per-user Desk socket (P1), a Chat-level `live.pid`, and a standalone fallback when no Desk is open.
 7. **Optional, herdr interop:** under `HERDR_ENV=1`, report the Desk's rolled-up state with `pane report-agent --source oge`, fire-and-forget.
 
 ## Evaluation
