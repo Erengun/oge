@@ -96,7 +96,7 @@ type Brief struct {
 
 // BriefTotals add up the Chats.
 type BriefTotals struct {
-	Settled, Accepted, Failed, Parked, NeedsYou, Stopped int
+	Settled, Accepted, Failed, Rejected, Parked, NeedsYou, Stopped int
 	// Ended counts the Chats that ended unexpectedly.
 	Ended int
 }
@@ -109,8 +109,9 @@ type ChatBrief struct {
 	Run   bool // a one-shot Run, not a Chat
 	// Settled counts the turns that settled in the window.
 	Settled int
-	// Accepted, Failed and Parked count the cuts that ended so in it.
-	Accepted, Failed, Parked int
+	// Accepted, Failed, Rejected and Parked count the cuts and Runs that
+	// ended so in it.
+	Accepted, Failed, Rejected, Parked int
 	// Gates are the Gates open now, wherever they opened.
 	Gates []OpenGate
 	Asks  int
@@ -239,10 +240,11 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		}
 		cb.Accepted += rs.accepted
 		cb.Failed += rs.failed
+		cb.Rejected += rs.rejected
 		cb.Parked += rs.parked
 		cb.Stopped += rs.stopped
 		cb.Gates = append(cb.Gates, rs.gates...)
-		if rs.accepted+rs.failed+rs.parked+rs.stopped+len(rs.gates) > 0 {
+		if rs.accepted+rs.failed+rs.rejected+rs.parked+rs.stopped+len(rs.gates) > 0 {
 			shown[cb.ID] = true
 		}
 	}
@@ -273,6 +275,7 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		t.Settled += cb.Settled
 		t.Accepted += cb.Accepted
 		t.Failed += cb.Failed
+		t.Rejected += cb.Rejected
 		t.Parked += cb.Parked
 		t.NeedsYou += cb.NeedsYou()
 		t.Stopped += cb.Stopped
@@ -286,8 +289,8 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 
 // runState is what one Run brings to its Chat's part.
 type runState struct {
-	accepted, failed, parked, stopped int
-	gates                             []OpenGate
+	accepted, failed, rejected, parked, stopped int
+	gates                                       []OpenGate
 }
 
 // read reads a Run's Ledger: its Chat ("" for a one-shot Run), the end it
@@ -327,8 +330,10 @@ func (r BriefRun) read(in func(time.Time) bool) (chat string, s runState) {
 			switch d.Outcome {
 			case Accepted:
 				s.accepted = 1
-			case Failed, Rejected:
+			case Failed:
 				s.failed = 1
+			case Rejected: // a Check or a human at a Gate
+				s.rejected = 1
 			case Parked:
 				s.parked = 1
 			case InfrastructureStop:
@@ -339,8 +344,9 @@ func (r BriefRun) read(in func(time.Time) bool) (chat string, s runState) {
 		}
 	}
 	switch {
-	case !ended && (r.Torn || !r.Live):
-		// Gone without an end: whatever it waited at waits no more.
+	case !ended && !r.Live:
+		// Gone without an end, its tail torn or not: whatever it waited
+		// at waits no more. A live one's torn tail is a record mid-write.
 		if last := r.last(); in(last) || open != nil {
 			s.stopped = 1
 		}
@@ -508,6 +514,9 @@ func (b Brief) summary() string {
 	if t.Failed > 0 {
 		parts = append(parts, fmt.Sprintf("✗ %d Check failed", t.Failed))
 	}
+	if t.Rejected > 0 {
+		parts = append(parts, fmt.Sprintf("✗ %d rejected", t.Rejected))
+	}
 	if t.Parked > 0 {
 		parts = append(parts, fmt.Sprintf("%d parked", t.Parked))
 	}
@@ -530,8 +539,8 @@ func (b Brief) Counts() string {
 	if t.NeedsYou > 0 {
 		parts = append(parts, fmt.Sprintf("▲%d", t.NeedsYou))
 	}
-	if t.Failed > 0 {
-		parts = append(parts, fmt.Sprintf("✗%d", t.Failed))
+	if t.Failed+t.Rejected > 0 {
+		parts = append(parts, fmt.Sprintf("✗%d", t.Failed+t.Rejected))
 	}
 	if t.Accepted > 0 {
 		parts = append(parts, fmt.Sprintf("✓%d", t.Accepted))
@@ -569,6 +578,9 @@ func (c ChatBrief) line(loc *time.Location) string {
 	}
 	if c.Failed > 0 {
 		parts = append(parts, "✗ "+plural(c.Failed, "Check")+" failed")
+	}
+	if c.Rejected > 0 {
+		parts = append(parts, fmt.Sprintf("✗ %d rejected", c.Rejected))
 	}
 	if c.Accepted > 0 {
 		parts = append(parts, fmt.Sprintf("✓ %d accepted", c.Accepted))

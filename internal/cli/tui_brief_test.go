@@ -95,3 +95,13 @@ func TestAwayWindowSleep(t *testing.T) {
 		t.Errorf("injected clock: %v", w.Slept)
 	}
 }
+
+// The window is wall clock, so an absence over a closed lid counts in
+// full: neither end keeps its monotonic reading.
+func TestAwayWindowWallClock(t *testing.T) {
+	now := time.Now()
+	w := awayWindow(now, now.Add(time.Hour))
+	if w.From != w.From.Round(0) || w.To != w.To.Round(0) {
+		t.Errorf("the window keeps a monotonic reading: %v – %v", w.From, w.To)
+	}
+}

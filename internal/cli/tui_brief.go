@@ -35,7 +35,7 @@ func (h *home) noteInput(msg tea.Msg) {
 		return
 	}
 	now := h.clock()
-	if last := h.away.last; !last.IsZero() && now.Sub(last) >= awayMin {
+	if last := h.away.last; !last.IsZero() && wallSince(last, now) >= awayMin {
 		b := h.buildBrief(awayWindow(last, now))
 		h.away.back = &b
 	}
@@ -47,11 +47,18 @@ func (h *home) noteInput(msg tea.Msg) {
 // stops while it sleeps; times without a monotonic reading (an injected
 // clock) show none.
 func awayWindow(from, to time.Time) run.BriefWindow {
-	w := run.BriefWindow{From: from, To: to, Basis: run.BasisAway}
-	if s := to.Round(0).Sub(from.Round(0)) - to.Sub(from); s >= run.SleepFloor {
+	// The window itself is wall clock: it includes the sleep.
+	w := run.BriefWindow{From: from.Round(0), To: to.Round(0), Basis: run.BasisAway}
+	if s := wallSince(from, to) - to.Sub(from); s >= run.SleepFloor {
 		w.Slept = s
 	}
 	return w
+}
+
+// wallSince is to - from on the wall clock, which goes on while the
+// machine sleeps: an absence over a closed lid counts in full.
+func wallSince(from, to time.Time) time.Duration {
+	return to.Round(0).Sub(from.Round(0))
 }
 
 // brief is the return brief for the Inbox's first card: the absence the
@@ -62,7 +69,7 @@ func (h *home) brief() (b run.Brief, ok bool) {
 		return *h.away.back, true
 	}
 	now := h.clock()
-	if h.away.last.IsZero() || now.Sub(h.away.last) < awayMin {
+	if h.away.last.IsZero() || wallSince(h.away.last, now) < awayMin {
 		return run.Brief{}, false
 	}
 	return h.buildBrief(awayWindow(h.away.last, now)), true
@@ -105,6 +112,8 @@ func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 		if err != nil {
 			continue
 		}
+		// This process writes it: a torn tail is a record mid-write.
+		log.Torn = false
 		bc := run.BriefChat{BriefLog: log, N: v.num, Title: v.name}
 		if v.turn != nil {
 			bc.Asks = len(v.turn.asks)
