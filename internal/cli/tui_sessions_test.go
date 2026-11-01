@@ -335,13 +335,24 @@ func TestSessionRefreshSurvivesARestart(t *testing.T) {
 	slash(h, "/sessions")
 	typeText(h, "a")
 	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
-	h.onDesk[0].last = h.onDesk[0].last.Add(-72 * time.Hour) // as if added 3d ago
-	want := h.onDesk[0].last.Add(72 * time.Hour)
+	added := h.onDesk[0]
+	// The session went on elsewhere: a rerun finds it later and renamed.
+	want := added.last.Add(72 * time.Hour)
+	first := h.discover
+	h.discover = func(ctx context.Context, rs []string) sessionFound {
+		f := first(ctx, rs)
+		for i, s := range f.sessions {
+			if s.Provider == added.provider && s.ID == added.id {
+				f.sessions[i].LastActive, f.sessions[i].Title = want, "renamed"
+			}
+		}
+		return f
+	}
 	slash(h, "/sessions")
 	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
 	d.Close(true)
 	got := restoreSessions(private)
-	if len(got) != 1 || !got[0].last.Equal(want) {
-		t.Errorf("restored %+v, want last %v", got, want)
+	if len(got) != 1 || !got[0].last.Equal(want) || got[0].title != "renamed" {
+		t.Errorf("restored %+v, want last %v and the new title", got, want)
 	}
 }
