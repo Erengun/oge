@@ -102,6 +102,16 @@ func TestBriefGolden(t *testing.T) {
 			// The agent died mid-turn and the Chat went on.
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefRec(11, RecAttemptEnded, map[string]any{"turn": 1, "failure": "agent text never shows"}),
 				briefSettled(20, 2))}},
+		{name: "real_ids",
+			// Ids as newID makes them: the date alone names nothing. Two cuts
+			// of a Chat this home doesn't list are one entry, not two Runs.
+			w: BriefWindow{From: briefT0, To: briefAt(130), Basis: BasisLastAct},
+			chats: []BriefChat{briefChat("20261101T090000-a1b2c3", 0, "", briefSettled(10, 1)),
+				briefChat("20261101T091500-d4e5f6", 0, "", briefSettled(20, 1))},
+			runs: []BriefRun{
+				briefCut("20261101T093000-0a0b0c", "20261101T080000-778899", true, briefGate(40, "gate.result")),
+				briefCut("20261101T092000-0d0e0f", "20261101T080000-778899", false, briefEnded(35, Accepted)),
+				briefCut("20261101T091000-101112", "", false, briefEnded(30, Failed))}},
 		{name: "empty",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(-30, 1))},
 			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(-20, Accepted))}},

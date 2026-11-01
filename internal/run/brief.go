@@ -243,14 +243,18 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		spans = append(spans, logSleeps(r.Records)...)
 		cb := byID[chat]
 		if cb == nil {
-			cb = &ChatBrief{ID: r.ID, Title: r.Title, Run: true}
+			// A one-shot Run, or a cut of a Chat not listed here (closed,
+			// or open in another home): one entry per Chat, never per cut.
+			id := chat
+			if id == "" {
+				id = r.ID
+			}
+			cb = &ChatBrief{ID: id, Title: r.Title, Run: chat == ""}
 			if len(r.Records) > 0 {
-				started[r.ID] = r.Records[0].At
+				started[id] = r.Records[0].At
 			}
 			order = append(order, cb)
-			if chat == "" {
-				byID[r.ID] = cb
-			}
+			byID[id] = cb
 		} else if cb.Title == "" && r.Title != "" {
 			cb.Title = r.Title // the newest cut's: Runs come newest first
 		}
@@ -563,7 +567,7 @@ func (c ChatBrief) name() string {
 	n := "Chat " + fmt.Sprint(c.N)
 	switch {
 	case c.Run:
-		n = "Run " + shortID(c.ID)
+		n = "Run " + c.ID // whole: oge apply and oge receipt take it
 	case c.N == 0:
 		n = "Chat " + shortID(c.ID)
 	}
@@ -622,9 +626,12 @@ func plural(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
+// shortID drops the date from a Chat id ("20261101T150405-abcdef" is
+// "150405-abcdef"): the date alone tells this morning's Chats apart from
+// nothing. Other shapes are kept whole.
 func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+	if len(id) > 9 && id[8] == 'T' {
+		return id[9:]
 	}
 	return id
 }
