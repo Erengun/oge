@@ -146,8 +146,9 @@ func isTitleLine(line []byte) bool {
 }
 
 // tailActivity is the newest timestamp among the complete lines in the
-// file's last tailBytes, or zero when none parses. Timestamps grow through
-// a file, so the tail holds the last activity without reading content.
+// file's last tailBytes, or zero when none parses. A file is appended to,
+// so the tail holds the last activity without reading the rest; within it
+// timestamps may step back slightly, hence the newest, not the last.
 func tailActivity(f *os.File, size int64) time.Time {
 	off := size - tailBytes
 	if off < 0 {
@@ -173,11 +174,10 @@ func tailActivity(f *os.File, size int64) time.Time {
 		if json.Unmarshal(lines[i], &r) != nil {
 			continue
 		}
+		// Timestamps can step back by a fraction of a second near the end
+		// of a file: take the newest in the tail, not the last line's.
 		if t, e := time.Parse(time.RFC3339Nano, r.Timestamp); e == nil && t.After(last) {
 			last = t
-		}
-		if !last.IsZero() {
-			break
 		}
 	}
 	return last

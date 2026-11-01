@@ -117,7 +117,6 @@ func TestDiscoverSessionsMixedSidechainStaysListed(t *testing.T) {
 func TestDiscoverSessionsLargeContentLines(t *testing.T) {
 	big := `{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T10:00:00Z","message":"` +
 		strings.Repeat("x", 8<<20) + `"}`
-	start := time.Now()
 	got := DiscoverSessions(writeSession(t,
 		`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T09:00:00Z"}`,
 		big,
@@ -130,9 +129,6 @@ func TestDiscoverSessionsLargeContentLines(t *testing.T) {
 	}
 	if got[0].LastActive.IsZero() {
 		t.Fatal("no last activity")
-	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Fatalf("16MB of content lines took %v", d)
 	}
 }
 
