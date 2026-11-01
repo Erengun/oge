@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
@@ -65,9 +66,11 @@ var (
 	// A verifier's (QA's) Session is always fresh.
 	ErrSessionReuse = errors.New("only an implementer Session may be reused")
 	ErrChatClosed   = errors.New("the chat is closed")
-	ErrChatStopped  = errors.New("the chat was stopped: Öge was interrupted")
-	ErrChatIdle     = errors.New("the chat Session was idle too long and was closed")
-	ErrChatLost     = errors.New("the chat Session ended")
+	// ErrChatStopped is a Stop (a hangup or a signal): it is a close, so
+	// every ErrChatClosed guard refuses a cut, refresh or Consultation after it.
+	ErrChatStopped = fmt.Errorf("the chat was stopped: Öge was interrupted: %w", ErrChatClosed)
+	ErrChatIdle    = errors.New("the chat Session was idle too long and was closed")
+	ErrChatLost    = errors.New("the chat Session ended")
 )
 
 // ChatParams is what a Chat opens from.
@@ -154,9 +157,12 @@ type Chat struct {
 	prepMu     sync.Mutex
 	prepClosed bool
 
-	cutMu   sync.Mutex // one cut at a time
-	lastCut *cutMark   // the last cut that reached a Run's walk; written under supersedeMu too
-	refused *Result    // the cut setup's failure refused
+	cutMu sync.Mutex // one cut at a time
+	// cutting: a Cut, not a Snapshot refresh, holds cutMu. Stop logs
+	// TurnInterrupted only for a turn or a cut in flight.
+	cutting atomic.Bool
+	lastCut *cutMark // the last cut that reached a Run's walk; written under supersedeMu too
+	refused *Result  // the cut setup's failure refused
 	// verified are the cuts' Check results by what they checked, for the
 	// Chat's lifetime: a cut of the same tree reuses its Verdict.
 	verified map[checkKey]checkedBy
@@ -1266,8 +1272,8 @@ func (c *Chat) end(reason error, why string) {
 		<-c.prepared
 		c.prepMu.Unlock()
 		if !c.cutMu.TryLock() {
-			busy = true
-			c.cutMu.Lock() // a cut in flight still uses the seed and the control
+			busy = busy || c.cutting.Load() // a refresh holding it interrupts no turn
+			c.cutMu.Lock()                  // a cut in flight still uses the seed and the control
 		}
 		defer c.cutMu.Unlock()
 		c.prep.control.Stop()

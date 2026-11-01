@@ -53,10 +53,12 @@ func stoppedChat(t *testing.T, f *runFixture, want string) {
 	if err := json.Unmarshal(recs[len(recs)-1].Data, &last); err != nil || last.Why != "hangup" {
 		t.Errorf("TurnInterrupted %s: %v", recs[len(recs)-1].Data, err)
 	}
+	started := 0
 	for _, r := range recs {
 		if r.Type != run.RecProcessStarted {
 			continue
 		}
+		started++
 		var p struct{ PGID int }
 		if err := json.Unmarshal(r.Data, &p); err != nil || p.PGID <= 0 {
 			t.Fatalf("ProcessStarted %s: %v", r.Data, err)
@@ -64,6 +66,9 @@ func stoppedChat(t *testing.T, f *runFixture, want string) {
 		if syscall.Kill(-p.PGID, 0) == nil {
 			t.Errorf("the Chat's agent process group %d is still running", p.PGID)
 		}
+	}
+	if started == 0 {
+		t.Errorf("the Chat log has no %s: nothing to check the process group of", run.RecProcessStarted)
 	}
 	work, _ := filepath.Glob(filepath.Join(f.state, "work", "chats", "*", "implement", want))
 	if len(work) != 1 {

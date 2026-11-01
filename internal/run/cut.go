@@ -195,6 +195,8 @@ func (c *Chat) Cut(ctx context.Context, cp CutParams) (*Result, error) {
 	c.supersedeMu.Unlock()
 	c.cutMu.Lock()
 	defer c.cutMu.Unlock()
+	c.cutting.Store(true)
+	defer c.cutting.Store(false)
 	if err := c.Err(); errors.Is(err, ErrChatClosed) {
 		return nil, err
 	}
