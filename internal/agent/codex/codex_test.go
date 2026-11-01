@@ -793,3 +793,71 @@ func TestUsageIsPerTurnNotTheRunningTotal(t *testing.T) {
 		<-s.events // TurnSettled
 	}
 }
+
+// held_approval.jsonl: Codex does not expire a pending approval. The
+// fileChange request waited about 690 s for an answer; nothing from the
+// server touched it in between, only Öge's decline resolved it, and the
+// turn completed (docs/research/held-requests.md). Öge's adapter answers
+// every approval at once today, so it never holds one itself.
+func TestCodexDoesNotExpireAHeldApproval(t *testing.T) {
+	var asked, answered, resolved, completed float64
+	var between []string
+	var declinedAt float64
+	raw := loadTimed(t, "held_approval.jsonl")
+	for _, r := range raw {
+		m := r.Msg
+		method, _ := m["method"].(string)
+		switch {
+		case method == "item/fileChange/requestApproval":
+			asked = r.T
+		case r.Dir == "c2s" && m["id"] == float64(0) && m["result"] != nil:
+			answered = r.T
+		case method == "serverRequest/resolved" && resolved == 0:
+			resolved = r.T
+		case method == "turn/completed":
+			completed = r.T
+		case method == "item/completed" && declinedAt == 0:
+			if item, _ := m["params"].(map[string]any)["item"].(map[string]any); item["type"] == "fileChange" && item["status"] == "declined" {
+				declinedAt = r.T
+			}
+		}
+		if asked != 0 && answered == 0 && r.T > asked && method != "" {
+			between = append(between, method)
+		}
+	}
+	if asked == 0 || answered-asked < 600 {
+		t.Fatalf("the recording held the approval %.0f s, want at least 600", answered-asked)
+	}
+	if len(between) != 0 {
+		t.Errorf("the server sent %v while the approval was held", between)
+	}
+	if declinedAt < answered {
+		t.Errorf("the fileChange item declined at %.1f, before the answer at %.1f", declinedAt, answered)
+	}
+	if resolved < answered || completed < resolved {
+		t.Errorf("order: answered %.1f, resolved %.1f, turn completed %.1f", answered, resolved, completed)
+	}
+}
+
+type timedRec struct {
+	T   float64        `json:"t"`
+	Dir string         `json:"dir"`
+	Msg map[string]any `json:"msg"`
+}
+
+func loadTimed(t *testing.T, name string) []timedRec {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []timedRec
+	for _, l := range bytes.Split(bytes.TrimSpace(b), []byte("\n")) {
+		var r timedRec
+		if err := json.Unmarshal(l, &r); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
