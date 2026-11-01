@@ -328,7 +328,7 @@ func TestAdviceSendAfterTheChatClosed(t *testing.T) {
 		chatView: &chatView{comp: newComposer(), chat: &homeChat{},
 			adv: &adviseState{shown: true, chat: &run.Chat{}, advice: &run.Advice{ID: "c1", Text: "x"}}},
 	}
-	if cmd := h.sendAdvice(); cmd != nil || h.adv != nil || h.turn != nil || len(h.msg) == 0 {
+	if cmd := h.sendAdvice(true); cmd != nil || h.adv != nil || h.turn != nil || len(h.msg) == 0 {
 		t.Errorf("cmd %v adv %v turn %v msg %v", cmd != nil, h.adv, h.turn, h.msg)
 	}
 }

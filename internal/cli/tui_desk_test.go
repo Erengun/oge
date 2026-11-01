@@ -781,6 +781,9 @@ func TestQuietIsDrawnWithNoMessage(t *testing.T) {
 	if col := strings.Join(railCol(h), "\n"); !strings.Contains(col, "2 ?") {
 		t.Errorf("rail after the quiet redraw:\n%s", col)
 	}
+	if got := ansi.Strip(h.header(200)); strings.Contains(got, "working") {
+		t.Errorf("header after the quiet redraw: %q", got)
+	}
 	if len(r.d) != 1 {
 		t.Errorf("a quiet turn asked for more redraws: %v", r.d)
 	}
@@ -834,7 +837,7 @@ func TestFailedCheckAndAdviceTurns(t *testing.T) {
 	c := &run.Chat{}
 	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
 	h.pendingFB = &pendingFeedback{text: "1 failing"}
-	h.sendAdviceTurn(c, &run.Advice{ID: "a1", Text: "try the other path"}, false)
+	h.sendAdviceTurn(c, &run.Advice{ID: "a1", Text: "try the other path"}, false, true)
 	if m, _ := h.mark(h.chatView); h.turn == nil || m != "●" {
 		t.Fatalf("glyph = %s during the advice turn, want ●", m)
 	}
@@ -845,13 +848,30 @@ func TestFailedCheckAndAdviceTurns(t *testing.T) {
 
 	h = deskHome()
 	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
-	h.sendAdviceTurn(c, &run.Advice{ID: "a2", Text: "try the other path"}, true)
+	h.sendAdviceTurn(c, &run.Advice{ID: "a2", Text: "try the other path"}, true, false)
 	if m, _ := h.mark(h.chatView); h.turn == nil || m != "●" {
 		t.Fatalf("glyph = %s during the automatic advice turn, want ●", m)
 	}
 	h.turn = nil
 	if m, _ := h.mark(h.chatView); m != "✗" {
 		t.Errorf("glyph = %s after an automatic turn with no cut, want ✗", m)
+	}
+}
+
+// The chain's automatic Consultation under [advisor] auto = "ask" waits
+// for ↵: the human sending it answers the failure.
+func TestAcceptedAutoAdviceAnswersTheFailure(t *testing.T) {
+	h := deskHome()
+	c := h.chat.c
+	h.last, h.side.outcome, h.doneAt = &lastRun{}, run.Failed, h.clock()
+	h.adv = &adviseState{chat: c, advice: &run.Advice{ID: "a1", Text: "try the other path"}, shown: true, auto: true, mode: pipeline.AdvisorAutoAsk}
+	h.Update(enter())
+	if h.turn == nil || !h.answered {
+		t.Fatalf("↵ on the advice: turn %v, answered %v", h.turn, h.answered)
+	}
+	h.turn = nil
+	if m, _ := h.mark(h.chatView); m != "○" {
+		t.Errorf("glyph = %s after the human sent the advice, want ○", m)
 	}
 }
 
