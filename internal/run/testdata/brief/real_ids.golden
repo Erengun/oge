@@ -1,11 +1,11 @@
 since you last acted (2h 10m): ✓ 1 accepted · ▲ 1 needs you (Chat 080000-778899: result Gate) · ✗ 1 Check failed · 2 turns settled
 Chat 090000-a1b2c3
   Since you left: 1 turn settled
-  Your decisions: none yet
+  Your decisions: none in the cuts read
   Waiting for you: nothing
 Chat 091500-d4e5f6
   Since you left: 1 turn settled
-  Your decisions: none yet
+  Your decisions: none in the cuts read
   Waiting for you: nothing
 Run 20261101T091000-101112
   Since you left: ✗ 1 Check failed
@@ -13,6 +13,6 @@ Run 20261101T091000-101112
   Waiting for you: nothing
 Chat 080000-778899
   Since you left: ✓ 1 accepted
-  Your decisions: none yet
+  Your decisions: none in the cuts read
   Waiting for you: ▲ result Gate since 01:40
 Next: Chat 080000-778899 · ▲ result Gate since 01:40

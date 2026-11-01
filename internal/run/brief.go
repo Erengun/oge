@@ -60,6 +60,9 @@ type BriefChat struct {
 	// Asks are the asks waiting now. No record holds them, so only the
 	// process that holds the Session knows: 0 anywhere else.
 	Asks int
+	// AskedAt is when the Chat last came to need the human, as the caller
+	// has it (zero when unknown): it dates an ask, which no record does.
+	AskedAt time.Time
 }
 
 // BriefRun is a Run's Ledger: a Chat's cut or a one-shot Run.
@@ -145,6 +148,18 @@ type ChatBrief struct {
 	// Gates are the Gates open now, wherever they opened.
 	Gates []OpenGate
 	Asks  int
+	// AskedAt dates the asks, as the Inbox does (zero: unknown).
+	AskedAt time.Time
+	// newestSeen says the Chat's newest cut was read; newestOpen that it
+	// has not ended in an Accepted, Failed or Rejected (running, parked,
+	// stopped), so no older cut's end is its card. humanAt is the human's
+	// last message in the Chat log, which answers a failed Check.
+	newestSeen, newestOpen bool
+	newestRun              string
+	humanAt                time.Time
+	// logDelivered are the Chat log's own Delivered records: always fully
+	// read, so an apply is never missed for want of its cut's Ledger.
+	logDelivered []loggedDelivery
 	// Stopped counts the cuts that ended without an end recorded: their
 	// process is gone, or their Ledger is torn.
 	Stopped int
@@ -158,10 +173,17 @@ type ChatBrief struct {
 	Torn bool
 }
 
+type loggedDelivery struct {
+	At  time.Time
+	Run string
+	How string
+}
+
 // Decision is one act of the human, in Öge's fixed words.
 type Decision struct {
 	At   time.Time
 	What string // "chose acknowledge at tamper Gate", "applied cut"
+	run  string // the Run whose Ledger records it, "" when from a Chat log
 	// Delivery is an apply or a branch, not a Gate decision.
 	Delivery bool
 }
@@ -229,7 +251,7 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 	var order []*ChatBrief
 	var spans []sleepSpan
 	for _, c := range chats {
-		cb := &ChatBrief{ID: c.ID, N: c.N, Title: c.Title, Asks: c.Asks, First: oneLine(c.First)}
+		cb := &ChatBrief{ID: c.ID, N: c.N, Title: c.Title, Asks: c.Asks, AskedAt: c.AskedAt, First: oneLine(c.First)}
 		byID[c.ID], order = cb, append(order, cb)
 		newest := time.Time{}
 		for _, r := range c.Records {
@@ -257,8 +279,21 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 				if cb.Ended == "" {
 					cb.Ended = "interrupt"
 				}
+			case RecDelivered:
+				var d struct{ Run, How string }
+				_ = json.Unmarshal(r.Data, &d)
+				if d.How == "apply" || d.How == "branch" {
+					cb.logDelivered = append(cb.logDelivered, loggedDelivery{r.At, d.Run, d.How})
+				}
 			case RecTurnStarted, RecSessionReopened:
 				cb.Ended = "" // it went on after
+				if r.Type == RecTurnStarted {
+					var d struct{ By string }
+					_ = json.Unmarshal(r.Data, &d)
+					if d.By == "" {
+						cb.humanAt = r.At
+					}
+				}
 			}
 		}
 		spans = append(spans, logSleeps(c.Records)...)
@@ -301,11 +336,19 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		} else {
 			delete(oldest, cb.ID)
 		}
-		if rs.final != "" && cb.Newest == "" { // Runs come newest first
-			cb.Newest, cb.NewestAt, cb.NewestDelivered = rs.final, rs.finalAt, rs.delivered
+		if !cb.newestSeen && !cb.Run { // Runs come newest first
+			// The newest cut is the Chat's card, whatever state it is in:
+			// one still running or parked hides an older cut's end.
+			cb.newestSeen = true
+			if rs.final != "" {
+				cb.Newest, cb.NewestAt, cb.NewestDelivered, cb.newestRun = rs.final, rs.finalAt, rs.delivered, r.ID
+			} else {
+				cb.newestOpen = true
+			}
 		}
-		cb.Decisions = append(cb.Decisions, rs.decided...)
 		for _, d := range rs.decided {
+			d.run = r.ID
+			cb.Decisions = append(cb.Decisions, d)
 			if d.Delivery && in(d.At) {
 				cb.Delivered++
 			}
@@ -318,6 +361,30 @@ func BuildBrief(w BriefWindow, chats []BriefChat, runs []BriefRun) Brief {
 		cb.Gates = append(cb.Gates, rs.gates...)
 		if rs.accepted+rs.failed+rs.rejected+rs.parked+rs.stopped+len(rs.gates) > 0 {
 			shown[cb.ID] = true
+		}
+	}
+	for _, cb := range order {
+		if cb.Newest == Failed && cb.humanAt.After(cb.NewestAt) {
+			cb.Newest = "" // the human's message answered it, as the Inbox shows
+		}
+		// The Chat log's applies and branches the Ledgers read did not hold.
+		have := map[string]bool{}
+		for _, d := range cb.Decisions {
+			if d.Delivery {
+				have[d.run] = true
+			}
+		}
+		for _, d := range cb.logDelivered {
+			if d.Run == cb.newestRun {
+				cb.NewestDelivered = true
+			}
+			if have[d.Run] {
+				continue
+			}
+			cb.Decisions = append(cb.Decisions, Decision{At: d.At, What: map[string]string{"apply": "applied", "branch": "branched"}[d.How] + " cut", Delivery: true, run: d.Run})
+			if in(d.At) {
+				cb.Delivered++
+			}
 		}
 	}
 	sort.SliceStable(order, func(i, j int) bool {
@@ -620,7 +687,8 @@ func (b Brief) Lines(loc *time.Location) []string {
 
 // Next is the Chat whose card the Inbox shows first and what it is, in the
 // Inbox's order: ▲, then ✗, then ✓, and within each the older first (a
-// Gate's Since, a cut's end), the earlier Chat on a tie. ok is false when
+// Gate's Since, an ask's time, a cut's end), the earlier Chat on a tie or
+// when a card has no date. ok is false when
 // nothing is actionable. A one-shot Run has no card.
 func (b Brief) Next(loc *time.Location) (c ChatBrief, what string, ok bool) {
 	best := 3
@@ -631,7 +699,9 @@ func (b Brief) Next(loc *time.Location) (c ChatBrief, what string, ok bool) {
 			continue
 		}
 		at := cc.cardAt()
-		if r < best || r == best && !at.IsZero() && (bestAt.IsZero() || at.Before(bestAt)) {
+		// An undated card keeps its place and never loses it to a dated
+		// one: the earlier Chat holds on a tie.
+		if r < best || r == best && !at.IsZero() && !bestAt.IsZero() && at.Before(bestAt) {
 			c, best, bestAt = cc, r, at
 		}
 	}
@@ -652,6 +722,8 @@ func (c ChatBrief) rank() int {
 	switch {
 	case c.NeedsYou() > 0:
 		return 0
+	case c.newestOpen:
+		return 3
 	case c.Newest == Failed:
 		return 1
 	case c.Newest == Accepted && !c.NewestDelivered:
@@ -667,7 +739,7 @@ func (c ChatBrief) cardAt() time.Time {
 		if len(c.Gates) > 0 {
 			return c.Gates[0].Since
 		}
-		return time.Time{}
+		return c.AskedAt
 	}
 	return c.NewestAt
 }
@@ -696,7 +768,12 @@ const decisionsShown = 3
 // decisions are the human's acts in the Chat, oldest first.
 func (c ChatBrief) decisions(loc *time.Location) string {
 	if len(c.Decisions) == 0 {
-		return "none yet"
+		if c.Run {
+			return "none yet" // its one Ledger was read whole
+		}
+		// A Chat's older cuts may be past what was read; its applies are
+		// never missed (its own log), a Gate decision in an unread cut is.
+		return "none in the cuts read"
 	}
 	var parts []string
 	ds := c.Decisions

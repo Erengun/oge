@@ -418,3 +418,46 @@ func TestInboxBriefPlainAndQuiet(t *testing.T) {
 		}
 	}
 }
+
+// G1: the ✓ card behind the brief isn't on screen, so it isn't seen until
+// tab brings it there.
+func TestInboxDoneCardBehindBriefIsNotSeen(t *testing.T) {
+	h, now := inboxHome(t)
+	h.views[1].pendingFB, h.views[1].answered = nil, true
+	h.views[2].turn = nil
+	h.views[4].cutGate = nil
+	four := h.views[3]
+	r := &redraws{}
+	h.redraw = r.after
+	h.absence.back = briefOf(h)
+	h.Update(ctrlSpace())
+	if h.inbox == nil || h.inbox.brief == nil {
+		t.Fatal("no brief")
+	}
+	*now = now.Add(seenAfter)
+	for _, m := range r.msg {
+		h.Update(m)
+	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m, _ := h.mark(four); m != "✓" {
+		t.Fatalf("Chat 4 after the brief alone: %s, want ✓", m)
+	}
+	// Past the brief with tab, the card counts from when it is shown.
+	h.absence.back = briefOf(h)
+	h.Update(ctrlSpace())
+	h.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	*now = now.Add(seenAfter)
+	var seen tea.Msg
+	for _, m := range r.msg {
+		if _, ok := m.(inboxSeenMsg); ok {
+			seen = m
+		}
+	}
+	if seen == nil {
+		t.Fatal("no seen-clock after tab")
+	}
+	h.Update(seen)
+	if m, _ := h.mark(four); m != "○" {
+		t.Errorf("Chat 4 after its card was shown: %s, want ○", m)
+	}
+}

@@ -79,8 +79,12 @@ func TestBriefGolden(t *testing.T) {
 		{name: "open_gate",
 			// The Gate opened before the briefWindow and still needs you; an
 			// ask waits in another Chat.
-			chats: []BriefChat{briefChat("c3", 3, "parser"), func() BriefChat { c := briefChat("c1", 1, "auth", briefSettled(5, 2)); c.Asks = 1; return c }()},
-			runs:  []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))}},
+			chats: []BriefChat{briefChat("c3", 3, "parser"), func() BriefChat {
+				c := briefChat("c1", 1, "auth", briefSettled(5, 2))
+				c.Asks, c.AskedAt = 1, briefAt(10)
+				return c
+			}()},
+			runs: []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))}},
 		{name: "hangup",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1), briefRec(11, RecTurnStarted, map[string]any{"turn": 2}),
 				// The Chat ends the turn in flight before it records the hangup.
@@ -199,6 +203,38 @@ func TestBriefGolden(t *testing.T) {
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))},
 			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed)),
 				briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
+		{name: "next_ask_dated",
+			// The ask in Chat 1 came after Chat 2's Gate opened: Chat 2 first.
+			// With the ask older, Chat 1 would lead.
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 1, "auth", briefSettled(5, 1))
+				c.Asks, c.AskedAt = 1, briefAt(70)
+				return c
+			}(), briefChat("c2", 2, "parser", briefSettled(6, 1))},
+			runs: []BriefRun{briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
+		{name: "next_ask_older",
+			chats: []BriefChat{func() BriefChat {
+				c := briefChat("c1", 1, "auth", briefSettled(5, 1))
+				c.Asks, c.AskedAt = 1, briefAt(10)
+				return c
+			}(), briefChat("c2", 2, "parser", briefSettled(6, 1))},
+			runs: []BriefRun{briefCut("r2", "c2", true, briefGate(30, "gate.tamper"))}},
+		{name: "newest_cut_live",
+			// The cut that was accepted at 00:50 is not the Chat's card: the
+			// human's next message made a cut that is still verifying.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCutAt(2, "r2", "c1", true, briefRec(60, RecAttemptEnded, map[string]any{"turn": 2})),
+				briefCut("r1", "c1", false, briefEnded(50, Accepted))}},
+		{name: "failure_answered_by_message",
+			// The human asked why it failed; that turn settled with no cut.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecTurnStarted, map[string]any{"turn": 2}), briefSettled(70, 2))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "apply_from_chat_log",
+			// The cut's Ledger was not read: the Chat log still records the apply.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1),
+				briefRec(30, RecDelivered, map[string]any{"run": "r2", "how": "apply"}))},
+			runs: []BriefRun{briefCut("r2", "c1", false, briefEnded(50, Accepted))}},
 		{name: "empty",
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(-30, 1))},
 			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(-20, Accepted))}},

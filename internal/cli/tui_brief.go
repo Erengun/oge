@@ -142,6 +142,12 @@ func (h *home) buildBrief(w run.BriefWindow) run.Brief {
 		if v.turn != nil {
 			bc.Asks = len(v.turn.asks)
 		}
+		if bc.Asks > 0 || v.cutGate != nil || v.stale != nil {
+			bc.AskedAt = v.askedAt // the Inbox dates an ask so
+			if bc.AskedAt.IsZero() {
+				bc.AskedAt = v.lastEvent
+			}
+		}
 		chats = append(chats, bc)
 	}
 	var runs []run.BriefRun

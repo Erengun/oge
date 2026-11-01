@@ -171,6 +171,9 @@ func (h *home) inboxTick() tea.Cmd {
 	if in == nil {
 		return nil
 	}
+	if in.brief != nil {
+		return nil // the first card is behind the brief: not on screen
+	}
 	h.showCard()
 	if in.cur == nil || in.mark != "✓" || in.cur.seen || in.unread == in.cur || h.redraw == nil || in.ticked.Equal(in.shown) {
 		return nil
@@ -182,7 +185,7 @@ func (h *home) inboxTick() tea.Cmd {
 
 // inboxSeen marks the ✓ card seen when it is still on screen.
 func (h *home) inboxSeen(m inboxSeenMsg) {
-	if in := h.inbox; in != nil && in.cur == m.v && in.shown.Equal(m.shown) && in.unread != m.v {
+	if in := h.inbox; in != nil && in.brief == nil && in.cur == m.v && in.shown.Equal(m.shown) && in.unread != m.v {
 		m.v.seen = true
 	}
 }
@@ -219,7 +222,8 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	if in.brief != nil {
 		switch key {
 		case "tab", "shift+tab":
-			in.brief = nil // on to the first card
+			in.brief = nil // on to the first card, shown from now
+			in.shown, in.ticked = h.clock(), time.Time{}
 		case "enter": // Enter alone decides nothing (ADR-0022)
 		default:
 			in.comp.key(msg)
