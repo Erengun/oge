@@ -1,6 +1,6 @@
 # Away: the Desk while you're gone
 
-Status: draft, needs the user's decisions (below). Evidence: [`docs/research/herdr-and-attention.md`](../research/herdr-and-attention.md) (§1 Duet, §2 herdr, §5 principles) and [`docs/research/competitor-pain-points.md`](../research/competitor-pain-points.md) (2.11, G6). Builds on [`desk.md`](desk.md) and [ADR-0024](../adr/0024-several-chats-one-attention-queue.md). It reframes part of [#55](https://github.com/Erengun/oge/issues/55) and takes G6 from [#342](https://github.com/Erengun/oge/issues/342).
+Status: approved (user, 2026-11-01; decisions A1–A8 in #354, recorded below). Evidence: [`docs/research/herdr-and-attention.md`](../research/herdr-and-attention.md) (§1 Duet, §2 herdr, §5 principles) and [`docs/research/competitor-pain-points.md`](../research/competitor-pain-points.md) (2.11, G6). Builds on [`desk.md`](desk.md) and [ADR-0024](../adr/0024-several-chats-one-attention-queue.md). It reframes part of [#55](https://github.com/Erengun/oge/issues/55) and takes G6 from [#342](https://github.com/Erengun/oge/issues/342).
 
 ## Why
 
@@ -47,6 +47,21 @@ Under the U2 default (`[chat] feedback = ask`), "keeps working while you're away
 | A6 | A restored Chat whose settings changed | Read-only, plus `n` for a new Chat. | Also allow a typed `reopen`: continue under the new settings, recorded as a pinned human decision. | Continue silently. | **b.** Never c (that is herdr D1080). |
 | A7 | `oge add "task"` (#338) reaching a Desk while you're away | Starts at once, as #338 is written. | Lands as a card. Its first turn starts only when a human focuses it or presses Enter. | Refused while away. | **b.** A supervised agent runs as your user and can run `oge add` itself. Hard denies are path-based, so nothing else stops that fan-out. This amends #338's first acceptance criterion. |
 | A8 | What off-terminal pushes may carry | The Chat number, counts and the repo name only. | Opt-in `[notify] titles = true` adds Chat titles. | Always include titles. | **a** by default, **b** as opt-in. Titles come from your first message, which is Task text, and notify.go's rule keeps that out of third-party pushes (G11 wants the title). |
+
+### Decided (user, 2026-11-01, #354)
+
+| # | Decision |
+|---|---|
+| A1 | **Host-kept.** herdr, tmux or screen keeps `oge` alive; Öge builds no daemon or detach. |
+| A2 | **Stop cleanly now** with no host: interrupt, grace, kill, scope check, Checkpoint. |
+| A3 | **Ask on `/quit`** when Chats are open: keep them for restore or close them. A signal (SIGHUP, SIGTERM) can't ask, so it **keeps** them. |
+| A4 | **No send-back while away.** The `✗` card waits; U2 holds. |
+| A5 | **Re-brief only** on restore; no vendor session resume. |
+| A6 | A restored Chat whose settings changed is **read-only**, with `n` and a typed `reopen`. |
+| A7 | `oge add` while away **lands as a card**; it starts only when focused. |
+| A8 | Pushes carry the **Chat number, counts and repo** only; `[notify] titles = true` opts in to titles. |
+
+The table above keeps the options and the reasoning.
 
 ## Model
 
