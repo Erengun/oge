@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"11111111-aaaa","cwd":"/repo/a","gitBranch":"main","isSidechain":false,"timestamp":"2026-10-30T10:00:00.000Z","message":{"role":"user","content":"SENTINEL-MESSAGE-TEXT"}}
+{"type":"custom-title","sessionId":"11111111-aaaa","customTitle":"fix the parser"}
+{"type":"ai-title","sessionId":"11111111-aaaa","aiTitle":"Parser work"}
+{"type":"assistant","sessionId":"11111111-aaaa","cwd":"/repo/a","isSidechain":false,"timestamp":"2026-10-30T10:05:00.000Z","message":{"content":[{"type":"tool_result","content":"SENTINEL-TOOL-RESULT"}]}}
