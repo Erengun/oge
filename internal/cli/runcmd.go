@@ -326,12 +326,16 @@ func selectView(env Env, f runFlags, t task.Task, frozen *pipeline.Frozen) view 
 	u := newTUI(env, t, frozen, plain)
 	user := userForNotify(env)
 	u.notify = notifierFor(env, f, user)
+	u.herdr = startHerdr(env)
 	u.m.st.setTheme(user.ThemeName())
 	u.vim = user.VimMode()
 	u.vimEscape = user.VimEscapeKeys()
 	u.m.st.reloadCustomTheme(env.Getenv)
 	u.m.kb, _ = loadKeybindings(env.Getenv)
 	u.m.notify = u.notify
+	if u.herdr != nil {
+		u.m.herdr = u.herdr
+	}
 	return u
 }
 
