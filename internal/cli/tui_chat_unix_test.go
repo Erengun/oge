@@ -44,8 +44,7 @@ func startChatSession(t *testing.T, sc multiturn.Scenario, setup func(*runFixtur
 // process has exited.
 func (s *homeSession) quitChat(f *runFixture) {
 	s.t.Helper()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		s.t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if left, _ := filepath.Glob(filepath.Join(f.state, "work", "chats", "*")); len(left) > 0 {
@@ -420,8 +419,7 @@ func TestHomeChatEscapeHatch(t *testing.T) {
 	s.type_("yo\r")
 	s.expect("ÖGE RECEIPT") // a one-shot Run's, never a Chat turn's
 	s.composer()
-	s.type_("\x03")
-	s.wait() // the one-shot path keeps its last Run's code; fakeclaude's envelope stops it
+	s.quitClosing("\x03") // the one-shot path keeps its last Run's code; fakeclaude's envelope stops it
 	if logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*")); len(logs) > 0 {
 		t.Errorf("OGE_CHAT=0 opened a Chat: %v", logs)
 	}

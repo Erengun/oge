@@ -210,8 +210,8 @@ func TestBackgroundSendErrorStaysInItsChat(t *testing.T) {
 }
 
 // With another Chat at work, Ctrl+C on an empty box only says so: the
-// next Ctrl+C, and only the very next key, quits. A stopped turn's second
-// Ctrl+C asks the same.
+// next Ctrl+C, and only the very next key, goes on to quit, through the
+// quit ask. A stopped turn's second Ctrl+C asks the same.
 func TestCtrlCWithAnotherChatWorkingAsksAgain(t *testing.T) {
 	h := deskHome()
 	first := h.chatView
@@ -227,8 +227,11 @@ func TestCtrlCWithAnotherChatWorkingAsksAgain(t *testing.T) {
 	if h.quit {
 		t.Fatal("ctrl+c, esc, ctrl+c quit")
 	}
-	if _, cmd := h.Update(ctrlC); !h.quit || cmd == nil {
-		t.Fatalf("a second ctrl+c in a row didn't quit")
+	if h.Update(ctrlC); h.quit || h.quitAsk != 1 {
+		t.Fatalf("a second ctrl+c in a row: quit %v, ask %d", h.quit, h.quitAsk)
+	}
+	if _, cmd := h.Update(runeKey('c')); !h.quit || cmd == nil || h.keep {
+		t.Fatalf("c at the ask: quit %v, keep %v", h.quit, h.keep)
 	}
 
 	h = deskHome()
@@ -244,15 +247,61 @@ func TestCtrlCWithAnotherChatWorkingAsksAgain(t *testing.T) {
 		t.Errorf("the turn's screen doesn't say why it didn't quit:\n%s", got)
 	}
 	h.Update(ctrlC)
-	if !h.quit {
-		t.Error("a second ctrl+c didn't quit")
+	if h.quit || h.quitAsk == 0 {
+		t.Error("a second ctrl+c didn't go on to the quit ask")
 	}
 
-	// With nothing else at work, one is enough, as before.
+	// With nothing else at work, one is enough to ask; with no Chat
+	// open, to quit, as before.
 	h = deskHome()
 	h.Update(ctrlC)
+	if h.quit || h.quitAsk != 1 {
+		t.Error("ctrl+c on an empty box with one Chat open didn't ask")
+	}
+	h = deskHome()
+	h.chat = &homeChat{}
+	h.Update(ctrlC)
 	if !h.quit {
-		t.Error("ctrl+c on an empty box with one Chat didn't quit")
+		t.Error("ctrl+c on an empty box with no Chat open didn't quit")
+	}
+}
+
+// Quitting with Chats open asks whether to keep them (docs/ux/away.md,
+// A3). Enter alone, ctrl+c or any other key decides nothing; esc goes back; k
+// keeps them, c closes them.
+func TestQuitAsksToKeepOpenChats(t *testing.T) {
+	h := deskHome()
+	submit(h, "/new")
+	h.chat = &homeChat{c: &run.Chat{}}
+	submit(h, "/quit")
+	if h.quit || h.quitAsk != 2 {
+		t.Fatalf("/quit with two Chats open: quit %v, ask %d", h.quit, h.quitAsk)
+	}
+	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "Keep 2 Chats for next time? k keep · c close · esc cancel") {
+		t.Errorf("the ask isn't on the screen:\n%s", got)
+	}
+	for _, k := range []tea.KeyPressMsg{enter(), runeKey('y'), runeKey('q'), {Code: tea.KeySpace}, ctrlKey('c')} {
+		if h.Update(k); h.quit || h.quitAsk == 0 {
+			t.Fatalf("%q at the ask: quit %v, ask %d", k.String(), h.quit, h.quitAsk)
+		}
+	}
+	if h.comp.text() != "" {
+		t.Errorf("keys at the ask reached the box: %q", h.comp.text())
+	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.quit || h.quitAsk != 0 || strings.Contains(ansi.Strip(h.View().Content), "for next time?") {
+		t.Fatalf("esc: quit %v, ask %d", h.quit, h.quitAsk)
+	}
+	submit(h, "/quit")
+	if _, cmd := h.Update(runeKey('k')); !h.quit || !h.keep || cmd == nil {
+		t.Fatalf("k: quit %v, keep %v", h.quit, h.keep)
+	}
+
+	// With no Chat open, /quit quits as it always has.
+	h = testHome(80)
+	submit(h, "/quit")
+	if !h.quit || h.quitAsk != 0 {
+		t.Errorf("/quit with no Chat: quit %v, ask %d", h.quit, h.quitAsk)
 	}
 }
 
@@ -893,5 +942,83 @@ func TestFeedbackTurnsAndTheFailure(t *testing.T) {
 	h.turn = nil
 	if m, _ := h.mark(h.chatView); m != "○" {
 		t.Errorf("glyph = %s after the human's send-back, want ○", m)
+	}
+}
+
+func runeKey(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
+
+// A ✓ seen is written to desk.log once, so it stays seen across a
+// restart (G1).
+func TestSeenIsRecordedOnce(t *testing.T) {
+	private := t.TempDir()
+	d, err := run.OpenDesk(private, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Release()
+	h := deskHome()
+	h.chat = &homeChat{c: &run.Chat{ID: "c1"}, desk: d}
+	h.last, h.side.outcome, h.doneRun, h.doneAt = &lastRun{}, run.Accepted, "r1", h.clock()
+	h.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if h.seenRun != "" {
+		t.Fatal("recorded seen before the human looked")
+	}
+	h.Update(runeKey('x'))
+	h.Update(runeKey('y'))
+	if h.seenRun != "r1" {
+		t.Fatalf("seenRun %q", h.seenRun)
+	}
+	d.Close(true)
+	recs, err := run.ReadDesk(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	for _, r := range recs {
+		if r.Type == run.RecSeen {
+			seen = append(seen, string(r.Data))
+		}
+	}
+	if len(seen) != 1 || seen[0] != `{"chat":"c1","upto":"r1"}` {
+		t.Errorf("Seen records %v", seen)
+	}
+}
+
+// A rail click while the quit ask is open moves nothing and the ask stays
+// on the screen; the keys are still the ask's.
+func TestQuitAskSurvivesARailClick(t *testing.T) {
+	h, _ := railHome(120, 3)
+	h.views[1].turn = &chatTurn{}
+	h.quitAsk = 3 // asked, whatever the Chats' own state
+	col := railCol(h)
+	y := slices.IndexFunc(col, func(l string) bool { return strings.HasPrefix(l, "│2 ●") })
+	if y < 0 {
+		t.Fatalf("no row for Chat 2:\n%s", strings.Join(col, "\n"))
+	}
+	before := h.num
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y + 1})
+	h.Update(tea.PasteMsg{Content: "can you"})
+	if h.num != before || h.quitAsk == 0 || h.quit {
+		t.Errorf("click at the ask: focused %d (was %d), ask %d, quit %v", h.num, before, h.quitAsk, h.quit)
+	}
+	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "for next time?") {
+		t.Errorf("the ask left the screen:\n%s", got)
+	}
+}
+
+// ctrl+c twice in a stopped turn opens the ask, and the turn's own view
+// shows it (no screen skips the ask while its keys are the ask's).
+func TestQuitAskShowsOnTheTurnView(t *testing.T) {
+	for _, rows := range []int{2, 3} {
+		h, _ := railHome(120, rows)
+		h.chat = &homeChat{}
+		h.turn = &chatTurn{stopped: true}
+		h.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+		if h.quitAsk == 0 {
+			t.Fatalf("rows %d: ctrl+c opened no ask", rows)
+		}
+		if got := ansi.Strip(h.View().Content); !strings.Contains(got, "for next time?") {
+			t.Errorf("rows %d: the ask is not on the turn view:\n%s", rows, got)
+		}
 	}
 }

@@ -184,8 +184,7 @@ func (h *home) quitCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/quit")
 	}
-	h.quit = true
-	return tea.Quit, ""
+	return h.quitOrAsk(), ""
 }
 
 func (h *home) setupCmd(args []string) (tea.Cmd, string) {

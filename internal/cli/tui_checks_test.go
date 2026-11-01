@@ -156,8 +156,7 @@ func TestBareOgeSetupEditsAGlobSavesItAndRuns(t *testing.T) {
 	s.composer()
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	b, _ := os.ReadFile(filepath.Join(f.repo, ".oge", "oge.toml"))
@@ -192,8 +191,7 @@ func TestBareOgeFirstRunChecksSectionIsTheProposal(t *testing.T) {
 	s.expect("Saved .oge/oge.toml")
 	s.type_("\t")
 	s.composer()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	b, _ := os.ReadFile(filepath.Join(f.repo, ".oge", "oge.toml"))
@@ -243,8 +241,7 @@ func TestBareOgeUnsavedNarrowedGlobIsTrustWeakening(t *testing.T) {
 	s.expect("Test globs: *_test.go (from setup)")
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if !strings.Contains(s.out.String(), "trust-weakening option in effect: test glob removed in setup") {
@@ -268,8 +265,7 @@ func TestBareOgeRunsFromTheUnsavedProposal(t *testing.T) {
 	s.expect("Checks: go test -json ./... (from setup)")
 	s.type_("fix Add\r")
 	s.ended()
-	s.type_("\x03")
-	if code := s.wait(); code != ExitOK {
+	if code := s.quitClosing("\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 	if strings.Contains(s.out.String(), "test_config is empty") {
@@ -299,8 +295,8 @@ func TestBareOgeUnknownToolchainOpensEmptyChecks(t *testing.T) {
 			t.Fatalf("%q not shown:\n%s", w, s.settledScreen())
 		}
 	}
-	s.type_("\x03\x03") // closes the panel, then leaves the empty box
-	if code := s.wait(); code != ExitOK {
+	// closes the panel, then leaves the empty box
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }

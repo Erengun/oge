@@ -57,6 +57,8 @@ type homeChat struct {
 	// delivered stands in for the Chat's word on whether a cut was
 	// delivered (Chat.IsDelivered); a test seam, nil in the product.
 	delivered func(run string) bool
+	// desk is the Desk record: the Chats it holds (ChatAdded, ChatClosed).
+	desk *run.Desk
 
 	// mu is held only to read or swap c, never across opening one: /new
 	// and /close run while a first message opens its Chat. gen moves on
@@ -125,7 +127,7 @@ func (hc *homeChat) clone() *homeChat {
 	if hc == nil {
 		return nil
 	}
-	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown}
+	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown, desk: hc.desk}
 }
 
 func (hc *homeChat) get() *run.Chat {
@@ -141,6 +143,7 @@ func (hc *homeChat) close() {
 		return
 	}
 	if c := hc.take(); c != nil {
+		hc.desk.ChatClosed(c.ID) // ahead of its Workspace going
 		_ = c.Close()
 	}
 	hc.closing.Wait()
@@ -169,6 +172,7 @@ func (hc *homeChat) reset(v *chatView) tea.Cmd {
 	if c == nil {
 		return nil
 	}
+	hc.desk.ChatClosed(c.ID)
 	hc.closing.Add(1)
 	return func() tea.Msg {
 		defer hc.closing.Done()
@@ -370,6 +374,7 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
 	}
 	hc, ctx, v := h.chat, h.ctx, h.chatView
+	n, title, repo := v.num, v.name, v.root
 	c, gen := hc.current()
 	if c == nil {
 		hc.closing.Add(1) // quitting waits for it to open, and closes it
@@ -381,7 +386,10 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 			if err != nil {
 				return chatSentMsg{view: v, err: err}
 			}
+			// Recorded before the home can see it: its ChatClosed comes after.
+			hc.desk.ChatAdded(opened.ID, n, title, repo)
 			if !hc.opened(opened, gen) {
+				hc.desk.ChatClosed(opened.ID)
 				_ = opened.Close() // /close or quitting got here first
 				return chatSentMsg{view: v, err: errChatGone}
 			}
@@ -986,6 +994,7 @@ func (h *home) cutEnded(msg chatCutMsg) tea.Cmd {
 		line = h.ogeLine(l)
 		h.side.verdict, h.side.outcome, h.side.changes = sideVerdict(l), res.Outcome, nil
 		h.doneAt, h.seen, h.answered = h.clock(), false, false
+		h.doneRun = res.ID
 		if res.Outcome == run.Accepted || res.Outcome == run.Failed {
 			diff = h.inlineDiff()
 		}
@@ -1208,8 +1217,7 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if !h.leave() {
 				return h, nil
 			}
-			h.quit = true
-			return h, tea.Quit
+			return h, h.quitOrAsk()
 		}
 		h.stop()
 		return h, nil

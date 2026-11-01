@@ -416,6 +416,10 @@ type home struct {
 	// quitArmed: Ctrl+C would have quit with another Chat working, and
 	// said so; a second Ctrl+C, the very next key, quits (leave).
 	quitArmed bool
+	// quitAsk: quitting asked whether to keep this many open Chats
+	// (tui_away.go); keep: the answer kept them.
+	quitAsk int
+	keep    bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -591,10 +595,19 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, withTick(h.attend(), h.inboxTick())
 	}
 	m, cmd := h.routed(msg)
+	h.recordSeen()
 	return m, withTick(withTick(cmd, h.attend()), h.inboxTick())
 }
 
 func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if h.quitAsk > 0 {
+		switch m := msg.(type) {
+		case tea.KeyPressMsg:
+			return h.quitAskKey(m) // the quit ask has the keys
+		case tea.MouseMsg, tea.PasteMsg:
+			return h, nil // a click or paste can't move or answer it
+		}
+	}
 	// A Chat's message is handled with that Chat focused, the whole update
 	// through; one for a Chat the home no longer has is dropped.
 	restore, ok := h.route(msg)
@@ -907,8 +920,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !h.leave() {
 					return h, nil
 				}
-				h.quit = true
-				return h, tea.Quit
+				return h, h.quitOrAsk()
 			}
 			h.cleared = h.comp.expanded()
 			h.comp.set("")
@@ -1307,24 +1319,37 @@ func (h *home) View() tea.View {
 	return v
 }
 
+// withAsk adds the quit ask under a view that doesn't go through render(),
+// so no screen can hide it while its keys are the ask's.
+func (h *home) withAsk(s string) string {
+	if h.quitAsk > 0 {
+		s += "\n " + h.st.bad(quitAskLine(h.quitAsk))
+	}
+	return s
+}
+
 func (h *home) view() tea.View {
 	if h.inbox != nil {
-		return h.inboxView()
+		v := h.inboxView()
+		v.Content = h.withAsk(v.Content)
+		return v
 	}
 	if h.chats != nil {
-		return tea.NewView(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n"))
+		return tea.NewView(h.withAsk(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n")))
 	}
 	if h.turn != nil {
-		return tea.NewView(h.turnView())
+		return tea.NewView(h.withAsk(h.turnView()))
 	}
 	if h.stale != nil {
-		return tea.NewView(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait")))
+		return tea.NewView(h.withAsk(h.ogeLine("newer edits, unchecked: " + h.st.bold("[a] "+h.stale.verb()+" verified  [w] wait"))))
 	}
 	if h.cutGate != nil {
-		return tea.NewView(strings.Join(gateView(h.st, h.cutGate), "\n"))
+		return tea.NewView(h.withAsk(strings.Join(gateView(h.st, h.cutGate), "\n")))
 	}
 	if h.run != nil {
-		return h.queueView()
+		v := h.queueView()
+		v.Content = h.withAsk(v.Content)
+		return v
 	}
 	if h.quit {
 		return tea.NewView("")
@@ -1492,6 +1517,9 @@ func (h *home) render() (string, int, int) {
 	}
 	for _, l := range h.msg {
 		lines = append(lines, " "+st.bad(l))
+	}
+	if h.quitAsk > 0 { // drawn from the ask itself, so nothing else erases it
+		lines = append(lines, " "+st.bad(quitAskLine(h.quitAsk)))
 	}
 	if s := h.search; s != nil {
 		label, match := "(reverse-i-search)", ""
@@ -1961,11 +1989,13 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	if hc != nil {
 		h.chat = hc
 		hc.verdict = verdictFor(first.root)
+		hc.desk = u.desk
 	}
 	h.repoFor = func(root string) (*repoCtx, []string) {
 		rc, problem := repoFor(root)
 		if rc != nil && rc.hc != nil && rc.hc.verdict == nil {
 			rc.hc.verdict = verdictFor(rc.root)
+			rc.hc.desk = u.desk
 		}
 		return rc, problem
 	}
@@ -1980,10 +2010,14 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		in.hangUp()
 		err = nil
 	}
-	if ctx.Err() != nil {
-		// A signal ended the session (a hangup, SIGTERM): every Chat
-		// stops as an interrupt does, and keeps its Workspace.
-		why := in.why()
+	if ctx.Err() != nil || h.keep {
+		// A signal ended the session (a hangup, SIGTERM), or quitting
+		// kept the Chats: every Chat stops as an interrupt does, and keeps
+		// its Workspace for next time.
+		why := "quit"
+		if ctx.Err() != nil {
+			why = in.why()
+		}
 		for _, v := range h.views {
 			v.chat.stop(why)
 		}
@@ -1991,17 +2025,16 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 			c.stop(why)
 		}
 	}
-	// hc is the caller's to close; the other Chats are the home's.
+	// Every Chat left closes here, the caller's hc too, so that desk.log
+	// has its ChatClosed ahead of DeskClosed. A Chat stopped above is
+	// closed already, and its Workspace kept.
 	for _, v := range h.views {
-		if v.chat != hc {
-			v.chat.close()
-		}
+		v.chat.close()
 	}
 	for _, c := range h.closed {
-		if c != hc {
-			c.close()
-		}
+		c.close()
 	}
+	u.desk.Close(ctx.Err() == nil)
 	if h.full {
 		// The alternate screen took the transcript with it: leave it in the
 		// terminal's scrollback, as an inline session would have.

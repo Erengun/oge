@@ -297,8 +297,8 @@ func TestBareOgeCtrlCThenUpRestoresTheTask(t *testing.T) {
 	s.expectScreen("Ask a question or describe a change")
 	s.type_("\x1b[A")
 	s.expectScreen("fix Add")
-	s.type_("\x03\x03") // clear it, then leave
-	if code := s.wait(); code != ExitOK {
+	// clear it, then leave
+	if code := s.quitClosing("\x03\x03"); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
 	}
 }

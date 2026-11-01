@@ -91,7 +91,11 @@ type chatView struct {
 	doneAt    time.Time
 	seen      bool
 	focusAt   time.Time
-	answered  bool
+	// doneRun is the Run of the Accepted cut doneAt is of; seenRun the
+	// one whose ✓ desk.log has as seen (recordSeen).
+	doneRun  string
+	seenRun  string
+	answered bool
 	// The attention router (attention.go): attnMark is the glyph it last
 	// saw, askedAt when the Chat last came to need the human, and rang
 	// that its stale Gate or ask has rung.
