@@ -52,20 +52,32 @@ type inboxItem struct {
 	at   time.Time
 }
 
+// inboxRank orders the cards: ▲, ✗, a stopped Chat (○), then ✓.
 func inboxRank(mark string) int {
-	return strings.Index("▲✗✓", mark) / len("▲")
+	switch mark {
+	case "▲":
+		return 0
+	case "✗":
+		return 1
+	case "○":
+		return 2
+	}
+	return 3
 }
 
 // inboxItems are the cards, in the Inbox's order.
 func (h *home) inboxItems() []inboxItem {
 	var out []inboxItem
 	for _, v := range h.views {
-		m, _ := h.mark(v)
-		if m != "▲" && m != "✗" && m != "✓" {
+		m, coarse := h.mark(v)
+		// A restored Chat that stopped has a card too: ○ is idle for any other.
+		if m != "▲" && m != "✗" && m != "✓" && !(v.rest != nil && v.rest.Card != nil && stoppedMark(m, coarse)) {
 			continue
 		}
 		at := v.doneAt
-		if m == "▲" {
+		if v.rest != nil && v.rest.Card != nil {
+			at = v.rest.Card.At
+		} else if m == "▲" {
 			at = v.askedAt
 			if at.IsZero() {
 				at = v.lastEvent
@@ -253,13 +265,13 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case "s":
-		if ok && it.mark == "✗" {
+		if ok && it.mark == "✗" && v.rest == nil {
 			cmd, note := h.on(v, h.sendBack)
 			in.note = note
 			return cmd
 		}
 	case "a":
-		if ok && it.mark == "✗" {
+		if ok && it.mark == "✗" && v.rest == nil {
 			// /advise needs the question: the box holds it, the human asks.
 			h.inbox = nil
 			h.seeOn(v)
@@ -347,7 +359,7 @@ func (h *home) inboxTask() tea.Cmd {
 	if task.IsEmpty(text) {
 		return nil
 	}
-	fresh := h.turn == nil && h.verify == nil && h.comp.empty() && (h.chat == nil || h.chat.get() == nil)
+	fresh := h.rest == nil && h.turn == nil && h.verify == nil && h.comp.empty() && (h.chat == nil || h.chat.get() == nil)
 	if !fresh {
 		h.openView(h.repoCtx)
 	}
@@ -369,7 +381,12 @@ func (h *home) inboxTask() tea.Cmd {
 // (the failing count and criterion ids are Öge's too).
 func (h *home) wanted(it inboxItem) string {
 	v := it.v
+	if v.rest != nil && v.rest.Card != nil {
+		return v.rest.cardText()
+	}
 	switch it.mark {
+	case "○":
+		return "stopped when oge exited"
 	case "▲":
 		switch {
 		case v.cutGate != nil, v.verify != nil && v.verify.gate != nil:
@@ -445,7 +462,7 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 		lines = append(lines, fit(" "+st.dim("nothing needs you")))
 	} else {
 		v := it.v
-		paint := map[string]func(string) string{"▲": st.accent, "✗": st.bad, "✓": st.ok}[it.mark]
+		paint := map[string]func(string) string{"▲": st.accent, "✗": st.bad, "✓": st.ok, "○": st.warn}[it.mark]
 		id := []string{strconv.Itoa(v.num) + " " + clean(v.caption())}
 		if p := h.project(v); p != "" {
 			id = append(id, p)
@@ -454,7 +471,11 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 			id = append(id, clean(a))
 		}
 		if !it.at.IsZero() {
-			id = append(id, "waiting "+elapsed(h.clock().Sub(it.at)))
+			if age := railAge(h.clock(), it.at); v.rest != nil && age != "" {
+				id = append(id, "since "+age+" ago") // a restart ago: coarse, as the rail
+			} else if v.rest == nil {
+				id = append(id, "waiting "+elapsed(h.clock().Sub(it.at)))
+			}
 		}
 		lines = append(lines, fit(" "+paint(it.mark)+" "+strings.Join(id, st.dim(" · "))))
 		lines = append(lines, fit("   "+h.wanted(it)))
@@ -471,16 +492,23 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 			cs := counts(st, f.add, f.del)
 			lines = append(lines, fit("   "+clean(f.path)+" "+cs))
 		}
-		if v.side.verdict == "" && len(v.side.changes) == 0 {
+		if v.side.verdict == "" && len(v.side.changes) == 0 && v.rest == nil {
 			lines = append(lines, fit("   "+st.dim("no Evidence yet")))
 		}
 		switch it.mark {
-		case "▲":
+		case "▲", "○":
 			keys = "o open"
 		case "✗":
 			keys = "s send back · a advise · o open"
 		case "✓":
 			keys = "d diff · o open · u unread"
+		}
+		if v.rest != nil {
+			// No Session yet: only what reading can do.
+			keys = "o open"
+			if it.mark == "✓" {
+				keys = "o open · u unread"
+			}
 		}
 		if n > 1 {
 			keys += " · tab next"

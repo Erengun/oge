@@ -79,6 +79,13 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 	}
 	u := selectView(env, f, task.Task{}, frozen).(*tui)
 	u.desk = desk
+	// The Chats the last Desk left open, read and swept, never started.
+	if r, err := run.RestoreDesk(state); err != nil {
+		u.restoreProblem = "the Desk record can't be read, so no Chat is restored: " + clean(err.Error())
+	} else {
+		r.SweepResidue()
+		u.restored = r
+	}
 	rc, refused := openRepo(env, f, u, histDir, root, setup, res)
 	if rc == nil {
 		fmt.Fprintf(env.Stderr, "oge: %s\n", refused)

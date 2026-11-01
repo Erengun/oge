@@ -29,7 +29,7 @@ func quitAskLine(n int) string {
 func (h *home) openChats() int {
 	n := 0
 	for _, v := range h.views {
-		if v.chat != nil && (v.chat.get() != nil || v.turn != nil) {
+		if v.rest != nil || v.chat != nil && (v.chat.get() != nil || v.turn != nil) {
 			n++
 		}
 	}
@@ -59,12 +59,12 @@ func (h *home) quitAskKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (h *home) recordSeen() {
 	now := h.clock()
 	for _, v := range h.views {
-		if v.chat == nil || v.doneRun == "" || v.seenRun == v.doneRun || v.side.outcome != run.Accepted || !v.seenBy(now) {
+		if v.doneRun == "" || v.seenRun == v.doneRun || v.side.outcome != run.Accepted || !v.seenBy(now) {
 			continue
 		}
-		if c := v.chat.get(); c != nil {
+		if id := v.chatID(); id != "" {
 			v.seenRun = v.doneRun
-			v.chat.desk.Seen(c.ID, v.doneRun)
+			v.deskOf().Seen(id, v.doneRun)
 		}
 	}
 }

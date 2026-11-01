@@ -466,7 +466,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 		return nil, err
 	}
 	proc := c.sess.Process()
-	if err := c.log(RecProcessStarted, map[string]any{"chat": c.ID, "pid": proc.PID, "pgid": proc.PGID,
+	if err := c.log(RecProcessStarted, map[string]any{"chat": c.ID, "pid": proc.PID, "pgid": proc.PGID, "start": processStart(proc.PID),
 		"launch_profile": launchProfile(stage), "permissions": agent.AutoPermissions}); err != nil {
 		c.sess.Close()
 		return nil, err
@@ -663,7 +663,7 @@ func (c *Chat) reopen(ctx context.Context) error {
 	// ProcessStarted, and is in the log before any turn reaches it.
 	proc := sess.Process()
 	if err := c.log(RecSessionReopened, map[string]any{"chat": c.ID, "reason": reason, "turn": next,
-		"pid": proc.PID, "pgid": proc.PGID, "permissions": agent.AutoPermissions}); err != nil {
+		"pid": proc.PID, "pgid": proc.PGID, "start": processStart(proc.PID), "permissions": agent.AutoPermissions}); err != nil {
 		_ = sess.Close()
 		c.mu.Lock()
 		if !c.closed {
@@ -722,6 +722,11 @@ func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string, hu
 	}
 	if err == nil {
 		started := map[string]any{"chat": c.ID, "turn": n, "message": sha256Hex(text)}
+		// The message's text, redacted, in a blob, so a restart can show
+		// the transcript (chat_restore.go); "message" stays its hash.
+		if blob, perr := c.blobs.Put(redact.Redact([]byte(text))); perr == nil {
+			started["text"] = blob
+		}
 		if oge {
 			started["by"] = "oge"
 		}
