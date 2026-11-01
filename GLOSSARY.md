@@ -92,6 +92,10 @@ _Avoid_: Snapshot, save point, partial Candidate
 One Öge-owned conversation with an agent. An Attempt uses exactly one Session; a Session belongs to one Stage and may continue into later Attempts of that Stage only where the Role kind or Stage explicitly allows reuse.
 _Avoid_: Thread, conversation, agent session id (the agent's own id is mapped, not used)
 
+**Native session**:
+A conversation the agent itself stores and lists (`claude --resume`, `codex resume`), whoever started it. Öge discovers it, may show it on the Desk, and may resume it exactly through the agent's own mechanism, but never owns, converts or rebuilds it (ADR-0025, docs/ux/sessions.md). Unlike a Session, its id is the agent's and is used as is.
+_Avoid_: External chat, imported Chat (it is not a Chat until adopted)
+
 **Chat**:
 What bare `oge` opens: one Snapshot, one implementer Workspace and one long-lived implementer Session that the user talks to, a **turn** at a time. A Chat hosts Runs; it isn't one (docs/ux/chat-first.md).
 _Avoid_: Conversation, thread, chat session (a Session is one agent conversation, and a Chat holds one)

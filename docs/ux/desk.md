@@ -64,6 +64,10 @@ Why (research): making a plan for an unfinished goal stops it intruding on your 
 
 Rejected: Later as a backlog. Priorities, labels, deadlines, filters, sorting or states on Later items would make Öge a project-management tool and turn captured ideas back into obligations. The soft cap (`max_active`) stays experimental, validated in the Evaluation below.
 
+## Native sessions (user, 2026-11-01)
+
+Sessions started outside Öge (`claude --resume`, `codex resume`) are discovered per project and can join the Desk explicitly; see [`sessions.md`](sessions.md) and ADR-0025. They show as `◌` with their age, never with a state Öge cannot establish.
+
 ## Layout
 
 ```
