@@ -451,9 +451,10 @@ func (h *home) inboxView() tea.View {
 }
 
 // inboxHint is `^space inbox (N)` for the box's status: "" with no card,
-// and with one Chat open, whose news is on screen already.
+// with one Chat open, whose news is on screen already, and while a Run or
+// a shell command keeps ctrl+space from opening it.
 func (h *home) inboxHint() string {
-	if len(h.views) < 2 {
+	if len(h.views) < 2 || h.run != nil || h.job != nil {
 		return ""
 	}
 	if n := h.inboxCount(); n > 0 {
