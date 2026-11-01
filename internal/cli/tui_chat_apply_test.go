@@ -33,8 +33,7 @@ func TestChatApplyOnAcceptRequiresSafeCheckedCut(t *testing.T) {
 			applied := 0
 			checked := &lastRun{id: "checked", apply: func() string { applied++; return "applied checked" }}
 			h := &home{st: newStyles(false),
-				sel: &setupState{apply: true},
-				chatView: &chatView{comp: newComposer(), verify: &chatVerify{seq: 1, cancel: func() {}},
+				chatView: &chatView{repoCtx: &repoCtx{sel: &setupState{apply: true}}, comp: newComposer(), verify: &chatVerify{seq: 1, cancel: func() {}},
 					chat: &homeChat{verdict: func(*run.Result, int) (string, *lastRun) { return "✓ Accepted", checked }}},
 			}
 			r := &run.Result{Outcome: run.Accepted, Check: &oracle.Result{Pass: true}}

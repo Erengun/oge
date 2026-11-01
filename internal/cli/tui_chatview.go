@@ -26,6 +26,10 @@ type chatView struct {
 	// while another Chat has the focus, and a message for this Chat that
 	// puts text back in the box puts it in this one.
 	comp *composer
+	// *repoCtx is the Chat's repo (docs/ux/desk.md, Projects): its
+	// Snapshot, Workspace, delivery target, header and setup. A Chat never
+	// acts on another repo.
+	*repoCtx
 
 	// chat is the Chat (#259): each message is its turn. nil runs each
 	// message as a one-shot Run (an agent without auto mode, or
@@ -114,18 +118,37 @@ func (h *home) focus(v *chatView) {
 	}
 	h.chatView = v
 	v.focusAt = h.clock()
+	// The @file picker and the / menu were built for the old Chat's box and
+	// repo: close them, so nothing from one Chat lands in another's.
+	h.at.list, h.at.off = nil, false
+	h.menu = nil
 }
 
-// newView is a fresh Chat on the session's config: empty, numbered after
-// the others, with a Chat of its own to open on its first message.
+// newView is a fresh Chat in the focused Chat's repo: empty, numbered
+// after the others, with a Chat of its own to open on its first message.
 func (h *home) newView() *chatView {
+	v := &chatView{num: h.nextNum(), comp: h.composer(), tr: &transcript{}, chat: h.chat.clone(), repoCtx: h.repoCtx}
+	v.side.frozen = h.side.frozen
+	return v
+}
+
+// newViewIn is a fresh Chat in the repo rc, as newView.
+func (h *home) newViewIn(rc *repoCtx) *chatView {
+	v := &chatView{num: h.nextNum(), comp: h.composer(), tr: &transcript{}, chat: rc.hc.clone(), repoCtx: rc}
+	if rc.sel != nil {
+		v.side.frozen = rc.sel.lastFrozen
+	}
+	return v
+}
+
+// nextNum is the number a Chat opened now gets: one more than the
+// highest open.
+func (h *home) nextNum() int {
 	n := 0
 	for _, v := range h.views {
 		n = max(n, v.num)
 	}
-	v := &chatView{num: n + 1, comp: h.composer(), tr: &transcript{}, chat: h.chat.clone()}
-	v.side.frozen = h.side.frozen
-	return v
+	return n + 1
 }
 
 // switchTo is the human moving to another Chat (/new, /close, /chats,

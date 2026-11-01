@@ -55,7 +55,7 @@ func slashCommands() []slashCmd {
 		{name: "/label", advanced: true, usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
 		{name: "/export", advanced: true, usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
 		{name: "/copy", advanced: true, usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
-		{name: "/new", usage: "/new", desc: "open another Chat; this one keeps working", run: (*home).newCmd},
+		{name: "/new", usage: "/new [path]", desc: "open another Chat; this one keeps working", run: (*home).newCmd},
 		{name: "/chats", usage: "/chats", desc: "switch to another Chat", run: (*home).chatsCmd},
 		{name: "/close", advanced: true, usage: "/close", desc: "end this Chat", run: (*home).closeCmd},
 		{name: "/clear", advanced: true, usage: "/clear", desc: "start this Chat afresh", run: (*home).clearCmd},

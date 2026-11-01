@@ -22,14 +22,40 @@ import (
 
 // newCmd is /new: another Chat, focused, while this one goes on. A Chat
 // that has opened nothing yet is only started afresh, as /clear does.
+// /new <path> opens it in the repo at path (docs/ux/desk.md, Projects
+// P2); an idle Chat moves there instead.
 func (h *home) newCmd(args []string) (tea.Cmd, string) {
-	if len(args) > 0 {
+	if len(args) > 1 {
 		return nil, usageOf("/new")
 	}
+	rc := h.repoCtx
+	if len(args) == 1 {
+		root, problem := projectRoot(args[0], h.root, h.getenv)
+		if problem != "" {
+			return nil, problem
+		}
+		if repoKey(root) != repoKey(h.root) {
+			if h.repoFor == nil {
+				return nil, "/new: this session can't open another repo"
+			}
+			var lines []string
+			if rc, lines = h.repoFor(root); rc == nil {
+				return nil, strings.Join(lines, "; ")
+			}
+			defer func() { h.msg = append(h.msg, lines...) }() // its config's problem, under its box
+		}
+	}
 	if h.chat == nil || (h.turn == nil && h.verify == nil && h.chat.get() == nil) {
-		return h.resetView(), ""
+		cmd := h.resetView()
+		if rc != h.repoCtx {
+			h.moveTo(rc)
+		}
+		return cmd, ""
 	}
 	n, old, v := h.working(), h.num, h.newView()
+	if rc != h.repoCtx {
+		v = h.newViewIn(rc)
+	}
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
@@ -39,6 +65,19 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
 	}
 	return nil, ""
+}
+
+// moveTo puts the focused Chat, idle and opened nothing, in the repo rc:
+// its Chat, header, setup and history are rc's from now on.
+func (h *home) moveTo(rc *repoCtx) {
+	if h.chat != nil {
+		h.closed = append(h.closed, h.chat) // quitting waits for its closing
+	}
+	h.repoCtx, h.chat = rc, rc.hc.clone()
+	if rc.sel != nil {
+		h.side.frozen = rc.sel.lastFrozen
+	}
+	h.navigating = false
 }
 
 // working counts the open Chats with a turn or a check in flight.

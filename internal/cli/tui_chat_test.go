@@ -21,7 +21,7 @@ import (
 func TestChatCutUsesTheTurnsPipeline(t *testing.T) {
 	standard := &pipeline.Frozen{Mode: pipeline.Standard}
 	var got *pipeline.Frozen
-	h := &home{chatView: &chatView{comp: newComposer(), chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen, _ gate.Port, _ func(run.Event)) (*run.Result, error) {
+	h := &home{chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), chat: &homeChat{cut: func(_ context.Context, _ *run.Chat, f *pipeline.Frozen, _ gate.Port, _ func(run.Event)) (*run.Result, error) {
 		got = f
 		return nil, run.ErrNothingToCut
 	}},
@@ -41,7 +41,7 @@ func TestChatCutUsesTheTurnsPipeline(t *testing.T) {
 func TestChatVerifyNamesAStep(t *testing.T) {
 	ready := make(chan func(run.Event), 1)
 	h := &home{now: func() time.Time { return time.Unix(0, 0) },
-		chatView: &chatView{comp: newComposer(), chat: &homeChat{cut: func(ctx context.Context, _ *run.Chat, _ *pipeline.Frozen, _ gate.Port, o func(run.Event)) (*run.Result, error) {
+		chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), chat: &homeChat{cut: func(ctx context.Context, _ *run.Chat, _ *pipeline.Frozen, _ gate.Port, o func(run.Event)) (*run.Result, error) {
 			ready <- o
 			<-ctx.Done() // the cut holds until the test ends it
 			return nil, ctx.Err()
@@ -101,7 +101,7 @@ func TestAskRowsFitTheFrame(t *testing.T) {
 		got = append(got, ans)
 		return nil
 	})
-	h := &home{width: 30, height: 24, st: newStyles(false), chatView: &chatView{comp: newComposer(), turn: &chatTurn{asks: []*agent.Ask{a}}}}
+	h := &home{width: 30, height: 24, st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), turn: &chatTurn{asks: []*agent.Ask{a}}}}
 	for _, r := range h.askRows(a) {
 		if w := ansi.StringWidth("    " + r); w > h.width {
 			t.Errorf("row %q is %d wide in a %d-wide frame", r, w, h.width)
@@ -132,7 +132,7 @@ func TestQuestionsOneAtATime(t *testing.T) {
 		return nil
 	})
 	a.Questions = []agent.AskQuestion{{Text: "Which?", Options: []string{"red", "blue"}}, {Text: "Name?", Options: []string{"Ada"}}}
-	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{comp: newComposer(), turn: &chatTurn{}}}
+	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), turn: &chatTurn{}}}
 	h.comp.set("a draft")
 	h.turn.asks = []*agent.Ask{a}
 	h.showAsk()
@@ -171,7 +171,7 @@ func TestCutEndedDecidesFromTheRun(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &home{st: newStyles(false),
-				chatView: &chatView{comp: newComposer(), last: older,
+				chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), last: older,
 					actions: true,
 					chat:    &homeChat{verdict: func(*run.Result, int) (string, *lastRun) { return "✓ shown", newer }},
 					verify:  &chatVerify{seq: 1, cancel: func() {}, stopped: true}},
@@ -186,7 +186,7 @@ func TestCutEndedDecidesFromTheRun(t *testing.T) {
 		})
 	}
 	// A superseded cut, or one /new let go, ends unshown.
-	h := &home{st: newStyles(false), chatView: &chatView{comp: newComposer(), last: older, verify: &chatVerify{seq: 2, cancel: func() {}}}}
+	h := &home{st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), last: older, verify: &chatVerify{seq: 2, cancel: func() {}}}}
 	h.cutEnded(chatCutMsg{seq: 1, res: &run.Result{Outcome: run.Accepted, Check: &oracle.Result{Pass: true}}})
 	h.cutEnded(chatCutMsg{seq: 2, err: run.ErrSuperseded})
 	if h.last != older || len(h.scroll) != 0 {
@@ -200,8 +200,7 @@ func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
 	a := agent.NewAsk("AskUserQuestion", "", "", func(agent.Answer) error { return nil })
 	a.Questions = []agent.AskQuestion{{Text: "Which?"}}
 	h := &home{st: newStyles(false),
-		resolve:  func(*setupState) (*resolved, []string) { return nil, nil },
-		chatView: &chatView{comp: newComposer(), turn: &chatTurn{asks: []*agent.Ask{a}}},
+		chatView: &chatView{repoCtx: &repoCtx{resolve: func(*setupState) (*resolved, []string) { return nil, nil }}, comp: newComposer(), turn: &chatTurn{asks: []*agent.Ask{a}}},
 	}
 	h.comp = h.composer()
 	h.comp.set("/apply")
@@ -217,7 +216,7 @@ func TestShowAskKeepsASlashCommandFromTheAgent(t *testing.T) {
 // Öge's feedback turn shows as busy as a user turn: the live area says
 // it is working, and Esc interrupts it.
 func TestFeedbackTurnShowsWorking(t *testing.T) {
-	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{comp: newComposer(), turn: &chatTurn{oge: true, text: "Öge's Check failed on your last change: 1 failing."}}}
+	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), turn: &chatTurn{oge: true, text: "Öge's Check failed on your last change: 1 failing."}}}
 	h.comp = h.composer()
 	if v := h.view().Content; !strings.Contains(v, "working… · esc to interrupt") || strings.Contains(v, "[ctrl+e] editor") {
 		t.Errorf("the feedback turn's live area:\n%s", v)
@@ -226,11 +225,10 @@ func TestFeedbackTurnShowsWorking(t *testing.T) {
 
 func turnQueueHome() *home {
 	h := &home{width: 80,
-		height:  24,
-		st:      newStyles(false),
-		hist:    &history{},
-		resolve: func(*setupState) (*resolved, []string) { return &resolved{frozen: &pipeline.Frozen{}}, nil },
-		chatView: &chatView{comp: newComposer(), turn: &chatTurn{},
+		height: 24,
+		st:     newStyles(false),
+		chatView: &chatView{repoCtx: &repoCtx{hist: &history{},
+			resolve: func(*setupState) (*resolved, []string) { return &resolved{frozen: &pipeline.Frozen{}}, nil }}, comp: newComposer(), turn: &chatTurn{},
 			chat: &homeChat{}},
 	}
 	h.comp = h.composer()
@@ -310,7 +308,7 @@ func TestQueuedCommandHoldsTheMessages(t *testing.T) {
 func TestAdviceEscInVimInsertIsVims(t *testing.T) {
 	h := &home{st: newStyles(false),
 		vim:      true,
-		chatView: &chatView{comp: newComposer(), adv: &adviseState{shown: true, cancel: func() {}, advice: &run.Advice{ID: "c1", Text: "x"}}},
+		chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), adv: &adviseState{shown: true, cancel: func() {}, advice: &run.Advice{ID: "c1", Text: "x"}}},
 	}
 	h.comp.set("typing")
 	if _, ok := h.adviceKey(tea.KeyPressMsg{Code: tea.KeyEscape}); ok || h.adv == nil {
@@ -325,7 +323,7 @@ func TestAdviceEscInVimInsertIsVims(t *testing.T) {
 // Advice for a Chat that has gone is never sent.
 func TestAdviceSendAfterTheChatClosed(t *testing.T) {
 	h := &home{st: newStyles(false),
-		chatView: &chatView{comp: newComposer(), chat: &homeChat{},
+		chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), chat: &homeChat{},
 			adv: &adviseState{shown: true, chat: &run.Chat{}, advice: &run.Advice{ID: "c1", Text: "x"}}},
 	}
 	if cmd := h.sendAdvice(true); cmd != nil || h.adv != nil || h.turn != nil || len(h.msg) == 0 {
@@ -336,12 +334,12 @@ func TestAdviceSendAfterTheChatClosed(t *testing.T) {
 // A cut with nothing to cut against, after changes, says they are not
 // checked, and the next cut covers them.
 func TestCutNothingToCutAfterChangesIsUnchecked(t *testing.T) {
-	h := &home{st: newStyles(false), chatView: &chatView{comp: newComposer(), verify: &chatVerify{seq: 1, changed: 2, cancel: func() {}}}}
+	h := &home{st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), verify: &chatVerify{seq: 1, changed: 2, cancel: func() {}}}}
 	h.cutEnded(chatCutMsg{seq: 1, err: run.ErrNothingToCut})
 	if !h.unchecked || !strings.Contains(strings.Join(h.scroll, "\n"), "not checked") {
 		t.Errorf("unchecked %v, printed %q", h.unchecked, h.scroll)
 	}
-	h = &home{st: newStyles(false), chatView: &chatView{comp: newComposer(), verify: &chatVerify{seq: 1, cancel: func() {}}}}
+	h = &home{st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), verify: &chatVerify{seq: 1, cancel: func() {}}}}
 	h.cutEnded(chatCutMsg{seq: 1, err: run.ErrNothingToCut})
 	if h.unchecked || len(h.scroll) != 0 {
 		t.Errorf("a cut of nothing said %q", h.scroll)
@@ -357,7 +355,7 @@ func TestAdviseDuringAQuestionIsNotTheAnswer(t *testing.T) {
 		return nil
 	})
 	a.Questions = []agent.AskQuestion{{Text: "Which?", Options: []string{"red"}}}
-	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{comp: newComposer(), turn: &chatTurn{}}}
+	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{repoCtx: &repoCtx{}, comp: newComposer(), turn: &chatTurn{}}}
 	h.turn.asks = []*agent.Ask{a}
 	h.showAsk()
 	h.comp.set("/advise should I?")
