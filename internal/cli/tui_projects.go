@@ -37,11 +37,13 @@ func gitRoot(path string) string {
 
 // pinned is [desk] projects that are git repos now, read once: the rail
 // is drawn often, and a path that appears later is for the next session.
+// A path inside a repo, not its top level, is left out: pinning ~/notes
+// must not pin the dotfiles repo around it.
 func (h *home) pinned() []string {
 	if !h.pinsRead {
 		h.pinsRead = true
 		for _, p := range h.deskProjects {
-			if r := gitRoot(p); r != "" && !slices.ContainsFunc(h.pins, func(q string) bool { return repoKey(q) == repoKey(r) }) {
+			if r := gitRoot(p); r != "" && repoKey(r) == repoKey(p) && !slices.ContainsFunc(h.pins, func(q string) bool { return repoKey(q) == repoKey(r) }) {
 				h.pins = append(h.pins, r)
 			}
 		}
@@ -66,33 +68,48 @@ func (h *home) unopened() []string {
 	return out
 }
 
-// railGroups is the open Chats by repo, in the order each repo first had a
-// Chat (h.order: a repo keeps its place for the session), each group in
-// number order; and the pinned projects with no Chat.
-func (h *home) railGroups() (groups [][]*chatView, pinned []string) {
-	by := map[string][]*chatView{}
-	for _, v := range h.views {
-		k := repoKey(v.root)
-		if !slices.Contains(h.order, k) {
+// place records root's repo in h.order when a Chat first opens there. The
+// first call also seeds the pinned projects after it, in config order, so
+// a "+ name" row and its later group share one slot that never moves.
+func (h *home) place(root string) {
+	add := func(r string) {
+		if k := repoKey(r); !slices.Contains(h.order, k) {
 			h.order = append(h.order, k)
 		}
+	}
+	if len(h.order) == 0 {
+		add(root)
+		for _, r := range h.pinned() {
+			add(r)
+		}
+	}
+	add(root)
+}
+
+// railGroups is one slot per repo in h.order (a repo keeps its place for
+// the session): the open Chats there in number order, or nil for a pinned
+// project with no Chat. roots names each slot's repo.
+func (h *home) railGroups() (slots [][]*chatView, roots []string) {
+	by := map[string][]*chatView{}
+	rootOf := map[string]string{}
+	for _, v := range h.views {
+		k := repoKey(v.root)
+		h.place(v.root) // already placed when a Chat opened; this is for any that was not
 		by[k] = append(by[k], v)
+		rootOf[k] = v.root
+	}
+	for _, r := range h.pinned() {
+		h.place(r)
+		rootOf[repoKey(r)] = r
 	}
 	for _, k := range h.order {
 		if g := by[k]; len(g) > 0 {
-			groups = append(groups, g)
+			slots, roots = append(slots, g), append(roots, g[0].root)
+		} else if r, ok := rootOf[k]; ok && slices.ContainsFunc(h.pinned(), func(q string) bool { return repoKey(q) == k }) {
+			slots, roots = append(slots, nil), append(roots, r)
 		}
 	}
-	return groups, h.unopened()
-}
-
-// projectKeys are the repos groups and pinned stand for, in that order.
-func (h *home) projectKeys(groups [][]*chatView, pinned []string) []string {
-	var out []string
-	for _, g := range groups {
-		out = append(out, g[0].root)
-	}
-	return append(out, pinned...)
+	return slots, roots
 }
 
 // projectLabels names each repo by its directory's name; two that share
@@ -165,7 +182,7 @@ func recentRoots(private string, n int) []string {
 		}
 		keys = append(keys, k)
 		tried++
-		if r := gitRoot(s.root); r != "" && !slices.ContainsFunc(out, func(o string) bool { return repoKey(o) == repoKey(r) }) {
+		if r := gitRoot(s.root); r != "" && repoKey(r) == repoKey(s.root) && !slices.ContainsFunc(out, func(o string) bool { return repoKey(o) == repoKey(r) }) {
 			out = append(out, r)
 		}
 	}

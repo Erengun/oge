@@ -63,6 +63,8 @@ func (h *home) openView(rc *repoCtx) {
 	if rc != h.repoCtx {
 		v = h.newViewIn(rc)
 	}
+	h.place(h.repoCtx.root) // the focused Chat's repo comes first
+	h.place(v.root)
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
@@ -76,6 +78,7 @@ func (h *home) openView(rc *repoCtx) {
 // moveTo puts the focused Chat, idle and opened nothing, in the repo rc:
 // its Chat, header, setup and history are rc's from now on.
 func (h *home) moveTo(rc *repoCtx) {
+	h.place(rc.root)
 	if h.chat != nil {
 		h.closed = append(h.closed, h.chat) // quitting waits for its closing
 	}
@@ -508,10 +511,15 @@ func (h *home) rail(height int) []string {
 	}
 	var body []string
 	var hits []railHit
-	groups, pinned := h.railGroups()
-	heads := len(groups)+len(pinned) > 1
-	labels := projectLabels(h.projectKeys(groups, pinned))
+	groups, roots := h.railGroups()
+	heads := len(groups) > 1
+	labels := projectLabels(roots)
 	for gi, g := range groups {
+		if len(g) == 0 { // a pinned project with no Chat: a dim row, a click opens one
+			body = append(body, st.dim(ansi.Truncate("+ "+clean(labels[gi]), inner, "…")))
+			hits = append(hits, railHit{y: len(body) - 1, x1: inner, open: roots[gi]})
+			continue
+		}
 		if heads {
 			body = append(body, st.dim(ansi.Truncate(clean(labels[gi]), inner, "…")))
 		}
@@ -565,13 +573,6 @@ func (h *home) rail(height int) []string {
 		}
 		body = append(body, line)
 	}
-	// Pinned projects with no Chat: a dim row each, a click opens one.
-	for i, root := range pinned {
-		name := labels[len(groups)+i]
-		body = append(body, st.dim(ansi.Truncate("+ "+clean(name), inner, "…")))
-		hits = append(hits, railHit{y: len(body) - 1, x1: inner, open: root})
-	}
-
 	// The box: the top border names it; rows and hits move in by one.
 	b := st.border
 	out := make([]string, 0, height)

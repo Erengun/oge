@@ -588,6 +588,14 @@ func (h *home) menuKey(msg tea.KeyPressMsg) (handled bool) {
 		l, _ := h.menu.Update(msg)
 		h.menu = &l
 	case "tab":
+		if text == "/new" && sel.cmd.name == "/new" {
+			// /new typed whole and Tab: the project picker, as with the space
+			if _, p := h.projectsCmd(nil); p != "" {
+				h.msg = []string{p}
+			}
+			h.comp.set("")
+			return true
+		}
 		complete()
 	case "esc":
 		h.menuOff, h.menuOffText = true, text

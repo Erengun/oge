@@ -219,6 +219,54 @@ func TestNewThenTabOpensThePicker(t *testing.T) {
 	}
 }
 
+func TestNewTypedWholeThenTabOpensThePicker(t *testing.T) {
+	h, roots := reposHome(t, "alpha", "beta")
+	pin(h, []string{roots["beta"]})
+	typeText(h, "/new") // the slash menu is open on /new
+	h.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !h.projectPicker() {
+		t.Fatalf("no project picker; msg %v", h.msg)
+	}
+}
+
+func TestOrderIsFirstOpenedWithoutDrawingTheRail(t *testing.T) {
+	h, roots := reposHome(t, "alpha", "beta")
+	h.place(roots["alpha"])
+	h.place(roots["beta"])
+	h.place(roots["alpha"])
+	if want := []string{repoKey(roots["alpha"]), repoKey(roots["beta"])}; !slices.Equal(h.order, want) {
+		t.Errorf("order %v want %v", h.order, want)
+	}
+}
+
+func TestPinnedRowKeepsItsSlot(t *testing.T) {
+	h, roots := reposHome(t, "alpha", "p1", "p2")
+	pin(h, []string{roots["p1"], roots["p2"]})
+	h.place(roots["alpha"])
+	_, got := h.railGroups()
+	want := []string{roots["alpha"], roots["p1"], roots["p2"]}
+	if !slices.Equal(got, want) {
+		t.Fatalf("slots %v want %v", got, want)
+	}
+	h.views = append(h.views, &chatView{repoCtx: &repoCtx{root: roots["p2"]}, num: 2, comp: newComposer(), tr: &transcript{}})
+	_, got = h.railGroups()
+	if !slices.Equal(got, want) {
+		t.Errorf("opening P2 moved slots: %v", got)
+	}
+}
+
+func TestPinInsideAnotherRepoIsLeftOut(t *testing.T) {
+	h, roots := reposHome(t, "alpha")
+	sub := filepath.Join(roots["alpha"], "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pin(h, []string{sub})
+	if got := h.pinned(); len(got) != 0 {
+		t.Errorf("pinned %v", got)
+	}
+}
+
 func TestProjectsWithNothingSaysSo(t *testing.T) {
 	h, _ := reposHome(t, "alpha")
 	submit(h, "/projects")
