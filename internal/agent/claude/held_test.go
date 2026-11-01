@@ -1,8 +1,10 @@
 package claude
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,12 +12,17 @@ import (
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
 )
 
-// heldFor is how long these tests hold a request. The real hold is far
-// longer (docs/research/held-requests.md records a 90 s hold against the
-// real claude, past the 60 s auto-continue in claude-code #73125); the
-// adapter has no timer on a pending Ask, so a short hold exercises the same
-// path and the test stays quick.
-const heldFor = 1500 * time.Millisecond
+// heldFor is how long these tests hold a request, 1.5 s by default. That
+// guards only against a timer shorter than 1.5 s in the adapter or the
+// fake; a minute-scale timer would pass it. Set OGE_HELD_FOR (a Go
+// duration, e.g. 5m) to run the long hold. The real claude's behaviour over
+// a long hold is in testdata/held_ask.ndjson (TestRecordedHeldAsk).
+var heldFor = func() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("OGE_HELD_FOR")); err == nil && d > 0 {
+		return d
+	}
+	return 1500 * time.Millisecond
+}()
 
 // A pending Ask that Öge holds is answered later and the agent proceeds as
 // if it had been answered at once: nothing is denied, withdrawn or settled
@@ -108,5 +115,85 @@ func TestHeldAskDeniedByTheHuman(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, "a.txt")); err == nil {
 		t.Error("the denied call ran")
+	}
+}
+
+// held_ask.ndjson (an Edit, 300 s) and held_ask_question.ndjson
+// (AskUserQuestion, 200 s): a real claude 2.1.316 left a can_use_tool
+// unanswered for the recorded hold. It sent nothing in between, and the
+// turn ended in success once allowed. Frames are stamped when a reader
+// thread received them, so a frame during the hold would show. The
+// recordings are default mode with no hook, not Chat's auto mode with the
+// PreToolUse hook: no auto-mode ask could be provoked (see
+// docs/research/held-requests.md).
+func TestRecordedHeldAsk(t *testing.T) {
+	for _, c := range []struct {
+		file string
+		min  float64
+	}{{"held_ask.ndjson", 280}, {"held_ask_question.ndjson", 180}} {
+		t.Run(c.file, func(t *testing.T) { recordedHeldAsk(t, c.file, c.min) })
+	}
+}
+
+func recordedHeldAsk(t *testing.T, file string, minHold float64) {
+	t.Helper()
+	type frame struct {
+		T   float64        `json:"t"`
+		Dir string         `json:"dir"`
+		Msg map[string]any `json:"msg"`
+	}
+	var fs []frame
+	for _, l := range fixture(t, file) {
+		var f frame
+		if err := json.Unmarshal([]byte(l), &f); err != nil {
+			t.Fatal(err)
+		}
+		if f.Dir == "in" || f.Dir == "out" {
+			fs = append(fs, f)
+		}
+	}
+	var asked, answered, resultAt float64
+	var askID string
+	var during []string
+	var toolErr bool
+	var result string
+	for _, f := range fs {
+		typ, _ := f.Msg["type"].(string)
+		req, _ := f.Msg["request"].(map[string]any)
+		switch {
+		case f.Dir == "out" && typ == "control_request" && req["subtype"] == "can_use_tool" && asked == 0:
+			asked, askID = f.T, f.Msg["request_id"].(string)
+			continue
+		case f.Dir == "in" && typ == "control_response" && answered == 0 && asked != 0:
+			if resp, _ := f.Msg["response"].(map[string]any); resp["request_id"] == askID {
+				answered = f.T
+				continue
+			}
+		}
+		// claude's rate_limit_event comes in the same instant as the ask.
+		if asked != 0 && answered == 0 && !(typ == "rate_limit_event" && f.T-asked < 2) {
+			during = append(during, f.Dir+" "+typ)
+		}
+		if answered != 0 && f.Dir == "out" {
+			if typ == "user" {
+				b, _ := json.Marshal(f.Msg)
+				toolErr = toolErr || strings.Contains(string(b), `"is_error": true`) || strings.Contains(string(b), `"is_error":true`)
+			}
+			if typ == "result" {
+				resultAt, result = f.T, f.Msg["subtype"].(string)
+			}
+		}
+	}
+	if asked == 0 || answered-asked < minHold {
+		t.Fatalf("the recording held the ask %.0f s, want at least %.0f", answered-asked, minHold)
+	}
+	if len(during) != 0 {
+		t.Errorf("frames during the hold: %v", during)
+	}
+	if toolErr {
+		t.Error("a tool result after the answer was an error")
+	}
+	if result != "success" || resultAt < answered {
+		t.Errorf("result %q at %.1f, answer at %.1f", result, resultAt, answered)
 	}
 }

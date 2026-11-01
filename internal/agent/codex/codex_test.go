@@ -802,6 +802,7 @@ func TestUsageIsPerTurnNotTheRunningTotal(t *testing.T) {
 func TestCodexDoesNotExpireAHeldApproval(t *testing.T) {
 	var asked, answered, resolved, completed float64
 	var between []string
+	var declinedAt float64
 	raw := loadTimed(t, "held_approval.jsonl")
 	for _, r := range raw {
 		m := r.Msg
@@ -815,8 +816,12 @@ func TestCodexDoesNotExpireAHeldApproval(t *testing.T) {
 			resolved = r.T
 		case method == "turn/completed":
 			completed = r.T
+		case method == "item/completed" && declinedAt == 0:
+			if item, _ := m["params"].(map[string]any)["item"].(map[string]any); item["type"] == "fileChange" && item["status"] == "declined" {
+				declinedAt = r.T
+			}
 		}
-		if asked != 0 && answered == 0 && r.T > asked && method != "" && method != "thread/status/changed" {
+		if asked != 0 && answered == 0 && r.T > asked && method != "" {
 			between = append(between, method)
 		}
 	}
@@ -825,6 +830,9 @@ func TestCodexDoesNotExpireAHeldApproval(t *testing.T) {
 	}
 	if len(between) != 0 {
 		t.Errorf("the server sent %v while the approval was held", between)
+	}
+	if declinedAt < answered {
+		t.Errorf("the fileChange item declined at %.1f, before the answer at %.1f", declinedAt, answered)
 	}
 	if resolved < answered || completed < resolved {
 		t.Errorf("order: answered %.1f, resolved %.1f, turn completed %.1f", answered, resolved, completed)
