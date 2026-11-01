@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -60,42 +61,57 @@ func readSession(path, profile string) (agent.NativeSession, bool) {
 		return agent.NativeSession{}, false
 	}
 	s := agent.NativeSession{Provider: Name, Profile: profile, Path: path, Written: st.ModTime()}
-	var last time.Time
 	titleRank := 0
+	var first, parsed int // identity lines tried; first is 1 once a main record was seen
 	rd := bufio.NewReaderSize(f, 64<<10)
 	for {
 		line, err := rd.ReadBytes('\n')
-		var r sessionRecord
-		if len(line) > 0 && json.Unmarshal(line, &r) == nil {
-			if r.IsSidechain {
-				return agent.NativeSession{}, false
+		if len(line) > 0 {
+			// Content lines are megabytes and never parsed: identity comes
+			// from the first records, titles from short title lines only.
+			if (s.ID == "" || s.Cwd == "") && parsed < maxIdentityLines && len(line) <= maxParsedLine {
+				parsed++
+				var r sessionRecord
+				if json.Unmarshal(line, &r) == nil && r.SessionID != "" {
+					// A sidechain file is one from its first record; a main
+					// file with a later sidechain record stays listed.
+					if first == 0 && r.IsSidechain {
+						return agent.NativeSession{}, false
+					}
+					first = 1
+					if !r.IsSidechain {
+						if s.ID == "" {
+							s.ID = r.SessionID
+						}
+						if s.Cwd == "" {
+							s.Cwd = r.Cwd
+						}
+					}
+				}
 			}
-			if s.ID == "" {
-				s.ID = r.SessionID
-			}
-			if s.Cwd == "" {
-				s.Cwd = r.Cwd
-			}
-			if t, e := time.Parse(time.RFC3339Nano, r.Timestamp); e == nil && t.After(last) {
-				last = t
-			}
-			rank, title := 0, ""
-			switch r.Type {
-			case "custom-title":
-				rank, title = 3, r.CustomTitle
-			case "ai-title":
-				rank, title = 2, r.AITitle
-			case "summary":
-				rank, title = 1, r.Summary
-			}
-			if title = strings.TrimSpace(title); title != "" && rank >= titleRank {
-				s.Title, titleRank = oneLine(title), rank
+			if len(line) <= maxParsedLine && isTitleLine(line) {
+				var r sessionRecord
+				if json.Unmarshal(line, &r) == nil {
+					rank, title := 0, ""
+					switch r.Type {
+					case "custom-title":
+						rank, title = 3, r.CustomTitle
+					case "ai-title":
+						rank, title = 2, r.AITitle
+					case "summary":
+						rank, title = 1, r.Summary
+					}
+					if title = strings.TrimSpace(title); title != "" && rank >= titleRank {
+						s.Title, titleRank = oneLine(title), rank
+					}
+				}
 			}
 		}
 		if err != nil {
 			break // io.EOF, or a read error: what was read so far stands
 		}
 	}
+	last := tailActivity(f, st.Size())
 	if s.ID == "" {
 		// An unrecognised shape still lists, by the id Claude names the file.
 		s.ID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
@@ -105,6 +121,61 @@ func readSession(path, profile string) (agent.NativeSession, bool) {
 	}
 	s.LastActive = last
 	return s, true
+}
+
+const (
+	maxIdentityLines = 16
+	maxParsedLine    = 256 << 10
+	tailBytes        = 256 << 10
+)
+
+var titleMarks = [][]byte{[]byte(`"type":"custom-title"`), []byte(`"type":"ai-title"`), []byte(`"type":"summary"`)}
+
+func isTitleLine(line []byte) bool {
+	for _, m := range titleMarks {
+		if bytes.Contains(line, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// tailActivity is the newest timestamp among the complete lines in the
+// file's last tailBytes, or zero when none parses. Timestamps grow through
+// a file, so the tail holds the last activity without reading content.
+func tailActivity(f *os.File, size int64) time.Time {
+	off := size - tailBytes
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, size-off)
+	n, _ := f.ReadAt(buf, off)
+	buf = buf[:n]
+	if off > 0 { // drop the partial first line
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+			buf = buf[i+1:]
+		} else {
+			return time.Time{}
+		}
+	}
+	var last time.Time
+	lines := bytes.Split(buf, []byte{'\n'})
+	for i := len(lines) - 1; i >= 0; i-- {
+		if len(lines[i]) == 0 {
+			continue
+		}
+		var r sessionRecord
+		if json.Unmarshal(lines[i], &r) != nil {
+			continue
+		}
+		if t, e := time.Parse(time.RFC3339Nano, r.Timestamp); e == nil && t.After(last) {
+			last = t
+		}
+		if !last.IsZero() {
+			break
+		}
+	}
+	return last
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

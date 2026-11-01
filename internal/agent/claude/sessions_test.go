@@ -87,3 +87,51 @@ func TestDiscoverSessionsNoProfiles(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func writeSession(t *testing.T, lines ...string) []Profile {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "projects", "-p")
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p, "s1.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return []Profile{{Dir: dir}}
+}
+
+func TestDiscoverSessionsMixedSidechainStaysListed(t *testing.T) {
+	got := DiscoverSessions(writeSession(t,
+		`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T10:00:00Z"}`,
+		`{"type":"assistant","sessionId":"s1","cwd":"/r","isSidechain":true,"timestamp":"2026-10-30T10:01:00Z"}`,
+	))
+	if len(got) != 1 || got[0].ID != "s1" || got[0].Cwd != "/r" {
+		t.Fatalf("got %+v", got)
+	}
+	if !got[0].LastActive.Equal(time.Date(2026, 10, 30, 10, 1, 0, 0, time.UTC)) {
+		t.Fatalf("last %v", got[0].LastActive)
+	}
+}
+
+func TestDiscoverSessionsLargeContentLines(t *testing.T) {
+	big := `{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T10:00:00Z","message":"` +
+		strings.Repeat("x", 8<<20) + `"}`
+	start := time.Now()
+	got := DiscoverSessions(writeSession(t,
+		`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T09:00:00Z"}`,
+		big,
+		`{"type":"ai-title","aiTitle":"big one","sessionId":"s1"}`,
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-30T10:05:00Z"}`,
+		big,
+	))
+	if len(got) != 1 || got[0].Title != "big one" || got[0].Cwd != "/r" {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].LastActive.IsZero() {
+		t.Fatal("no last activity")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("16MB of content lines took %v", d)
+	}
+}
