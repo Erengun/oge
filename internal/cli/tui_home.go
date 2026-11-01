@@ -82,6 +82,9 @@ func (h *home) composer() *composer {
 // setKeys swaps in a reloaded keyMap whole; the boxes in use follow it.
 func (h *home) setKeys(kb *keyMap) {
 	h.kb = kb
+	for _, v := range h.views {
+		v.comp.kb = kb
+	}
 	h.comp.kb = kb
 	if h.next != nil {
 		h.next.comp.kb = kb
@@ -311,7 +314,6 @@ type home struct {
 	gateArm    time.Time // when a Gate opened while a next Task was being typed
 	// getenv reads the environment for /terminal; nil reads nothing.
 	getenv func(string) string
-	comp   *composer
 	// vim is the composer's vim mode (#156); normal is its NORMAL state.
 	vim, normal bool
 	vimState    // the pending operator, count and last change (tui_vim_ops.go)
@@ -369,7 +371,8 @@ type home struct {
 	// menu is the slash menu while it is open: it lists the commands that
 	// complete menuQuery. Esc closes it for the text it was closed on.
 	menu   *list.Model
-	picker *runPicker // /runs: the Run picker while it is open (#176)
+	picker *runPicker  // /runs: the Run picker while it is open (#176)
+	chats  *list.Model // /chats: the Chat picker while it is open
 	// diff is the /diff viewer while it is open (#169); diffOf reads a
 	// Run's Candidate as files.
 	diff        *diffViewer
@@ -405,6 +408,9 @@ type home struct {
 	shown int
 	keys  *keyPanel // the ? panel, when open (#155)
 	quit  bool
+	// quitArmed: Ctrl+C would have quit with another Chat working, and
+	// said so; a second Ctrl+C, the very next key, quits (leave).
+	quitArmed bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -418,9 +424,15 @@ type home struct {
 	now  func() time.Time
 
 	// *chatView is the focused Chat's state (tui_chatview.go): its fields
-	// read as the home's own. views are the session's Chats, one for now.
+	// read as the home's own. views are the session's open Chats, in the
+	// order they opened; closed are the Chats /close closed, which
+	// quitting waits for.
 	*chatView
-	views []*chatView
+	views  []*chatView
+	closed []*homeChat
+	// background: the message being handled is for a Chat without the
+	// focus (route).
+	background bool
 	// dropped counts messages for a Chat no longer in views.
 	dropped int
 }
@@ -563,9 +575,12 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return h, nil
 	}
-	defer restore()
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() != "ctrl+c" {
+		h.quitArmed = false // only the very next key quits
+	}
 	if h.full {
 		if cmd, ok := h.fullUpdate(msg); ok {
+			restore()
 			return h, cmd
 		}
 	}
@@ -576,6 +591,8 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if flush := h.flushAdvice(); flush != nil {
 		cmd = tea.Sequence(cmd, flush) // after whatever this update prints
 	}
+	// The menu and the @ picker are the focused composer's.
+	restore()
 	h.syncMenu()
 	h.syncAt()
 	h.dropRecordingInOverlay()
@@ -638,6 +655,11 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
 			return h, adviceTick(h.chatView, m.seq)
 		}
+		return h, nil
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && h.chats != nil {
+		// Over whatever the Chat shows: switching decides nothing.
+		h.chatsKey(k)
 		return h, nil
 	}
 	if h.turn != nil {
@@ -727,7 +749,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case h.job != nil:
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.diff != nil, h.hidden != nil:
+		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.chats != nil, h.diff != nil, h.hidden != nil:
 		default:
 			h.comp.change("paste", func() { h.comp.insertPaste(msg.Content) })
 			h.endNavigation()
@@ -833,6 +855,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 			if h.comp.empty() {
+				if !h.leave() {
+					return h, nil
+				}
 				h.quit = true
 				return h, tea.Quit
 			}
@@ -958,6 +983,9 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.sel.syncFrom(res)
 	h.at.files, h.at.filesReady = nil, false // listed again for the next composer
 	h.hist.add(text)                         // what the human typed, never the agent's output
+	if h.name == "" {
+		h.name = task.Parse(text).Title
+	}
 	h.comp.clearUndo()
 	h.navigating = false
 	h.visual = 0
@@ -1173,6 +1201,13 @@ func (h *home) onEnded(e ended) (tea.Model, tea.Cmd) {
 // reopen opens the composer again after a Run: empty, with what the next
 // Run would use read afresh (the files may have changed during the Run).
 func (h *home) reopen() {
+	if h.background {
+		// The Chat's own box only: the lines under the box, the setup bar
+		// and the history walk are the focused Chat's.
+		h.actions = false
+		h.comp = h.composer()
+		return
+	}
 	h.run, h.done, h.actions = nil, nil, false
 	h.comp, h.queuedText = h.composer(), ""
 	h.navigating = false
@@ -1205,6 +1240,9 @@ func (h *home) View() tea.View {
 }
 
 func (h *home) view() tea.View {
+	if h.chats != nil {
+		return tea.NewView(strings.Join(append([]string{"", " " + h.st.bold("Chats")}, h.chatsLines()...), "\n"))
+	}
 	if h.turn != nil {
 		return tea.NewView(h.turnView())
 	}
@@ -1703,7 +1741,8 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	in := newInterrupts(cancel)
 	defer in.watch(os.Interrupt, syscall.SIGTERM)()
 
-	h := &home{comp: newComposer(), chatView: &chatView{tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}}
+	h.chatView.num = 1
 	h.views = []*chatView{h.chatView}
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
@@ -1815,7 +1854,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			if err != nil {
 				return line + "\noge: reading the Run for delivery: " + clean(err.Error()), nil
 			}
-			c := hc.get()
+			c := h.chat.get() // the Chat the cut is of: route focused it
 			l.apply = func() string { return h.chatApply(env, root, c, res) }
 			branch := l.branch
 			l.branch = func(name string) string {
@@ -1839,6 +1878,17 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
 	err = u.program(in, h)
+	// hc is the caller's to close; the other Chats are the home's.
+	for _, v := range h.views {
+		if v.chat != hc {
+			v.chat.close()
+		}
+	}
+	for _, c := range h.closed {
+		if c != hc {
+			c.close()
+		}
+	}
 	if h.full {
 		// The alternate screen took the transcript with it: leave it in the
 		// terminal's scrollback, as an inline session would have.

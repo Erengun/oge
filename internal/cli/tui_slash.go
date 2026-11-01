@@ -55,8 +55,10 @@ func slashCommands() []slashCmd {
 		{name: "/label", advanced: true, usage: "/label [run] <text>", desc: "name a Run (yours; not Evidence); no text clears", args: true, run: (*home).labelCmd},
 		{name: "/export", advanced: true, usage: "/export", desc: "write this session's transcript to a file (redacted)", run: (*home).exportCmd},
 		{name: "/copy", advanced: true, usage: "/copy", desc: "copy the last Receipt to the clipboard (redacted)", run: (*home).copyCmd},
-		{name: "/new", usage: "/new", desc: "start a fresh task", run: (*home).newCmd},
-		{name: "/clear", advanced: true, usage: "/clear", desc: "start a fresh task", run: (*home).newCmd},
+		{name: "/new", usage: "/new", desc: "open another Chat; this one keeps working", run: (*home).newCmd},
+		{name: "/chats", usage: "/chats", desc: "switch to another Chat", run: (*home).chatsCmd},
+		{name: "/close", advanced: true, usage: "/close", desc: "end this Chat", run: (*home).closeCmd},
+		{name: "/clear", advanced: true, usage: "/clear", desc: "start this Chat afresh", run: (*home).clearCmd},
 		{name: "/notify", advanced: true, usage: "/notify on|off", desc: "alerts for this session", run: (*home).notifyCmd},
 		{name: "/terminal", advanced: true, usage: "/terminal", desc: "hints for this terminal (Shift+Enter, Alt keys, tmux)", run: (*home).terminalCmd},
 		{name: "/resume", unavailable: true, usage: "/resume", desc: "not built yet (#55)", run: func(*home, []string) (tea.Cmd, string) {
@@ -96,12 +98,13 @@ func (h *home) slash(text string) (cmd tea.Cmd, ok bool) {
 		return nil, true
 	}
 	h.dropAdviceEdit() // a command replaced what the box held
+	v := h.chatView    // the Chat it was typed in: /new and /chats move the focus
 	cmd, problem := c.run(h, args)
 	if problem != "" {
 		h.msg = []string{problem}
 		return nil, true
 	}
-	h.comp = h.composer()
+	v.comp = h.composer()
 	h.navigating = false
 	return cmd, true
 }
@@ -158,34 +161,6 @@ func advancedHelpText(kb *keyMap) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func (h *home) newCmd(args []string) (tea.Cmd, string) {
-	if len(args) > 0 {
-		return nil, usageOf("/new")
-	}
-	h.last, h.thread = nil, nil
-	h.side.verdict, h.side.outcome, h.side.changes, h.side.tokens, h.side.cost = "", "", nil, nil, nil
-	h.side.took, h.side.turns, h.side.steps, h.side.ctx = 0, 0, 0, nil
-	h.unchecked, h.uncheckedChanged = false, 0
-	h.steps = nil // a result of the old Session hangs on no new step
-	// A fresh task is a fresh Chat: the next message opens a new Session,
-	// and the old one's cut in flight ends unshown.
-	if v := h.verify; v != nil {
-		v.cancel()
-		h.verify = nil
-	}
-	h.actions = false
-	h.pendingFB = nil
-	if h.adv != nil {
-		h.dismissAdvice(h.adv)
-		h.adv.cancel()
-		h.adv = nil
-	}
-	h.dropAdviceEdit()
-	cmd := h.chat.reset(h.chatView)
-	h.resetting = cmd != nil
-	return cmd, ""
 }
 
 func (h *home) notifyCmd(args []string) (tea.Cmd, string) {

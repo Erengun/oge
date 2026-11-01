@@ -2,6 +2,7 @@ package cli
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +16,17 @@ import (
 // the whole terminal's (the composer, overlays, size, alerts) stays on
 // the home.
 type chatView struct {
+	// num is the Chat's number for alt+N, the rail and /chats: one more
+	// than the highest when it opened, kept for its whole life, so closing
+	// another Chat never renumbers it. name is its first message's title;
+	// "" until then.
+	num  int
+	name string
+	// comp is the Chat's composer: its draft, undo and pastes stay with it
+	// while another Chat has the focus, and a message for this Chat that
+	// puts text back in the box puts it in this one.
+	comp *composer
+
 	// chat is the Chat (#259): each message is its turn. nil runs each
 	// message as a one-shot Run (an agent without auto mode, or
 	// OGE_CHAT=0). turn is the turn in flight; verify is the newest cut
@@ -76,6 +88,57 @@ type chatView struct {
 // focus makes v the Chat the home shows and the keys go to.
 func (h *home) focus(v *chatView) { h.chatView = v }
 
+// newView is a fresh Chat on the session's config: empty, numbered after
+// the others, with a Chat of its own to open on its first message.
+func (h *home) newView() *chatView {
+	n := 0
+	for _, v := range h.views {
+		n = max(n, v.num)
+	}
+	v := &chatView{num: n + 1, comp: h.composer(), tr: &transcript{}, chat: h.chat.clone()}
+	v.side.frozen = h.side.frozen
+	return v
+}
+
+// switchTo is the human moving to another Chat (/new, /close, /chats,
+// alt+N, a rail click): what is half done in the home's overlays and
+// history walk ends, and v's own draft and scroll come back with it. A
+// walk through the history gives the box back its draft first, and what
+// is said under the box, or held for ↑ after a Ctrl+C, was this Chat's.
+func (h *home) switchTo(v *chatView) {
+	if v == h.chatView {
+		return
+	}
+	if h.navigating {
+		h.comp.set(h.draft)
+	}
+	h.navigating, h.visual = false, 0
+	h.msg, h.note, h.cleared = nil, "", ""
+	h.focus(v)
+	if h.full {
+		h.layout()
+	}
+}
+
+// viewNum is the open Chat numbered n, nil when there is none.
+func (h *home) viewNum(n int) *chatView {
+	for _, v := range h.views {
+		if v.num == n {
+			return v
+		}
+	}
+	return nil
+}
+
+// label is how the Chat is named in the rail and /chats: its first
+// message's title, "new" before one.
+func (v *chatView) caption() string {
+	if v.name == "" {
+		return "new"
+	}
+	return v.name
+}
+
 // chatViewOf is the Chat a message is for: nil when it names none.
 func chatViewOf(msg tea.Msg) *chatView {
 	switch m := msg.(type) {
@@ -116,9 +179,11 @@ func chatViewOf(msg tea.Msg) *chatView {
 // longer has: its message is dropped. A message that names no Chat is
 // the focused one's.
 //
-// The handlers run as they do for the focused Chat, so the ones that
-// touch the whole terminal (the composer, toast, notify, msg) do so for
-// a Chat in the background too; slice 4 gates them.
+// The handlers run as they do for the focused Chat, with h.background
+// set: what is the whole terminal's (msg, the toast, quitting, printing
+// above the program) they must leave alone then. The composer is the
+// Chat's own (chatView.comp), so text a handler puts back in it waits
+// there.
 func (h *home) route(msg tea.Msg) (restore func(), ok bool) {
 	v := chatViewOf(msg)
 	if v == nil || v == h.chatView {
@@ -130,5 +195,23 @@ func (h *home) route(msg tea.Msg) (restore func(), ok bool) {
 	}
 	prev := h.chatView
 	h.focus(v)
-	return func() { h.focus(prev) }, true
+	h.background = true
+	return func() {
+		h.background = false
+		h.focus(prev)
+	}, true
+}
+
+// problem says what went wrong with the Chat: under the box for the
+// focused one, in its transcript for one in the background, whose lines
+// must never land under another Chat's box.
+func (h *home) problem(lines ...string) tea.Cmd {
+	if !h.background {
+		h.msg = append(h.msg, lines...)
+		return nil
+	}
+	for i, l := range lines {
+		lines[i] = h.ogeLine(strings.TrimPrefix(l, "oge: "))
+	}
+	return h.println(strings.Join(lines, "\n"))
 }

@@ -39,7 +39,8 @@ import (
 // TODO(#259-decision): HeldOutViewed (D6) has no caller in the home yet:
 // no home view shows held-out tests. The view that does records it.
 
-// homeChat is the session's Chat, opened by the first message.
+// homeChat is one of the session's Chats (one per chatView), opened by its
+// first message.
 type homeChat struct {
 	// open opens the Chat on the config the first message resolved.
 	open func(res *resolved) (*run.Chat, error)
@@ -54,10 +55,47 @@ type homeChat struct {
 	// seam, nil in the product.
 	shown func(c *run.Chat, consultation string)
 
-	mu sync.Mutex
-	c  *run.Chat
-	// closing counts the Chats /new is closing: quitting waits for them.
+	// mu is held only to read or swap c, never across opening one: /new
+	// and /close run while a first message opens its Chat. gen moves on
+	// each reset or close, so a Chat opened meanwhile is closed, unused.
+	mu  sync.Mutex
+	c   *run.Chat
+	gen int
+	// closing counts the Chats being opened, and the ones /new and /close
+	// are closing: quitting waits for them.
 	closing sync.WaitGroup
+}
+
+// errChatGone is a message's Chat closed while it opened: the message is
+// for a Chat the home no longer has.
+var errChatGone = errors.New("the Chat was closed while it opened")
+
+// current is the open Chat, nil when none, and its generation.
+func (hc *homeChat) current() (*run.Chat, int) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	return hc.c, hc.gen
+}
+
+// opened keeps c as the Chat, unless hc was reset or closed since gen.
+func (hc *homeChat) opened(c *run.Chat, gen int) bool {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	if hc.gen != gen {
+		return false
+	}
+	hc.c = c
+	return true
+}
+
+// take empties hc, returning the Chat that was open.
+func (hc *homeChat) take() *run.Chat {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	c := hc.c
+	hc.c = nil
+	hc.gen++
+	return c
 }
 
 // fits reports whether a message on res goes to the Chat: one is open, or
@@ -78,6 +116,15 @@ func (hc *homeChat) fits(res *resolved) bool {
 	return false
 }
 
+// clone is a homeChat like hc with no Chat open yet: another Chat of the
+// session's (/new). nil clones to nil.
+func (hc *homeChat) clone() *homeChat {
+	if hc == nil {
+		return nil
+	}
+	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown}
+}
+
 func (hc *homeChat) get() *run.Chat {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
@@ -90,7 +137,7 @@ func (hc *homeChat) close() {
 	if hc == nil {
 		return
 	}
-	if c := hc.get(); c != nil {
+	if c := hc.take(); c != nil {
 		_ = c.Close()
 	}
 	hc.closing.Wait()
@@ -103,10 +150,7 @@ func (hc *homeChat) reset(v *chatView) tea.Cmd {
 	if hc == nil {
 		return nil
 	}
-	hc.mu.Lock()
-	c := hc.c
-	hc.c = nil
-	hc.mu.Unlock()
+	c := hc.take()
 	if c == nil {
 		return nil
 	}
@@ -291,18 +335,23 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		dismissed = h.println(h.ogeLine(h.st.dim("advice dismissed: nothing was sent to the agent")))
 	}
 	hc, ctx, v := h.chat, h.ctx, h.chatView
+	c, gen := hc.current()
+	if c == nil {
+		hc.closing.Add(1) // quitting waits for it to open, and closes it
+	}
 	send := func() tea.Msg {
-		hc.mu.Lock()
-		if hc.c == nil {
-			c, err := hc.open(res)
+		if c == nil {
+			defer hc.closing.Done()
+			opened, err := hc.open(res)
 			if err != nil {
-				hc.mu.Unlock()
 				return chatSentMsg{view: v, err: err}
 			}
-			hc.c = c
+			if !hc.opened(opened, gen) {
+				_ = opened.Close() // /close or quitting got here first
+				return chatSentMsg{view: v, err: errChatGone}
+			}
+			c = opened
 		}
-		c := hc.c
-		hc.mu.Unlock()
 		if edited != nil && edited.chat == c {
 			ch, err := c.SendEdited(ctx, edited.id, text) // the user's turn, from an advisor's text
 			return chatSentMsg{view: v, events: ch, err: err}
@@ -364,19 +413,20 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.nextTurn(h.println(line))
 		}
 		if msg.err != nil {
-			// The composer and msg are the terminal's, not this Chat's:
-			// for a Chat in the background, slice 4 gates them.
+			// The composer is this Chat's own; msg is the terminal's, so
+			// problem says it in the transcript of a Chat in the
+			// background.
 			text, held, ed := h.turn.text, h.turn.feedback != "", h.turn.edited
 			queued := h.endTurn()
 			defer func() { h.adviceEdit = ed }() // kept for the retry
 			// Kept, to send again, with what was queued and typed since.
 			h.comp.set(strings.TrimSpace(strings.Join(append(append([]string{text}, queued...), h.comp.text()), "\n\n")))
-			h.msg = append(h.msg, "oge: "+clean(msg.err.Error()))
+			said := h.problem("oge: " + clean(msg.err.Error()))
 			if held {
 				// The feedback turn waited on this one: say it goes unsent.
-				return h, h.println(h.ogeLine(h.st.dim("the failing cut's feedback turn wasn't sent")))
+				return h, tea.Sequence(said, h.println(h.ogeLine(h.st.dim("the failing cut's feedback turn wasn't sent"))))
 			}
-			return h, nil
+			return h, said
 		}
 		h.turn.events = msg.events
 		if h.turn.oge {
@@ -392,6 +442,9 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return h.chatKey(msg)
 	case tea.PasteMsg:
+		if h.chats != nil {
+			break // the /chats picker has the screen; a paste never lands behind it
+		}
 		if a := h.ask(); a == nil || a.Questions != nil {
 			h.comp.insertPaste(msg.Content)
 		}
@@ -441,8 +494,7 @@ func (h *home) showAsk() {
 	h.dropAskAdvice()
 	h.turn.advisedBy = ""
 	if a := h.ask(); a != nil && a.Questions != nil {
-		// The composer is the terminal's: slice 4 gates this for a Chat in
-		// the background.
+		// The composer is the Chat's own, in the background too.
 		if text := strings.TrimSpace(h.comp.expanded()); text != "" {
 			h.enqueue(text)
 			h.comp = h.composer()
@@ -752,8 +804,8 @@ func (h *home) cutGateKey(k tea.KeyPressMsg) tea.Cmd {
 // endTurn opens the composer again, keeping what was typed during the
 // turn and not yet sent; it returns the messages queued meanwhile.
 //
-// The composer is the terminal's: for a Chat in the background, slice 4
-// gates the reopening.
+// The composer is the Chat's own; for a Chat in the background, reopen
+// leaves the rest of the terminal alone.
 func (h *home) endTurn() []string {
 	text, queued := h.comp.expanded(), h.turn.queued
 	h.turn = nil
@@ -808,6 +860,10 @@ func queuedCommand(q string) bool {
 // messages go as one turn, joined by a blank line. With any, they are back
 // in the composer, unsent: a command's prompt or viewer is on screen, and
 // a turn started under it would hide it.
+//
+// A Chat in the background runs none: a command's output, prompt or
+// viewer is the terminal's, and would land on the focused Chat. They wait
+// in this Chat's own box, with the messages, until it has the focus.
 func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
 	draft := h.comp.expanded()
 	var cmds []tea.Cmd
@@ -816,7 +872,7 @@ func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
 	for _, q := range queued {
 		if queuedCommand(q) {
 			ran = true
-			if h.job != nil {
+			if h.job != nil || h.background {
 				msgs = append(msgs, q) // after a running shell job: waits too
 				continue
 			}
@@ -842,9 +898,8 @@ func (h *home) submitQueued(queued []string) (tea.Model, tea.Cmd) {
 	h.comp.set(draft)
 	res, problem := h.resolve(h.sel)
 	if problem != nil {
-		h.msg = problem
 		h.comp.set(keep)
-		return h, nil
+		return h, h.problem(problem...)
 	}
 	text := strings.Join(msgs, "\n\n")
 	h.hist.add(text)
@@ -1108,6 +1163,9 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		// A key is the focused Chat's: it stops that turn only.
 		if t.stopped {
+			if !h.leave() {
+				return h, nil
+			}
 			h.quit = true
 			return h, tea.Quit
 		}
@@ -1149,9 +1207,10 @@ func (h *home) chatKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		full := strings.TrimSpace(h.comp.expanded()) // a paste, whole
 		h.comp = h.composer()
-		if word, _, _, ok := parseSlash(full); ok && word == "/advise" {
+		if word, _, _, ok := parseSlash(full); ok && slashDuringTurn(word) {
 			// It runs alongside the turn, and is never a question's
-			// answer: the point of asking now.
+			// answer: the point of asking now, or of opening another
+			// Chat while this one works.
 			cmd, _ := h.slash(full)
 			if h.msg != nil {
 				h.comp.set(full) // the text stays in the box

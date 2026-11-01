@@ -39,7 +39,7 @@ func askHome(got *[]agent.Answer) (*home, *agent.Ask) {
 		return nil
 	})
 	a.Questions = []agent.AskQuestion{{Text: "Which?", Options: []string{"red", "blue"}}}
-	h := &home{width: 80, height: 24, st: newStyles(false), comp: newComposer(), chatView: &chatView{turn: &chatTurn{}}}
+	h := &home{width: 80, height: 24, st: newStyles(false), chatView: &chatView{comp: newComposer(), turn: &chatTurn{}}}
 	h.turn.asks = []*agent.Ask{a}
 	h.showAsk()
 	return h, a

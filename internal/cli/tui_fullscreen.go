@@ -342,12 +342,15 @@ func (h *home) compose(v tea.View) tea.View {
 // fullKey handles the keys that only move around the full screen. They
 // never reach an ask, a Gate or a delivery: none of them decides anything.
 func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	if h.keys != nil || h.picker != nil || h.diff != nil || h.panel != nil ||
-		h.search != nil || (h.run != nil && h.run.expanded) {
+	if h.keys != nil || h.picker != nil || h.chats != nil || h.diff != nil || h.panel != nil ||
+		h.search != nil || h.hidden != nil || h.saving || h.review != nil || (h.run != nil && h.run.expanded) {
 		return nil, false
 	}
 	t := h.tr
 	key := msg.String()
+	if h.switchKey(key) {
+		return nil, true
+	}
 	// A key the keybindings file gave to an action is that action's, not ours.
 	ctx := ctxComposer
 	if h.run != nil {
@@ -489,17 +492,30 @@ func (h *home) noteReply(text string) {
 }
 
 // leaveTranscript writes what the session printed to w, on the screen the
-// terminal returned to, so quitting does not lose it.
+// terminal returned to, so quitting does not lose it: every Chat's, in
+// number order, each under its name when there is more than one.
 func (h *home) leaveTranscript(w io.Writer) {
-	if len(h.tr.entries) == 0 {
-		return
+	views := h.views
+	if len(views) == 0 {
+		views = []*chatView{h.chatView}
+	}
+	var said []*chatView
+	for _, v := range views {
+		if len(v.tr.entries) > 0 {
+			said = append(said, v)
+		}
 	}
 	width := h.termW
 	if width <= 0 {
 		width = 80
 	}
-	t := &transcript{entries: h.tr.entries, expand: h.tr.expand}
-	fmt.Fprintln(w, strings.Join(t.render(width), "\n"))
+	for _, v := range said {
+		if len(said) > 1 {
+			fmt.Fprintln(w, h.st.dim(fmt.Sprintf("── Chat %d · %s ──", v.num, clean(v.caption()))))
+		}
+		t := &transcript{entries: v.tr.entries, expand: v.tr.expand}
+		fmt.Fprintln(w, strings.Join(t.render(width), "\n"))
+	}
 }
 
 // unclip blanks the closing border lines at the top of the viewport whose

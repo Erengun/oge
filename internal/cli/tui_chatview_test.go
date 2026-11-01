@@ -16,12 +16,12 @@ import (
 func twoChats() (h *home, a, b *chatView, cancelled map[*chatView]int) {
 	cancelled = map[*chatView]int{}
 	view := func() *chatView {
-		v := &chatView{turn: &chatTurn{}, chat: &homeChat{}}
+		v := &chatView{comp: newComposer(), tr: &transcript{}, turn: &chatTurn{}, chat: &homeChat{}}
 		v.verify = &chatVerify{seq: 1, changed: 2, cancel: func() { cancelled[v]++ }}
 		return v
 	}
 	a, b = view(), view()
-	h = &home{width: 80, height: 24, st: newStyles(false), comp: newComposer(), chatView: a, views: []*chatView{a, b}}
+	h = &home{width: 80, height: 24, st: newStyles(false), chatView: a, views: []*chatView{a, b}}
 	return h, a, b, cancelled
 }
 

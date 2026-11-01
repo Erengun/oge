@@ -79,7 +79,7 @@ The Desk takes the other route:
 
 **Switching**
 - Click a rail row, or press `alt+1…9` when the terminal sends Meta. `/chats` opens a picker that works everywhere.
-- The exact keys are settled in slice 3. `ctrl+n` and `ctrl+p` are taken.
+- Settled in slice 3a (#355): `alt+1…9` in the full screen; `/chats` everywhere, at 80 columns too; `/new` keeps the current Chat running and opens another; `/close` ends the focused Chat and leaves the others' numbers alone; `/clear` starts this Chat afresh in place. `/new`, `/chats` and `/close` also work during a turn. Clicking a rail row comes with the rail (3b). `ctrl+n` and `ctrl+p` are taken.
 
 **Since-you-left card.** Shown when you focus a Chat that received events while it was unfocused:
 - your last message;
