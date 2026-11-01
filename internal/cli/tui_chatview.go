@@ -118,6 +118,10 @@ func (h *home) focus(v *chatView) {
 	}
 	h.chatView = v
 	v.focusAt = h.clock()
+	// The @file picker and the / menu were built for the old Chat's box and
+	// repo: close them, so nothing from one Chat lands in another's.
+	h.at.list, h.at.off = nil, false
+	h.menu = nil
 }
 
 // newView is a fresh Chat in the focused Chat's repo: empty, numbered

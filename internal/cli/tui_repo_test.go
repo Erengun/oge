@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -218,5 +219,19 @@ func TestAnotherRepoLeavesTheStartReposFlags(t *testing.T) {
 	}
 	if len(res.flags.o.Agents) != 1 || res.flags.o.Agents[0] != "fake" || !res.flags.o.Fast {
 		t.Errorf("the session's agent and mode didn't come along: %v, fast %v", res.flags.o.Agents, res.flags.o.Fast)
+	}
+}
+
+// Switching Chats closes the @file picker and the / menu: they were built
+// for the old Chat's box and repo, so nothing from one lands in another.
+func TestFocusClosesThePickers(t *testing.T) {
+	h := deskHome()
+	submit(h, "/new")
+	first := h.views[0]
+	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	h.at.list, h.menu = &l, &l
+	h.focus(first)
+	if h.at.list != nil || h.menu != nil {
+		t.Fatalf("pickers still open after a switch: at %v, menu %v", h.at.list != nil, h.menu != nil)
 	}
 }
