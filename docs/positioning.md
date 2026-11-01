@@ -4,29 +4,37 @@ Decided in the positioning review ([#65](https://github.com/Erengun/oge/issues/6
 
 ## Identity
 
-Revised after the market review of 2026-10-05, which superseded the #65 headline.
+Revised 2026-11-01 (the attention review, after the Desk work in [ADR-0024](adr/0024-several-chats-one-attention-queue.md)). It supersedes the 2026-10-05 identity, which superseded the #65 headline.
 
-> **Öge makes delegation actually feel like delegation.**
+> **One Desk for everything you're building.**
+
+Thesis:
+
+> **AI multiplied execution. Öge protects attention.**
 
 Category (what Öge is):
 
-> **Öge is the supervision layer for coding agents.**
+> **Öge is an attention layer for AI-accelerated development.**
 
-It is not another coding agent, not a test runner and not generic multi-agent orchestration. It supervises the native agents you already use, and stays provider-independent, terminal-native and trust-aware.
+The problem it answers: AI raised a developer's execution capacity past their ability to track the work it produces. You can start five tasks before finishing one, across several repos, with agents producing output while you do something else. Decisions, reviews, failures and unfinished work pile up, and you switch contexts to keep it all moving. The bottleneck moved from execution to human attention: context switching, prioritisation, decision fatigue and the cost of resuming.
 
-Supporting thought:
+Öge is not another coding agent, not a test runner, not a project-management tool and not generic multi-agent orchestration. The agents are not the product, and neither are the projects: the Desk is where you keep control of the work AI lets you start. It drives the native agents you already use and stays provider-independent, terminal-native and trust-aware.
 
-> AI made coding fast. Supervision became the bottleneck.
+Supervision is the mechanism that lets you look away: Öge checks the work and accepts it only on evidence it gathers itself, so you don't re-check every "done". Verification makes the Desk credible; it is not the identity.
 
-Product behaviour:
+The aim is **maximum productive parallelism with minimum context switching**: not fewer agents, but fewer times you rebuild context or watch a project by hand.
 
-> Give Öge the task. It supervises the agents, checks the work, and brings you in only when your judgment is actually needed.
+Three things Öge must get right:
 
-Promise:
+1. **Stop forcing context switches.** Something happening in project A never makes you open it. Öge brings what matters to you at a natural breakpoint ([`ux/desk.md`](ux/desk.md)).
+2. **Preserve context so you resume at once.** Coming back to a Chat, you see what you were doing, what happened since, what you decided, what is waiting and the next action, all from records ([`ux/away.md`](ux/away.md)).
+3. **Make committing attention intentional.** Starting work is cheap; Öge lets you get an idea out of your head without turning it into another running Chat (Later, in [`ux/desk.md`](ux/desk.md)).
+
+Earlier lines, kept as explanation, not headline:
+
+> Öge makes delegation actually feel like delegation.
 
 > Hand off the task. Öge brings you back when the work is ready or genuinely needs you.
-
-Öge is not a verification tool, not a multi-agent tool and not a "stop babysitting" tool. Verification is the mechanism that makes delegation credible, not the identity.
 
 ### Three layers
 
@@ -37,6 +45,8 @@ Promise:
 | **Earn done** | "Tell me when I can trust the result." | Independent verifier, Oracle, Evidence, Receipt |
 
 ### North star
+
+Unchanged by the 2026-11-01 revision: it is the compass, and the new identity says it out loud.
 
 > **How much useful agent work happens per minute of human attention?**
 

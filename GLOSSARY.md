@@ -1,6 +1,6 @@
 # Öge
 
-Öge is the supervision layer for coding agents: it runs the native agents you already use, routes only real decisions to you, and accepts work only on evidence it gathers itself.
+Öge is one Desk for everything you're building, an attention layer for AI-accelerated development: it runs the native agents you already use across your projects, routes only real decisions to you, and accepts work only on evidence it gathers itself.
 
 ## Language
 
@@ -103,6 +103,10 @@ _Avoid_: Fleet, swarm, dashboard, workspace (a Workspace is an agent's directory
 **Inbox**:
 The Desk's queue of things waiting for the human (open Gates and asks, failed Checks, Accepted cuts not yet seen), shown one card at a time with the Evidence. Öge orders it with a fixed table of attention levels, never with a model.
 _Avoid_: Notifications, feed, queue (a queued message is a turn waiting to be sent)
+
+**Later**:
+An idea captured on the Desk without committing to it: text only, with no agent, Chat or Workspace behind it. It becomes a Chat only when the human promotes it (docs/ux/desk.md, I1–I3).
+_Avoid_: Backlog, todo, ticket, task (a Task is what a Run is given)
 
 **Turn**:
 One user message in a Chat: one `Send` to the implementer Session, which ends when the agent's reply settles. Messages sent during a turn queue; Esc interrupts it without ending the Session.
