@@ -737,3 +737,20 @@ func TrackedFiles(root string) ([]string, error) {
 	sort.Strings(paths)
 	return paths, nil
 }
+
+// OpenRunRepo opens the Run repository InitRunRepo made at dir.
+func OpenRunRepo(dir string) (*RunRepo, error) {
+	if _, err := os.Stat(filepath.Join(dir, "objects")); err != nil {
+		return nil, err
+	}
+	return &RunRepo{Dir: dir}, nil
+}
+
+// RefCommit is the commit ref names, ok false when there is none.
+func (r *RunRepo) RefCommit(ref string) (string, bool) {
+	out, err := r.git("", "", nil, "rev-parse", "--verify", "-q", ref+"^{commit}")
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
