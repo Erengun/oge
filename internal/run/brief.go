@@ -169,7 +169,8 @@ type ChatBrief struct {
 	Stopped int
 	// Ended says how a signal stopped the Chat with work in flight, as its
 	// TurnInterrupted says: "hangup" (its terminal closed), "interrupt" (a
-	// second Ctrl-C or SIGTERM); "" when none did.
+	// second Ctrl-C or SIGTERM), "stop" (/stop), "quit" (kept at /quit);
+	// "" when none did.
 	Ended string
 	// Torn says its log's last record is torn. Unless the caller knows
 	// the Chat isn't live, that is a record still being written or one
@@ -949,8 +950,14 @@ func (c ChatBrief) since(loc *time.Location) string {
 	case "":
 	case "hangup":
 		parts = append(parts, "stopped when its terminal closed")
-	default:
+	case "stop":
+		parts = append(parts, "stopped by /stop")
+	case "quit":
+		parts = append(parts, "kept when you quit")
+	case "interrupt":
 		parts = append(parts, "stopped by an interrupt (a second Ctrl-C or SIGTERM)")
+	default:
+		parts = append(parts, "stopped")
 	}
 	if c.Torn {
 		parts = append(parts, "its log's last record is torn (still being written, or cut off)")
