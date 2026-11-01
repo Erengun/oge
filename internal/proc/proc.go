@@ -4,6 +4,7 @@ package proc
 
 import (
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -18,13 +19,24 @@ var (
 // Start starts cmd in a new process group. Wait for it with Wait.
 func Start(cmd *exec.Cmd) error {
 	setGroup(cmd)
-	if err := cmd.Start(); err != nil {
+	if err := forkStart(cmd); err != nil {
 		return err
 	}
 	mu.Lock()
 	live[cmd] = true
 	mu.Unlock()
 	return nil
+}
+
+// forkStart starts cmd on a thread locked for the fork. On Linux the
+// child's death signal (proc_linux.go) is tied to the thread that forked
+// it, not to the process (go.dev/issue/27505). The lock keeps the fork on
+// one thread, and is released after it: Go ends a thread only when a
+// goroutine exits still locked to it, which Öge's code never does.
+func forkStart(cmd *exec.Cmd) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	return cmd.Start()
 }
 
 // Wait waits for cmd, then forgets it.
