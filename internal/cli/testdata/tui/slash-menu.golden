@@ -6,6 +6,7 @@
    /diff [run]                      review changes
    /apply [run]                     apply changes to your working tree
    /new [path]                      open another Chat; this one keeps working
+   /projects                        open a Chat in another project
    /chats                           switch to another Chat
    /inbox                           what the Chats want from you (ctrl+space)
    /quit                            leave

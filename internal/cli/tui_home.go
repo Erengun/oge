@@ -390,6 +390,13 @@ type home struct {
 	deskMax   int
 	deskQuiet time.Duration
 	capNoted  bool
+	// deskProjects are [desk] projects; the rail and /projects show the
+	// ones that are git repos (tui_projects.go). order is the repos in the
+	// order their first Chat opened, which the rail never changes.
+	deskProjects []string
+	pins         []string
+	pinsRead     bool
+	order        []string
 	// redraw schedules a redraw (tea.Tick); nil schedules none, as in
 	// tests that drive the home by hand.
 	redraw   func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
@@ -697,8 +704,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && h.chats != nil {
 		// Over whatever the Chat shows: switching decides nothing.
-		h.chatsKey(k)
-		return h, nil
+		return h, h.chatsKey(k)
 	}
 	if h.turn != nil {
 		return h.chatUpdate(msg)
@@ -949,7 +955,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.endNavigation()
 			}
 		case "tab":
-			if p := h.openSetup(); p != "" {
+			if h.comp.text() == "/new " {
+				_, p := h.projectsCmd(nil) // /new and Tab: the project picker
+				if h.comp.set(""); p != "" {
+					h.msg = []string{p}
+				}
+			} else if p := h.openSetup(); p != "" {
 				h.msg = []string{p}
 			}
 		case actCycleMode:
@@ -1293,7 +1304,7 @@ func (h *home) view() tea.View {
 		return h.inboxView()
 	}
 	if h.chats != nil {
-		return tea.NewView(strings.Join(append([]string{"", " " + h.st.bold("Chats")}, h.chatsLines()...), "\n"))
+		return tea.NewView(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n"))
 	}
 	if h.turn != nil {
 		return tea.NewView(h.turnView())
@@ -1805,7 +1816,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	}
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
-	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, herdr: u.herdr, redraw: tea.Tick}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, deskProjects: u.deskProjects, herdr: u.herdr, redraw: tea.Tick}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}

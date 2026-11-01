@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -65,6 +66,39 @@ type DeskConfig struct {
 	// StaleGate is how long a Gate or an ask may wait on the human before
 	// Öge rings for it, even while they type; "" is DefaultDeskStaleGate.
 	StaleGate string `toml:"stale_gate,omitempty"`
+	// Projects are repos pinned in the rail even with no Chat open
+	// (docs/ux/desk.md, Projects P2): absolute paths, or ~/ ones.
+	Projects []string `toml:"projects,omitempty"`
+}
+
+// DeskProjects returns [desk] projects with ~ expanded against home, in
+// config order and without repeats. Entries Validate refuses are left out.
+func (c *UserConfig) DeskProjects(home string) []string {
+	if c == nil || c.Desk == nil {
+		return nil
+	}
+	var out []string
+	for _, p := range c.Desk.Projects {
+		if q, ok := projectPath(p, home); ok && !slices.Contains(out, q) {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// projectPath is a [desk] projects entry as an absolute, cleaned path.
+func projectPath(p, home string) (string, bool) {
+	p = strings.TrimSpace(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home == "" {
+			return "", false
+		}
+		p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+	}
+	if p == "" || !filepath.IsAbs(p) {
+		return "", false
+	}
+	return filepath.Clean(p), true
 }
 
 // The [desk] defaults: about 3 working Chats is what one person tracks
@@ -316,6 +350,11 @@ func (c *UserConfig) validate() []Problem {
 		if d.StaleGate != "" {
 			if _, err := parseDuration(d.StaleGate); err != nil {
 				add("desk.stale_gate", err.Error())
+			}
+		}
+		for _, p := range d.Projects {
+			if _, ok := projectPath(p, "/"); !ok {
+				add("desk.projects", fmt.Sprintf("%q must be an absolute path or start with ~/", p))
 			}
 		}
 	}
