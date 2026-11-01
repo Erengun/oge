@@ -42,6 +42,9 @@ const (
 	RecTurnStarted     = "TurnStarted"
 	RecSessionReopened = "SessionReopened"
 	RecHeldOutViewed   = "HeldOutViewed"
+	// RecTurnInterrupted is the last record of a Chat that Stop ended
+	// while a turn or its cut was in flight. Its Workspace is kept.
+	RecTurnInterrupted = "TurnInterrupted"
 )
 
 // ChatFlag is the hidden escape hatch from the Chat: "0" refuses to open
@@ -62,6 +65,7 @@ var (
 	// A verifier's (QA's) Session is always fresh.
 	ErrSessionReuse = errors.New("only an implementer Session may be reused")
 	ErrChatClosed   = errors.New("the chat is closed")
+	ErrChatStopped  = errors.New("the chat was stopped: Öge was interrupted")
 	ErrChatIdle     = errors.New("the chat Session was idle too long and was closed")
 	ErrChatLost     = errors.New("the chat Session ended")
 )
@@ -1223,11 +1227,29 @@ func (c *Chat) Done() <-chan struct{} {
 
 // Close ends the Session and removes the Workspace, which is disposable.
 func (c *Chat) Close() error {
+	c.end(ErrChatClosed, "")
+	return nil
+}
+
+// Stop ends the Chat for Öge going away (a hangup or a termination
+// signal), as Close does: the turn in flight is interrupted, its
+// Session's process group killed after the grace period, its writes
+// scope-checked, and a cut in flight cancelled. Unlike Close it keeps the
+// Workspace, and when a turn or a cut was in flight the log ends in
+// TurnInterrupted, with why ("hangup" or "interrupt").
+func (c *Chat) Stop(why string) error {
+	c.end(ErrChatStopped, why)
+	return nil
+}
+
+// end is Close, or Stop when why is set.
+func (c *Chat) end(reason error, why string) {
 	c.closing.Do(func() {
 		c.reopening.Lock()
 		defer c.reopening.Unlock()
 		c.mu.Lock()
-		c.closed, c.err = true, ErrChatClosed
+		c.closed, c.err = true, reason
+		turn, busy := c.turns, c.cur != nil
 		c.timer.Stop()
 		unctx, sess, pumped := c.unctx, c.sess, c.pumped
 		c.mu.Unlock()
@@ -1243,14 +1265,21 @@ func (c *Chat) Close() error {
 		c.cancelPrep()
 		<-c.prepared
 		c.prepMu.Unlock()
-		c.cutMu.Lock() // a cut in flight still uses the seed and the control
+		if !c.cutMu.TryLock() {
+			busy = true
+			c.cutMu.Lock() // a cut in flight still uses the seed and the control
+		}
 		defer c.cutMu.Unlock()
 		c.prep.control.Stop()
 		c.prep.seed.Close()
+		if why != "" && busy {
+			_ = c.log(RecTurnInterrupted, map[string]any{"chat": c.ID, "turn": turn, "why": why})
+		}
 		c.logMu.Lock()
 		c.l.Close()
 		c.logMu.Unlock()
-		oracle.RemoveAll(c.work)
+		if why == "" {
+			oracle.RemoveAll(c.work)
+		}
 	})
-	return nil
 }
