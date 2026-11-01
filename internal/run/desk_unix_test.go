@@ -136,6 +136,20 @@ func TestDeskLogRecords(t *testing.T) {
 	if a != (run.ChatAdded{Chat: "c1", N: 1, Title: "fix Add", Repo: "/repo"}) || s != (run.Seen{Chat: "c1", Upto: "r1"}) || !c.Clean {
 		t.Errorf("ChatAdded %+v, Seen %+v, DeskClosed %+v", a, s, c)
 	}
+	// A cut line left by a crash doesn't swallow the next Desk's records.
+	d2, err := run.OpenDesk(private, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.ChatAdded("c2", 1, "again", "/repo")
+	d2.Close(false)
+	recs, err = run.ReadDesk(private)
+	if err != nil {
+		t.Fatalf("ReadDesk after a cut line and a new Desk: %v", err)
+	}
+	if n := len(recs); n != len(want)+3 || recs[n-3].Type != run.RecDeskOpened || recs[n-1].Type != run.RecDeskClosed {
+		t.Errorf("records after reopening: %d", n)
+	}
 	if fi, err := os.Stat(private + "/desk"); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("desk dir: %v %v", fi, err)
 	}

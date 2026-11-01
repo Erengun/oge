@@ -18,7 +18,6 @@ func (h *home) quitOrAsk() tea.Cmd {
 		return tea.Quit
 	}
 	h.quitAsk = n
-	h.msg = []string{quitAskLine(n)}
 	return nil
 }
 
@@ -46,11 +45,11 @@ func (h *home) quitAskKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.keep = true
 		fallthrough
 	case "c", "C":
-		h.quitAsk, h.msg = 0, nil
+		h.quitAsk = 0
 		h.quit = true
 		return h, tea.Quit
 	case "esc":
-		h.quitAsk, h.msg = 0, nil
+		h.quitAsk = 0
 	}
 	return h, nil
 }

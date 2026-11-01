@@ -600,8 +600,13 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyPressMsg); ok && h.quitAsk > 0 {
-		return h.quitAskKey(k) // the quit ask has the keys
+	if h.quitAsk > 0 {
+		switch m := msg.(type) {
+		case tea.KeyPressMsg:
+			return h.quitAskKey(m) // the quit ask has the keys
+		case tea.MouseMsg, tea.PasteMsg:
+			return h, nil // a click or paste can't move or answer it
+		}
 	}
 	// A Chat's message is handled with that Chat focused, the whole update
 	// through; one for a Chat the home no longer has is dropped.
@@ -1499,6 +1504,9 @@ func (h *home) render() (string, int, int) {
 	}
 	for _, l := range h.msg {
 		lines = append(lines, " "+st.bad(l))
+	}
+	if h.quitAsk > 0 { // drawn from the ask itself, so nothing else erases it
+		lines = append(lines, " "+st.bad(quitAskLine(h.quitAsk)))
 	}
 	if s := h.search; s != nil {
 		label, match := "(reverse-i-search)", ""

@@ -983,3 +983,25 @@ func TestSeenIsRecordedOnce(t *testing.T) {
 		t.Errorf("Seen records %v", seen)
 	}
 }
+
+// A rail click while the quit ask is open moves nothing and the ask stays
+// on the screen; the keys are still the ask's.
+func TestQuitAskSurvivesARailClick(t *testing.T) {
+	h, _ := railHome(120, 3)
+	h.views[1].turn = &chatTurn{}
+	h.quitAsk = 3 // asked, whatever the Chats' own state
+	col := railCol(h)
+	y := slices.IndexFunc(col, func(l string) bool { return strings.HasPrefix(l, "│2 ●") })
+	if y < 0 {
+		t.Fatalf("no row for Chat 2:\n%s", strings.Join(col, "\n"))
+	}
+	before := h.num
+	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y + 1})
+	h.Update(tea.PasteMsg{Content: "can you"})
+	if h.num != before || h.quitAsk == 0 || h.quit {
+		t.Errorf("click at the ask: focused %d (was %d), ask %d, quit %v", h.num, before, h.quitAsk, h.quit)
+	}
+	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "for next time?") {
+		t.Errorf("the ask left the screen:\n%s", got)
+	}
+}

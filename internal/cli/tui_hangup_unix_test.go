@@ -128,6 +128,50 @@ func TestHomeChatTerminatedMidTurn(t *testing.T) {
 	}
 }
 
+// A hangup or SIGTERM keeps the Chat for next time (A3): desk.log has
+// ChatAdded and an unclean DeskClosed, no ChatClosed, and the Workspace
+// stays.
+func TestSignalKeepsTheChatInDeskLog(t *testing.T) {
+	// Sequential: it signals the test process.
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGTERM} {
+		t.Run(sig.String(), func(t *testing.T) {
+			s, f := startChatSession(t, multiturn.Scenario{Turns: []multiturn.Turn{
+				{Reply: "working on it", Hold: true},
+			}}, nil)
+			s.composer()
+			s.type_("long job\r")
+			s.expect("working on it")
+			if err := syscall.Kill(os.Getpid(), sig); err != nil {
+				t.Fatal(err)
+			}
+			s.wait()
+			state, err := ledger.OpenStateRoot(f.state, f.repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recs, err := run.ReadDesk(state.Private)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var types []string
+			for _, r := range recs {
+				types = append(types, r.Type)
+			}
+			if got, want := strings.Join(types, " "), strings.Join([]string{run.RecDeskOpened, run.RecChatAdded, run.RecDeskClosed}, " "); got != want {
+				t.Fatalf("desk.log %s, want %s", got, want)
+			}
+			var c run.DeskClosed
+			_ = json.Unmarshal(recs[len(recs)-1].Data, &c)
+			if c.Clean {
+				t.Error("a signal wrote a clean DeskClosed")
+			}
+			if left, _ := filepath.Glob(filepath.Join(f.state, "work", "chats", "*")); len(left) != 1 {
+				t.Errorf("Workspaces left %v, want the Chat's kept", left)
+			}
+		})
+	}
+}
+
 // redirectFDs points a descriptor at a 0600 log, appending.
 func TestRedirectFDs(t *testing.T) {
 	t.Parallel()

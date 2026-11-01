@@ -135,6 +135,12 @@ func OpenDesk(private string, getenv func(string) string) (*Desk, error) {
 		unlockDesk(lock)
 		return nil, err
 	}
+	// A crash can leave a cut-off last line; drop it before appending.
+	if err := endLine(log); err != nil {
+		log.Close()
+		unlockDesk(lock)
+		return nil, err
+	}
 	d := &Desk{lock: lock, log: log}
 	o := deskHost(getenv)
 	o.PID = os.Getpid()
@@ -144,6 +150,16 @@ func OpenDesk(private string, getenv func(string) string) (*Desk, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// endLine cuts a crash's half-written last line off f, so the next record
+// starts on its own line and the log still reads.
+func endLine(f *os.File) error {
+	b, err := os.ReadFile(f.Name())
+	if err != nil || len(b) == 0 || b[len(b)-1] == '\n' {
+		return err
+	}
+	return f.Truncate(int64(bytes.LastIndexByte(b, '\n') + 1))
 }
 
 // deskHost is the host getenv says oge runs under: herdr, then tmux, then
