@@ -158,9 +158,10 @@ type Chat struct {
 	prepClosed bool
 
 	cutMu sync.Mutex // one cut at a time
-	// cutting: a Cut, not a Snapshot refresh, holds cutMu. Stop logs
+	// cutting counts the Cuts in flight (waiting for cutMu or holding it);
+	// a Snapshot refresh holding cutMu isn't one. Stop logs
 	// TurnInterrupted only for a turn or a cut in flight.
-	cutting atomic.Bool
+	cutting atomic.Int32
 	lastCut *cutMark // the last cut that reached a Run's walk; written under supersedeMu too
 	refused *Result  // the cut setup's failure refused
 	// verified are the cuts' Check results by what they checked, for the
@@ -1255,7 +1256,8 @@ func (c *Chat) end(reason error, why string) {
 		defer c.reopening.Unlock()
 		c.mu.Lock()
 		c.closed, c.err = true, reason
-		turn, busy := c.turns, c.cur != nil
+		// Read before anything is cancelled: a cancelled cut unwinds fast.
+		turn, busy := c.turns, c.cur != nil || c.cutting.Load() > 0
 		c.timer.Stop()
 		unctx, sess, pumped := c.unctx, c.sess, c.pumped
 		c.mu.Unlock()
@@ -1271,10 +1273,7 @@ func (c *Chat) end(reason error, why string) {
 		c.cancelPrep()
 		<-c.prepared
 		c.prepMu.Unlock()
-		if !c.cutMu.TryLock() {
-			busy = busy || c.cutting.Load() // a refresh holding it interrupts no turn
-			c.cutMu.Lock()                  // a cut in flight still uses the seed and the control
-		}
+		c.cutMu.Lock() // a cut in flight still uses the seed and the control
 		defer c.cutMu.Unlock()
 		c.prep.control.Stop()
 		c.prep.seed.Close()
