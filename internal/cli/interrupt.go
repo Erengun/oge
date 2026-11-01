@@ -41,6 +41,7 @@ type interrupts struct {
 	hangup  func()
 	hungUp  bool
 	stopped bool // ended by a signal rather than by the human
+	ended   bool // a hangup or SIGTERM came: Öge is going, not just interrupted
 	// exit, when set, runs on a hangup or SIGTERM before that interrupt
 	// is passed on: Öge is exiting, so a Gate waiting in a forwarded Run
 	// parks rather than being abandoned by the Run's cancel.
@@ -112,6 +113,7 @@ func (i *interrupts) signalled(sig os.Signal) {
 	exiting := sig == hangupSignal || sig == syscall.SIGTERM
 	i.mu.Lock()
 	i.stopped = true
+	i.ended = i.ended || exiting
 	f := i.hangup
 	if sig != hangupSignal || i.hungUp {
 		f = nil
@@ -150,6 +152,13 @@ func (i *interrupts) why() string {
 	return ""
 }
 
+// terminated reports whether a hangup or SIGTERM ended the session.
+func (i *interrupts) terminated() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.ended
+}
+
 // hangUp ends the session as a SIGHUP would, for a terminal read that
 // failed with EIO: it runs i.hangup unless a SIGHUP already did, then
 // cancels without counting an interrupt, so a late SIGHUP doesn't force.
@@ -159,7 +168,7 @@ func (i *interrupts) hangUp() {
 	if i.hungUp {
 		f = nil
 	}
-	i.hungUp, i.stopped = true, true
+	i.hungUp, i.stopped, i.ended = true, true, true
 	exit := i.exit
 	i.mu.Unlock()
 	if f != nil {

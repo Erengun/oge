@@ -505,3 +505,30 @@ func TestVimEscapeKey(t *testing.T) {
 		t.Error("a nil config has no escape sequence")
 	}
 }
+
+func TestLoadUserConfigNotifyCommand(t *testing.T) {
+	c, probs := LoadUserConfig([]byte("schema = 1\n[notify]\ncommand = [\"ntfy\", \"publish\", \"my topic\"]\ntitles = true\n"))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	n := c.NotifyConfig()
+	if n == nil || !n.Titles || len(n.Command) != 3 || n.Command[2] != "my topic" {
+		t.Fatalf("notify = %+v", n)
+	}
+	for _, bad := range []string{
+		"command = []",
+		"command = [\"\"]",
+		"command = [\"ntfy publish topic\"]",
+		"command = [\"ntfy\", \"a\\u0000b\"]",
+	} {
+		if _, probs := LoadUserConfig([]byte("schema = 1\n[notify]\n" + bad + "\n")); len(probs) == 0 {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+	if _, probs := LoadUserConfig([]byte("schema = 1\n[notify]\ncommand = [\"/Applications/My Notifier.app/notifier\", \"x\"]\n")); len(probs) != 0 {
+		t.Errorf("a program path with a space was refused: %v", probs)
+	}
+	if c, _ := LoadUserConfig([]byte("schema = 1\n[notify]\nattention = false\n")); c.NotifyConfig().Titles || c.NotifyConfig().Command != nil {
+		t.Error("titles or command on by default")
+	}
+}

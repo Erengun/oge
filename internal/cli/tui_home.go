@@ -399,11 +399,13 @@ type home struct {
 	order        []string
 	// redraw schedules a redraw (tea.Tick); nil schedules none, as in
 	// tests that drive the home by hand.
-	redraw   func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
-	toast    *toast
-	toastSeq int
-	run      *model    // nil while composing
-	notify   *notifier // the session's alerts; nil when silent (#170)
+	redraw func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
+	// reachDesk is the away messages (reach.go); nil sends none.
+	reachDesk *reachDesk
+	toast     *toast
+	toastSeq  int
+	run       *model    // nil while composing
+	notify    *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -454,6 +456,7 @@ type home struct {
 	deskStale  time.Duration
 	herdr      herdr.Reporter
 	herdrState herdr.State
+	herdrMsg   string // the message it was told with
 	// absence is the away window and the return brief (tui_brief.go); a
 	// Chat's own away (tui_since.go) is chatView.away.
 	absence awayState
@@ -1854,6 +1857,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, deskProjects: u.deskProjects, herdr: u.herdr, redraw: tea.Tick}
+	h.reachDesk = u.reachDesk()
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.absence.last = h.clock()
@@ -2023,6 +2027,9 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		}
 		for _, c := range h.closed {
 			c.stop(why)
+		}
+		if in.terminated() {
+			h.reachStopped()
 		}
 	}
 	// Every Chat left closes here, the caller's hc too, so that desk.log

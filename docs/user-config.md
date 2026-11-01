@@ -48,6 +48,16 @@ bell = true        # ring the bell with either
 
 `/notify on|off` in the home turns both alerts (and so the bell) on or off for the session. Nothing is sent in plain mode, without a TTY, with `--unattended`, or in dry-run. Under tmux the OSC goes through the passthrough (needs `allow-passthrough on`); under GNU screen only the bell rings; foot and rxvt get OSC 777.
 
+**Away messages.** While you are away (the terminal reported focus lost, or no key or mouse for 10 minutes), Öge sends three fixed messages off the terminal and nothing else: a Chat needs you (sent at once, then coalesced for 15 minutes; a Gate still open past `[desk] stale_gate` re-sends once), every Chat settled (once), and the Desk stopped (SIGHUP or SIGTERM). Never per tool step or as progress. They read `oge · api · Chat 2 needs you`, `oge · api · 2 Chats need you`, `oge · api · settled · 2 ready · 1 needs you · 1 failed` and `oge · api · the Desk stopped · run oge to restore`. They carry the Chat number, counts and the repo's name, and with Chats from several repos the name becomes `N repos`. At the terminal nothing changes. Two keys in `[notify]` shape them:
+
+```toml
+[notify]
+command = ["ntfy", "publish", "my-topic"]   # an argv, no shell; the text is added as the last argument
+titles = false                               # true adds a Chat's title: "Chat 2 parser needs you"
+```
+
+`command` is for tmux or screen, where an OSC to a detached client goes nowhere. The first element is the program and each argument has its own element; a lone element with spaces is refused as a shell line. Öge runs it with no shell, a 10 second limit and its output discarded, off the UI. A failure shows once in the home as a dim line. `titles` is off by default because a title is your own first message, which is Task text that would leave the terminal; agent text and replies never do. Under herdr the pane report carries the needs-you and settled texts as its message (herdr's own alerts and remote attach reach you), and Öge's OSC stays off. The Desk stopped is not carried there, because the pane is released on exit; set `command` to get that message under herdr too.
+
 **Under herdr.** When Öge runs in a herdr pane (`HERDR_ENV=1`, with `HERDR_BIN_PATH` and `HERDR_PANE_ID` set), it tells herdr what the pane is doing, so the pane shows as an agent instead of a plain terminal. It runs `pane report-agent` with state `working`, `blocked` or `idle`, and `pane release-agent` when it exits. The call has a 500 ms timeout, runs off the UI, and its failures are ignored. A `--message` carries only the fixed texts above ("oge: waiting for you", "Run ended: <outcome>"), never agent text. Outside herdr nothing is run. Because herdr already shows the state, Öge's own bell and desktop notifications are off by default there; set `attention`, `run_end` or `bell` in `[notify]` to turn one back on.
 
 **Chat feedback.** When a Chat's Check fails, Öge no longer prompts the agent on your behalf by default. The `[chat]` table is global, not per repo:
