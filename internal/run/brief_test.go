@@ -1,0 +1,229 @@
+package run
+
+import (
+	"encoding/json"
+	"errors"
+	"flag"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/erengun/oge/internal/ledger"
+)
+
+var updateBrief = flag.Bool("update", false, "rewrite the golden files")
+
+// briefT0 is when the human left in every case: 01:00 UTC.
+var briefT0 = time.Date(2026, 11, 1, 1, 0, 0, 0, time.UTC)
+
+func briefAt(min int) time.Time { return briefT0.Add(time.Duration(min) * time.Minute) }
+
+func briefRec(min int, typ string, data any) ledger.Record {
+	raw, _ := json.Marshal(data)
+	return ledger.Record{At: briefAt(min), Type: typ, Data: raw}
+}
+
+func briefChat(id string, n int, title string, recs ...ledger.Record) BriefChat {
+	return BriefChat{BriefLog: BriefLog{ID: id, Records: append([]ledger.Record{briefRec(-60, RecChatStarted, map[string]any{"chat": id})}, recs...)}, N: n, Title: title}
+}
+
+func briefCut(id, chat string, live bool, recs ...ledger.Record) BriefRun {
+	start := briefRec(-1, RecRunStarted, map[string]any{"run": id, "chat": chat})
+	if len(recs) > 0 {
+		start.At = recs[0].At.Add(-time.Minute)
+	}
+	return BriefRun{BriefLog: BriefLog{ID: id, Records: append([]ledger.Record{start}, recs...)}, Live: live}
+}
+
+func briefSettled(min, turn int) ledger.Record {
+	return briefRec(min, RecAttemptEnded, map[string]any{"turn": turn, "reply": "agent text never shows"})
+}
+
+func briefGate(min int, gate string) ledger.Record {
+	return briefRec(min, RecGateOpened, map[string]any{"pins": map[string]any{"gate": gate}})
+}
+
+func briefEnded(min int, o Outcome) ledger.Record {
+	return briefRec(min, RecRunEnded, map[string]any{"outcome": o, "why": []string{"agent text never shows"}})
+}
+
+// briefWindow is two hours from briefT0.
+var briefWindow = BriefWindow{From: briefT0, To: briefAt(120), Basis: BasisAway}
+
+func TestBriefGolden(t *testing.T) {
+	cases := []struct {
+		name  string
+		w     BriefWindow
+		chats []BriefChat
+		runs  []BriefRun
+	}{
+		{name: "accepted",
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 3), briefSettled(30, 4))},
+			runs:  []BriefRun{briefCut("r1", "c1", false, briefGate(40, "gate.result"), briefRec(41, RecGateDecided, map[string]any{}), briefEnded(42, Accepted))}},
+		{name: "failed",
+			chats: []BriefChat{briefChat("c1", 2, "ci-flake", briefSettled(10, 1))},
+			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "parked",
+			chats: []BriefChat{briefChat("c1", 4, "docs")},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefGate(30, "gate.result"),
+				briefRec(50, RecGateParked, map[string]any{}), briefRec(50, RecRunParked, map[string]any{"gate": "gate.result"}))}},
+		{name: "open_gate",
+			// The Gate opened before the briefWindow and still needs you; an
+			// ask waits in another Chat.
+			chats: []BriefChat{briefChat("c3", 3, "parser"), func() BriefChat { c := briefChat("c1", 1, "auth", briefSettled(5, 2)); c.Asks = 1; return c }()},
+			runs:  []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))}},
+		{name: "hangup",
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1), briefRec(11, RecTurnStarted, map[string]any{"turn": 2}),
+				briefRec(30, RecTurnInterrupted, map[string]any{"turn": 2, "why": "hangup"}))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefGate(25, "gate.result"))}},
+		{name: "sleep_gap",
+			// A Check's first command took 1m by the monotonic clock, yet
+			// the next started 41m later by the wall clock.
+			w:     BriefWindow{From: briefT0, To: briefAt(120), Basis: BasisAway, Slept: 10 * time.Minute},
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(5, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefRec(10, RecCheckStarted, map[string]any{}),
+				briefRec(60, RecCheckEnded, map[string]any{"result": map[string]any{"commands": []map[string]any{
+					{"started_at": briefAt(10), "duration_ms": 60_000}, {"started_at": briefAt(51), "duration_ms": 1000}}}}),
+				briefEnded(61, Accepted))}},
+		{name: "empty",
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(-30, 1))},
+			runs:  []BriefRun{briefCut("r1", "c1", false, briefEnded(-20, Accepted))}},
+		{name: "last_act",
+			w:     BriefWindow{From: briefT0, To: briefAt(130), Basis: BasisLastAct},
+			chats: []BriefChat{briefChat("c1", 0, "", briefSettled(10, 1)), briefChat("c2", 0, "", briefSettled(20, 1))},
+			runs: []BriefRun{func() BriefRun {
+				r := briefCut("r1", "c2", false, briefEnded(30, Accepted))
+				r.Title = "fix the parser"
+				return r
+			}(),
+				func() BriefRun {
+					r := briefCut("r9", "", false, briefEnded(40, Rejected))
+					r.Title = "one-shot task"
+					return r
+				}()}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := tc.w
+			if w.To.IsZero() {
+				w = briefWindow
+			}
+			got := BuildBrief(w, tc.chats, tc.runs).Text(time.UTC)
+			briefGolden(t, filepath.Join("testdata", "brief", tc.name+".golden"), got)
+		})
+	}
+}
+
+func briefGolden(t *testing.T, path, got string) {
+	t.Helper()
+	if *updateBrief {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update to create it)", err)
+	}
+	if got != string(want) {
+		t.Errorf("%s differs (run with -update to accept)\n--- got\n%s\n--- want\n%s", path, got, want)
+	}
+}
+
+func TestBriefTotals(t *testing.T) {
+	b := BuildBrief(briefWindow, []BriefChat{briefChat("c3", 3, "parser")}, []BriefRun{briefCut("r3", "c3", true, briefGate(-20, "gate.tamper"))})
+	if b.Totals.NeedsYou != 1 || len(b.Chats) != 1 || b.Chats[0].Gates[0].Gate != "tamper" || b.Counts() != "▲1" {
+		t.Fatalf("brief = %+v, counts %q", b, b.Counts())
+	}
+	// The same Gate in a Run no process runs any more needs nobody: the
+	// cut stopped without an end.
+	b = BuildBrief(briefWindow, []BriefChat{briefChat("c3", 3, "parser")}, []BriefRun{briefCut("r3", "c3", false, briefGate(-20, "gate.tamper"))})
+	if b.Totals.NeedsYou != 0 || b.Totals.Stopped != 1 || b.Totals.Ended != 0 {
+		t.Fatalf("dead Run's Gate: totals = %+v", b.Totals)
+	}
+}
+
+func TestBriefSleepPairs(t *testing.T) {
+	// Overlapping pairs measured the same sleep; apart, they add up.
+	chat := briefChat("c1", 1, "x",
+		briefRec(10, RecConsultationStarted, map[string]any{"consultation": "a"}),
+		briefRec(70, RecConsultationEnded, map[string]any{"consultation": "a", "duration_ms": 10 * 60_000}))
+	run := briefCut("r1", "c1", false,
+		briefRec(12, RecProcessStarted, map[string]any{"attempt": "a1"}),
+		briefRec(68, RecObservation, map[string]any{"attempt": "a1", "kind": "responsiveness", "duration_ms": 16 * 60_000}),
+		briefRec(90, RecProcessStarted, map[string]any{"attempt": "a2"}),
+		briefRec(110, RecObservation, map[string]any{"attempt": "a2", "kind": "responsiveness", "duration_ms": 5 * 60_000}),
+		// Under the floor: noise.
+		briefRec(111, RecProcessStarted, map[string]any{"attempt": "a3"}),
+		briefRec(112, RecObservation, map[string]any{"attempt": "a3", "kind": "responsiveness", "duration_ms": 0}))
+	b := BuildBrief(briefWindow, []BriefChat{chat}, []BriefRun{run})
+	if want := 50*time.Minute + 15*time.Minute; b.Slept != want {
+		t.Fatalf("slept = %v, want %v", b.Slept, want)
+	}
+	// The briefWindow's own measure wins when it is longer.
+	w := briefWindow
+	w.Slept = 90 * time.Minute
+	if b := BuildBrief(w, []BriefChat{chat}, []BriefRun{run}); b.Slept != w.Slept {
+		t.Fatalf("slept = %v, want the briefWindow's %v", b.Slept, w.Slept)
+	}
+}
+
+func TestBriefTornLog(t *testing.T) {
+	dir := t.TempDir()
+	l, err := ledger.Create(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{RecChatStarted, RecTurnStarted, RecAttemptEnded} {
+		if err := l.Append(typ, map[string]any{"turn": 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l.Close()
+	p := filepath.Join(dir, ledger.LedgerFile)
+	b, _ := os.ReadFile(p)
+	if err := os.WriteFile(p, b[:len(b)-20], 0o600); err != nil { // the last record dies mid-write
+		t.Fatal(err)
+	}
+	log, err := ReadBriefLog("c1", dir)
+	if err != nil || !log.Torn || len(log.Records) != 2 {
+		t.Fatalf("ReadBriefLog = %+v, %v", log, err)
+	}
+	now := time.Now()
+	brief := BuildBrief(BriefWindow{From: now.Add(-time.Hour), To: now.Add(time.Minute)}, []BriefChat{{BriefLog: log, N: 1, Title: "parser"}}, nil)
+	if len(brief.Chats) != 1 || brief.Chats[0].Ended != "torn" {
+		t.Fatalf("brief = %+v", brief)
+	}
+	briefGolden(t, filepath.Join("testdata", "brief", "torn.golden"), brief.Chats[0].line(time.UTC)+"\n")
+
+	if _, err := ReadBriefLog("none", t.TempDir()); err == nil || errors.Is(err, ledger.ErrTornTail) {
+		t.Fatalf("no log: err = %v", err)
+	}
+}
+
+func TestLastAct(t *testing.T) {
+	chats := []BriefChat{briefChat("c1", 1, "x",
+		briefRec(10, RecTurnStarted, map[string]any{"turn": 1}),
+		briefRec(20, RecTurnStarted, map[string]any{"turn": 2, "by": "oge"}), // a feedback turn: not the human
+		briefRec(25, RecAttemptEnded, map[string]any{}))}
+	runs := []BriefRun{briefCut("r1", "c1", false, briefRec(15, RecGateDecided, map[string]any{}))}
+	if got := LastAct(chats, runs); !got.Equal(briefAt(15)) {
+		t.Fatalf("LastAct = %v, want %v", got, briefAt(15))
+	}
+}
+
+func TestSpan(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		20 * time.Second: "0m", 40 * time.Minute: "40m", 2*time.Hour + 10*time.Minute: "2h 10m",
+		3 * time.Hour: "3h", 52 * time.Hour: "2d 4h",
+	} {
+		if got := Span(d); got != want {
+			t.Errorf("Span(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
