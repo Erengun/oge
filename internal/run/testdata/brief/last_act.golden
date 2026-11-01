@@ -8,10 +8,9 @@ Chat c2 fix the parser
   Since you left: ✓ 1 accepted · 1 turn settled
   Your decisions: none yet
   Waiting for you: nothing
-  Next: ✓ accepted, not applied
 Run r9 one-shot task
   You were: one-shot task
   Since you left: ✗ 1 rejected
   Your decisions: none yet
   Waiting for you: nothing
-  Next: ✗ 1 rejected
+Next: Chat c2 fix the parser · ✓ accepted, not applied

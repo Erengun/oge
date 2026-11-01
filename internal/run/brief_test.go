@@ -30,7 +30,14 @@ func briefChat(id string, n int, title string, recs ...ledger.Record) BriefChat 
 }
 
 func briefCut(id, chat string, live bool, recs ...ledger.Record) BriefRun {
-	start := briefRec(-1, RecRunStarted, map[string]any{"run": id, "chat": chat})
+	return briefCutAt(1, id, chat, live, recs...)
+}
+
+// briefCutAt is a cut whose Task starts at turn first of its Chat: 1 for
+// the Chat's first cut, later after an apply.
+func briefCutAt(first int, id, chat string, live bool, recs ...ledger.Record) BriefRun {
+	start := briefRec(-1, RecRunStarted, map[string]any{"run": id, "chat": chat,
+		"task_turns": []map[string]any{{"turn": first, "sha256": "x"}}})
 	if len(recs) > 0 {
 		start.At = recs[0].At.Add(-time.Minute)
 	}
@@ -152,6 +159,41 @@ func TestBriefGolden(t *testing.T) {
 					r.Title = "fix the parser"
 					return r
 				}()}},
+		{name: "fixed_while_away",
+			// The Check failed, then the auto send-back's cut was accepted:
+			// the Inbox shows ✓ for the Chat, so nothing waits and Next is ✓.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCut("r2", "c1", false, briefEnded(30, Accepted)),
+				briefCut("r1", "c1", false, briefEnded(20, Failed))}},
+		{name: "apply_failed",
+			// Delivery is written before the repo changes: DeliveryFailed
+			// says nothing was applied, so the ✓ card still waits.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, briefEnded(20, Accepted),
+				briefRec(25, recDelivery, map[string]any{"kind": "apply"}),
+				briefRec(26, recDeliveryFailed, map[string]any{"error": "agent text never shows"}))}},
+		{name: "first_not_read",
+			// The oldest cut read starts at turn 4, mid-Chat: no "You were".
+			chats: []BriefChat{briefChat("c1", 1, "", briefSettled(10, 4))},
+			runs: []BriefRun{func() BriefRun {
+				r := briefCutAt(4, "r2", "c1", false, briefEnded(20, Accepted))
+				r.Title = "now add docs"
+				return r
+			}()}},
+		{name: "next_ends_at_inbox_first",
+			// ▲ in Chat 1 and ✗ in Chat 2: the brief ends at Chat 1's ▲.
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", true, briefGate(30, "gate.tamper")),
+				briefCut("r2", "c2", false, briefEnded(20, Failed))}},
+		{name: "decisions_newest",
+			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1))},
+			runs: []BriefRun{briefCut("r1", "c1", false, func() []ledger.Record {
+				var out []ledger.Record
+				for i := 1; i <= 5; i++ {
+					out = append(out, briefRec(i*5, RecGateDecided, map[string]any{"pins": map[string]any{"gate": "gate.result"}, "actor": "human", "choice": "accept"}))
+				}
+				return append(out, briefEnded(40, Accepted))
+			}()...)}},
 		{name: "next_order",
 			// A ✗ in Chat 1 and a ▲ in Chat 2: the Inbox's order puts ▲ first.
 			chats: []BriefChat{briefChat("c1", 1, "parser", briefSettled(10, 1)), briefChat("c2", 2, "auth", briefSettled(11, 1))},

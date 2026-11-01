@@ -423,10 +423,14 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 	if b := in.brief; b != nil {
 		// The brief is plain text from the records: Öge's words and the
 		// human's own, no colour to lose under NO_COLOR.
-		for _, l := range b.Lines(time.Local)[1:] {
-			if strings.HasPrefix(l, "  ") {
+		for _, l := range h.briefFit(b.Lines(time.Local)[1:]) {
+			switch {
+			case strings.HasPrefix(l, "  Your decisions: "):
+				// The newest act is last: a narrow screen cuts the oldest.
+				lines = append(lines, "   "+clean(truncLeft(strings.TrimPrefix(l, "  "), width-3)))
+			case strings.HasPrefix(l, "  "):
 				lines = append(lines, fit("   "+clean(strings.TrimPrefix(l, "  "))))
-			} else {
+			default:
 				lines = append(lines, fit(" "+st.bold(clean(l))))
 			}
 		}
@@ -525,4 +529,53 @@ func (h *home) inboxHint() string {
 		return "^space inbox (" + strconv.Itoa(n) + ")"
 	}
 	return ""
+}
+
+// truncLeft cuts s to width cells from its left, keeping the end.
+func truncLeft(s string, width int) string {
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	return "…" + ansi.TruncateLeft(s, ansi.StringWidth(s)-max(width-1, 0), "")
+}
+
+// briefFit is the brief's lines (after the summary) cut to the screen: the
+// first Chats while they fit, then "+N more Chats · oge status", and always
+// the last Next line, so the head and the first Chat's "You were" stay on
+// screen (compose keeps the bottom rows of a tall live area).
+func (h *home) briefFit(lines []string) []string {
+	// Rows the card keeps for the head, keys, note and the task box.
+	room := h.height - 9
+	if h.height <= 0 || room < 5 {
+		room = 5
+	}
+	var next string
+	if n := len(lines); n > 0 && strings.HasPrefix(lines[n-1], "Next: ") {
+		next, lines = lines[n-1], lines[:n-1]
+		room--
+	}
+	var groups [][]string
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "  ") || len(groups) == 0 {
+			groups = append(groups, nil)
+		}
+		groups[len(groups)-1] = append(groups[len(groups)-1], l)
+	}
+	var out []string
+	for i, g := range groups {
+		left := len(groups) - i - 1
+		need := len(g)
+		if left > 0 {
+			need++ // the "+N more" line
+		}
+		if i > 0 && len(out)+need > room {
+			out = append(out, "  +"+strconv.Itoa(len(groups)-i)+" more · oge status")
+			break
+		}
+		out = append(out, g...)
+	}
+	if next != "" {
+		out = append(out, next)
+	}
+	return out
 }

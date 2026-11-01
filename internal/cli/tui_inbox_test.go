@@ -369,7 +369,7 @@ func TestInboxBriefIsFirstCard(t *testing.T) {
 	screen := ansi.Strip(strings.Join(screenLines(h), "\n"))
 	since := time.Date(2026, 11, 1, 9, 5, 0, 0, time.UTC).In(time.Local).Format("15:04")
 	for _, want := range []string{"while you were away", "You were: SECRET-INTENT", "Your decisions: chose acknowledge at tamper Gate",
-		"Waiting for you: ▲ tamper Gate since " + since, "Next: ▲ tamper Gate", "tab next"} {
+		"Waiting for you: ▲ tamper Gate since " + since, "Next: Chat 5 docs · ▲ tamper Gate", "tab next"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("the card lacks %q:\n%s", want, screen)
 		}
