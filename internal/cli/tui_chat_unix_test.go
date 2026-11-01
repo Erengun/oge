@@ -596,7 +596,8 @@ func TestHomeChatCloseDuringVerify(t *testing.T) {
 }
 
 // /new during a held Check keeps that Chat verifying in the background;
-// quitting from the new Chat closes both and leaves no Check behind.
+// quitting from the new Chat asks for a second Ctrl+C, then closes both
+// and leaves no Check behind.
 func TestHomeChatNewDuringVerifyThenQuit(t *testing.T) {
 	t.Parallel()
 	s, f, pids := heldChatSession(t)
@@ -608,6 +609,8 @@ func TestHomeChatNewDuringVerifyThenQuit(t *testing.T) {
 			t.Errorf("/new stopped the first Chat's Check %d", pid)
 		}
 	}
+	s.type_("\x03")
+	s.expectScreen("Chat 1 is working · ctrl+c again quits")
 	s.quitChat(f)
 	checkGone(t, pids)
 }

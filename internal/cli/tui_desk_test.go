@@ -5,10 +5,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/erengun/oge/internal/agent"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -153,11 +156,24 @@ func TestChatsPicker(t *testing.T) {
 		t.Fatal("/chats didn't open")
 	}
 	got := ansi.Strip(h.View().Content)
-	for _, want := range []string{"Chats", "1  new", "2  new", "(this one)"} {
+	for _, want := range []string{"Chats", "1 ○ new  idle", "2 ○ new  idle", "(this one)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("picker lacks %q:\n%s", want, got)
 		}
 	}
+	// Each row says the Chat's coarse state.
+	h.chats = nil
+	one := h.viewNum(1)
+	one.turn = &chatTurn{}
+	submit(h, "/chats")
+	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "1 ● new  working") {
+		t.Errorf("a Chat at work isn't working in the picker:\n%s", got)
+	}
+	one.turn.asks = []*agent.Ask{{}}
+	if got := ansi.Strip(h.View().Content); !strings.Contains(got, "1 ▲ new  needs you") {
+		t.Errorf("a Chat asking isn't needs you in the picker:\n%s", got)
+	}
+	one.turn = nil
 	h.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
 	if h.chats != nil || h.num != 1 {
 		t.Errorf("1 in the picker: open %v, focused %d", h.chats != nil, h.num)
@@ -189,5 +205,198 @@ func TestBackgroundSendErrorStaysInItsChat(t *testing.T) {
 	}
 	if b.comp.text() != "fix it" || !strings.Contains(printed(b), "no session") || printed(a) != "" {
 		t.Errorf("b: box %q, printed %q; a printed %q", b.comp.text(), printed(b), printed(a))
+	}
+}
+
+// With another Chat at work, Ctrl+C on an empty box only says so: the
+// next Ctrl+C, and only the very next key, quits. A stopped turn's second
+// Ctrl+C asks the same.
+func TestCtrlCWithAnotherChatWorkingAsksAgain(t *testing.T) {
+	h := deskHome()
+	first := h.chatView
+	submit(h, "/new")
+	first.turn = &chatTurn{}
+	ctrlC := ctrlKey('c')
+	h.Update(ctrlC)
+	if h.quit || !strings.Contains(strings.Join(h.msg, "\n"), "Chat 1 is working · ctrl+c again quits") {
+		t.Fatalf("one ctrl+c: quit %v, msg %q", h.quit, h.msg)
+	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	h.Update(ctrlC)
+	if h.quit {
+		t.Fatal("ctrl+c, esc, ctrl+c quit")
+	}
+	if _, cmd := h.Update(ctrlC); !h.quit || cmd == nil {
+		t.Fatalf("a second ctrl+c in a row didn't quit")
+	}
+
+	h = deskHome()
+	first = h.chatView
+	submit(h, "/new")
+	first.verify = &chatVerify{cancel: func() {}}
+	h.turn = &chatTurn{stopped: true}
+	h.Update(ctrlC)
+	if h.quit {
+		t.Fatal("a stopped turn's ctrl+c quit with Chat 1 verifying")
+	}
+	h.Update(ctrlC)
+	if !h.quit {
+		t.Error("a second ctrl+c didn't quit")
+	}
+
+	// With nothing else at work, one is enough, as before.
+	h = deskHome()
+	h.Update(ctrlC)
+	if !h.quit {
+		t.Error("ctrl+c on an empty box with one Chat didn't quit")
+	}
+}
+
+// alt+N doesn't move the focus from under the hidden-characters prompt:
+// Enter then submits the text to the Chat it was typed in.
+func TestSwitchWaitsForTheHiddenPrompt(t *testing.T) {
+	h := deskHome()
+	submit(h, "/new")
+	h.Update(alt('1'))
+	h.hidden = &hiddenPrompt{text: "do it\u200b now", n: 1}
+	h.Update(alt('2'))
+	if h.num != 1 || h.hidden == nil {
+		t.Errorf("alt+2 under the prompt: focused %d, prompt open %v", h.num, h.hidden != nil)
+	}
+	h.hidden = nil
+	h.saving = true
+	h.Update(alt('2'))
+	if h.num != 1 {
+		t.Errorf("alt+2 under the save prompt focused %d", h.num)
+	}
+}
+
+// A Chat whose turn ends in the background runs none of its queued
+// commands: their output and prompts are the terminal's. They wait in its
+// own box, and the focused Chat is untouched.
+func TestQueuedCommandsWaitInABackgroundChat(t *testing.T) {
+	h := deskHome()
+	first := h.chatView
+	submit(h, "/new")
+	first.turn = &chatTurn{queued: []string{"!true", "/diff", "and then this"}}
+	h.comp.set("mine")
+	h.Update(chatEvMsg{view: first, ok: false})
+	if h.chatView == first || h.job != nil || h.diff != nil || len(h.msg) != 0 || len(h.tr.entries) != 0 || h.comp.text() != "mine" {
+		t.Errorf("focused: job %v, diff %v, msg %q, entries %d, box %q", h.job != nil, h.diff != nil, h.msg, len(h.tr.entries), h.comp.text())
+	}
+	if first.turn != nil || first.comp.text() != "!true\n\n/diff\n\nand then this" {
+		t.Errorf("Chat 1: turn %v, box %q", first.turn != nil, first.comp.text())
+	}
+}
+
+// A switch in the middle of a history walk gives the box its draft back
+// first; what one Chat said under the box, or cleared with Ctrl+C, stays
+// with it.
+func TestSwitchEndsTheHistoryWalk(t *testing.T) {
+	h := deskHome()
+	h.hist = &history{entries: []string{"older"}}
+	submit(h, "/new")
+	h.Update(alt('1'))
+	typeText(h, "fix login")
+	h.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.comp.text() != "older" {
+		t.Fatalf("↑ showed %q", h.comp.text())
+	}
+	h.Update(alt('2'))
+	h.Update(alt('1'))
+	if h.comp.text() != "fix login" || h.navigating {
+		t.Errorf("back on 1: box %q, navigating %v", h.comp.text(), h.navigating)
+	}
+	h.Update(ctrlKey('c')) // cleared, for ↑ to bring back here
+	h.msg = []string{"Chat 1's problem"}
+	h.Update(alt('2'))
+	if len(h.msg) != 0 {
+		t.Errorf("Chat 1's lines under Chat 2's box: %q", h.msg)
+	}
+	h.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if h.comp.text() == "fix login" {
+		t.Error("↑ on Chat 2 brought back what Ctrl+C cleared in Chat 1")
+	}
+}
+
+// /new says the old Chat stays open, and how to get back to it.
+func TestNewSaysTheOldChatStaysOpen(t *testing.T) {
+	h := deskHome()
+	submit(h, "/new")
+	if !strings.Contains(h.note, "Chat 1 stays open · /chats switches back") {
+		t.Errorf("note %q", h.note)
+	}
+}
+
+// Quitting leaves every Chat's transcript in the scrollback, in number
+// order, each under its name.
+func TestLeaveTranscriptWritesEveryChat(t *testing.T) {
+	h := deskHome()
+	first := h.chatView
+	first.name = "parser"
+	h.tr.add(trEntry{text: "from one"})
+	submit(h, "/new")
+	h.tr.add(trEntry{text: "from two"})
+	var b strings.Builder
+	h.leaveTranscript(&b)
+	out := ansi.Strip(b.String())
+	i1, i2 := strings.Index(out, "from one"), strings.Index(out, "from two")
+	h1, h2 := strings.Index(out, "Chat 1 · parser"), strings.Index(out, "Chat 2 · new")
+	if i1 < 0 || i2 < 0 || h1 < 0 || h2 < 0 || !(h1 < i1 && i1 < h2 && h2 < i2) {
+		t.Errorf("transcripts out of order or unnamed:\n%s", out)
+	}
+
+	// One Chat with anything in it is written as before, unnamed.
+	h = deskHome()
+	h.tr.add(trEntry{text: "alone"})
+	b.Reset()
+	h.leaveTranscript(&b)
+	if out := ansi.Strip(b.String()); !strings.Contains(out, "alone") || strings.Contains(out, "Chat 1") {
+		t.Errorf("one Chat:\n%s", out)
+	}
+}
+
+// Opening a Chat for the first message holds no lock /new or /close
+// waits on, and a Chat opened after a reset is not kept.
+func TestOpeningAChatHoldsNoLock(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	h := deskHome()
+	h.chat = &homeChat{open: func(*resolved) (*run.Chat, error) {
+		close(started)
+		<-release
+		return nil, errors.New("no agent")
+	}}
+	hc := h.chat
+	_, gen := hc.current()
+	_, cmd := h.chatSubmit("fix it", &resolved{frozen: &pipeline.Frozen{}}, nil)
+	sent := make(chan tea.Msg, 1)
+	go func() {
+		m := cmd() // the send alone, or a Sequence ending in it
+		if cmds := seqCmds(m); len(cmds) > 0 {
+			m = cmds[len(cmds)-1]()
+		}
+		sent <- m
+	}()
+	<-started
+	done := make(chan struct{})
+	go func() {
+		submit(h, "/new")
+		h.Update(alt('1'))
+		submit(h, "/close")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("/new or /close waited for the Chat to open")
+	}
+	close(release)
+	if m, ok := (<-sent).(chatSentMsg); !ok || m.err == nil {
+		t.Errorf("sent %#v", m)
+	}
+	hc.closing.Wait()
+	if hc.opened(&run.Chat{}, gen) || hc.get() != nil {
+		t.Error("a Chat opened before a reset was kept")
 	}
 }

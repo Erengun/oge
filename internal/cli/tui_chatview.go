@@ -102,12 +102,18 @@ func (h *home) newView() *chatView {
 
 // switchTo is the human moving to another Chat (/new, /close, /chats,
 // alt+N, a rail click): what is half done in the home's overlays and
-// history walk ends, and v's own draft and scroll come back with it.
+// history walk ends, and v's own draft and scroll come back with it. A
+// walk through the history gives the box back its draft first, and what
+// is said under the box, or held for ↑ after a Ctrl+C, was this Chat's.
 func (h *home) switchTo(v *chatView) {
 	if v == h.chatView {
 		return
 	}
+	if h.navigating {
+		h.comp.set(h.draft)
+	}
 	h.navigating, h.visual = false, 0
+	h.msg, h.note, h.cleared = nil, "", ""
 	h.focus(v)
 	if h.full {
 		h.layout()

@@ -408,6 +408,9 @@ type home struct {
 	shown int
 	keys  *keyPanel // the ? panel, when open (#155)
 	quit  bool
+	// quitArmed: Ctrl+C would have quit with another Chat working, and
+	// said so; a second Ctrl+C, the very next key, quits (leave).
+	quitArmed bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -571,6 +574,9 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	restore, ok := h.route(msg)
 	if !ok {
 		return h, nil
+	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() != "ctrl+c" {
+		h.quitArmed = false // only the very next key quits
 	}
 	if h.full {
 		if cmd, ok := h.fullUpdate(msg); ok {
@@ -849,6 +855,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return h, nil
 			}
 			if h.comp.empty() {
+				if !h.leave() {
+					return h, nil
+				}
 				h.quit = true
 				return h, tea.Quit
 			}

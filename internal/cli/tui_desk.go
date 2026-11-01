@@ -22,12 +22,13 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 	if len(args) > 0 {
 		return nil, usageOf("/new")
 	}
-	if h.chat == nil || (h.chat.get() == nil && h.turn == nil && h.verify == nil) {
+	if h.chat == nil || (h.turn == nil && h.verify == nil && h.chat.get() == nil) {
 		return h.resetView(), ""
 	}
-	v := h.newView()
+	old, v := h.num, h.newView()
 	h.views = append(h.views, v)
 	h.switchTo(v)
+	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
 	return nil, ""
 }
 
@@ -89,6 +90,28 @@ func (h *home) resetView() tea.Cmd {
 	return cmd
 }
 
+// leave reports whether Ctrl+C quits now. Quitting stops every Chat, so
+// with another one at work the first press only says so, and a second
+// one in a row quits.
+func (h *home) leave() bool {
+	var busy []string
+	for _, v := range h.views {
+		if v != h.chatView && (v.turn != nil || v.verify != nil) {
+			busy = append(busy, strconv.Itoa(v.num))
+		}
+	}
+	if h.quitArmed || len(busy) == 0 {
+		return true
+	}
+	h.quitArmed = true
+	line := "Chat " + busy[0] + " is working · ctrl+c again quits and stops it"
+	if len(busy) > 1 {
+		line = "Chats " + strings.Join(busy, ", ") + " are working · ctrl+c again quits and stops them"
+	}
+	h.msg = append(h.msg, line)
+	return false
+}
+
 // slashDuringTurn reports whether a command runs while the focused
 // Chat's turn is in flight, rather than being queued as a message.
 func slashDuringTurn(word string) bool {
@@ -110,11 +133,15 @@ func altNum(key string) int {
 }
 
 // switchKey is alt+N: it focuses Chat N, when there is one. A key the
-// keybindings file gave to an action is that action's.
+// keybindings file gave to an action is that action's. A shell command
+// running is the focused Chat's, its output too: no switch until it ends.
 func (h *home) switchKey(key string) bool {
 	n := altNum(key)
 	if n == 0 || h.run != nil || h.kb.actionFor(ctxComposer, key) != "" {
 		return false
+	}
+	if h.job != nil {
+		return true
 	}
 	if v := h.viewNum(n); v != nil {
 		h.switchTo(v)
@@ -157,7 +184,8 @@ func (chatDelegate) Spacing() int                        { return 0 }
 func (chatDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 	v := it.(chatItem).v
-	line := fmt.Sprintf("%d  %s", v.num, clean(v.caption()))
+	glyph, state := v.state()
+	line := fmt.Sprintf("%d %s %s  %s", v.num, glyph, clean(v.caption()), d.h.st.dim(state))
 	if v == d.h.chatView {
 		line += d.h.st.dim("  (this one)")
 	}
@@ -166,6 +194,19 @@ func (d chatDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
 		return
 	}
 	fmt.Fprint(w, "   "+line)
+}
+
+// state is the Chat's coarse state, glyph and word, as /chats shows it:
+// waiting on the human first, then at work, else idle. It is static and
+// names no tool (docs/ux/desk.md).
+func (v *chatView) state() (glyph, word string) {
+	switch {
+	case v.turn != nil && len(v.turn.asks) > 0, v.stale != nil, v.pendingFB != nil:
+		return "▲", "needs you"
+	case v.turn != nil, v.verify != nil:
+		return "●", "working"
+	}
+	return "○", "idle"
 }
 
 // chatsKey is a key while /chats is open: Enter or a Chat's number
