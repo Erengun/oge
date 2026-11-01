@@ -371,6 +371,8 @@ func glyph(v *chatView, now time.Time, quiet time.Duration) (mark, coarse string
 		return "?", "quiet"
 	case v.turn != nil, v.verify != nil:
 		return "●", "working"
+	case v.added != "" && v.turn == nil:
+		return "○", "new task"
 	case v.last != nil && v.side.outcome == run.Accepted && !v.seenBy(now) && !v.cutDelivered():
 		return "✓", "done"
 	}

@@ -402,10 +402,13 @@ type home struct {
 	redraw func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// reachDesk is the away messages (reach.go); nil sends none.
 	reachDesk *reachDesk
-	toast     *toast
-	toastSeq  int
-	run       *model    // nil while composing
-	notify    *notifier // the session's alerts; nil when silent (#170)
+	// desk is the Desk record, for what the home itself adds (oge add's
+	// cards); nil records nothing.
+	desk     *run.Desk
+	toast    *toast
+	toastSeq int
+	run      *model    // nil while composing
+	notify   *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -602,7 +605,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m, cmd := h.routed(msg)
 	h.recordSeen()
-	return m, withTick(withTick(cmd, h.attend()), h.inboxTick())
+	return m, withTick(withTick(tea.Batch(cmd, h.startAdded()), h.attend()), h.inboxTick())
 }
 
 func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -663,6 +666,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch m := msg.(type) {
+	case deskAddMsg:
+		h.deskAdd(m)
+		return h, nil
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatStepMsg:
@@ -1867,6 +1873,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, deskProjects: u.deskProjects, herdr: u.herdr, redraw: tea.Tick}
 	h.reachDesk = u.reachDesk()
+	h.desk = u.desk
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.absence.last = h.clock()
@@ -2012,6 +2019,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		}
 		return rc, problem
 	}
+	u.serveAdd(ctx)
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}

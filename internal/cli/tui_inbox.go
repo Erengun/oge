@@ -70,13 +70,17 @@ func (h *home) inboxItems() []inboxItem {
 	var out []inboxItem
 	for _, v := range h.views {
 		m, coarse := h.mark(v)
-		// A restored Chat that stopped has a card too: ○ is idle for any other.
-		if m != "▲" && m != "✗" && m != "✓" && !(v.rest != nil && v.rest.Card != nil && stoppedMark(m, coarse)) {
+		// A restored Chat that stopped has a card too, and so does a task
+		// from oge add not started yet: ○ is idle for any other.
+		added := m == "○" && v.added != ""
+		if m != "▲" && m != "✗" && m != "✓" && !added && !(v.rest != nil && v.rest.Card != nil && stoppedMark(m, coarse)) {
 			continue
 		}
 		at := v.doneAt
 		if v.rest != nil && v.rest.Card != nil {
 			at = v.rest.Card.At
+		} else if added {
+			at = v.addedAt
 		} else if m == "▲" {
 			at = v.askedAt
 			if at.IsZero() {
@@ -246,6 +250,13 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	v := it.v
 	switch key {
 	case "enter":
+		if ok && it.mark == "○" {
+			// A card oge add made: Enter opens its Chat, which starts it.
+			// The task was typed by whoever ran oge add, not decided here.
+			h.inbox = nil
+			h.seeOn(v)
+			return nil
+		}
 		return nil // Enter alone decides nothing (ADR-0022)
 	case "tab", "shift+tab":
 		if !ok {
@@ -408,6 +419,9 @@ func (h *home) wanted(it inboxItem) string {
 		}
 		return "the Check failed"
 	}
+	if it.mark == "○" {
+		return "new task from oge add"
+	}
 	return "Accepted, not applied"
 }
 
@@ -463,6 +477,9 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 	} else {
 		v := it.v
 		paint := map[string]func(string) string{"▲": st.accent, "✗": st.bad, "✓": st.ok, "○": st.warn}[it.mark]
+		if it.mark == "○" && v.added != "" {
+			paint = st.dim // not started: nothing has happened yet
+		}
 		id := []string{strconv.Itoa(v.num) + " " + clean(v.caption())}
 		if p := h.project(v); p != "" {
 			id = append(id, p)
@@ -492,16 +509,20 @@ func (h *home) inboxLines() (lines []string, curRow, curCol int) {
 			cs := counts(st, f.add, f.del)
 			lines = append(lines, fit("   "+clean(f.path)+" "+cs))
 		}
-		if v.side.verdict == "" && len(v.side.changes) == 0 && v.rest == nil {
+		if it.mark == "○" && v.added != "" {
+			lines = append(lines, fit("   "+st.dim("not started: ")+clean(task.Parse(v.added).Title)))
+		} else if v.side.verdict == "" && len(v.side.changes) == 0 && v.rest == nil {
 			lines = append(lines, fit("   "+st.dim("no Evidence yet")))
 		}
 		switch it.mark {
-		case "▲", "○":
+		case "▲":
 			keys = "o open"
 		case "✗":
 			keys = "s send back · a advise · o open"
 		case "✓":
 			keys = "d diff · o open · u unread"
+		case "○":
+			keys = "⏎ open and start it · o open"
 		}
 		if v.rest != nil {
 			// No Session yet: only what reading can do.
