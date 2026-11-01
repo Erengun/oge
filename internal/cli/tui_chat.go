@@ -1483,11 +1483,12 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 		case r == run.RefreshConflict:
 			note += "\n" + h.ogeLine(h.st.dim(run.ConflictNote))
 		}
-		// The other Chats (a home is one repository) take what this
-		// apply wrote as Öge's, not as an outside change.
+		// The other Chats in this repository take what this apply wrote
+		// as Öge's, not as an outside change. A Chat in another project
+		// never sees it: its repo is untouched.
 		wrote := p.Wrote()
 		for _, v := range h.views {
-			if v.chat == nil || len(wrote) == 0 {
+			if v.chat == nil || len(wrote) == 0 || v.repoCtx != h.repoCtx {
 				continue
 			}
 			if s := v.chat.get(); s != nil && s != c {
