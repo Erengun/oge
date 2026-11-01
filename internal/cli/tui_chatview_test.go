@@ -16,7 +16,7 @@ import (
 func twoChats() (h *home, a, b *chatView, cancelled map[*chatView]int) {
 	cancelled = map[*chatView]int{}
 	view := func() *chatView {
-		v := &chatView{comp: newComposer(), tr: &transcript{}, turn: &chatTurn{}, chat: &homeChat{}}
+		v := &chatView{repoCtx: &repoCtx{}, comp: newComposer(), tr: &transcript{}, turn: &chatTurn{}, chat: &homeChat{}}
 		v.verify = &chatVerify{seq: 1, changed: 2, cancel: func() { cancelled[v]++ }}
 		return v
 	}
@@ -70,7 +70,7 @@ func TestChatMessagesGoToTheirChat(t *testing.T) {
 // no Chat is the focused one's.
 func TestChatMessageForAGoneChatIsDropped(t *testing.T) {
 	h, a, b, _ := twoChats()
-	gone := &chatView{turn: &chatTurn{}, chat: &homeChat{}}
+	gone := &chatView{repoCtx: &repoCtx{}, turn: &chatTurn{}, chat: &homeChat{}}
 	h.Update(chatEvMsg{view: gone, ev: agent.Event{Kind: agent.Claim, Text: "lost"}, ok: true})
 	if h.dropped != 1 || printed(a)+printed(b)+printed(gone) != "" || h.chatView != a {
 		t.Errorf("dropped %d, a %q, b %q, gone %q", h.dropped, printed(a), printed(b), printed(gone))

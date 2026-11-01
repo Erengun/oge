@@ -181,7 +181,7 @@ func TestSlashUnknownAndUsage(t *testing.T) {
 		"/apply --rejected":         "flags are for oge apply",
 		"/branch a b c":             "usage: /branch",
 		"/runs now":                 "usage: /runs",
-		"/new now":                  "usage: /new",
+		"/new a b":                  "usage: /new [path]",
 		"/help me":                  "usage: /help",
 	} {
 		h.comp.set(in)

@@ -5,7 +5,7 @@
    /receipt [run]                   show the result and checks
    /diff [run]                      review changes
    /apply [run]                     apply changes to your working tree
-   /new                             open another Chat; this one keeps working
+   /new [path]                      open another Chat; this one keeps working
    /chats                           switch to another Chat
    /quit                            leave
  tab complete · enter run a whole command · esc close

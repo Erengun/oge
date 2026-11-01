@@ -48,31 +48,50 @@ func startRun(env Env, f runFlags, root string, t task.Task, frozen *pipeline.Fr
 // f is what the command line asked for, not first.flags: the user config and
 // the setup panel's choices are added to it for every Task. The panel's
 // choices outlive one Run, so they are kept here, for the session.
+//
+// One home holds Chats from several repos (docs/ux/desk.md, Projects):
+// each repo's config, setup, history and Chat are its own (repoCtx),
+// opened once, the first time a Chat goes there.
 func startHome(env Env, f runFlags, root string, first *resolved) int {
-	setup := newSetupState(env, root)
-	res, problem := first, []string(nil)
-	if first == nil {
-		// No project config: the Checks section holds Öge's proposal.
-		if !setup.seedProposal() {
-			setup.seedEmpty() // a toolchain Öge doesn't recognise: the section starts empty
+	if first != nil {
+		if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
+			return code
 		}
-		res, problem = resolveHome(env, f, root, setup)
-	} else if code := refuseRun(env, first.flags, first.frozen); code != ExitOK {
-		return code
 	}
 	state, code := openState(env, root)
 	if code != ExitOK {
 		return code
 	}
+	histDir := filepath.Join(state.Private, "history")
+	// With no project config (first is nil), the Checks section holds
+	// Öge's proposal (repoConfig).
+	setup, res, problem := repoConfig(env, f, root, first)
 	frozen := &pipeline.Frozen{}
 	if res != nil {
 		frozen = res.frozen
 	}
 	u := selectView(env, f, task.Task{}, frozen).(*tui)
-	hc := homeChatFor(env, root, state)
-	defer hc.close()
-	code, err := u.home(env, root, filepath.Join(state.Private, "history"), starter(env, root, state, u, true), res, problem,
-		func(s *setupState) (*resolved, []string) { return resolveHome(env, f, root, s) }, setup, hc)
+	rc, refused := openRepo(env, f, u, histDir, root, setup, res)
+	if rc == nil {
+		fmt.Fprintf(env.Stderr, "oge: %s\n", refused)
+		return ExitRefused
+	}
+	repos := map[string]*repoCtx{repoKey(root): rc}
+	// The first Chat is rc.hc itself; another repo's Chats are clones of
+	// its hc, which the home closes.
+	defer rc.hc.close()
+	code, err := u.home(env, histDir, rc, res, problem, func(root string) (*repoCtx, []string) {
+		if r, ok := repos[repoKey(root)]; ok {
+			return r, nil
+		}
+		setup, res, problem := repoConfig(env, f, root, nil)
+		r, refused := openRepo(env, f, u, histDir, root, setup, res)
+		if r == nil {
+			return nil, []string{"/new: " + refused}
+		}
+		repos[repoKey(root)] = r
+		return r, problem
+	})
 	return endCode(env, code, err, u.started)
 }
 

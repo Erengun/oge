@@ -435,7 +435,7 @@ func TestGlyphFollowsExactState(t *testing.T) {
 		{"done, a key pressed", func(v *chatView) { accepted(v); v.seen = true }, t0, "○ idle"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			v := &chatView{}
+			v := &chatView{repoCtx: &repoCtx{}}
 			c.set(v)
 			if mark, coarse := glyph(v, c.now, pipeline.DefaultDeskQuiet); mark+" "+coarse != c.want {
 				t.Errorf("glyph = %s %s, want %s", mark, coarse, c.want)
@@ -472,9 +472,9 @@ func TestHeaderCountsTheChats(t *testing.T) {
 	}
 	h.turn = &chatTurn{}
 	h.lastEvent = h.clock()
-	b := &chatView{num: 2, cutGate: &gateState{}}
-	c := &chatView{num: 3, verify: &chatVerify{}}
-	d := &chatView{num: 4}
+	b := &chatView{repoCtx: &repoCtx{}, num: 2, cutGate: &gateState{}}
+	c := &chatView{repoCtx: &repoCtx{}, num: 3, verify: &chatVerify{}}
+	d := &chatView{repoCtx: &repoCtx{}, num: 4}
 	h.views = append(h.views, b, c, d)
 	got := ansi.Strip(h.header(200))
 	if !strings.Contains(got, "▲1 needs you · ●2 working") || strings.Contains(got, "✓") {
@@ -507,7 +507,7 @@ func TestDoneStaysSeenAfterSwitchingAway(t *testing.T) {
 	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
 	h.now = func() time.Time { return now }
 	first := h.chatView
-	other := &chatView{num: 2}
+	other := &chatView{repoCtx: &repoCtx{}, num: 2}
 	h.views = append(h.views, other)
 	h.focus(other)
 	first.last, first.side.outcome, first.doneAt = &lastRun{}, run.Accepted, now
@@ -531,7 +531,7 @@ func railHome(w, n int) (*home, *time.Time) {
 	h.num, h.focusAt = 1, now
 	h.views = []*chatView{h.chatView}
 	for i := 2; i <= n; i++ {
-		h.views = append(h.views, &chatView{num: i, comp: newComposer(), tr: &transcript{}})
+		h.views = append(h.views, &chatView{repoCtx: &repoCtx{}, num: i, comp: newComposer(), tr: &transcript{}})
 	}
 	return h, &now
 }
@@ -685,7 +685,7 @@ func TestNewPastTheCapWarnsOnce(t *testing.T) {
 	h := deskHome()
 	h.turn = &chatTurn{}
 	for range 2 {
-		h.views = append(h.views, &chatView{num: len(h.views) + 1, turn: &chatTurn{}})
+		h.views = append(h.views, &chatView{repoCtx: &repoCtx{}, num: len(h.views) + 1, turn: &chatTurn{}})
 	}
 	submit(h, "/new")
 	if len(h.views) != 4 || h.num != 4 || !strings.Contains(h.note, "3 Chats are working") || strings.Contains(h.note, "again") {
@@ -701,7 +701,7 @@ func TestNewPastTheCapWarnsOnce(t *testing.T) {
 	h = deskHome()
 	h.deskMax = 5
 	h.turn = &chatTurn{}
-	h.views = append(h.views, &chatView{num: 2, turn: &chatTurn{}}, &chatView{num: 3, turn: &chatTurn{}})
+	h.views = append(h.views, &chatView{repoCtx: &repoCtx{}, num: 2, turn: &chatTurn{}}, &chatView{repoCtx: &repoCtx{}, num: 3, turn: &chatTurn{}})
 	submit(h, "/new")
 	if len(h.views) != 4 || h.capNoted {
 		t.Errorf("max_active 5: views %v, noted %v", nums(h), h.capNoted)
@@ -733,7 +733,7 @@ func TestFailedCheckAnsweredByATurn(t *testing.T) {
 // An Accepted cut that was applied is not done-unseen.
 func TestDoneIsNotAnAppliedCut(t *testing.T) {
 	applied := false
-	v := &chatView{last: &lastRun{id: "r1"}, chat: &homeChat{delivered: func(id string) bool { return applied && id == "r1" }}}
+	v := &chatView{repoCtx: &repoCtx{}, last: &lastRun{id: "r1"}, chat: &homeChat{delivered: func(id string) bool { return applied && id == "r1" }}}
 	v.side.outcome = run.Accepted
 	now := time.Now()
 	if m, _ := glyph(v, now, pipeline.DefaultDeskQuiet); m != "✓" {

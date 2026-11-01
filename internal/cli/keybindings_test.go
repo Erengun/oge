@@ -207,7 +207,7 @@ func TestKeybindingsLeaveGateKeysAlone(t *testing.T) {
 
 func TestKeybindingsReloadWithTheComposer(t *testing.T) {
 	env := keysEnv(t, validKeys)
-	h := &home{resolve: func(*setupState) (*resolved, []string) { return nil, nil }, chatView: &chatView{comp: newComposer()}}
+	h := &home{chatView: &chatView{repoCtx: &repoCtx{resolve: func(*setupState) (*resolved, []string) { return nil, nil }}, comp: newComposer()}}
 	h.reloadTheme = func() string {
 		kb, n := loadKeybindings(env)
 		h.setKeys(kb)

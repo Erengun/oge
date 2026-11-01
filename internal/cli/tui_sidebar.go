@@ -40,7 +40,9 @@ type sideState struct {
 func (h *home) setSetup(f *pipeline.Frozen) {
 	h.setup = setupLines(f)
 	for _, v := range h.views {
-		v.side.frozen = f
+		if v.repoCtx != nil && v.root == h.root {
+			v.side.frozen = f // the same repo's config: never another repo's
+		}
 	}
 	h.side.frozen = f
 }

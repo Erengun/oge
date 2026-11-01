@@ -21,7 +21,6 @@ import (
 	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 	"github.com/erengun/oge/internal/task"
-	"github.com/erengun/oge/internal/workspace"
 	"github.com/rivo/uniseg"
 )
 
@@ -318,9 +317,9 @@ type home struct {
 	// vim is the composer's vim mode (#156); normal is its NORMAL state.
 	vim, normal bool
 	vimState    // the pending operator, count and last change (tui_vim_ops.go)
-	// hist is the repo's prompt history. nav is the entry ↑ and ↓ show; draft is what was in the box before the
-	// first ↑. search is Ctrl+R's search while it is open.
-	hist       *history
+	// nav is the history entry ↑ and ↓ show (the repo's, repoCtx.hist);
+	// draft is what was in the box before the first ↑. search is Ctrl+R's
+	// search while it is open.
 	nav        int // the entry shown; meaningful only while navigating
 	navigating bool
 	draft      string
@@ -328,36 +327,27 @@ type home struct {
 	// brings it back, before any history entry.
 	cleared string
 	search  *histSearch
-	// shell runs a ! command (#160); root is its cwd; shellHist is the shell
-	// history, apart from hist; job is the command in flight.
-	shell     func(ctx context.Context, root, line string) shellResult
-	root      string
-	shellHist *history
-	job       *shellJob
+	// shell runs a ! command (#160) in the focused Chat's root; job is
+	// the command in flight.
+	shell func(ctx context.Context, root, line string) shellResult
+	job   *shellJob
 	// stash is Ctrl+S's one slot: a draft put aside for this session.
 	stash string
 	// hidden is the confirmation of a Task that held hidden characters.
 	hidden *hiddenPrompt
-	title  string   // the box's title: repo and branch
-	setup  []string // the setup bar, as lines
 	st     styles
 	// start begins the Run for a Task in this program: it returns the Run's
 	// model and its first command.
 	start func(task.Task, *resolved, int, int) (*model, tea.Cmd)
-	// resolve reads the config again, for the Task about to start and with
-	// the setup panel's choices (sel) added.
-	resolve func(*setupState) (*resolved, []string)
 	// reloadTheme re-reads the custom theme file (#175) and the keybindings
 	// file (#163); it returns a notice when one is bad. Called when the composer opens and on Ctrl+L,
 	// never during a Run.
 	reloadTheme func() string
-	// sel is what the setup panel edits; it lives for the session.
-	sel    *setupState
+	// The setup panel edits the focused Chat's repo's sel (repoCtx).
 	panel  *setupPanel    // non-nil while Tab's setup is open
 	saving bool           // the save prompt waits for y or n
 	review *projectReview // the reviewed save into .oge/oge.toml waits for y or n
-	save   func() (string, error)
-	note   string // what happened, shown under the box (a save)
+	note   string         // what happened, shown under the box (a save)
 	ctx    context.Context
 	// exiting is closed once Öge is exiting: a hangup or SIGTERM came, or
 	// the view ended. A Gate still waiting then parks.
@@ -365,28 +355,18 @@ type home struct {
 	// msg is what stops or went wrong, shown under the box.
 	msg  []string
 	edit func(text string) tea.Cmd // Ctrl+E: $EDITOR on the Task
-	// deliver is /receipt, /diff, /apply and /branch of a named Run, and
-	// runs lists the repository's recent Runs for /runs (#145).
-	deliver func(cmd string, args []string) string
-	runs    func(n int) ([]*delivery.Run, string)
-	// label is /label and the picker's l: it names a Run beside its
-	// Ledger (#177).
-	label func(id, text string) (string, string)
 	// menu is the slash menu while it is open: it lists the commands that
 	// complete menuQuery. Esc closes it for the text it was closed on.
 	menu   *list.Model
 	picker *runPicker  // /runs: the Run picker while it is open (#176)
 	chats  *list.Model // /chats: the Chat picker while it is open
-	// diff is the /diff viewer while it is open (#169); diffOf reads a
-	// Run's Candidate as files.
+	// diff is the /diff viewer while it is open (#169).
 	diff        *diffViewer
-	diffOf      func(id string) (string, []diffFile, bool)
 	menuQuery   string
 	menuOff     bool
 	menuOffText string
-	// at is the @file picker (#146); listFiles reads the tracked files.
-	at        atState
-	listFiles func() ([]string, error)
+	// at is the @file picker (#146).
+	at atState
 	// armText and armAt: a delivery command the menu completed runs only on
 	// an Enter that comes actionsArm later, so a double tap never delivers.
 	armText string
@@ -440,12 +420,14 @@ type home struct {
 	now  func() time.Time
 
 	// *chatView is the focused Chat's state (tui_chatview.go): its fields
-	// read as the home's own. views are the session's open Chats, in the
-	// order they opened; closed are the Chats /close closed, which
-	// quitting waits for.
+	// read as the home's own, its repo's too (repoCtx). views are the
+	// session's open Chats, in the order they opened; closed are the Chats
+	// /close closed, which quitting waits for. repoFor opens the repo at a
+	// root for /new <path>: the same repoCtx for the same repo.
 	*chatView
-	views  []*chatView
-	closed []*homeChat
+	views   []*chatView
+	closed  []*homeChat
+	repoFor func(root string) (*repoCtx, []string)
 	// background: the message being handled is for a Chat without the
 	// focus (route).
 	background bool
@@ -1781,8 +1763,12 @@ func editInEditor(env Env, text string, hold func(bool)) tea.Cmd {
 // it or Öge is interrupted while composing. code is the last Run's exit
 // code. res is the config as of now (nil when problem says why it can't be
 // resolved); resolve reads it again when a Task is sent.
-func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *resolved, *run.FollowUp) startFunc,
-	res *resolved, problem []string, resolve func(*setupState) (*resolved, []string), sel *setupState, hc *homeChat) (code int, err error) {
+//
+// first is the repo oge started in, the first Chat's; res is its config
+// (nil: it didn't resolve, for problem). repoFor opens another repo for
+// /new <path>.
+func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, problem []string,
+	repoFor func(root string) (*repoCtx, []string)) (code int, err error) {
 	// A signal while composing ends the session; during a Run it goes to
 	// the Run (forwardTo), as Ctrl+C does.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1798,7 +1784,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	defer in.watch(os.Interrupt, syscall.SIGTERM, hangupSignal)()
 
-	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}}, hist: loadHistory(historyPath(histDir, root)), title: homeTitle(env, root), st: u.m.st, ctx: ctx, resolve: resolve, msg: problem, sel: sel, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, herdr: u.herdr, redraw: tea.Tick}
+	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, herdr: u.herdr, redraw: tea.Tick}
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.views = []*chatView{h.chatView}
@@ -1806,10 +1792,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 	}
 	h.getenv = env.Getenv
-	h.shell, h.root = runShell, root
-	if histDir != "" {
-		h.shellHist = loadHistory(shellHistoryFile(histDir, root))
-	}
+	h.shell = runShell
 	h.reloadTheme = func() string {
 		theme := h.st.reloadCustomTheme(env.Getenv)
 		kb, keys := loadKeybindings(env.Getenv)
@@ -1821,9 +1804,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 	}
 	if res != nil {
 		h.setSetup(res.frozen)
-		sel.init(res)
 	}
-	h.save = sel.save
 	u.noFallback = true
 	h.exiting = u.exiting
 	h.full = true
@@ -1835,6 +1816,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		used      *resolved     // the Run's config
 		failed    *ended        // Öge itself failed or panicked
 		cur       task.Task     // the Run's Task, with its follow-ups
+		runRoot   = first.root  // the Run's repo: the focused Chat's when it began
 	)
 	last := ExitOK
 	h.hold = func(on bool) {
@@ -1867,7 +1849,8 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		u.plain.frozen, u.plain.warn = r.frozen, r.warn
 		u.plain.applying = r.flags.apply
 		u.plain.width = func() int { return h.width }
-		h.done = u.launch(runCtx, runIn, startFor(t, r, fu))
+		runRoot = h.root
+		h.done = u.launch(runCtx, runIn, h.startFor(t, r, fu))
 		go func(forced, ended <-chan struct{}) {
 			select {
 			case <-forced:
@@ -1888,13 +1871,14 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 		}
 		var text string
 		var l *lastRun
-		text, l, last = u.summary(env, used.flags, root, e.res, h.hold)
+		text, l, last = u.summary(env, used.flags, runRoot, e.res, h.hold)
 		h.thread = nextThread(h.thread, cur, e.res, used.flags)
 		return text, l, false
 	}
-	if hc != nil {
-		h.chat = hc
-		hc.verdict = func(res *run.Result, changed int) (string, *lastRun) {
+	// verdictFor is the cut's Verdict line and what takes its Run, for the
+	// Chats of the repo at root: they deliver there and nowhere else.
+	verdictFor := func(root string) func(res *run.Result, changed int) (string, *lastRun) {
+		return func(res *run.Result, changed int) (string, *lastRun) {
 			line := verdictLine(res, changed)
 			if res.Dir == "" {
 				return line, nil
@@ -1930,9 +1914,18 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			return line, l
 		}
 	}
-	h.deliver, h.runs, h.label = deliverer(env), recentRuns(env, root), labeller(env, root)
-	h.diffOf = diffLoader(env)
-	h.listFiles = func() ([]string, error) { return workspace.TrackedFiles(root) }
+	hc := first.hc
+	if hc != nil {
+		h.chat = hc
+		hc.verdict = verdictFor(first.root)
+	}
+	h.repoFor = func(root string) (*repoCtx, []string) {
+		rc, problem := repoFor(root)
+		if rc != nil && rc.hc != nil && rc.hc.verdict == nil {
+			rc.hc.verdict = verdictFor(rc.root)
+		}
+		return rc, problem
+	}
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
@@ -2000,7 +1993,7 @@ func (u *tui) home(env Env, root, histDir string, startFor func(task.Task, *reso
 			if err != nil {
 				return 0, err
 			}
-			if code := afterRun(env, used.flags, u.plain, root, out); code != ExitOK {
+			if code := afterRun(env, used.flags, u.plain, runRoot, out); code != ExitOK {
 				return code, nil
 			}
 			return outcomeCode(env, out), nil
