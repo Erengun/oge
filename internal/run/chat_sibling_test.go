@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -108,11 +109,10 @@ func TestSiblingApplyWithAnOutsideEdit(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := appliedSub(t)
-			old := c.snapshot()
 			if _, err := sibling(t, c, map[string]string{"x.go": siblingX}); err != nil {
 				t.Fatal(err)
 			}
-			old = c.snapshot()
+			old := c.snapshot()
 			for p, s := range outside {
 				if err := os.WriteFile(filepath.Join(c.source, p), []byte(s), 0o644); err != nil {
 					t.Fatal(err)
@@ -231,4 +231,104 @@ func TestSiblingApplyWaitsForACutOrTurn(t *testing.T) {
 		}
 		wsHas(t, c, "x.go", siblingX)
 	})
+}
+
+// A cut after a sibling's retake starts where the Workspace was carried
+// to: the sibling's file is never the Implementer's change, and the cut's
+// base is in the chain the Run takes.
+func TestSiblingRetakeThenCut(t *testing.T) {
+	c := appliedSub(t, multiturn.Turn{Reply: "mul", Writes: []multiturn.File{{Path: "mul.go", Content: refreshMul}}})
+	if got, err := sibling(t, c, map[string]string{"x.go": siblingX}); err != nil || got != RefreshDone {
+		t.Fatalf("sibling apply: %v %v", got, err)
+	}
+	drain(t, send(t, c, "now Mul"), nil)
+	e, err := c.toCut(c.lastCut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := c.repo.ChangedFiles(e.base, e.candidate)
+	if err != nil || !reflect.DeepEqual(changed, []string{"mul.go"}) {
+		t.Errorf("the cut's changes %v %v, want mul.go only", changed, err)
+	}
+	if err := exec.Command("git", "--git-dir", c.repo.Dir, "merge-base", "--is-ancestor", e.base, e.candidate).Run(); err != nil {
+		t.Errorf("the cut's base isn't in the Candidate's chain: %v", err)
+	}
+	if res := cut(t, c); res.Candidate == "" {
+		t.Errorf("cut %s %v", res.Outcome, res.Why)
+	}
+}
+
+// What a sibling's retake took is the base: the user deleting or
+// reverting it by hand is outside Öge, never merged, and nothing moves.
+func TestSiblingRetakeThenUserEdit(t *testing.T) {
+	c := appliedSub(t)
+	if got, err := sibling(t, c, map[string]string{"x.go": siblingX}); err != nil || got != RefreshDone {
+		t.Fatalf("sibling apply: %v %v", got, err)
+	}
+	old := c.snapshot()
+	if err := os.Remove(filepath.Join(c.source, "x.go")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.RefreshSnapshot(); err != nil || got != RefreshOutside {
+		t.Fatalf("%v %v, want RefreshOutside", got, err)
+	}
+	if c.snapshot() != old || len(refreshed(t, c)) != 2 {
+		t.Error("the base moved on the user's delete")
+	}
+	wsHas(t, c, "x.go", siblingX)
+}
+
+// A sibling's write, once taken and then changed by this Chat's own
+// apply, is not Öge's any more: the user putting its old bytes back by
+// hand is outside Öge.
+func TestSiblingWriteIsForgottenOnceTaken(t *testing.T) {
+	v2 := "package fx\n\nfunc X() int { return 2 }\n"
+	c := appliedSub(t, multiturn.Turn{Reply: "x", Writes: []multiturn.File{{Path: "x.go", Content: v2}}})
+	if got, err := sibling(t, c, map[string]string{"x.go": siblingX}); err != nil || got != RefreshDone {
+		t.Fatalf("sibling apply: %v %v", got, err)
+	}
+	drain(t, send(t, c, "X is 2"), nil)
+	res := cut(t, c)
+	applyTo(t, c, res, map[string]string{"x.go": v2})
+	if got, err := c.RefreshSnapshot(); err != nil || got != RefreshDone {
+		t.Fatalf("own refresh: %v %v", got, err)
+	}
+	old := c.snapshot()
+	if err := os.WriteFile(filepath.Join(c.source, "x.go"), []byte(siblingX), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.RefreshSnapshot(); err != nil || got != RefreshOutside {
+		t.Fatalf("%v %v, want RefreshOutside", got, err)
+	}
+	if c.snapshot() != old {
+		t.Error("the base moved on the user's revert")
+	}
+	wsHas(t, c, "x.go", v2)
+}
+
+// A Workspace write that fails part-way is put back: the Workspace, the
+// base and the Chat log stay as they were.
+func TestSiblingRetakeWriteFailsCleanly(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+	c := appliedSub(t)
+	old, last := c.snapshot(), c.last
+	locked := filepath.Join(c.Workspace, "sub")
+	if err := os.Mkdir(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	if err := os.Mkdir(filepath.Join(c.source, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sibling(t, c, map[string]string{"a.go": "package fx\n", "sub/b.go": "package sub\n"}); err == nil {
+		t.Fatalf("%v, want the write's error", got)
+	}
+	if _, err := os.Lstat(filepath.Join(c.Workspace, "a.go")); err == nil {
+		t.Error("a.go was left in the Workspace")
+	}
+	if c.snapshot() != old || c.last != last || len(refreshed(t, c)) != 1 {
+		t.Error("the base, the Workspace's commit or the log moved")
+	}
 }

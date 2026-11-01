@@ -87,6 +87,9 @@ func (s state) same(o state) bool {
 type action struct {
 	path string
 	to   state
+	// merged: the write is a three-way merge with edits made since the
+	// Snapshot, which may be the user's own.
+	merged bool
 }
 
 // Plan is what applying a Candidate does to a working tree: computed in
@@ -105,12 +108,17 @@ type Plan struct {
 func (p *Plan) Writes() int { return len(p.actions) }
 
 // Wrote is what applying the plan writes, path by path: each path's mode
-// and the git blob id of the bytes written (a merged write's, not the
-// Candidate's), or no mode for a path it deletes. A sibling Chat on the
-// same repository tells Öge's own write from an outside change by it.
+// and the git blob id of the bytes written, or no mode for a path it
+// deletes. A sibling Chat on the same repository tells Öge's own write
+// from an outside change by it. A merged write is left out: its bytes
+// hold edits made since the Snapshot, which may be the user's, and a
+// sibling never takes those as Öge's.
 func (p *Plan) Wrote() []run.Wrote {
 	var out []run.Wrote
 	for _, a := range p.actions {
+		if a.merged {
+			continue
+		}
 		w := run.Wrote{Path: a.path}
 		if a.to.present {
 			w.Mode, w.OID = a.to.mode, workspace.BlobOID(a.to.data)
@@ -185,7 +193,7 @@ func planApply(r *Run, target, base, rev string) (*Plan, error) {
 		case ours.same(theirs):
 			p.Already++
 		case ours.same(base):
-			p.actions = append(p.actions, action{c.Path, theirs})
+			p.actions = append(p.actions, action{path: c.Path, to: theirs})
 		default:
 			to, why, err := merge(ours, base, theirs)
 			if err != nil {
@@ -196,7 +204,7 @@ func planApply(r *Run, target, base, rev string) (*Plan, error) {
 				continue
 			}
 			p.Merged++
-			p.actions = append(p.actions, action{c.Path, to})
+			p.actions = append(p.actions, action{path: c.Path, to: to, merged: true})
 		}
 	}
 	return p, nil

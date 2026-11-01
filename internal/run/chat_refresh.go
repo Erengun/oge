@@ -74,20 +74,22 @@ func (c *Chat) NoteDelivered(wrote []Wrote) (Refresh, error) {
 
 // RefreshSnapshot retakes the Chat's Snapshot after an apply (D10), but
 // only when the user's repository is what Öge delivered: the tree of the
-// commit last applied (Delivered's rev), but for paths a sibling Chat's
-// apply wrote (NoteDelivered), each holding exactly the bytes it wrote.
-// The Workspace holds no edit of the user's, and Öge never merges one in,
-// so any other tree is an outside change: RefreshOutside, and nothing
-// moves. Taking it as the base would turn the user's own edit into a diff
-// the Implementer appears to have made.
+// commit last applied (Delivered's rev), or of the Snapshot once it was
+// retaken on that apply, but for paths a sibling Chat's apply wrote since
+// (NoteDelivered), each holding exactly the bytes it wrote. The Workspace
+// holds no edit of the user's, and Öge never merges one in, so any other
+// tree is an outside change: RefreshOutside, and nothing moves. Taking it
+// as the base would turn the user's own edit into a diff the Implementer
+// appears to have made.
 //
 // The Workspace is carried onto the new base: what the Chat edited since
 // its apply stays, and a sibling's paths are written in, so neither reads
 // as the Implementer's on the next turn. A sibling's path this Chat has
 // edited differently is RefreshConflict, and nothing is written or moved.
 // Neither is a pending edit to a path the new base protects (it would
-// read as Tamper): the base is kept, and the next apply evens it out. A
-// turn in flight may be writing the Workspace, so the retake waits for it.
+// read as Tamper), nor a cut not yet applied (its Run holds the old
+// base): the base is kept, and the next apply evens it out. A turn in
+// flight may be writing the Workspace, so the retake waits for it.
 //
 // A cut in flight keeps its base (it captured the old Snapshot, Oracle and
 // Preflight by value) and the retake is deferred: Cut retries it once it
@@ -119,13 +121,19 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	if err != nil {
 		return RefreshNone, err
 	}
-	want, err := c.repo.TreeOf(rev)
+	c.scopeMu.Lock()
+	cur, snap, on := c.Snapshot, c.info, c.retakenOn
+	c.scopeMu.Unlock()
+	// base is what Öge delivered last: rev, or the Snapshot retaken on it
+	// (a sibling's apply taken since is in it, and rev lacks it).
+	base := rev
+	if on == rev {
+		base = cur
+	}
+	want, err := c.repo.TreeOf(base)
 	if err != nil {
 		return RefreshNone, err
 	}
-	c.scopeMu.Lock()
-	cur, snap := c.Snapshot, c.info
-	c.scopeMu.Unlock()
 	curTree, err := c.repo.TreeOf(cur)
 	if err != nil {
 		return RefreshNone, err
@@ -134,9 +142,10 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	switch {
 	case have == curTree:
 		c.setRefreshDue(false)
+		c.forgetSiblings() // what they wrote is in the base, or was changed since
 		return RefreshNone, nil
 	case have != want:
-		if sibling, err = c.siblingPaths(rev, commit); err != nil {
+		if sibling, err = c.siblingPaths(base, commit); err != nil {
 			return RefreshNone, err
 		}
 		if sibling == nil {
@@ -166,20 +175,30 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	}
 	c.scopeMu.Lock()
 	defer c.scopeMu.Unlock()
-	// The Workspace must be what was delivered too: a turn after the cut,
-	// or a hold-back, leaves it different, and edits to a file the new
-	// base protects would read as Tamper. The next apply evens it out.
-	// Another retake may have won while this one read: then the base is
-	// already this tree, and nothing is logged twice.
-	if now, err := c.repo.TreeOf(c.Snapshot); err != nil {
-		return RefreshNone, err
-	} else if now == have {
+	// Another retake may have won while this one read: then base is stale,
+	// and nothing is logged twice.
+	if c.Snapshot != cur {
 		return RefreshNone, nil
 	}
 	protected := implementerScope(m, c.frozen)
-	last, write, r, err := c.rebaseWorkspace(rev, commit, sibling, protected)
+	last, write, undo, r, err := c.rebaseWorkspace(base, commit, sibling, protected)
 	if err != nil || r != RefreshDone {
 		return r, err
+	}
+	// The last cut's commit is where the next cut's Implementer changes
+	// start (toCut). When the chain moves onto the new base, so does it:
+	// only a cut fully applied can, as the new base itself, and a cut not
+	// yet applied keeps the old base.
+	c.supersedeMu.Lock()
+	lc := c.lastCut
+	c.supersedeMu.Unlock()
+	moved := last != c.last
+	if moved && lc != nil {
+		if t, err := c.repo.TreeOf(lc.commit); err != nil {
+			return RefreshNone, err
+		} else if t != want {
+			return RefreshNone, nil
+		}
 	}
 	rec := map[string]any{"commit": commit, "prev": cur, "applied": rev, "run": filepath.Base(runDir),
 		"head": info.Head, "branch": info.Branch, "modified": info.Modified, "untracked": info.Untracked,
@@ -189,17 +208,21 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	}
 	if len(write) > 0 {
 		// The Workspace is written with no turn in flight, and none
-		// starts until it is.
+		// starts until it is. A write that fails is put back, and so is
+		// the whole when the record can't be written: the Workspace stays
+		// what c.last holds.
 		c.mu.Lock()
 		if c.cur != nil {
 			c.mu.Unlock()
 			c.setRefreshDue(true)
 			return RefreshDeferred, nil
 		}
-		// Written ahead: the record says what the new base is before it is.
-		err := c.log(RecSnapshotRefreshed, rec)
+		err := writeWorkspace(c.Workspace, write, undo)
 		if err == nil {
-			err = writeWorkspace(c.Workspace, write)
+			// The record says what the new base is before it is.
+			if err = c.log(RecSnapshotRefreshed, rec); err != nil {
+				unwriteWorkspace(c.Workspace, undo)
+			}
 		}
 		c.mu.Unlock()
 		if err != nil {
@@ -216,16 +239,36 @@ func (c *Chat) RefreshSnapshot() (Refresh, error) {
 	c.prep.control.Stop()
 	c.prep.seed.Close()
 	c.prep, c.refused = chatPrep{}, nil
-	c.Snapshot, c.info, c.v0, c.protected, c.last = commit, info, mBlob, protected, last
+	c.Snapshot, c.info, c.v0, c.protected, c.last, c.retakenOn = commit, info, mBlob, protected, last, rev
+	c.supersedeMu.Lock()
+	if moved && lc != nil {
+		nl := *lc
+		nl.commit = commit
+		c.lastCut = &nl
+		if c.cuts[lc.run] == lc {
+			c.cuts[lc.run] = &nl
+		}
+	}
+	c.siblings = nil // in the base now
+	c.supersedeMu.Unlock()
 	c.prepare(m, commit)
 	return RefreshDone, nil
 }
 
+// forgetSiblings drops what sibling Chats' applies wrote: the base holds
+// it now. A path a sibling wrote and something changed since must never
+// read as Öge's later, when it holds those bytes again.
+func (c *Chat) forgetSiblings() {
+	c.supersedeMu.Lock()
+	c.siblings = nil
+	c.supersedeMu.Unlock()
+}
+
 // siblingPaths are the paths the tree of commit, the user's repository
-// now, differs from rev's on, when each is one a sibling Chat's apply
+// now, differs from base's on, when each is one a sibling Chat's apply
 // wrote and holds exactly what it wrote. nil: some other change is in it.
-func (c *Chat) siblingPaths(rev, commit string) ([]string, error) {
-	changes, err := c.repo.Changes(rev, commit)
+func (c *Chat) siblingPaths(base, commit string) ([]string, error) {
+	changes, err := c.repo.Changes(base, commit)
 	if err != nil {
 		return nil, err
 	}
@@ -243,78 +286,83 @@ func (c *Chat) siblingPaths(rev, commit string) ([]string, error) {
 }
 
 // rebaseWorkspace carries the Workspace, last committed as c.last, from
-// rev, the commit last applied, onto commit, the new base, with scopeMu
-// held. last is the Workspace's commit on the new base, and write what
-// the Workspace needs written to hold it: the sibling's paths. r is
-// RefreshDone when the retake can go on.
-func (c *Chat) rebaseWorkspace(rev, commit string, sibling []string, protected func(string) string) (last string, write []wsWrite, r Refresh, err error) {
+// base, what Öge last delivered, onto commit, the new base, with scopeMu
+// held. last is the Workspace's commit on the new base, write what the
+// Workspace needs written to hold it (the sibling's paths), and undo what
+// puts each of those back. r is RefreshDone when the retake can go on.
+func (c *Chat) rebaseWorkspace(base, commit string, sibling []string, protected func(string) string) (last string, write, undo []wsWrite, r Refresh, err error) {
 	lastTree, err := c.repo.TreeOf(c.last)
 	if err != nil {
-		return "", nil, RefreshNone, err
+		return "", nil, nil, RefreshNone, err
 	}
-	want, err := c.repo.TreeOf(rev)
+	want, err := c.repo.TreeOf(base)
 	if err != nil {
-		return "", nil, RefreshNone, err
+		return "", nil, nil, RefreshNone, err
 	}
 	last = c.last
 	switch {
 	case lastTree == want && len(sibling) == 0:
-		return last, nil, RefreshDone, nil
+		return last, nil, nil, RefreshDone, nil
 	case lastTree == want:
 		last = commit // nothing pending: the Workspace is the new base
 	default:
 		if len(sibling) > 0 {
 			// A sibling's path this Chat edited too, and to other bytes, is
 			// never merged.
-			mine, err := c.repo.ChangedFiles(rev, c.last)
+			mine, err := c.repo.ChangedFiles(base, c.last)
 			if err != nil {
-				return "", nil, RefreshNone, err
+				return "", nil, nil, RefreshNone, err
 			}
 			differ, err := c.repo.ChangedFiles(c.last, commit)
 			if err != nil {
-				return "", nil, RefreshNone, err
+				return "", nil, nil, RefreshNone, err
 			}
 			if overlap(sibling, mine, differ) {
-				return "", nil, RefreshConflict, nil
+				return "", nil, nil, RefreshConflict, nil
 			}
 		}
-		moved, _, conflicted, err := c.repo.Rebase(rev, commit, c.last)
+		moved, _, conflicted, err := c.repo.Rebase(base, commit, c.last)
 		switch {
 		case errors.Is(err, workspace.ErrGitTooOld):
-			return "", nil, RefreshNone, nil // keep the base; the next apply evens it out
+			return "", nil, nil, RefreshNone, nil // keep the base; the next apply evens it out
 		case err != nil:
-			return "", nil, RefreshNone, err
+			return "", nil, nil, RefreshNone, err
 		case conflicted:
-			return "", nil, RefreshConflict, nil
+			return "", nil, nil, RefreshConflict, nil
 		}
 		pending, err := c.repo.ChangedFiles(commit, moved)
 		if err != nil {
-			return "", nil, RefreshNone, err
+			return "", nil, nil, RefreshNone, err
 		}
 		for _, p := range pending {
 			if protected(p) != "" {
-				return "", nil, RefreshNone, nil
+				return "", nil, nil, RefreshNone, nil
 			}
 		}
 		last = moved
 	}
 	changes, err := c.repo.Changes(c.last, last)
 	if err != nil {
-		return "", nil, RefreshNone, err
+		return "", nil, nil, RefreshNone, err
 	}
 	for _, ch := range changes {
 		if wsPathBad(c.Workspace, ch.Path) {
-			return "", nil, RefreshConflict, nil
+			return "", nil, nil, RefreshConflict, nil
 		}
-		w := wsWrite{path: ch.Path, mode: ch.NewMode}
+		w, u := wsWrite{path: ch.Path, mode: ch.NewMode}, wsWrite{path: ch.Path, mode: ch.OldMode}
 		if ch.NewMode != "" {
 			if w.data, err = c.repo.Blob(ch.NewOID); err != nil {
-				return "", nil, RefreshNone, err
+				return "", nil, nil, RefreshNone, err
 			}
 		}
-		write = append(write, w)
+		if ch.OldMode != "" {
+			if u.data, err = c.repo.Blob(ch.OldOID); err != nil {
+				return "", nil, nil, RefreshNone, err
+			}
+		}
+		write, undo = append(write, w), append(undo, u)
 	}
-	return last, write, RefreshDone, nil
+	return last, write, undo, RefreshDone, nil
 }
 
 // overlap reports whether a path is in each of the lists.
@@ -355,33 +403,45 @@ func wsPathBad(ws, rel string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// writeWorkspace makes the writes in the Workspace at ws.
-func writeWorkspace(ws string, writes []wsWrite) error {
-	for _, w := range writes {
-		full := filepath.Join(ws, filepath.FromSlash(w.path))
-		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if w.mode == "" {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return err
-		}
-		var err error
-		switch w.mode {
-		case "120000":
-			err = os.Symlink(filepath.FromSlash(string(w.data)), full)
-		case "100755":
-			err = os.WriteFile(full, w.data, 0o755)
-		default:
-			err = os.WriteFile(full, w.data, 0o644)
-		}
-		if err != nil {
+// writeWorkspace makes the writes in the Workspace at ws. When one fails,
+// the paths it reached are put back as undo (one for each write) says.
+func writeWorkspace(ws string, writes, undo []wsWrite) error {
+	for i, w := range writes {
+		if err := writeOne(ws, w); err != nil {
+			unwriteWorkspace(ws, undo[:i+1])
 			return err
 		}
 	}
 	return nil
+}
+
+// unwriteWorkspace puts back what writeWorkspace wrote, as undo says.
+func unwriteWorkspace(ws string, undo []wsWrite) {
+	for i := len(undo) - 1; i >= 0; i-- {
+		_ = writeOne(ws, undo[i])
+	}
+}
+
+// writeOne makes one write in the Workspace at ws.
+func writeOne(ws string, w wsWrite) error {
+	full := filepath.Join(ws, filepath.FromSlash(w.path))
+	if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if w.mode == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	switch w.mode {
+	case "120000":
+		return os.Symlink(filepath.FromSlash(string(w.data)), full)
+	case "100755":
+		return os.WriteFile(full, w.data, 0o755)
+	default:
+		return os.WriteFile(full, w.data, 0o644)
+	}
 }
 
 func (c *Chat) setRefreshDue(v bool) {

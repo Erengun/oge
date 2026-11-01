@@ -1483,12 +1483,17 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 		}
 		// The other Chats (a home is one repository) take what this
 		// apply wrote as Öge's, not as an outside change.
+		wrote := p.Wrote()
 		for _, v := range h.views {
-			if wrote := p.Wrote(); v.chat != nil && len(wrote) > 0 {
-				if s := v.chat.get(); s != nil && s != c {
-					if r, _ := s.NoteDelivered(wrote); r == run.RefreshConflict {
-						note += "\n" + h.ogeLine(h.st.dim(fmt.Sprintf("Chat %d is editing files this apply changed; its Snapshot is kept", v.num)))
-					}
+			if v.chat == nil || len(wrote) == 0 {
+				continue
+			}
+			if s := v.chat.get(); s != nil && s != c {
+				switch r, err := s.NoteDelivered(wrote); {
+				case err != nil:
+					note += "\n" + h.ogeLine(fmt.Sprintf("✗ retaking Chat %d's Snapshot: %s", v.num, clean(err.Error())))
+				case r == run.RefreshConflict:
+					note += "\n" + h.ogeLine(h.st.dim(fmt.Sprintf("Chat %d is editing files this apply changed; its Snapshot is kept", v.num)))
 				}
 			}
 		}

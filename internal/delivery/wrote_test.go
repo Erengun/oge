@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// What an apply wrote is named by each path's git blob id as written: a
-// merged write's bytes, not the Candidate's, and a deleted path has none.
+// What an apply wrote is named by each path's git blob id as written, and
+// a deleted path has none. A write merged with the user's own edit is left
+// out: a sibling Chat never takes the user's edit as Öge's.
 func TestPlanWroteNamesTheBytesWritten(t *testing.T) {
 	user, r := planFixture(t, map[string]string{"m.txt": "one\ntwo\nthree\n", "gone.txt": "x\n"}, func(ws string) {
 		os.WriteFile(filepath.Join(ws, "m.txt"), []byte("one\ntwo\nTHREE\n"), 0o644)
@@ -37,7 +38,6 @@ func TestPlanWroteNamesTheBytesWritten(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	want := map[string][2]string{
-		"m.txt":    {"100644", hash("m.txt")},
 		"new.sh":   {"100755", hash("new.sh")},
 		"gone.txt": {"", ""},
 	}
