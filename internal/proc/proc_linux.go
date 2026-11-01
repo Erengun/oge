@@ -24,7 +24,8 @@ var forkedOn func(tid int)
 // (go.dev/issue/27505), and Go ends a thread when a goroutine exits still
 // locked to it. A pool thread could be ended that way by any code, so the
 // forking thread never goes back to the pool: the goroutine exits locked
-// once the child is reaped, and the thread ends with it.
+// once the child is reaped, and the thread ends with it. If that thread is
+// the main one, Go parks it for good instead, which costs one idle thread.
 func forkStart(cmd *exec.Cmd) (release func(), err error) {
 	started := make(chan error, 1)
 	reaped := make(chan struct{})
