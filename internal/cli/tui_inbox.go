@@ -397,6 +397,9 @@ func (h *home) wanted(it inboxItem) string {
 	}
 	switch it.mark {
 	case "○":
+		if v.added != "" {
+			return "new task from oge add"
+		}
 		return "stopped when oge exited"
 	case "▲":
 		switch {
@@ -418,9 +421,6 @@ func (h *home) wanted(it inboxItem) string {
 			}
 		}
 		return "the Check failed"
-	}
-	if it.mark == "○" {
-		return "new task from oge add"
 	}
 	return "Accepted, not applied"
 }
