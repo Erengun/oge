@@ -226,8 +226,9 @@ const (
 	cutEnded
 	cutParked
 	cutSuperseded // a newer cut's Check covers it
-	// cutInterrupted: the Run was cancelled (a hangup, a quit) and ended
-	// as an Infrastructure stop, with no Verdict.
+	// cutInterrupted: the Run was cancelled, by a Ctrl+C or by oge's exit,
+	// and ended as an Infrastructure stop with no Verdict; restoreChat
+	// tells the two apart by the Chat's TurnInterrupted.
 	cutInterrupted
 )
 
@@ -424,8 +425,8 @@ func restoreChat(c *RestoredChat, cutDirs []string, seen string) {
 		// TurnInterrupted at or after the cut began.
 		c.State, c.Since, c.Word = RestoredIdle, cut.at, "cancelled"
 	case covers && (cut.state == cutOpen || cut.state == cutInterrupted):
-		// Its process is gone, or it was cancelled: a Check killed has no
-		// Verdict.
+		// Its process is gone (kill -9), or oge's exit cancelled it: a Check
+		// killed has no Verdict.
 		c.State, c.Since = RestoredStopped, cut.at
 		c.Card = &RestoredCard{Kind: CardCheckInterrupted, Turn: cut.to, At: cut.at}
 		if intr != nil {
