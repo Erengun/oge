@@ -21,7 +21,15 @@ const (
 )
 
 // methodNotFound is the JSON-RPC code of a server without the method.
+// Real codex rejects an unknown method while parsing the request, so it
+// answers -32600 "unknown variant `thread/list`" instead (codex-cli 0.163.0).
 const methodNotFound = "(-32601)"
+
+// noThreadList reports an error from a codex that lacks thread/list.
+func noThreadList(err error) bool {
+	m := err.Error()
+	return strings.HasSuffix(m, methodNotFound) || strings.Contains(m, "unknown variant `thread/list`")
+}
 
 // thread is the part of a thread/list entry Öge reads. The preview is
 // the user's own text and is deliberately not decoded, and neither is
@@ -117,7 +125,7 @@ func (a *Adapter) ListSessions(ctx context.Context, cwds []string) ([]agent.Nati
 			}
 			if err := s.call(ctx, "thread/list", params, &res); err != nil {
 				reason := "codex sessions aren't listed: " + clip(err.Error())
-				if strings.HasSuffix(err.Error(), methodNotFound) {
+				if noThreadList(err) {
 					reason = "this codex has no thread/list, so its sessions aren't listed; update codex"
 				}
 				sortSessions(out)

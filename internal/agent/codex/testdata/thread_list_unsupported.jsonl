@@ -2,4 +2,4 @@
 {"t": 0.04, "proc": "L", "dir": "s2c", "msg": {"id": 1, "result": {"userAgent": "oge/0.155.1 (Mac OS 15; arm64) terminal (oge; 0.0.0)", "codexHome": "/home/user/.codex", "platformFamily": "unix", "platformOs": "macos"}}}
 {"t": 0.041, "proc": "L", "dir": "c2s", "msg": {"method": "initialized", "params": {}}}
 {"t": 0, "proc": "L", "dir": "c2s", "msg": {"id": 2, "method": "thread/list", "params": {"cwd": "/home/user/proj", "limit": 50, "archived": false, "sortKey": "updated_at", "sortDirection": "desc", "sourceKinds": ["cli", "vscode", "appServer"]}}}
-{"t": 0.05, "proc": "L", "dir": "s2c", "msg": {"id": 2, "error": {"code": -32601, "message": "Method not found: thread/list"}}}
+{"t": 0.05, "proc": "L", "dir": "s2c", "msg": {"id": 2, "error": {"code": -32600, "message": "Invalid request: unknown variant `thread/list`, expected one of `initialize`, `server/diagnostics`, `thread/start`"}}}
