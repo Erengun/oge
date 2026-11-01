@@ -62,6 +62,9 @@ type DeskConfig struct {
 	// Quiet is how long a turn may go without an agent event before its
 	// Chat shows quiet rather than working; "" is DefaultDeskQuiet.
 	Quiet string `toml:"quiet,omitempty"`
+	// StaleGate is how long a Gate or an ask may wait on the human before
+	// Öge rings for it, even while they type; "" is DefaultDeskStaleGate.
+	StaleGate string `toml:"stale_gate,omitempty"`
 }
 
 // The [desk] defaults: about 3 working Chats is what one person tracks
@@ -69,6 +72,7 @@ type DeskConfig struct {
 const (
 	DefaultDeskMaxActive = 3
 	DefaultDeskQuiet     = 3 * time.Minute
+	DefaultDeskStaleGate = 5 * time.Minute
 )
 
 // DeskLimits returns the [desk] settings with their defaults filled in.
@@ -84,6 +88,16 @@ func (c *UserConfig) DeskLimits() (maxActive int, quiet time.Duration) {
 		quiet = d
 	}
 	return maxActive, quiet
+}
+
+// DeskStaleGate returns [desk] stale_gate, DefaultDeskStaleGate when unset.
+func (c *UserConfig) DeskStaleGate() time.Duration {
+	if c != nil && c.Desk != nil {
+		if d, err := parseDuration(c.Desk.StaleGate); err == nil {
+			return d
+		}
+	}
+	return DefaultDeskStaleGate
 }
 
 // ChatConfig is the [chat] table.
@@ -297,6 +311,11 @@ func (c *UserConfig) validate() []Problem {
 		if d.Quiet != "" {
 			if _, err := parseDuration(d.Quiet); err != nil {
 				add("desk.quiet", err.Error())
+			}
+		}
+		if d.StaleGate != "" {
+			if _, err := parseDuration(d.StaleGate); err != nil {
+				add("desk.stale_gate", err.Error())
 			}
 		}
 	}

@@ -15,6 +15,8 @@ type toast struct {
 	text string
 	bad  bool
 	seq  int
+	// plain: the text carries its own marks (attention.go), no ✓ or ✗.
+	plain bool
 }
 
 const toastFor = 3 * time.Second
@@ -43,9 +45,14 @@ func (h *home) toastView() []string {
 	}
 	text := ansi.Truncate(t.text, max(h.width-10, 8), "…")
 	w := ansi.StringWidth(text) + 4
+	body := glyph + " " + text
+	if t.plain {
+		w -= 2
+		body = text
+	}
 	return []string{
 		border("╭" + strings.Repeat("─", w) + "╮"),
-		border("│") + " " + glyph + " " + text + " " + border("│"),
+		border("│") + " " + body + " " + border("│"),
 		border("╰" + strings.Repeat("─", w) + "╯"),
 	}
 }

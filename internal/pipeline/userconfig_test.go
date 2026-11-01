@@ -446,7 +446,14 @@ func TestLoadUserConfigDesk(t *testing.T) {
 	if n, q := c.DeskLimits(); len(probs) != 0 || n != 5 || q != 90*time.Second {
 		t.Errorf("max_active 5, quiet 90s gave %d, %s, %v", n, q, probs)
 	}
-	for _, bad := range []string{"max_active = -1", `quiet = "soon"`, `quiet = "0s"`} {
+	if d := c.DeskStaleGate(); d != DefaultDeskStaleGate {
+		t.Errorf("stale_gate unset gave %s", d)
+	}
+	c, _ = LoadUserConfig([]byte("schema = 1\n[desk]\nstale_gate = \"2m\"\n"))
+	if d := c.DeskStaleGate(); d != 2*time.Minute {
+		t.Errorf("stale_gate 2m gave %s", d)
+	}
+	for _, bad := range []string{"max_active = -1", `quiet = "soon"`, `quiet = "0s"`, `stale_gate = "later"`, `stale_gate = "0s"`} {
 		if _, probs := LoadUserConfig([]byte("schema = 1\n[desk]\n" + bad + "\n")); len(probs) != 1 || !strings.HasPrefix(probs[0].Key, "desk.") {
 			t.Errorf("%s gave %v", bad, probs)
 		}

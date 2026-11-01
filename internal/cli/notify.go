@@ -91,18 +91,20 @@ func (n *notifier) sequence(msg string) string {
 	return b.String()
 }
 
-// needsYou queues the "waiting for you" alert on m.
+// needsYou queues the "waiting for you" alert on m: a Gate interrupts
+// (attention.go), and [notify] attention says whether it rings.
 func (m *model) needsYou() {
 	m.reportHerdr(herdr.Blocked, notifyWaiting)
-	if m.notify != nil && m.notify.attention {
+	if levelOf(evGate) >= interrupt && m.notify != nil && m.notify.attention {
 		m.alerts = append(m.alerts, m.notify.sequence(notifyWaiting))
 	}
 }
 
-// runEnded queues the end-of-Run alert on m.
+// runEnded queues the end-of-Run alert on m: an end makes the human aware
+// (attention.go), and [notify] run_end says whether it rings.
 func (m *model) runEnded(res *run.Result, failed bool) {
 	m.reportEnded(res, failed)
-	if m.notify == nil || !m.notify.runEnd {
+	if levelOf(runEvent(res, failed)) < makeAware || m.notify == nil || !m.notify.runEnd {
 		return
 	}
 	var outcome run.Outcome
