@@ -11,6 +11,7 @@ Commands
   /apply [run]                       apply changes to your working tree
   /new [path]                        open another Chat; this one keeps working
   /chats                             switch to another Chat
+  /inbox                             what the Chats want from you (ctrl+space)
   /quit                              leave
 
 More controls: /help advanced

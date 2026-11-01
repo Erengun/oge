@@ -283,11 +283,18 @@ func (h *home) compose(v tea.View) tea.View {
 		curY -= drop
 	}
 	vh := max(H-headRows-len(live), 0)
+	// The since-you-left card is pinned above the transcript while the
+	// transcript keeps a few rows.
+	card := h.sinceCard(mainW)
+	if vh-len(card) < 3 {
+		card = nil
+	}
+	vh -= len(card)
 	left := 0
 	if h.railOn() {
 		left = railWidth + 1
 	}
-	t.top, t.vh, t.vw, t.left, t.chipX0 = headRows, vh, mainW, left, 0
+	t.top, t.vh, t.vw, t.left, t.chipX0 = headRows+len(card), vh, mainW, left, 0
 	var body []string
 	if len(t.entries) == 0 {
 		body = h.welcome()
@@ -305,14 +312,15 @@ func (h *home) compose(v tea.View) tea.View {
 	}
 	rows := make([]string, 0, H)
 	rows = append(rows, h.header(mainW), h.st.border(strings.Repeat("─", mainW)))
+	rows = append(rows, card...)
 	rows = append(rows, body...)
-	for len(rows) < headRows+vh {
+	for len(rows) < t.top+vh {
 		rows = append(rows, "")
 	}
 	if n := t.behind(); n > 0 && vh > 0 {
 		chip := h.st.accent(" ↓ " + plural(n, "line") + " below · jump to latest (end) ")
 		w := ansi.StringWidth(ansi.Strip(chip))
-		last := headRows + vh - 1
+		last := t.top + vh - 1
 		x0 := max(mainW-w-1, 0)
 		rows[last] = ansi.Truncate(rows[last], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[last]), 0)) + chip
 		t.chipX0 = x0 + 1
@@ -321,7 +329,7 @@ func (h *home) compose(v tea.View) tea.View {
 		w := ansi.StringWidth(ansi.Strip(toast[0]))
 		x0 := max(mainW-w-1, 0)
 		for i, tl := range toast[:min(len(toast), vh)] {
-			r := headRows + i
+			r := t.top + i // under the since-you-left card, never over it
 			rows[r] = ansi.Truncate(rows[r], x0, "") + strings.Repeat(" ", max(x0-ansi.StringWidth(rows[r]), 0)) + tl
 		}
 	}
@@ -357,7 +365,7 @@ func (h *home) compose(v tea.View) tea.View {
 	out.AltScreen = true
 	out.MouseMode = tea.MouseModeCellMotion
 	if v.Cursor != nil && curY >= 0 {
-		c := tea.NewCursor(left+curX, headRows+vh+curY)
+		c := tea.NewCursor(left+curX, t.top+vh+curY)
 		c.Blink = false
 		out.Cursor = c
 	}
@@ -389,8 +397,10 @@ func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch key {
 	case "pgup":
 		t.move(-max(t.vh-2, 1))
+		h.collapseSince()
 	case "pgdown":
 		t.move(max(t.vh-2, 1))
+		h.collapseSince()
 	case "ctrl+end":
 		t.latest()
 	case "end":
@@ -417,7 +427,7 @@ func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // overlaid reports whether something over the screen has the keys: a
 // panel, a picker, a prompt, an expanded Run.
 func (h *home) overlaid() bool {
-	return h.keys != nil || h.picker != nil || h.chats != nil || h.diff != nil || h.panel != nil ||
+	return h.keys != nil || h.picker != nil || h.chats != nil || h.inbox != nil || h.diff != nil || h.panel != nil ||
 		h.search != nil || h.hidden != nil || h.saving || h.review != nil || (h.run != nil && h.run.expanded)
 }
 
@@ -445,6 +455,7 @@ func (h *home) fullMouse(msg tea.Msg) (tea.Cmd, bool) {
 		case tea.MouseWheelDown:
 			t.move(3)
 		}
+		h.collapseSince()
 		return nil, true
 	case tea.MouseClickMsg:
 		mm := m.Mouse()

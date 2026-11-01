@@ -242,7 +242,7 @@ func TestStaleAskRingsWhileComposing(t *testing.T) {
 	_, cmd = h.Update(staleTickMsg{})
 	raw := rawOf(cmd)
 	if !strings.Contains(raw, "\a") || !strings.Contains(raw, "oge: Chat 2 is waiting for you") || strings.Contains(raw, "parser") {
-		t.Fatalf("stale ring %q", raw)
+		t.Fatalf("stale ring %q: want the number only (A8)", raw)
 	}
 	if h.comp.text() != "still typing" || h.chatView.num != 1 {
 		t.Errorf("the ring touched the box %q or focus %d", h.comp.text(), h.num)

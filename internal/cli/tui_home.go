@@ -312,6 +312,7 @@ type home struct {
 	next       *queued
 	queuedText string
 	gateArm    time.Time // when a Gate opened while a next Task was being typed
+	inboxArm   time.Time // when an Inbox letter focused a Chat: see inboxCarry
 	// getenv reads the environment for /terminal; nil reads nothing.
 	getenv func(string) string
 	// vim is the composer's vim mode (#156); normal is its NORMAL state.
@@ -360,6 +361,7 @@ type home struct {
 	menu   *list.Model
 	picker *runPicker  // /runs: the Run picker while it is open (#176)
 	chats  *list.Model // /chats: the Chat picker while it is open
+	inbox  *inboxState // the Inbox while it is open (tui_inbox.go)
 	// diff is the /diff viewer while it is open (#169).
 	diff        *diffViewer
 	menuQuery   string
@@ -576,10 +578,10 @@ func (h *home) Init() tea.Cmd {
 
 func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(staleTickMsg); ok {
-		return h, h.attend()
+		return h, withTick(h.attend(), h.inboxTick())
 	}
 	m, cmd := h.routed(msg)
-	return m, withTick(cmd, h.attend())
+	return m, withTick(withTick(cmd, h.attend()), h.inboxTick())
 }
 
 func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -676,6 +678,21 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.adv != nil && h.adv.running && h.adv.seq == m.seq {
 			return h, adviceTick(h.chatView, m.seq)
 		}
+		return h, nil
+	}
+	if m, ok := msg.(inboxSeenMsg); ok {
+		h.inboxSeen(m)
+		return h, nil
+	}
+	if h.inbox != nil {
+		// Over whatever the Chat shows; its keys reach no ask or Gate.
+		if cmd, ok := h.inboxInput(msg); ok {
+			return h, cmd
+		}
+	} else if k, ok := msg.(tea.KeyPressMsg); ok && h.inboxCarry(k) {
+		return h, nil
+	} else if k, ok := msg.(tea.KeyPressMsg); ok && inboxKey(k.String()) && h.canOpenInbox() && h.kb.actionFor(ctxComposer, k.String()) == "" {
+		h.openInbox()
 		return h, nil
 	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && h.chats != nil {
@@ -983,6 +1000,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 		h.tr.latest()
 	}
 	h.cleared, h.queuedText = "", ""
+	h.collapseSince() // sent: the card has done its work
 	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
 		// Sent as it was: still the advice turn, outside the Task.
 		h.adviceEdit = nil
@@ -1271,6 +1289,9 @@ func (h *home) View() tea.View {
 }
 
 func (h *home) view() tea.View {
+	if h.inbox != nil {
+		return h.inboxView()
+	}
 	if h.chats != nil {
 		return tea.NewView(strings.Join(append([]string{"", " " + h.st.bold("Chats")}, h.chatsLines()...), "\n"))
 	}

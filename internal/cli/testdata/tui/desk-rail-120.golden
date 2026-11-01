@@ -21,4 +21,4 @@
 │            │   oge › working… · esc to interrupt                                  │ ──────────────────────────────── │
 │            │ ╭──────────────────────────────────────────────────────────────────╮ │ WORKSPACE · MAIN                 │
 │            │ │ ❯ Type to queue a message                                        │ │ no changes                       │
-╰────────────╯ ╰─ ● working · esc interrupt · enter queue ────────────────────────╯ ╰──────────────────────────────────╯
+╰────────────╯ ╰─ ● working · ^space inbox (3) · esc interrupt · enter queue ─────╯ ╰──────────────────────────────────╯
