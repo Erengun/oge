@@ -342,12 +342,15 @@ func (h *home) compose(v tea.View) tea.View {
 // fullKey handles the keys that only move around the full screen. They
 // never reach an ask, a Gate or a delivery: none of them decides anything.
 func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	if h.keys != nil || h.picker != nil || h.diff != nil || h.panel != nil ||
+	if h.keys != nil || h.picker != nil || h.chats != nil || h.diff != nil || h.panel != nil ||
 		h.search != nil || (h.run != nil && h.run.expanded) {
 		return nil, false
 	}
 	t := h.tr
 	key := msg.String()
+	if h.switchKey(key) {
+		return nil, true
+	}
 	// A key the keybindings file gave to an action is that action's, not ours.
 	ctx := ctxComposer
 	if h.run != nil {

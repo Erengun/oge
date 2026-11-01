@@ -43,8 +43,10 @@ func (h *home) println(text string) tea.Cmd {
 
 // fit prints text above the program in pieces that fit above the frame.
 func (h *home) fit(text string) tea.Cmd {
-	if h.full {
-		h.tr.add(trEntry{text: text}) // the transcript's viewport, not the terminal's scrollback
+	if h.full || h.background {
+		// The transcript's viewport, not the terminal's scrollback: a Chat
+		// in the background never prints above the focused one's box.
+		h.tr.add(trEntry{text: text})
 		return nil
 	}
 	return printFitting(text, h.width, h.height, h.frameRows())

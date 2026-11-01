@@ -61,10 +61,10 @@ func TestHomeChatAdviceEditAbandonedIsLogged(t *testing.T) {
 	assertAdviceDismissedOnce(t, f)
 }
 
-// /new drops the advice shown: a dismissal.
-func TestHomeChatAdviceDismissedByNewIsLogged(t *testing.T) {
+// /clear drops the advice shown: a dismissal.
+func TestHomeChatAdviceDismissedByClearIsLogged(t *testing.T) {
 	t.Parallel()
-	s, f := adviceThen(t, "/new\r", func(s *homeSession) {
+	s, f := adviceThen(t, "/clear\r", func(s *homeSession) {
 		s.composer()
 	})
 	s.quitChat(f)

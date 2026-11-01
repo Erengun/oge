@@ -39,6 +39,9 @@ type sideState struct {
 // sidebar names as the agent and model.
 func (h *home) setSetup(f *pipeline.Frozen) {
 	h.setup = setupLines(f)
+	for _, v := range h.views {
+		v.side.frozen = f
+	}
 	h.side.frozen = f
 }
 

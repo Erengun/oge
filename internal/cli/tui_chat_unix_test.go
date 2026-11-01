@@ -581,18 +581,35 @@ func checkGone(t *testing.T, pids string) {
 	}
 }
 
-// /new during a held Check doesn't hold the home up: the composer comes
+// /close during a held Check doesn't hold the home up: the composer comes
 // back while the old Chat closes, and its Check is killed.
-func TestHomeChatNewDuringVerify(t *testing.T) {
+func TestHomeChatCloseDuringVerify(t *testing.T) {
 	t.Parallel()
 	s, f, pids := heldChatSession(t)
-	s.type_("/new\r")
+	s.type_("/close\r")
 	s.composer()
 	checkGone(t, pids)
 	if out := s.out.String()[s.mark:]; strings.Contains(out, "Accepted") || strings.Contains(out, "cancelled") {
 		t.Errorf("the old Chat's cut showed:\n%s", out)
 	}
 	s.quitChat(f)
+}
+
+// /new during a held Check keeps that Chat verifying in the background;
+// quitting from the new Chat closes both and leaves no Check behind.
+func TestHomeChatNewDuringVerifyThenQuit(t *testing.T) {
+	t.Parallel()
+	s, f, pids := heldChatSession(t)
+	s.type_("/new\r")
+	s.composer()
+	b, _ := os.ReadFile(pids)
+	for _, l := range strings.Fields(string(b)) {
+		if pid, _ := strconv.Atoi(l); syscall.Kill(pid, 0) != nil {
+			t.Errorf("/new stopped the first Chat's Check %d", pid)
+		}
+	}
+	s.quitChat(f)
+	checkGone(t, pids)
 }
 
 // Quitting while a cut verifies leaves no Check process behind.
