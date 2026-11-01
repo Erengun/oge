@@ -184,11 +184,24 @@ func (s *deskServer) answer(req DeskRequest) DeskReply {
 		}
 		n, name, err := s.s.Add(req.Repo, req.Task)
 		if err != nil {
-			return DeskReply{Error: squash(err.Error()), Unavailable: errors.Is(err, ErrDeskUnavailable)}
+			unavailable := errors.Is(err, ErrDeskUnavailable)
+			if unavailable {
+				s.giveBack() // the Desk never took it: it runs elsewhere
+			}
+			return DeskReply{Error: squash(err.Error()), Unavailable: unavailable}
 		}
 		return DeskReply{OK: true, N: n, Repo: name}
 	}
 	return DeskReply{Error: "refused: unknown method"}
+}
+
+// giveBack returns the newest add's slot, for an add the Desk never took.
+func (s *deskServer) giveBack() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.adds) > 0 {
+		s.adds = s.adds[:len(s.adds)-1]
+	}
 }
 
 // admit counts one add against the limit; "" when it may go on, else the

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -198,5 +199,27 @@ func TestChatQueuedRecord(t *testing.T) {
 	if len(recs) != 3 || recs[1].Type != run.RecChatAdded || json.Unmarshal(recs[1].Data, &a) != nil ||
 		a != (run.ChatAdded{N: 2, Title: "fix it", Repo: "/work/api", Source: "oge add"}) {
 		t.Errorf("records %+v, ChatAdded %+v", recs, a)
+	}
+}
+
+// An add the Desk could not take (it was busy) runs elsewhere and does not
+// count against the limit.
+func TestDeskSocketUnavailableAddsDontCount(t *testing.T) {
+	var busy atomic.Bool
+	busy.Store(true)
+	private, _, _ := serve(t, run.DeskServe{Add: func(string, string) (int, string, error) {
+		if busy.Load() {
+			return 0, "", run.ErrDeskUnavailable
+		}
+		return 1, "r", nil
+	}})
+	for range run.AddLimit + 1 {
+		if _, _, err := run.AddToDesk(private, "/r", "task"); err == nil {
+			t.Fatal("a busy Desk took the task")
+		}
+	}
+	busy.Store(false)
+	if _, _, err := run.AddToDesk(private, "/r", "task"); err != nil {
+		t.Errorf("after busy adds: %v", err)
 	}
 }
