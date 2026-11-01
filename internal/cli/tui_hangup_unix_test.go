@@ -178,3 +178,24 @@ func TestInterruptsEIOThenSIGHUP(t *testing.T) {
 	default:
 	}
 }
+
+// A SIGHUP while interrupts go to a Run or an editor still ends the home:
+// there is no terminal to return to.
+func TestSIGHUPWhileForwardedEndsTheHome(t *testing.T) {
+	t.Parallel()
+	homeCancelled, runCancelled := 0, 0
+	in := newInterrupts(func() { homeCancelled++ })
+	in.forwardTo(newInterrupts(func() { runCancelled++ }))
+	in.signalled(syscall.SIGHUP)
+	if runCancelled != 1 || homeCancelled == 0 || in.why() != "hangup" {
+		t.Errorf("run cancelled %d, home cancelled %d, why %q", runCancelled, homeCancelled, in.why())
+	}
+	diverted := 0
+	in2 := newInterrupts(func() { homeCancelled++ })
+	homeCancelled = 0
+	in2.divert(func() { diverted++ })
+	in2.signalled(syscall.SIGHUP)
+	if diverted != 1 || homeCancelled == 0 {
+		t.Errorf("diverted %d, home cancelled %d", diverted, homeCancelled)
+	}
+}

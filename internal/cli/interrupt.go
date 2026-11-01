@@ -119,6 +119,11 @@ func (i *interrupts) signalled(sig os.Signal) {
 		f()
 	}
 	i.interrupt()
+	if sig == hangupSignal {
+		// No terminal is left to come back to: a hangup ends the home even
+		// while interrupts go to a Run or an editor (forwarded or diverted).
+		i.cancel()
+	}
 }
 
 // why is how the session was ended by a signal: "hangup", "interrupt",
