@@ -353,7 +353,8 @@ func (c *UserConfig) validate() []Problem {
 			}
 		}
 		for _, p := range d.Projects {
-			if _, ok := projectPath(p, "/"); !ok {
+			// The form only: a home of / is not absolute on every OS.
+			if q := strings.TrimSpace(p); q != "~" && !strings.HasPrefix(q, "~/") && !filepath.IsAbs(q) {
 				add("desk.projects", fmt.Sprintf("%q must be an absolute path or start with ~/", p))
 			}
 		}

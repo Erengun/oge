@@ -186,7 +186,7 @@ func TestDeskProjectsProblems(t *testing.T) {
 			t.Errorf("%s: problems %v", bad, probs)
 		}
 	}
-	for _, ok := range []string{`"~/x"`, `"~"`, `"/abs"`} {
+	for _, ok := range []string{`"~/x"`, `"~"`, "'" + t.TempDir() + "'"} {
 		if _, probs := LoadUserConfig([]byte("schema = 1\n[desk]\nprojects = [" + ok + "]\n")); len(probs) != 0 {
 			t.Errorf("%s: problems %v", ok, probs)
 		}

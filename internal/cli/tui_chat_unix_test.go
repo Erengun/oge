@@ -322,7 +322,13 @@ func TestHomeChatFeedbackQueuesAndDrops(t *testing.T) {
 	s.composerAfter("  after the newer cut")
 	out := s.out.String()
 	from := strings.LastIndex(out, "allowed: Bash touch d.go")
-	if n := strings.Count(out[from:strings.LastIndex(out, "  after the newer cut")], "Öge → agent"); n != 1 {
+	// composerAfter matched the screen: the renderer may have drawn the
+	// anchor as a diff, so the raw stream need not hold it whole.
+	end := strings.LastIndex(out, "  after the newer cut")
+	if end < from {
+		end = len(out)
+	}
+	if n := strings.Count(out[from:end], "Öge → agent"); n != 1 {
 		t.Errorf("%d feedback turns after the newer cut, want 1:\n%s", n, out[from:])
 	}
 	s.quitChat(f)

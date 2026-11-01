@@ -302,12 +302,13 @@ func TestNewThenTabWithNothingKeepsTheBox(t *testing.T) {
 }
 
 func TestDeskProjectsConfig(t *testing.T) {
-	c := &pipeline.UserConfig{Desk: &pipeline.DeskConfig{Projects: []string{"~/dev/api", "/work/web", "/work/web"}}}
-	if got := c.DeskProjects("/home/u"); !slices.Equal(got, []string{"/home/u/dev/api", "/work/web"}) {
+	home, web := t.TempDir(), t.TempDir()
+	c := &pipeline.UserConfig{Desk: &pipeline.DeskConfig{Projects: []string{"~/dev/api", web, web}}}
+	if got := c.DeskProjects(home); !slices.Equal(got, []string{filepath.Join(home, "dev", "api"), web}) {
 		t.Errorf("DeskProjects %q", got)
 	}
 	c.Desk.Projects = []string{"rel/path", ""}
-	if len(c.DeskProjects("/home/u")) != 0 {
+	if len(c.DeskProjects(home)) != 0 {
 		t.Error("relative paths kept")
 	}
 }
