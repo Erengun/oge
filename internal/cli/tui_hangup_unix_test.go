@@ -329,7 +329,18 @@ func TestStopMidTurnKeepsTheChat(t *testing.T) {
 	s.composer()
 	s.type_("long job\r")
 	s.expect("working on it")
-	time.Sleep(100 * time.Millisecond)
+	// The fake prints its Reply before it writes, so wait for the file itself.
+	written := filepath.Join(f.state, "work", "chats", "*", "implement", "add.go")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if m, _ := filepath.Glob(written); len(m) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the agent never wrote add.go")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	s.type_("/stop\r")
 	if code := s.wait(); code != ExitOK {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, s.out.String(), s.errOut.String())
