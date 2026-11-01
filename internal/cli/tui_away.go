@@ -45,6 +45,7 @@ func (h *home) quitAskKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		h.keep = true
 		fallthrough
 	case "c", "C":
+		h.closeAll = k.String() == "c" || k.String() == "C"
 		h.quitAsk = 0
 		h.quit = true
 		return h, tea.Quit

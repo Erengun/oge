@@ -275,6 +275,9 @@ func (h *home) reportDesk() {
 	}
 	marks := make([]string, 0, len(h.views))
 	for _, v := range h.views {
+		if v.rest != nil && v.attnMark == "?" {
+			continue // an unreadable restored Chat runs nothing
+		}
 		marks = append(marks, v.attnMark)
 	}
 	s := deskState(marks)

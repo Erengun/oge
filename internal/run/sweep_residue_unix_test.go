@@ -50,7 +50,7 @@ func TestSweepResidueChecksIdentity(t *testing.T) {
 		"pid 1":                   {1, 1, processStart(1)},
 	} {
 		d := &RestoredDesk{Chats: []*RestoredChat{{ID: "x", procs: []recordedProc{p}}}}
-		d.SweepResidue()
+		d.SweepResidue(nil)
 		if len(d.Swept) != 0 {
 			t.Errorf("%s: swept %+v", name, d.Swept)
 		}
@@ -59,7 +59,7 @@ func TestSweepResidueChecksIdentity(t *testing.T) {
 		t.Fatalf("a process that wasn't ours to kill died: %v", err)
 	}
 	d := &RestoredDesk{Chats: []*RestoredChat{{ID: "x", procs: []recordedProc{{pid, pid, start}}}}}
-	d.SweepResidue()
+	d.SweepResidue(nil)
 	if len(d.Swept) != 1 || d.Swept[0].PGID != pid || !dead(skip) {
 		t.Errorf("the recorded group lived: swept %+v", d.Swept)
 	}

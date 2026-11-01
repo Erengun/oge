@@ -222,3 +222,20 @@ func TestRestoredQuitAsks(t *testing.T) {
 		t.Errorf("%d open Chats counted, want 4", n)
 	}
 }
+
+// Only the answer c closes the restored Chats at exit: k, and any end
+// that is no answer, leave them as they are.
+func TestQuitAskClosesRestoredOnlyOnC(t *testing.T) {
+	for key, want := range map[string]bool{"c": true, "k": false} {
+		h, _, _ := restoredHome(t, nil)
+		h.quitAsk = 1
+		h.quitAskKey(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+		if h.closeAll != want {
+			t.Errorf("after %q closeAll = %v, want %v", key, h.closeAll, want)
+		}
+	}
+	h, _, _ := restoredHome(t, nil)
+	if h.closeAll {
+		t.Error("a Desk that quit with no answer would close its restored Chats")
+	}
+}

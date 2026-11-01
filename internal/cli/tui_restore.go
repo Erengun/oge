@@ -129,6 +129,9 @@ func (h *home) restoreTranscript(v *chatView, gone bool) {
 	if gone {
 		say("■ the repo " + clean(r.Repo) + " isn't there: this Chat can only be read")
 	}
+	if r.Swept > 0 {
+		say(fmt.Sprintf("Öge stopped %d process group(s) the last oge left running", r.Swept))
+	}
 	switch r.State {
 	case run.RestoredStopped:
 		if r.Card != nil && r.Card.Kind == run.CardCheckInterrupted {

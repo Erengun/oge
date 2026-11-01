@@ -30,7 +30,9 @@ const (
 	RecChatAdded  = "ChatAdded"
 	RecChatClosed = "ChatClosed"
 	RecSeen       = "Seen"
-	RecDeskClosed = "DeskClosed"
+	// RecResidueSwept: a restore killed a process group the last oge left.
+	RecResidueSwept = "ResidueSwept"
+	RecDeskClosed   = "DeskClosed"
 )
 
 // The hosts a Desk can live under (docs/ux/away.md, A1).
@@ -196,6 +198,12 @@ func (d *Desk) ChatClosed(chat string) {
 // Seen records the Chat's ✓ seen, up to the Run run.
 func (d *Desk) Seen(chat, run string) {
 	_ = d.append(RecSeen, Seen{Chat: chat, Upto: run})
+}
+
+// ResidueSwept records a process group a restore killed for chat, so the
+// kill leaves a trace.
+func (d *Desk) ResidueSwept(chat string, pid, pgid int) {
+	_ = d.append(RecResidueSwept, map[string]any{"chat": chat, "pid": pid, "pgid": pgid})
 }
 
 // Close records DeskClosed, clean or not, and lets the Desk go.

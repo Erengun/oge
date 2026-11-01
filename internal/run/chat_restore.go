@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -100,6 +101,9 @@ type RestoredChat struct {
 	Run  string
 	Seen bool
 
+	// Swept is how many of its recorded process groups the sweep killed.
+	Swept int
+
 	// procs are the processes its log recorded, for the residue sweep.
 	procs []recordedProc
 }
@@ -131,11 +135,16 @@ type SweptGroup struct {
 // process has now, or whose identity was never recorded or can't be read
 // is left alone: Öge never kills what it can't tell is its own. It runs
 // before a Workspace is touched, and starts nothing.
-func (d *RestoredDesk) SweepResidue() {
+//
+// Each group it kills is recorded in desk (nil records nothing) and counted
+// on its Chat, so the restored transcript can say so.
+func (d *RestoredDesk) SweepResidue(desk *Desk) {
 	for _, c := range d.Chats {
 		for _, p := range c.procs {
 			if sweepGroup(p.pid, p.pgid, p.start) {
 				d.Swept = append(d.Swept, SweptGroup{Chat: c.ID, PID: p.pid, PGID: p.pgid})
+				c.Swept++
+				desk.ResidueSwept(c.ID, p.pid, p.pgid)
 			}
 		}
 	}
@@ -216,6 +225,9 @@ const (
 	cutEnded
 	cutParked
 	cutSuperseded // a newer cut's Check covers it
+	// cutInterrupted: the Run was cancelled (a hangup, a quit) and ended
+	// as an Infrastructure stop, with no Verdict.
+	cutInterrupted
 )
 
 // cutsByChat lists the cuts of every Chat, oldest first. Only the first
@@ -283,9 +295,13 @@ func readCut(dir string) (restoredCut, bool) {
 			var d struct {
 				Outcome Outcome
 				Stop    string
+				Why     []string
 			}
 			_ = json.Unmarshal(rec.Data, &d)
 			c.state, c.outcome = cutEnded, d.Outcome
+			if d.Outcome == InfrastructureStop && slices.Contains(d.Why, interrupted) {
+				c.state = cutInterrupted
+			}
 			if d.Outcome == InfrastructureStop && d.Stop == "superseded" {
 				c.state = cutSuperseded
 			}
@@ -361,6 +377,12 @@ func restoreChat(c *RestoredChat, cutDirs []string, seen string) {
 			}
 			if json.Unmarshal(rec.Data, &d) == nil {
 				intr = &RestoredCard{Kind: CardInterrupted, Turn: d.Turn, Why: d.Why, At: rec.At}
+				// A stop closes the Session, so the pump ends the turn in
+				// flight with a failure just ahead of this record: that is
+				// no clean end, as the brief reads it.
+				if t := turns[d.Turn]; t != nil && t.Failure != "" {
+					t.Settled = false
+				}
 			}
 		case RecDelivered:
 			var d struct{ Turn int }
@@ -395,8 +417,9 @@ func restoreChat(c *RestoredChat, cutDirs []string, seen string) {
 	case covers && cut.state == cutParked:
 		c.State, c.Since = RestoredParked, cut.at
 		c.Card = &RestoredCard{Kind: CardParked, Gate: cut.gate, Verified: cut.verdict, At: cut.at}
-	case covers && cut.state == cutOpen:
-		// Its process is gone: a Check killed has no Verdict.
+	case covers && (cut.state == cutOpen || cut.state == cutInterrupted):
+		// Its process is gone, or it was cancelled: a Check killed has no
+		// Verdict.
 		c.State, c.Since = RestoredStopped, cut.at
 		c.Card = &RestoredCard{Kind: CardCheckInterrupted, Turn: cut.to, At: cut.at}
 		if intr != nil {
@@ -427,9 +450,10 @@ func restoreChat(c *RestoredChat, cutDirs []string, seen string) {
 		c.State, c.Since = RestoredIdle, cut.at
 		c.Word = strings.ToLower(string(cut.outcome))
 	case intr != nil && lastStarted > 0:
-		// Every turn settled, but a cut was in flight and left no Run.
+		// No cut Ledger says a Check was running: what the records say is
+		// an interrupted turn, and no more.
 		c.State, c.Since = RestoredStopped, intr.At
-		c.Card = &RestoredCard{Kind: CardCheckInterrupted, Turn: lastSettled, Why: intr.Why, At: intr.At}
+		c.Card = &RestoredCard{Kind: CardInterrupted, Turn: intr.Turn, Why: intr.Why, At: intr.At}
 	case lastStarted == 0 && intr == nil && cut == nil:
 		c.State = RestoredIdle // opened, nothing sent
 	default:

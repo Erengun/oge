@@ -423,6 +423,8 @@ type home struct {
 	quitAsk int
 	keep    bool
 	stopped bool // /stop: keep everything and stop now (A2), never asking
+	// closeAll: the human answered c at the quit ask: restored Chats close.
+	closeAll bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -2050,7 +2052,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		if in.terminated() {
 			h.reachStopped()
 		}
-	} else {
+	} else if h.closeAll {
 		h.closeRestored() // the human chose to close them
 	}
 	// Every Chat left closes here, the caller's hc too, so that desk.log

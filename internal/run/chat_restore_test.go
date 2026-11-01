@@ -77,6 +77,8 @@ func restoreFixture(t *testing.T) *ledger.StateRoot {
 		settled(1, "done: commas accepted"),
 		{RecTurnStarted, map[string]any{"turn": 2, "message": "h", "text": id2}},
 		{RecProcessStarted, map[string]any{"pid": 4242, "pgid": 4242, "start": "123.45"}},
+		// The pump ends the turn in flight when the stop closes the Session.
+		{RecAttemptEnded, map[string]any{"turn": 2, "failure": "agent_crash: chat_ended"}},
 		{RecTurnInterrupted, map[string]any{"turn": 2, "why": "hangup"}},
 	} {
 		l.Append(r.typ, r.data)
@@ -95,9 +97,16 @@ func restoreFixture(t *testing.T) *ledger.StateRoot {
 	// c5: the Check failed.
 	chat("c5", turnStarted(1, "ci", nil, t), settled(1, "ok"))
 	cut("20261101-0004-c5", "c5", 1, fixRec{RecVerdict, map[string]any{}}, fixRec{RecRunEnded, map[string]any{"outcome": Failed}})
-	// c6: the Check was killed: its Run has no end.
-	chat("c6", turnStarted(1, "lint", nil, t), settled(1, "ok"), fixRec{RecTurnInterrupted, map[string]any{"turn": 1, "why": "quit"}})
-	cut("20261101-0005-c6", "c6", 1, fixRec{RecCheckStarted, map[string]any{}})
+	// c6: oge exited while the Check ran: the Run was cancelled and ended.
+	chat("c6", turnStarted(1, "lint", nil, t), settled(1, "ok"), fixRec{RecTurnInterrupted, map[string]any{"turn": 1, "why": "hangup"}})
+	cut("20261101-0005-c6", "c6", 1, fixRec{RecCheckStarted, map[string]any{}},
+		fixRec{RecCheckEnded, map[string]any{"interrupted": true}},
+		fixRec{RecRunEnded, map[string]any{"outcome": InfrastructureStop, "why": []string{interrupted}}})
+	// c10: oge was killed while the Check ran: its Run has no end.
+	chat("c10", turnStarted(1, "fmt", nil, t), settled(1, "ok"))
+	cut("20261101-0006-c10", "c10", 1, fixRec{RecCheckStarted, map[string]any{}})
+	// c11: a turn settled, then a stop with no cut Ledger: no Check ran.
+	chat("c11", turnStarted(1, "tidy", nil, t), settled(1, "ok"), fixRec{RecTurnInterrupted, map[string]any{"turn": 1, "why": "quit"}})
 	// c7: closed by the human. c8: its log is gone. c9: killed with no record.
 	chat("c7")
 	chat("c9", turnStarted(1, "slow", nil, t))
@@ -106,7 +115,7 @@ func restoreFixture(t *testing.T) *ledger.StateRoot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, c := range []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"} {
+	for i, c := range []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11"} {
 		d.ChatAdded(c, i+1, "chat "+c, "/repo/"+c)
 	}
 	d.ChatClosed("c7")
@@ -127,14 +136,16 @@ func TestRestoreDeskStates(t *testing.T) {
 		repo  string
 	}
 	cases := map[string]want{
-		"c1": {RestoredStopped, CardInterrupted, "/repo/c1"},
-		"c2": {RestoredParked, CardParked, "/repo/c2"}, // the Run's Parked beats the Chat log's TurnInterrupted
-		"c3": {RestoredIdle, "", "/repo/c3"},           // Seen covers it
-		"c4": {RestoredDone, "", "/repo/c4"},
-		"c5": {RestoredFailed, "", "/repo/c5"},
-		"c6": {RestoredStopped, CardCheckInterrupted, "/repo/c6"},
-		"c8": {RestoredUnknown, "", "/repo/c8"},
-		"c9": {RestoredStopped, CardInterrupted, "/repo/c9"},
+		"c1":  {RestoredStopped, CardInterrupted, "/repo/c1"},
+		"c2":  {RestoredParked, CardParked, "/repo/c2"}, // the Run's Parked beats the Chat log's TurnInterrupted
+		"c3":  {RestoredIdle, "", "/repo/c3"},           // Seen covers it
+		"c4":  {RestoredDone, "", "/repo/c4"},
+		"c5":  {RestoredFailed, "", "/repo/c5"},
+		"c6":  {RestoredStopped, CardCheckInterrupted, "/repo/c6"},
+		"c8":  {RestoredUnknown, "", "/repo/c8"},
+		"c9":  {RestoredStopped, CardInterrupted, "/repo/c9"},
+		"c10": {RestoredStopped, CardCheckInterrupted, "/repo/c10"},
+		"c11": {RestoredStopped, CardInterrupted, "/repo/c11"},
 	}
 	if len(d.Chats) != len(cases) {
 		t.Fatalf("%d Chats restored, want %d (a closed Chat stays out)", len(d.Chats), len(cases))
@@ -174,6 +185,12 @@ func TestRestoreDeskStates(t *testing.T) {
 	}
 	if c := by["c9"]; c.Card.Why != "" || c.Card.Turn != 1 {
 		t.Errorf("c9: a kill leaves no why: %+v", c.Card)
+	}
+	if c := by["c6"]; c.Card.Why != "hangup" {
+		t.Errorf("c6 card %+v", c.Card)
+	}
+	if c := by["c11"]; c.Card.Turn != 1 || c.Card.Why != "quit" {
+		t.Errorf("c11 card %+v", c.Card)
 	}
 	if c := by["c8"]; c.Problem == "" {
 		t.Error("c8: an unknown state says why")

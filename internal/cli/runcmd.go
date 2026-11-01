@@ -83,7 +83,7 @@ func startHome(env Env, f runFlags, root string, first *resolved) int {
 	if r, err := run.RestoreDesk(state); err != nil {
 		u.restoreProblem = "the Desk record can't be read, so no Chat is restored: " + clean(err.Error())
 	} else {
-		r.SweepResidue()
+		r.SweepResidue(desk)
 		u.restored = r
 	}
 	rc, refused := openRepo(env, f, u, histDir, root, setup, res)
