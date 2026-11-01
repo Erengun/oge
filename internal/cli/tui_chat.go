@@ -1432,7 +1432,9 @@ func (h *home) chatDeliverable(c *run.Chat, res *run.Result) (string, bool) {
 // outcome, the files written, the checks) with the Receipt behind
 // /receipt, and marked delivered (D7). After the Chat's first apply it
 // merges on the commit last applied, not the Snapshot: the working tree
-// holds that one already (#261). A cut whose turns have a Tamper event
+// holds that one already (#261). Once the Snapshot was retaken on that
+// commit, a cut made on it merges on it: a sibling Chat's apply it took
+// is never this Chat's write. A cut whose turns have a Tamper event
 // it never carried is refused, and cut again. The Chat goes on.
 func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) string {
 	r, err := delivery.Load(res.Dir)
@@ -1444,7 +1446,7 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 		if msg, ok := h.chatDeliverable(c, res); !ok {
 			return msg
 		}
-		base.Rev, base.From = c.Applied()
+		base.Rev, base.From = c.ApplyBase(r.Snapshot)
 	}
 	var b strings.Builder
 	q := env
@@ -1478,6 +1480,24 @@ func (h *home) chatApply(env Env, root string, c *run.Chat, res *run.Result) str
 			note += "\n" + h.ogeLine("✗ retaking the Snapshot: "+clean(err.Error()))
 		case r == run.RefreshOutside:
 			note += "\n" + h.ogeLine(h.st.dim(run.OutsideNote))
+		case r == run.RefreshConflict:
+			note += "\n" + h.ogeLine(h.st.dim(run.ConflictNote))
+		}
+		// The other Chats (a home is one repository) take what this
+		// apply wrote as Öge's, not as an outside change.
+		wrote := p.Wrote()
+		for _, v := range h.views {
+			if v.chat == nil || len(wrote) == 0 {
+				continue
+			}
+			if s := v.chat.get(); s != nil && s != c {
+				switch r, err := s.NoteDelivered(wrote); {
+				case err != nil:
+					note += "\n" + h.ogeLine(fmt.Sprintf("✗ retaking Chat %d's Snapshot: %s", v.num, clean(err.Error())))
+				case r == run.RefreshConflict:
+					note += "\n" + h.ogeLine(h.st.dim(fmt.Sprintf("Chat %d is editing files this apply changed; its Snapshot is kept", v.num)))
+				}
+			}
 		}
 	}
 	files := p.Paths()

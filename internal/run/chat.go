@@ -145,7 +145,11 @@ type Chat struct {
 	scopeMu  sync.Mutex
 	last     string
 	lastTurn int // the turn whose commit last is, 0 for the Snapshot
-	reverted map[int][]workspace.Revert
+	// retakenOn is the commit applied (Applied's rev) the Snapshot was
+	// last retaken on: the Snapshot, not rev, is then what Öge delivered,
+	// a sibling Chat's apply taken since included (chat_refresh.go).
+	retakenOn string
+	reverted  map[int][]workspace.Revert
 
 	// The Preflight and the Snapshot control, started when the Chat opens
 	// (cut.go): prepared is closed once both have finished.
@@ -179,6 +183,9 @@ type Chat struct {
 	delivered  int
 	applied    string
 	appliedRun string // the directory of the Run applied
+	// siblings is what sibling Chats' applies wrote into the same
+	// repository, by path, the newest write of each (NoteDelivered).
+	siblings map[string]Wrote
 
 	mu     sync.Mutex
 	sess   agent.Session
@@ -1174,6 +1181,7 @@ func (c *Chat) settled(t *turnOut) {
 	}
 	c.timer.Reset(c.idle)
 	c.mu.Unlock()
+	c.retryRefresh() // a retake a turn in flight deferred
 }
 
 // drop settles the turn in flight and every queued one as failed, with
