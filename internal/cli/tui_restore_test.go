@@ -126,7 +126,8 @@ func TestRestoredChatOfAGoneRepo(t *testing.T) {
 	if h.num != 2 {
 		t.Fatalf("focused %d", h.num)
 	}
-	text := ansi.Strip(strings.Join(h.tr.render(100), "\n"))
+	// Wide enough that a long temp path (Windows' is) never wraps the line.
+	text := ansi.Strip(strings.Join(h.tr.render(1000), "\n"))
 	if !strings.Contains(text, "isn't there") || !strings.Contains(text, "parked at the result Gate") {
 		t.Errorf("transcript:\n%s", text)
 	}
