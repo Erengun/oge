@@ -6,10 +6,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/erengun/oge/internal/run"
 )
 
 // Several Chats (docs/ux/desk.md, slice 3): /new opens another Chat while
@@ -244,4 +247,52 @@ func (h *home) chatsLines() []string {
 		}
 	}
 	return append(out, " "+st.dim("⏎ or a number switches · esc"))
+}
+
+// deskQuiet is how long a turn may go without an agent event before its
+// Chat shows quiet rather than working ([desk] quiet).
+const deskQuiet = 3 * time.Minute
+
+// seenAfter is how long a Chat holds the focus before its ✓ counts as
+// seen; a key pressed in it counts at once (docs/ux/desk.md, G1).
+const seenAfter = time.Second
+
+// glyph is the Chat's exact state for the rail and the header counts: the
+// mark and its coarse word. The human's part comes first, then a failed
+// Check, then a turn gone quiet (never shown as working), work, an
+// Accepted cut not seen yet, and idle. It names no tool.
+func glyph(v *chatView, now time.Time) (mark, coarse string) {
+	switch {
+	case v.cutGate != nil, v.stale != nil, v.turn != nil && len(v.turn.asks) > 0:
+		return "▲", "needs you"
+	case v.pendingFB != nil, v.side.outcome == run.Failed:
+		return "✗", "check failed"
+	case v.turn != nil && !v.lastEvent.IsZero() && now.Sub(v.lastEvent) >= deskQuiet:
+		return "?", "quiet"
+	case v.turn != nil, v.verify != nil:
+		return "●", "working"
+	case v.last != nil && v.side.outcome == run.Accepted && !v.seenBy(now):
+		return "✓", "done"
+	}
+	return "○", "idle"
+}
+
+// seenBy reports whether the human has seen the Chat's Accepted cut by
+// now: a key pressed in it, or the focus held for seenAfter since it was
+// both focused and done.
+func (v *chatView) seenBy(now time.Time) bool {
+	if v.seen {
+		return true
+	}
+	if v.focusAt.IsZero() {
+		return false
+	}
+	return now.Sub(later(v.focusAt, v.doneAt)) >= seenAfter
+}
+
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }

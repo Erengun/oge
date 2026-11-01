@@ -403,3 +403,59 @@ func TestOpeningAChatHoldsNoLock(t *testing.T) {
 		t.Error("a Chat opened before a reset was kept")
 	}
 }
+
+// glyph follows the Chat's exact state, on an injected clock.
+func TestGlyphFollowsExactState(t *testing.T) {
+	t0 := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	accepted := func(v *chatView) { v.last, v.side.outcome, v.doneAt = &lastRun{}, run.Accepted, t0 }
+	for _, c := range []struct {
+		name string
+		set  func(*chatView)
+		now  time.Time
+		want string
+	}{
+		{"idle", func(*chatView) {}, t0, "○ idle"},
+		{"turn", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{}, t0 }, t0.Add(time.Minute), "● working"},
+		{"verify", func(v *chatView) { v.verify = &chatVerify{} }, t0, "● working"},
+		{"quiet", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{}, t0 }, t0.Add(deskQuiet), "? quiet"},
+		{"quiet verify alone is working", func(v *chatView) { v.verify, v.lastEvent = &chatVerify{}, t0 }, t0.Add(time.Hour), "● working"},
+		{"ask", func(v *chatView) { v.turn = &chatTurn{asks: []*agent.Ask{{}}} }, t0, "▲ needs you"},
+		{"quiet ask needs you", func(v *chatView) { v.turn, v.lastEvent = &chatTurn{asks: []*agent.Ask{{}}}, t0 }, t0.Add(time.Hour), "▲ needs you"},
+		{"gate", func(v *chatView) { v.cutGate = &gateState{} }, t0, "▲ needs you"},
+		{"stale", func(v *chatView) { v.stale = &staleAsk{} }, t0, "▲ needs you"},
+		{"feedback held", func(v *chatView) { v.pendingFB = &pendingFeedback{} }, t0, "✗ check failed"},
+		{"failed verdict", func(v *chatView) { v.side.outcome = run.Failed }, t0, "✗ check failed"},
+		{"gate over failed", func(v *chatView) { v.side.outcome, v.cutGate = run.Failed, &gateState{} }, t0, "▲ needs you"},
+		{"done in the background", accepted, t0.Add(time.Hour), "✓ done"},
+		{"done, focused under 1s", func(v *chatView) { accepted(v); v.focusAt = t0 }, t0.Add(seenAfter - 1), "✓ done"},
+		{"done, focused 1s", func(v *chatView) { accepted(v); v.focusAt = t0 }, t0.Add(seenAfter), "○ idle"},
+		{"done after a long focus", func(v *chatView) { accepted(v); v.focusAt = t0.Add(-time.Hour) }, t0.Add(seenAfter - 1), "✓ done"},
+		{"done, a key pressed", func(v *chatView) { accepted(v); v.seen = true }, t0, "○ idle"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := &chatView{}
+			c.set(v)
+			if mark, coarse := glyph(v, c.now); mark+" "+coarse != c.want {
+				t.Errorf("glyph = %s %s, want %s", mark, coarse, c.want)
+			}
+		})
+	}
+}
+
+// A turn's agent events keep its Chat working; past [desk] quiet without
+// one, it shows quiet.
+func TestGlyphQuietAfterTheLastEvent(t *testing.T) {
+	h := deskHome()
+	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	h.now = func() time.Time { return now }
+	h.turn = &chatTurn{}
+	h.lastEvent = now
+	now = now.Add(deskQuiet)
+	if m, _ := glyph(h.chatView, now); m != "?" {
+		t.Fatalf("glyph = %s after %s with no event, want ?", m, deskQuiet)
+	}
+	h.Update(chatEvMsg{view: h.chatView, ev: agent.Event{}, ok: true})
+	if m, _ := glyph(h.chatView, now); m != "●" {
+		t.Fatalf("glyph = %s right after an event, want ●", m)
+	}
+}

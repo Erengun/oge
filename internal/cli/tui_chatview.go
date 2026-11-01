@@ -75,6 +75,14 @@ type chatView struct {
 	// never meant for it (ADR-0015: applying is an explicit act).
 	actions   bool
 	actionsAt time.Time
+	// The rail's glyph (tui_desk.go): lastEvent is when the turn last
+	// heard from the agent, or began; doneAt is when its cut was
+	// Accepted, seen once the human has looked at it; focusAt is when
+	// this Chat took the focus, zero while another one has it.
+	lastEvent time.Time
+	doneAt    time.Time
+	seen      bool
+	focusAt   time.Time
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.
@@ -86,7 +94,13 @@ type chatView struct {
 }
 
 // focus makes v the Chat the home shows and the keys go to.
-func (h *home) focus(v *chatView) { h.chatView = v }
+func (h *home) focus(v *chatView) {
+	if h.chatView != nil {
+		h.chatView.focusAt = time.Time{}
+	}
+	h.chatView = v
+	v.focusAt = h.clock()
+}
 
 // newView is a fresh Chat on the session's config: empty, numbered after
 // the others, with a Chat of its own to open on its first message.
@@ -194,11 +208,11 @@ func (h *home) route(msg tea.Msg) (restore func(), ok bool) {
 		return nil, false
 	}
 	prev := h.chatView
-	h.focus(v)
+	h.chatView = v // not focus: the human has not moved to it
 	h.background = true
 	return func() {
 		h.background = false
-		h.focus(prev)
+		h.chatView = prev
 	}, true
 }
 

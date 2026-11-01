@@ -763,6 +763,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyPressMsg:
 		h.msg, h.note = nil, ""
+		h.seen = true // a key in this Chat: its ✓ has been seen
 		switch {
 		case h.job != nil:
 			// A shell command runs: Ctrl+C stops it (never Öge); other keys are dropped.
