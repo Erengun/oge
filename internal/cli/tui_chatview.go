@@ -120,6 +120,12 @@ type chatView struct {
 	// rest is set for a Chat restored from the Desk record: it has no
 	// Session, and its glyph is what its records showed (tui_restore.go).
 	rest *restoredView
+	// reopenAsk is the settings-changed card waiting for a typed reopen
+	// or n; reopenOK says the human typed reopen for the send in hand.
+	reopenAsk *reopenAsk
+	reopenOK  bool
+	// reopenShown is what the card listed, held for the typed reopen.
+	reopenShown []string
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.

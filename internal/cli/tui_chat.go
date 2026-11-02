@@ -51,6 +51,11 @@ type homeChat struct {
 	// verdict is the cut's Verdict line, and what can take its Run.
 	verdict func(res *run.Result, changed int) (string, *lastRun)
 	agents  map[string]agent.Adapter
+	// changes is the trust check of a restored Chat: what changed since its
+	// last Session started. resume builds the Chat again from its records,
+	// with no Session (nil: restored Chats can't reopen).
+	changes func(p run.ResumeParams) ([]string, error)
+	resume  func(p run.ResumeParams) (*run.Resumed, error)
 	// shown logs that ask advice was displayed (Chat.AdviceShown); a test
 	// seam, nil in the product.
 	shown func(c *run.Chat, consultation string)
@@ -130,7 +135,8 @@ func (hc *homeChat) clone() *homeChat {
 	if hc == nil {
 		return nil
 	}
-	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown, desk: hc.desk, adopt: hc.adopt}
+	return &homeChat{open: hc.open, cut: hc.cut, verdict: hc.verdict, agents: hc.agents, shown: hc.shown, desk: hc.desk,
+		adopt: hc.adopt, changes: hc.changes, resume: hc.resume}
 }
 
 func (hc *homeChat) get() *run.Chat {
@@ -233,6 +239,9 @@ type (
 		view   *chatView // the Chat it is for; nil is the focused one
 		events <-chan agent.Event
 		err    error
+		// resumed is set when the message reopened a restored Chat: its
+		// Chat is open from here, whatever became of the turn.
+		resumed *run.Resumed
 	}
 	// chatEvMsg is the turn's next event; ok is false once they end.
 	chatEvMsg struct {
@@ -378,19 +387,36 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 	}
 	hc, ctx, v := h.chat, h.ctx, h.chatView
 	n, title, repo := v.num, v.name, v.root
+	// A restored Chat reopens on its first message, not before (A6): the
+	// Chat is built from its records and its Session opens as Send does.
+	var rp *run.ResumeParams
+	if v.rest != nil {
+		rp = &run.ResumeParams{Chat: v.rest.RestoredChat, Config: res.cfgData, Now: res.frozen, Reopen: v.reopenOK, Shown: v.reopenShown}
+		v.reopenOK, v.reopenShown = false, nil
+	}
 	c, gen := hc.current()
 	if c == nil {
 		hc.closing.Add(1) // quitting waits for it to open, and closes it
 	}
 	send := func() tea.Msg {
+		var resumed *run.Resumed
 		if c == nil {
 			defer hc.closing.Done()
-			opened, err := hc.open(res)
-			if err != nil {
-				return chatSentMsg{view: v, err: err}
+			var opened *run.Chat
+			if rp != nil {
+				rs, err := hc.resume(*rp)
+				if err != nil {
+					return chatSentMsg{view: v, err: err}
+				}
+				resumed, opened = rs, rs.Chat // already on the Desk record
+			} else {
+				var err error
+				if opened, err = hc.open(res); err != nil {
+					return chatSentMsg{view: v, err: err}
+				}
+				// Recorded before the home can see it: its ChatClosed comes after.
+				hc.desk.ChatAdded(opened.ID, n, title, repo)
 			}
-			// Recorded before the home can see it: its ChatClosed comes after.
-			hc.desk.ChatAdded(opened.ID, n, title, repo)
 			if !hc.opened(opened, gen) {
 				hc.desk.ChatClosed(opened.ID)
 				_ = opened.Close() // /close or quitting got here first
@@ -400,10 +426,10 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 		}
 		if edited != nil && edited.chat == c {
 			ch, err := c.SendEdited(ctx, edited.id, text) // the user's turn, from an advisor's text
-			return chatSentMsg{view: v, events: ch, err: err}
+			return chatSentMsg{view: v, events: ch, err: err, resumed: resumed}
 		}
 		ch, err := c.Send(ctx, text)
-		return chatSentMsg{view: v, events: ch, err: err}
+		return chatSentMsg{view: v, events: ch, err: err, resumed: resumed}
 	}
 	if h.full {
 		h.tr.latest() // sending brings the view back to the bottom
@@ -430,6 +456,12 @@ func nextEvent(v *chatView, ch <-chan agent.Event) tea.Cmd {
 func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case chatSentMsg:
+		with := func(cmd tea.Cmd) tea.Cmd { return cmd }
+		if msg.resumed != nil {
+			if restored := h.finishRestore(msg.resumed, msg.err); restored != nil {
+				with = func(cmd tea.Cmd) tea.Cmd { return tea.Sequence(restored, cmd) }
+			}
+		}
 		if msg.err != nil && h.turn.oge {
 			// The composer holds the human's draft, never the feedback.
 			line := h.ogeLine("✗ sending the feedback turn: " + clean(msg.err.Error()))
@@ -472,14 +504,14 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// The feedback turn waited on this one: say it goes unsent.
 				return h, tea.Sequence(said, h.println(h.ogeLine(h.st.dim("the failing cut's feedback turn wasn't sent"))))
 			}
-			return h, said
+			return h, with(said)
 		}
 		h.turn.events = msg.events
 		if h.turn.oge {
 			// Shown once it is sent: a spent budget prints no such line.
-			return h, tea.Sequence(h.println(h.ogeAdviceLine(h.turn.text)), nextEvent(h.chatView, msg.events))
+			return h, with(tea.Sequence(h.println(h.ogeAdviceLine(h.turn.text)), nextEvent(h.chatView, msg.events)))
 		}
-		return h, nextEvent(h.chatView, msg.events)
+		return h, with(nextEvent(h.chatView, msg.events))
 	case chatEvMsg:
 		h.lastEvent = h.clock()
 		if !msg.ok {
