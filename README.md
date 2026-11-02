@@ -131,7 +131,7 @@ The Desk's attention rules come from work on interruptions, resumption, and supe
 **Cost of switching, and getting back**
 
 - Mark, Gudith & Klocke (2008), CHI, [10.1145/1357054.1357072](https://doi.org/10.1145/1357054.1357072). Interrupted work gets done faster but at the price of stress and effort; Öge judges the Desk by real time and stress, not felt speed.
-- Mark, González & Harris (2005), CHI, [10.1145/1054972.1055017](https://doi.org/10.1145/1054972.1055017). A rearranged desktop destroys reorientation cues; each Chat keeps its rail position and number.
+- Mark, González & Harris (2005), CHI, [10.1145/1054972.1055017](https://doi.org/10.1145/1054972.1055017). A rearranged desktop destroys reorientation cues. Keeping each Chat's rail position and number follows from this as a design hypothesis, which the Evaluation tests.
 - Altmann & Trafton (2002), *Cognitive Science* 26:39-83. Pending goals are recovered through cues; the "since you left" cue supplies them.
 - Trafton et al. (2003), *IJHCS* 58:583-603. A warning before an interruption helps people resume; Öge keeps your draft and place in each Chat.
 - Parnin & Rugaber (2011), *Software Quality Journal* 19:5-34. Programmers rarely resume editing straight away; Öge treats resumption as a first-class moment.
@@ -142,8 +142,8 @@ The Desk's attention rules come from work on interruptions, resumption, and supe
 **How many agents, and how to check on them**
 
 - Olsen & Wood (2004), CHI, [10.1145/985692.985722](https://doi.org/10.1145/985692.985722). Fan-out is work time divided by interaction time; Öge lengthens the first (verify, repair) and shortens the second (evidence on the card).
-- Cummings & Mitchell (2008), *IEEE Transactions on Systems, Man, and Cybernetics, Part A* 38(2):451-460. Waiting and lost situation awareness limit how many automated workers one person can supervise; Öge soft-caps active Chats.
-- Cowan (2001), *Behavioral and Brain Sciences* 24:87-114. Working memory holds only a few chunks; this limits how many contexts you can keep in mind.
+- Cummings & Mitchell (2008), *IEEE Transactions on Systems, Man, and Cybernetics, Part A* 38(2):451-460. Waiting and lost situation awareness limit how many automated workers one person can supervise; Öge soft-caps active Chats at 3 as an experimental default.
+- Cowan (2001), *Behavioral and Brain Sciences* 24:87-114. Working memory holds only a few chunks; background only, it does not justify the cap of 3.
 - Fitz et al. (2019), *Computers in Human Behavior* 101:84-94. Batching notifications improved attention and mood; Öge prefers an Inbox over a drip of alerts.
 - Mark et al. (2016), CHI, [10.1145/2858036.2858262](https://doi.org/10.1145/2858036.2858262). People who check on their own initiative do better than those driven by notifications; triage is self-initiated.
 - Jin & Dabbish (2009), CHI, [10.1145/1518701.1518979](https://doi.org/10.1145/1518701.1518979). Waiting and habitual checking are common self-interruptions, and an agent's run time is that kind of wait.

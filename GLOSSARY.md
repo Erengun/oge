@@ -250,6 +250,10 @@ _Avoid_: Aborted, killed, interrupted
 
 ### Running agents
 
+**Agent connection**:
+A provider or runtime Öge can drive or read: a Native adapter or Generic adapter with its Launch profile, or the Native sessions it discovers. It is not a Role kind and not a Chat. What an agent is *used for* is its Role kind; the unit of work is the Chat (docs/ux/desk.md, "Connections, roles and Chats").
+_Avoid_: Provider (alone), backend
+
 **Launch profile**:
 The Öge-owned, per-role flags, environment and policy used to start an agent, plus the configuration envelope the agent must report at startup. Anything outside the envelope is flagged, never silently accepted.
 _Avoid_: Agent config, user settings

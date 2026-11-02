@@ -1,6 +1,6 @@
 # herdr, Duet and human attention: research for the Desk
 
-Snapshot taken **2026-10-31**. This note is the evidence behind `docs/ux/desk.md` and [ADR-0024](../adr/0024-several-chats-one-attention-queue.md).
+Snapshot taken **2026-10-31**; AI-era evidence and the corrected mappings added **2026-11-02**. This note is the evidence behind `docs/ux/desk.md` and [ADR-0024](../adr/0024-several-chats-one-attention-queue.md).
 
 **Question.** Öge wants to move toward herdr's side: one person, several agents, and a glance that tells you which one needs you. Two things need to be known first:
 - How should this be built so that it reduces context switching instead of adding to it?
@@ -97,7 +97,7 @@ In use, the user's verdict was that this "returned to us as more output token us
 
 ### Interruption cost and two misquotes
 - **Mark, Gudith & Klocke 2008** [P], CHI, [10.1145/1357054.1357072](https://doi.org/10.1145/1357054.1357072). Interrupted people finished faster with no loss of quality, but with more stress, frustration, time pressure and effort. *It does not measure resumption time.*
-- **Mark, González & Harris 2005** [P], CHI, [10.1145/1054972.1055017](https://doi.org/10.1145/1054972.1055017). Field observation:
+- **Mark, González & Harris 2005** [P], CHI, [10.1145/1054972.1055017](https://doi.org/10.1145/1054972.1055017). Field observation (it describes working spheres and reorientation cues; it does **not** test whether a fixed-order list helps, see principle 4):
   - 57% of working spheres were interrupted.
   - When people came back to interrupted work the same day, the mean time **until they returned** was 25 min 26 s, with 2.26 other spheres in between.
   - A rearranged desktop destroys the cues people use to reorient.
@@ -113,12 +113,12 @@ In use, the user's verdict was that this "returned to us as more output token us
 ### Attention residue
 - **Leroy 2009** [A], *OBHDP* 109(2):168–181. Attention stays partly on a task you left. Finishing under time pressure reduced that residue.
 - **Leroy & Glomb 2018** [A], *Organization Science* 29(3):380–397. A brief "ready-to-resume plan" (where to resume, what remains) reduced residue and protected performance on the next task.
-- **Masicampo & Baumeister 2011** [A], *JPSP* 101(4):667–683, doi:10.1037/a0024192. Unfulfilled goals keep intruding on thought (the Zeigarnik effect); letting people formulate a specific plan for them eliminated the activation and interference effects. Caveat for Later (desk.md I1): the manipulation was plan making, not bare capture, so a one-line Later item is a weaker form; and their 2012 follow-up (*Social Cognition*) found specific plans can narrow attention to alternatives.
+- **Masicampo & Baumeister 2011** [A], *JPSP* 101(4):667–683, doi:10.1037/a0024192. Unfulfilled goals keep intruding on thought (the Zeigarnik effect); letting people formulate a specific plan for them eliminated the activation and interference effects. Caveat for Later (desk.md I1): the manipulation was plan making, not bare capture, so a one-line Later item is a weaker form and bare capture has to be measured, not assumed; and their 2012 follow-up (*Social Cognition*) found specific plans can narrow attention to alternatives.
 
 ### Capacity: how many agents
-- **Olsen & Wood 2004** [P], CHI, [10.1145/985692.985722](https://doi.org/10.1145/985692.985722). Fan-out = activity time ÷ interaction time: how long a robot works alone between human touches, divided by how long each touch takes.
+- **Olsen & Wood 2004** [P], "Fan-out: measuring human control of multiple robots", CHI 2004, pp. 231–238, [10.1145/985692.985722](https://doi.org/10.1145/985692.985722) (reference re-checked against Crossref 2026-11-02). Fan-out = activity time ÷ interaction time: how long a robot works alone between human touches, divided by how long each touch takes.
 - **Cummings & Mitchell 2008** [A], *IEEE SMC-A* 38(2):451–460. Modelled wait times cut predicted fan-out by up to 67%. Lost situation awareness was the largest factor.
-- **Cowan 2001** [A], *BBS* 24:87–114. Working memory holds about 4 chunks (3–5). This limits how many contexts a person keeps in mind, not how many agents can run.
+- **Cowan 2001** [A], *BBS* 24:87–114. Working memory holds about 4 chunks (3–5). Used only as background: people hold few contexts at once. It does **not** justify the number 3 for Öge's cap, and it says nothing about how many agents can run.
 
 ### Peripheral display, batching, checking
 - **Matthews et al. 2004** [P], UIST, [10.1145/1029632.1029676](https://doi.org/10.1145/1029632.1029676). Five notification levels: ignore, change-blind, make aware, interrupt, demand attention. **Weiser & Brown 1996**, "Designing Calm Technology" (conceptual): information moves between the periphery and the centre of attention.
@@ -128,22 +128,49 @@ In use, the user's verdict was that this "returned to us as more output token us
 - **Parasuraman & Manzey 2010** [A], *Human Factors* 52(3):381–410. Automation complacency appears under multiple-task load, affects experts too, and is not fixed by training.
 
 ### Agents specifically
-- **METR, Becker et al. 2025** [P], [arXiv:2507.09089](https://arxiv.org/abs/2507.09089). 16 developers working with one agent were **19% slower** while believing they were 20% faster.
+- **METR, Becker et al. 2025** [P], [arXiv:2507.09089](https://arxiv.org/abs/2507.09089). 16 experienced open-source developers, 246 tasks in mature repositories, each task randomly allowed or denied early-2025 AI tools. Developers forecast a 24% time reduction beforehand and believed afterwards that AI had cut their time by 20%. Measured completion time was **19% longer** with AI. It is single-agent, early-2025 and one setting. It justifies *measuring* instead of trusting felt speed. It is not evidence that parallel agents slow people down.
 - **Anthropic, "Measuring AI agent autonomy in practice" (Feb 2026)** [P], [anthropic.com](https://www.anthropic.com/research/measuring-agent-autonomy). Median Claude Code turn about 45 s; the 99.9th-percentile turn grew from under 25 to over 45 minutes.
-- **The gap.** No primary study measures one developer supervising several coding agents. Everything in section 5 is transferred.
+- **The gap.** Section 4a now has first studies of developers working with several agents (all 2026, small, one unreviewed). They support the problem and the mechanism. None tests a persistent cross-project Desk. Everything in section 5 is still mostly transferred.
+
+### 4a. AI-era evidence (added 2026-11-02)
+
+An external review listed these sources. Each was re-checked at its primary page on 2026-11-02 before being included. Tags as above. "[P] page" means the project or article page was read, not a full paper.
+
+| Source | Tag | What was verified |
+|---|---|---|
+| **ParallelPilot**: Long, Shi, Mozannar, Murad, Hosn (Microsoft Research AI Frontiers, Columbia). "Supporting Coordination and Monitoring in Parallel AI Coding". [Project page](https://iamtaolong.github.io/project_pages/parallelpilot.html); preprint arXiv 2609.33113 (not read) | [P] page | **Status: in submission / under review**, year 2026 (the page gives no month). Formative study N=14 (self-reported: parallel multi-session AI 45.3% of time; three concurrent sessions typical). Controlled study N=16, counterbalanced within-subjects, 20 minutes of live coding per block, against a no-tool baseline. Five practices (PILOT): Planning, Isolating, Logging, Observing, Triaging. **Tickets completed per minute +63%** (+1.50 tickets). Perceived tracking effort −1.88 (4.63 to 2.75) and switching disruption −1.81 (4.50 to 2.69) on 7-point scales. Awareness of intervention cues +2.56. **Not significant:** perceived control (3.94 to 4.31), self-rated intervention success (3.94 to 4.13); confidence in interventions, output trust and delegation confidence unchanged; 9 of 16 saw no difference in ease of verifying output. Monitoring gain did not correlate with objective throughput (exploratory). The authors state: "Making a fleet of agents observable is not the same as making its output verifiable." |
+| **Developers as Managers of AI Agents: A Workplace Shadowing Study**: Chou, Kim, Kartik, Jackson, Schimmer, Zimmermann, Jones. [arXiv:2610.33588](https://arxiv.org/abs/2610.33588), submitted 24 Oct 2026, v1 | [A] | 11 professional developers shadowed about 15 hours; 255 prompts analysed; 4.6 hours of follow-up interviews. On average **33.4%** of time went on formulating prompts or checking AI responses. Task switching ranged from **0 to 101.6 switches per hour**. Three patterns: Supervisor (direct artifact inspection), Delegator (dialogue-based coordination), Learner. The authors suggest future work on managing attention across concurrent agent tasks. Preprint, not peer reviewed; abstract only. |
+| **Understanding AI's Impact on Developer Workflows**: Fraser & Sergeyuk, JetBrains Research (HAX), blog post dated 15 Apr 2026, mixed-method study presented at ICSE 2026. [Article](https://kairos.jetbrains.com/research/articles/understanding-ai-impact-on-developer-workflows) | [P] page | Log data from 800 developers (400 AI users, 400 non-users), Oct 2022 to Oct 2024, 151,904,543 events; survey of 62 professional developers plus interviews. AI users typed almost 600 more characters per month; non-users about 75. AI users had about 6 more IDE activations per month; non-users about 7 fewer. Interviews: AI does not simply reduce context switching, it brings "a different pattern of fragmentation", which "changed shape rather than disappearing". The authors say the aim is patterns over time, **not causal effects**. |
+| **An Empirical Study of Work Fragmentation in Software Evolution Tasks**: Sanchez, Robbes, González, SANER 2015, pp. 251–260, [10.1109/SANER.2015.7081835](https://doi.org/10.1109/SANER.2015.7081835) (authors, venue and abstract confirmed through secondary listings; the IEEE page itself blocked fetching) | [S] | Thousands of Mylyn interaction traces from dozens of developers. Abstract: work fragmentation is correlated with lower observed productivity at the macro level (whole sessions) and the micro level (around fragmentation markers); longer activity switches seem to strengthen the effect. Correlational. A journal version appeared in *J. Software: Evolution and Process* 29(3), 2017. |
+| **Two Sides of the Same Coin: Software Developers' Perceptions of Task Switching and Task Interruption**: Abad, Noaeen, Zowghi, Far, Barker (UTS and Calgary), EASE 2018, [arXiv:1805.05504](https://arxiv.org/abs/1805.05504) | [P] (abstract and results text) | Survey of 141 software developers. **79 (56%)** said that in a typical day they cannot be fully focused and frequently flip between tasks (45, 32%, less often than every 30 minutes; 34, 24%, every 30 to 60 minutes). Respondents saw task switches as about as disruptive as random interruptions; cognitive cost and lower performance were the main consequences. Self-report; no DOI is cited here because the one tried resolved to a different paper. |
+
+What these sources support:
+
+| Level | Claim | Evidence |
+|---|---|---|
+| Direct | Developers working with AI agents experience fragmentation, heavy time on prompting and checking, and switching | Strong for the problem: Chou 2026, JetBrains 2026, Abad 2018, Sanchez 2015. Small samples, observational or self-reported. |
+| Mechanism | Switching and interruption cost attention and resumption effort | Strong: section 4. |
+| Product | This Desk design raises useful completed work and lowers the attention it takes | **Not yet established.** ParallelPilot is the nearest result (a different tool, 20-minute tasks, N=16, unreviewed). The Evaluation in `docs/ux/desk.md` is what would establish it. |
+
+Cautions that carry into the design:
+- ParallelPilot raised throughput and cut perceived tracking effort, but perceived control and confidence did not improve significantly. More visibility did not make people trust or verify better. So Öge must not optimise throughput alone (desk.md, Evaluation).
+- "Three concurrent sessions was the typical setup" in the ParallelPilot formative study is a reason to *test* a default of 3. It does not justify it.
+- Nothing here shows that fragmentation falls with a Desk. JetBrains found AI changes its shape, which is the Desk's premise, not its proof.
+
+**Central hypothesis (2026-11-02).** AI lets developers spread execution across multiple agents and providers. The bottleneck shifts to human attention, coordination and verification. A persistent, evidence-based workspace can increase useful completed work while reducing the attention it takes to supervise it. Öge is the instrument to test this.
 
 ## 5. Design principles for Öge (each one is used in `docs/ux/desk.md`)
 
 1. **Hold while composing; release at a coarse breakpoint (send), never at a typing pause.** Sources: Iqbal & Bailey 2008; Adamczyk & Bailey 2004; Züger 2017. Öge knows when the input box is non-empty, so this signal costs nothing.
 2. **Negotiate. The human chooses when to look; only a stale Gate or an expiring approval pushes.** Source: McFarlane 2002.
 3. **Use a fixed level table: ignore, change-blind, make aware, interrupt, demand.** The periphery stays static: a glyph, a coarse state and an age, with no tool names and no animation. Sources: Matthews 2004; Weiser & Brown 1996; Jin & Dabbish 2009.
-4. **Keep spatial order stable.** Each Chat keeps its rail position and number. Priority lives in the glyph, the header count and the Inbox order, not in reordering. Source: Mark, González & Harris 2005.
+4. **Keep spatial order stable. This is a design hypothesis.** Each Chat keeps its rail position and number. Priority lives in the glyph, the header count and the Inbox order, not in reordering. Mark, González & Harris 2005 shows that rearranged workspaces destroy reorientation cues, which fits but does not prove it. The more specific evidence is on spatial memory in stable layouts: Tak, Cockburn, Humm, Ahlström, Gutwin & Scarr, "Improving window switching interfaces", INTERACT 2009, LNCS 5727:187–200, [10.1007/978-3-642-03658-3_25](https://doi.org/10.1007/978-3-642-03658-3_25) [A]. Their abstract reports that spatially stable layouts were significantly faster than the common recency layout for window switching (read from a repository abstract; full text not read). A rail of 3 to 9 Chats is a different setting, so the Evaluation tests it.
 5. **Show a resumption cue on every switch**: your last message, then what changed and what ran, in time order, ending at the open ask. Typing is never swallowed. Sources: Parnin & DeLine 2010; Altmann & Trafton 2002; Trafton 2003.
 6. **Keep the draft and scroll position per Chat.** This is a free ready-to-resume plan. Source: Leroy & Glomb 2018.
-7. **Soft-cap active Chats at about 3. Raise fan-out by making the agent work longer alone (verify, repair) and making each human touch shorter (evidence on the card).** Sources: Olsen & Wood 2004; Cummings & Mitchell 2008; Cowan 2001.
+7. **Soft-cap active Chats at 3 as an experimental default. Raise fan-out by making the agent work longer alone (verify, repair) and making each human touch shorter (evidence on the card).** The fan-out model (Olsen & Wood 2004; Cummings & Mitchell 2008) says what moves the limit, not what the number is. Cowan 2001 is background only. Three is also the typical setup in the ParallelPilot formative study (N=14). The Evaluation sets the real number.
 8. **Self-initiated triage (the Inbox) instead of a notification drip.** Sources: Mark 2016; Fitz 2019.
 9. **Put evidence on every approval card, with no bulk apply.** Source: Parasuraman & Manzey 2010.
-10. **Measure real time and stress, not felt speed.** Sources: METR 2025; Mark 2008.
+10. **Measure real time and stress, not felt speed.** Sources: METR 2025; Mark 2008. METR shows felt and measured speed can differ in one single-agent setting, which is why Öge measures.
 
 ## 6. Recommendation
 
