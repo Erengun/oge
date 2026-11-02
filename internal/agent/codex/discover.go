@@ -61,6 +61,17 @@ func (t thread) subAgent() bool {
 // to have thread/list, or errs, the sessions found so far come back with
 // a one-line reason, empty otherwise.
 func (a *Adapter) ListSessions(ctx context.Context, cwds []string) ([]agent.NativeSession, string) {
+	return a.list(ctx, cwds, false)
+}
+
+// ListAllSessions is ListSessions without the cwd filter: every thread
+// codex lists, whatever directory it ran in (the same source kinds).
+func (a *Adapter) ListAllSessions(ctx context.Context) ([]agent.NativeSession, string) {
+	return a.list(ctx, []string{""}, true)
+}
+
+// list asks per cwd, or once with no cwd param when all is set.
+func (a *Adapter) list(ctx context.Context, cwds []string, all bool) ([]agent.NativeSession, string) {
 	path := a.Path
 	if path == "" {
 		var err error
@@ -112,9 +123,12 @@ func (a *Adapter) ListSessions(ctx context.Context, cwds []string) ([]agent.Nati
 		cursor := ""
 		for page := 0; page < maxPages; page++ {
 			params := map[string]any{
-				"cwd": cwd, "limit": listPage, "archived": false,
+				"limit": listPage, "archived": false,
 				"sortKey": "updated_at", "sortDirection": "desc",
 				"sourceKinds": []string{"cli", "vscode", "appServer"},
+			}
+			if !all {
+				params["cwd"] = cwd
 			}
 			if cursor != "" {
 				params["cursor"] = cursor

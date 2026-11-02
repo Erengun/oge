@@ -45,7 +45,7 @@ func sessionsHome(t *testing.T, codexWhy string) (*home, map[string]string) {
 	now := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
 	h.now = func() time.Time { return now }
 	ago := func(m int) time.Time { return now.Add(-time.Duration(m) * time.Minute) }
-	h.discover = func(_ context.Context, rs []string) sessionFound {
+	h.discover = func(_ context.Context, rs []string, every bool) sessionFound {
 		all := []agent.NativeSession{
 			{Provider: "claude", Profile: "claude", ID: "c1", Title: "fix the parser", LastActive: ago(4), Project: roots["alpha"]},
 			{Provider: "codex", ID: "x1", Title: "", LastActive: ago(1), Project: roots["alpha"]},
@@ -53,6 +53,9 @@ func sessionsHome(t *testing.T, codexWhy string) (*home, map[string]string) {
 			{Provider: "claude", Profile: "claude", ID: "b1", Title: "beta thing", LastActive: ago(600), Project: roots["beta"]},
 		}
 		f := sessionFound{}
+		if every {
+			rs = []string{roots["alpha"], roots["beta"]}
+		}
 		for _, s := range all {
 			for _, r := range rs {
 				if repoKey(r) == repoKey(s.Project) {
@@ -102,12 +105,12 @@ func TestSessionsCatalogListsNewestFirstAt80Columns(t *testing.T) {
 	}
 }
 
-func TestSessionsAllSpansProjectsWithATag(t *testing.T) {
+func TestSessionsAllSpansProjectsUnderHeaders(t *testing.T) {
 	h, roots := sessionsHome(t, "")
 	pin(h, []string{roots["beta"]})
 	slash(h, "/sessions all")
 	got := screenText(h)
-	if !strings.Contains(got, "beta thing · last active 10h · beta") || !strings.Contains(h.catalogTitle(), "all projects") {
+	if !strings.Contains(got, "beta · on the Desk") || !strings.Contains(got, "beta thing · last active 10h") || !strings.Contains(h.catalogTitle(), "all projects") {
 		t.Errorf("/sessions all:\n%s", got)
 	}
 }
@@ -350,8 +353,8 @@ func TestSessionRefreshSurvivesARestart(t *testing.T) {
 	// The session went on elsewhere: a rerun finds it later and renamed.
 	want := added.last.Add(72 * time.Hour)
 	first := h.discover
-	h.discover = func(ctx context.Context, rs []string) sessionFound {
-		f := first(ctx, rs)
+	h.discover = func(ctx context.Context, rs []string, all bool) sessionFound {
+		f := first(ctx, rs, all)
 		for i, s := range f.sessions {
 			if s.Provider == added.provider && s.ID == added.id {
 				f.sessions[i].LastActive, f.sessions[i].Title = want, "renamed"

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/list"
@@ -18,6 +19,7 @@ import (
 	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/agent/codex"
 	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/workspace"
 )
 
 // Native sessions on the Desk (docs/ux/sessions.md, S3). /sessions lists
@@ -41,24 +43,42 @@ func (s deskSession) key() string { return s.provider + "/" + s.id }
 type sessionFound struct {
 	sessions []agent.NativeSession
 	problems []string
+	// viewOnly says, for a project (keyed by repoKey) the Desk can't hold,
+	// why: its sessions are listed but not added or adopted.
+	viewOnly map[string]string
 }
 
-// sessionDiscover finds the native sessions in the project roots. It runs
-// off the UI goroutine and starts nothing on a timer.
-type sessionDiscover func(ctx context.Context, roots []string) sessionFound
+// sessionDiscover finds the native sessions in the project roots, or, when
+// all is set, every session on the machine with Project set to the main
+// repo of its cwd. It runs off the UI goroutine and starts nothing on a
+// timer.
+type sessionDiscover func(ctx context.Context, roots []string, all bool) sessionFound
 
 // defaultDiscover reads Claude's session files and asks a short-lived
-// Codex app-server, then keeps the sessions inside roots.
+// Codex app-server, then keeps the sessions inside roots, or groups every
+// one by project when all is set (codex is always asked without a cwd filter).
 func defaultDiscover(getenv func(string) string) sessionDiscover {
-	return func(ctx context.Context, roots []string) sessionFound {
+	return discoverWith(getenv, (&codex.Adapter{}).ListAllSessions)
+}
+
+// discoverWith is defaultDiscover with codex's listing given. Codex's cwd
+// filter matches a directory exactly, so a thread started in a worktree or
+// a subdirectory would never come back from it: codex is always listed
+// whole, and the folding into projects is done here, on the client.
+func discoverWith(getenv func(string) string, listAll func(context.Context) ([]agent.NativeSession, string)) sessionDiscover {
+	return func(ctx context.Context, roots []string, all bool) sessionFound {
 		var f sessionFound
-		all := claude.DiscoverSessions(claude.Profiles(getenv("HOME"), getenv, nil))
-		cs, why := (&codex.Adapter{}).ListSessions(ctx, roots)
-		all = append(all, cs...)
+		found := claude.DiscoverSessions(claude.Profiles(getenv("HOME"), getenv, nil))
+		cs, why := listAll(ctx)
+		found = append(found, cs...)
 		if why != "" {
 			f.problems = append(f.problems, why)
 		}
-		f.sessions = sessionsInProjects(all, roots)
+		if all {
+			f.sessions, f.viewOnly = sessionsByProject(found)
+		} else {
+			f.sessions = sessionsInProjects(found, roots)
+		}
 		return f
 	}
 }
@@ -78,6 +98,7 @@ type sessionCatalog struct {
 	problems []string
 	note     string // the last key's one dim line
 	found    []agent.NativeSession
+	viewOnly map[string]string
 	// adopt is the prompt waiting for y (tui_adopt.go); promptOnly is a
 	// catalog opened by a click on a ◌ row: it has no list, only the
 	// prompt or why there is none.
@@ -86,12 +107,21 @@ type sessionCatalog struct {
 }
 
 type sessionItem struct {
-	s   agent.NativeSession
-	tag string // the project, with /sessions all
-	on  bool
+	s        agent.NativeSession
+	on       bool
+	viewOnly string // why the Desk can't hold this session's project, "" when it can
 }
 
 func (i sessionItem) FilterValue() string { return i.s.Title }
+
+// sessionHeader is a project's line in /sessions all. It is never selected.
+type sessionHeader struct {
+	label    string
+	onDesk   bool
+	viewOnly string
+}
+
+func (i sessionHeader) FilterValue() string { return i.label }
 
 type sessionDelegate struct{ h *home }
 
@@ -99,8 +129,19 @@ func (sessionDelegate) Height() int                         { return 1 }
 func (sessionDelegate) Spacing() int                        { return 0 }
 func (sessionDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (d sessionDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) {
-	x := it.(sessionItem)
 	st := d.h.st
+	if hd, ok := it.(sessionHeader); ok {
+		line := st.bold(clean(hd.label))
+		switch {
+		case hd.onDesk:
+			line += st.dim(" · on the Desk")
+		case hd.viewOnly != "":
+			line += st.dim(" · view only")
+		}
+		fmt.Fprint(w, "  "+ansi.Truncate(line, max(d.h.width-4, 8), "…"))
+		return
+	}
+	x := it.(sessionItem)
 	who := x.s.Profile
 	if who == "" {
 		who = x.s.Provider
@@ -110,9 +151,6 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, i int, it list.Item) 
 		title = "(untitled)"
 	}
 	tail := " · last active " + sessionAge(d.h.clock(), x.s.LastActive)
-	if x.tag != "" {
-		tail += " · " + clean(x.tag)
-	}
 	if x.on {
 		tail += " · on the Desk"
 	}
@@ -147,12 +185,6 @@ func (h *home) sessionsCmd(args []string) (tea.Cmd, string) {
 	}
 	c := &sessionCatalog{all: len(args) == 1, root: h.root, loading: true}
 	roots := []string{h.root}
-	if c.all {
-		_, roots = h.railGroups()
-		if !slices.ContainsFunc(roots, func(r string) bool { return repoKey(r) == repoKey(h.root) }) {
-			roots = append(roots, h.root)
-		}
-	}
 	h.sessSeq++
 	c.seq = h.sessSeq
 	h.catalog = c
@@ -169,7 +201,7 @@ func (h *home) sessionsCmd(args []string) (tea.Cmd, string) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return func() tea.Msg { return sessionsMsg{seq, find(ctx, roots)} }, ""
+	return func() tea.Msg { return sessionsMsg{seq, find(ctx, roots, c.all)} }, ""
 }
 
 // sessionsFound fills the catalog when its discovery returns, and brings
@@ -194,44 +226,112 @@ func (h *home) sessionsFound(m sessionsMsg) {
 	if c == nil || c.seq != m.seq || h.chats == nil {
 		return
 	}
-	c.loading, c.problems, c.found = false, m.found.problems, m.found.sessions
+	c.loading, c.problems, c.found, c.viewOnly = false, m.found.problems, m.found.sessions, m.found.viewOnly
 	sort.SliceStable(c.found, func(i, j int) bool { return c.found[i].LastActive.After(c.found[j].LastActive) })
 	h.catalogItems()
 }
 
 // catalogItems rebuilds the list from the found sessions, keeping the
-// selection where it was.
+// selection where it was. With /sessions all the rows sit under a header
+// per project, projects ordered by their newest session.
 func (h *home) catalogItems() {
 	c := h.catalog
-	var roots []string
-	if c.all {
-		_, roots = h.railGroups()
-	}
-	labels := projectLabels(roots)
 	var items []list.Item
-	for _, s := range c.found {
-		if !c.all && repoKey(s.Project) != repoKey(c.root) {
-			continue
-		}
-		tag := ""
-		if c.all {
-			if i := slices.IndexFunc(roots, func(r string) bool { return repoKey(r) == repoKey(s.Project) }); i >= 0 {
-				tag = labels[i]
-			} else {
-				tag = filepath.Base(s.Project)
+	if !c.all {
+		for _, s := range c.found {
+			if repoKey(s.Project) == repoKey(c.root) {
+				items = append(items, sessionItem{s: s, on: h.sessionOn(s) >= 0})
 			}
 		}
-		items = append(items, sessionItem{s, tag, h.sessionOn(s) >= 0})
+	} else {
+		_, desk := h.railGroups()
+		var keys, roots []string // projects in order of their newest session
+		byKey := map[string][]agent.NativeSession{}
+		for _, s := range c.found { // found is newest first
+			k := repoKey(s.Project)
+			if _, ok := byKey[k]; !ok {
+				keys, roots = append(keys, k), append(roots, s.Project)
+			}
+			byKey[k] = append(byKey[k], s)
+		}
+		labels := projectLabels(roots)
+		for i, k := range keys {
+			why := c.viewOnly[k]
+			if roots[i] == "" {
+				labels[i] = "(no working directory)"
+			}
+			items = append(items, sessionHeader{
+				label:    labels[i],
+				onDesk:   slices.ContainsFunc(desk, func(r string) bool { return mainKey(r) == k }),
+				viewOnly: why,
+			})
+			for _, s := range byKey[k] {
+				items = append(items, sessionItem{s: s, on: h.sessionOn(s) >= 0, viewOnly: why})
+			}
+		}
 	}
 	sel := h.chats.Index()
 	h.chats.SetItems(items)
 	h.chats.SetHeight(min(len(items), max(h.height-8, 3)) + 4)
 	h.chats.Select(min(sel, max(len(items)-1, 0)))
+	h.skipHeader(1)
+}
+
+// skipHeader moves the selection off a project header, in dir (1 down,
+// -1 up), turning round at the end of the list.
+func (h *home) skipHeader(dir int) {
+	l := h.chats
+	items := l.Items()
+	i := l.Index()
+	for _, d := range []int{dir, -dir} {
+		for j := i; j >= 0 && j < len(items); j += d {
+			if _, hd := items[j].(sessionHeader); !hd {
+				l.Select(j)
+				return
+			}
+		}
+	}
 }
 
 // sessionOn is where s sits in the On-the-Desk rows, -1 when it is not.
 func (h *home) sessionOn(s agent.NativeSession) int {
 	return slices.IndexFunc(h.onDesk, func(d deskSession) bool { return d.provider == s.Provider && d.id == s.ID })
+}
+
+// mainKey is repoKey of the main repo root belongs to, so a worktree and
+// its repo compare equal; repoKey of root itself when it is not a repo.
+// It runs on the UI goroutine, so each root asks git once per process.
+func mainKey(root string) string {
+	if k, ok := mainKeys.Load(root); ok {
+		return k.(string)
+	}
+	k := repoKey(root)
+	if m, err := workspace.MainRoot(root); err == nil {
+		k = repoKey(m)
+	}
+	mainKeys.Store(root, k)
+	return k
+}
+
+// mainKeys caches mainKey by root: a repo's main root doesn't change
+// while oge runs.
+var mainKeys sync.Map
+
+// deskRootFor is the root the Desk already holds (a Chat's, or a pinned
+// one) for the project at main, when that is a linked worktree of it or
+// the repo itself; "" when the Desk holds none.
+func (h *home) deskRootFor(main string) string {
+	if main == "" {
+		return ""
+	}
+	k := mainKey(main)
+	_, desk := h.railGroups()
+	for _, r := range desk {
+		if mainKey(r) == k {
+			return r
+		}
+	}
+	return ""
 }
 
 // deskRecord is the Desk record the home writes to; nil records nothing.
@@ -244,7 +344,11 @@ func (h *home) deskRecord() *run.Desk {
 
 // addSession puts s on the Desk, after the rows already there.
 func (h *home) addSession(s agent.NativeSession) {
-	d := deskSession{provider: s.Provider, id: s.ID, profile: s.Profile, repo: s.Project, title: s.Title, last: s.LastActive}
+	repo := s.Project
+	if r := h.deskRootFor(repo); r != "" {
+		repo = r // the project already has a slot, under a linked worktree's root
+	}
+	d := deskSession{provider: s.Provider, id: s.ID, profile: s.Profile, repo: repo, title: s.Title, last: s.LastActive}
 	h.onDesk = append(h.onDesk, d)
 	h.place(d.repo) // its project keeps its slot in the rail
 	h.deskRecord().SessionAdded(run.SessionAdded{Provider: d.provider, ID: d.id, Profile: d.profile, Repo: d.repo, Title: d.title, Last: d.last})
@@ -309,6 +413,8 @@ func (h *home) catalogKey(msg tea.KeyPressMsg) tea.Cmd {
 		it, ok := h.chats.SelectedItem().(sessionItem)
 		switch {
 		case !ok:
+		case it.viewOnly != "":
+			c.note = it.viewOnly
 		case it.on:
 			c.note = "already on the Desk"
 		default:
@@ -318,11 +424,21 @@ func (h *home) catalogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "enter":
 		if it, ok := h.chats.SelectedItem().(sessionItem); ok {
+			if it.viewOnly != "" {
+				c.note, c.adopt = it.viewOnly, nil
+				break
+			}
 			h.askAdopt(c, it.s)
 		}
 	default:
+		before := h.chats.Index()
 		l, _ := h.chats.Update(msg)
 		h.chats = &l
+		dir := 1
+		if h.chats.Index() < before {
+			dir = -1
+		}
+		h.skipHeader(dir)
 	}
 	return nil
 }

@@ -218,3 +218,29 @@ func TestSymlinkedProfileDirIsDeniedResolved(t *testing.T) {
 		t.Errorf("deny %v lacks the link and %s", deny, resolved)
 	}
 }
+
+func TestProfilesConfigDirElsewhereStillIncludesPlainClaude(t *testing.T) {
+	home := t.TempDir()
+	for _, d := range []string{".claude", ".claude-work"} {
+		if err := os.MkdirAll(filepath.Join(home, d, "projects"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work := filepath.Join(home, ".claude-work")
+	got := Profiles(home, func(k string) string {
+		if k == "CLAUDE_CONFIG_DIR" {
+			return work
+		}
+		return ""
+	}, nil)
+	if len(got) != 2 || got[0].Name != "work" || got[0].Dir != work || got[1].Name != PlainName || got[1].Dir != filepath.Join(home, ".claude") {
+		t.Fatalf("got %+v", got)
+	}
+	if got[1].Label() != "claude@default" {
+		t.Errorf("label %q", got[1].Label())
+	}
+	// Without CLAUDE_CONFIG_DIR ~/.claude is the default, listed once.
+	if got := Profiles(home, func(string) string { return "" }, nil); len(got) != 2 || got[0].Name != "" || got[1].Name != "work" {
+		t.Fatalf("no config dir: %+v", got)
+	}
+}

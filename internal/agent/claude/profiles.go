@@ -24,12 +24,18 @@ func (p Profile) Label() string {
 	return Name + "@" + p.Name
 }
 
+// PlainName names ~/.claude as a profile when CLAUDE_CONFIG_DIR points
+// elsewhere: claude@default. Without CLAUDE_CONFIG_DIR, ~/.claude is the
+// default profile, bound as plain "claude".
+const PlainName = "default"
+
 // profileDirPrefix starts the name of every discovered profile directory
 // under $HOME: ~/.claude-work is the profile "work".
 const profileDirPrefix = ".claude-"
 
 // Profiles lists the Claude profiles in one order: the default first, then
-// the rest by name. It is the one place profiles are discovered, so the
+// the rest by name. With CLAUDE_CONFIG_DIR set elsewhere, ~/.claude (when
+// it holds config) is still listed, as the profile PlainName. It is the one place profiles are discovered, so the
 // adapter, the resolver and the TUI picker agree.
 //
 // The default is the dir in getenv("CLAUDE_CONFIG_DIR") when that is
@@ -54,6 +60,14 @@ func Profiles(home string, getenv func(string) string, extra map[string]string) 
 	for name, dir := range extra {
 		if ValidProfileName(name) && filepath.IsAbs(dir) {
 			byName[name] = filepath.Clean(dir)
+		}
+	}
+	// ~/.claude stays reachable when CLAUDE_CONFIG_DIR points elsewhere:
+	// sessions started with plain claude live there. It is the profile
+	// "default" unless a ~/.claude-default or an extra already is.
+	if plain := filepath.Join(home, ".claude"); filepath.IsAbs(home) && def.Dir != plain && holdsConfig(plain) {
+		if _, taken := byName[PlainName]; !taken {
+			byName[PlainName] = plain
 		}
 	}
 	// A parent CLAUDE_CONFIG_DIR that is a discovered profile makes the
