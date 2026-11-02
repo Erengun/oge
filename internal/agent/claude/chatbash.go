@@ -42,6 +42,9 @@ type sword struct {
 	dynamic bool
 	quoted  bool
 	bare    bool
+	// slashOK is set on a word Öge has read as a script or message, where
+	// a part made only of / is an operator or a delimiter, not the root.
+	slashOK bool
 }
 
 // heredoc is a here-document's body; quoted is a quoted delimiter, so
@@ -382,11 +385,22 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 				}
 			}
 		}
+		scripts := map[int]bool{}
+		if !oneOf("$(", opened) && !oneOf("<(", opened) && !oneOf(">(", opened) && !resplits(cmds, k, len(outer) > 0) {
+			scripts = scriptWords(name, c.words, h)
+		}
 		for _, cwd := range cwds {
 			for i, w := range c.words {
 				shell, prog := progs[i]
 				if shell || i > h && separator(name, c.words[i-1].text, w.text) {
 					continue
+				}
+				if scripts[i] {
+					w = scriptText(name, w)
+				} else if prog && !w.dynamic {
+					// An interpreter's program is read again as code,
+					// where a quoted / is told from an operator.
+					w.text = maskOutsideStrings(w.text, `"'`)
 				}
 				if p.wordEscapes(cwd, w, program || prog) {
 					return true
@@ -433,8 +447,12 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 			}
 		case "popd":
 			cwds = every
-		case "eval", "source", ".":
+		case "eval":
 			return true // a program the policy can't read
+		case "source", ".":
+			if !p.sourceOK(cwds, c.words[h+1:]) {
+				return true // a program the policy can't read
+			}
 		}
 	}
 	return false
@@ -528,6 +546,9 @@ func (p *policy) wordEscapes(cwd string, sw sword, program bool) bool {
 	pattern := sw.quoted && !sw.bare && !sw.dynamic && !program && !strings.ContainsAny(w, "'\"*?[=")
 	parts := strings.FieldsFunc(w, func(r rune) bool { return strings.ContainsRune(" '\"(),;=<>|&`[]", r) })
 	for _, t := range parts {
+		if sw.slashOK && t != "" && strings.Trim(t, "/") == "" {
+			continue
+		}
 		if m := urlRE.FindStringSubmatch(t); m != nil && !hasDotDot(t) {
 			if !strings.EqualFold(m[1], "file") {
 				continue
@@ -535,6 +556,12 @@ func (p *policy) wordEscapes(cwd string, sw sword, program bool) bool {
 			t = t[len(m[0])-1:] // file:///etc/x is /etc/x
 		}
 		for _, t := range strings.Split(t, ":") {
+			if program && !sw.quoted && !sw.dynamic && t != "" && strings.Trim(t, "/") == "" {
+				continue // an operator in code: 10 / 2, 7 // 2, x /= 2
+			}
+			if sw.slashOK && t != "" && strings.Trim(t, "/") == "" {
+				continue
+			}
 			if p.partEscapes(cwd, t, pattern) {
 				return true
 			}
@@ -601,4 +628,208 @@ func toolchain(get func(string) string) []string {
 		}
 	}
 	return out
+}
+
+var (
+	awks      = []string{"awk", "gawk", "mawk", "nawk"}
+	resplitOK = append([]string{"xargs", "eval", "source", ".", "parallel"}, shells...)
+)
+
+// shells are the shells, which run the text they are given.
+var shells = []string{"sh", "bash", "zsh", "dash", "ksh", "fish"}
+
+// resplits reports whether what command k prints may reach something
+// that re-splits or runs it: a later command of its pipeline, or of the
+// whole command when it sits in a group, that is xargs, a shell, an
+// interpreter, eval, source, parallel, or find -exec.
+func resplits(cmds []*scmd, k int, grouped bool) bool {
+	for m := k + 1; m < len(cmds); m++ {
+		if !grouped && !oneOf("|", cmds[m].ops) {
+			return false
+		}
+		ws := cmds[m].words
+		if h := head(ws); h < len(ws) {
+			n := filepath.Base(ws[h].text)
+			if oneOf(n, resplitOK) || inline[n] != nil {
+				return true
+			}
+		}
+		for _, w := range ws {
+			if oneOf(w.text, []string{"-exec", "-execdir", "-ok", "-okdir"}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// scriptWords are the indexes of the words of a command that hold a
+// script or a message: the script of sed, jq and awk, and the message
+// of git commit. A / in them that stands alone is an operator or a
+// delimiter. Every other word, the files they read included, is read as
+// a path.
+func scriptWords(name string, ws []sword, h int) map[int]bool {
+	out := map[int]bool{}
+	if h >= len(ws) {
+		return out
+	}
+	args := ws[h+1:]
+	at := func(i int) int { return h + 1 + i }
+	switch {
+	case name == "sed":
+		scripted := false // -e or -f gave the script
+		pos := -1
+		for i := 0; i < len(args); i++ {
+			t := args[i].text
+			switch {
+			case t == "--":
+				if pos < 0 && !scripted && i+1 < len(args) {
+					pos = i + 1
+				}
+				i = len(args)
+			case t == "--expression" || (len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.HasSuffix(t, "e")):
+				scripted = true
+				if i+1 < len(args) {
+					out[at(i+1)] = true
+					i++
+				}
+			case t == "--file" || (len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.HasSuffix(t, "f")):
+				scripted = true
+				i++
+			case t == "-i" && i+1 < len(args) && args[i+1].text == "" && args[i+1].quoted:
+				i++ // macOS: the suffix is a word of its own
+			case strings.HasPrefix(t, "-") && t != "-":
+			default:
+				if pos < 0 && !scripted {
+					pos = i
+				}
+				i = len(args)
+			}
+		}
+		if pos >= 0 {
+			out[at(pos)] = true
+		}
+	case name == "jq":
+		for i := 0; i < len(args); i++ {
+			t := args[i].text
+			switch {
+			case oneOf(t, []string{"--arg", "--argjson", "--slurpfile", "--rawfile"}):
+				i += 2
+			case oneOf(t, []string{"-L", "--indent"}):
+				i++
+			case oneOf(t, []string{"-f", "--from-file"}):
+				return out
+			case strings.HasPrefix(t, "-") && t != "-":
+			default:
+				out[at(i)] = true
+				return out
+			}
+		}
+	case oneOf(name, awks):
+		for i := 0; i < len(args); i++ {
+			t := args[i].text
+			switch {
+			case oneOf(t, []string{"-F", "-v"}):
+				i++
+			case oneOf(t, []string{"-e", "--source"}):
+				if i+1 < len(args) {
+					out[at(i+1)] = true
+				}
+				return out
+			case oneOf(t, []string{"-f", "--file"}):
+				return out
+			case strings.HasPrefix(t, "-") && t != "-":
+			default:
+				out[at(i)] = true
+				return out
+			}
+		}
+	case name == "git":
+		commit := false
+		for i := 0; i < len(args); i++ {
+			t := args[i].text
+			switch {
+			case !commit && t == "commit":
+				commit = true
+			case !commit && oneOf(t, []string{"-C", "-c", "--git-dir", "--work-tree"}):
+				i++
+			case !commit && strings.HasPrefix(t, "-"):
+			case !commit:
+				return out
+			case t == "--message" || (len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.HasSuffix(t, "m")):
+				if i+1 < len(args) {
+					out[at(i+1)] = true
+					i++
+				}
+			case strings.HasPrefix(t, "--message="):
+				out[at(i)] = true
+			}
+		}
+	}
+	return out
+}
+
+// scriptText is a script word with the text that can name a path kept
+// and the rest of its slashes taken out. sed and a commit message keep
+// everything but a part that is only slashes. jq and awk build paths
+// from string literals only, so outside the "literals" every slash goes,
+// and a lone one inside a literal is still the root.
+func scriptText(name string, w sword) sword {
+	if w.dynamic {
+		return w
+	}
+	if name == "jq" || oneOf(name, awks) {
+		w.text = maskOutsideStrings(w.text, `"`)
+		return w
+	}
+	w.slashOK = true
+	return w
+}
+
+// sourceOK reports whether source or . reads a relative path inside the
+// Workspace: no .., no absolute path, no ~, nothing expanded.
+func (p *policy) sourceOK(cwds []string, args []sword) bool {
+	if len(args) == 0 {
+		return false
+	}
+	t := args[0]
+	if t.dynamic || t.text == "" || filepath.IsAbs(t.text) || strings.HasPrefix(t.text, "~") ||
+		strings.ContainsAny(t.text, "*?[{") || hasDotDot(t.text) {
+		return false
+	}
+	for _, cwd := range cwds {
+		full := filepath.Join(cwd, t.text)
+		if !under(resolve(full), p.ws) {
+			return false
+		}
+	}
+	return true
+}
+
+// maskOutsideStrings turns every / outside a string literal into _. A
+// literal opens at any of quotes and closes at the same one; a \ skips
+// the next character. An unclosed literal runs to the end, so text it
+// can't read stays read as a path.
+func maskOutsideStrings(text, quotes string) string {
+	var b strings.Builder
+	var in rune
+	rs := []rune(text)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case in != 0 && r == '\\' && i+1 < len(rs):
+			b.WriteRune(r)
+			i++
+			b.WriteRune(rs[i])
+			continue
+		case in == 0 && strings.ContainsRune(quotes, r):
+			in = r
+		case in == r:
+			in = 0
+		case r == '/' && in == 0:
+			r = '_'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
