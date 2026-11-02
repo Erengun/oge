@@ -432,7 +432,7 @@ func (p *policy) escapesIn(cmd string, cwds []string, program progKind) bool {
 				} else if prog && kind == quotedProg && !w.dynamic {
 					// A python or node program is read again as code,
 					// where a quoted / is told from an operator.
-					w.text = maskOutsideStrings(w.text, `"'`)
+					w.text = maskOutsideStrings(w.text, `"'`, false)
 				}
 				if p.wordEscapes(cwd, w, kind.or(program)) {
 					return true
@@ -713,7 +713,10 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 	switch {
 	case name == "sed":
 		scripted := false // -e or -f gave the script
+		unsure := false   // a script file or a form not read: excuse nothing
 		pos := -1
+		var texts []string
+	scan:
 		for i := 0; i < len(args); i++ {
 			t := args[i].text
 			switch {
@@ -721,32 +724,47 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 				if pos < 0 && !scripted && i+1 < len(args) {
 					pos = i + 1
 				}
-				i = len(args)
+				break scan
 			case t == "--expression" || (len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.HasSuffix(t, "e")):
 				scripted = true
 				if i+1 < len(args) {
 					out[at(i+1)] = true
+					texts = append(texts, args[i+1].text)
 					i++
 				}
-			case t == "--file" || (len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.HasSuffix(t, "f")):
+			case strings.HasPrefix(t, "--expression="):
+				scripted = true
+				texts = append(texts, strings.TrimPrefix(t, "--expression="))
+			case t == "--file" || strings.HasPrefix(t, "--file=") ||
+				(len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.Contains(t, "f")):
+				unsure = true
 				scripted = true
 				i++
 			case t == "-i" && i+1 < len(args) && args[i+1].text == "" && args[i+1].quoted:
 				i++ // macOS: the suffix is a word of its own
+			case len(t) > 2 && t[0] == '-' && t[1] != '-' && strings.Contains(t, "e"):
+				unsure = true // -eSCRIPT: the script is in the word
+				scripted = true
 			case strings.HasPrefix(t, "-") && t != "-":
 			default:
 				if pos < 0 && !scripted {
 					pos = i
 				}
-				i = len(args)
+				break scan
 			}
 		}
 		if pos >= 0 {
 			out[at(pos)] = true
+			texts = append(texts, ws[at(pos)].text)
+		}
+		// GNU sed joins every script into one program, so an e in any
+		// of them runs what another one printed.
+		if unsure || sedRuns(strings.Join(texts, "\n")) {
+			return map[int]bool{}
 		}
 		for i := range out {
 			if sedRuns(ws[i].text) {
-				delete(out, i) // GNU sed runs it in a shell
+				delete(out, i)
 			}
 		}
 	case name == "jq":
@@ -761,7 +779,7 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 				i += 2
 			case oneOf(t, []string{"-L", "--indent"}):
 				i++
-			case t == "--from-file" || strings.HasPrefix(t, "--from-file="):
+			case t == "--from-file" || strings.HasPrefix(t, "--from-file=") || t == "--run-tests":
 				return out
 			case len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.Contains(t, "f"):
 				return out
@@ -783,19 +801,27 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 			}
 		}
 	case oneOf(name, awks):
+		// Only a flag known not to give the program lets the next word
+		// be the script. Any other flag (-fprog, --file=p, -Ep, ...)
+		// may make that word an input file.
 		for i := 0; i < len(args); i++ {
 			t := args[i].text
 			switch {
+			case t == "--":
+				if i+1 < len(args) {
+					out[at(i+1)] = true
+				}
+				return out
 			case oneOf(t, []string{"-F", "-v"}):
 				i++
+			case len(t) > 2 && (strings.HasPrefix(t, "-F") || strings.HasPrefix(t, "-v")) && t[1] != '-':
 			case oneOf(t, []string{"-e", "--source"}):
 				if i+1 < len(args) {
 					out[at(i+1)] = true
 				}
 				return out
-			case oneOf(t, []string{"-f", "--file", "-E", "--exec", "-i", "--include", "-l", "--load"}):
-				return out // a program file, or a file gawk reads or loads
 			case strings.HasPrefix(t, "-") && t != "-":
+				return out
 			default:
 				out[at(i)] = true
 				return out
@@ -836,7 +862,7 @@ func scriptText(name string, w sword) sword {
 		return w
 	}
 	if name == "jq" || oneOf(name, awks) {
-		w.text = maskOutsideStrings(w.text, `"`)
+		w.text = maskOutsideStrings(w.text, `"`, true)
 		return w
 	}
 	w.slashOK = true
@@ -867,7 +893,11 @@ func (p *policy) sourceOK(cwds []string, args []sword) bool {
 // literal opens at any of quotes and closes at the same one; a \ skips
 // the next character. An unclosed literal runs to the end, so text it
 // can't read stays read as a path.
-func maskOutsideStrings(text, quotes string) string {
+//
+// With comments, a # outside a literal starts a comment to the end of
+// the line. The comment is left as it is, so a path in it is still read
+// and a quote in it opens no literal.
+func maskOutsideStrings(text, quotes string, comments bool) string {
 	var b strings.Builder
 	var in rune
 	rs := []rune(text)
@@ -878,6 +908,15 @@ func maskOutsideStrings(text, quotes string) string {
 			b.WriteRune(r)
 			i++
 			b.WriteRune(rs[i])
+			continue
+		case comments && in == 0 && r == '#':
+			for i < len(rs) && rs[i] != '\n' {
+				b.WriteRune(rs[i])
+				i++
+			}
+			if i < len(rs) {
+				b.WriteRune(rs[i])
+			}
 			continue
 		case in == 0 && strings.ContainsRune(quotes, r):
 			in = r
