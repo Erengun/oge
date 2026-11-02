@@ -52,13 +52,13 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		}
 		return cmd, ""
 	}
-	h.openView(rc)
+	h.openView(rc, true)
 	return nil, ""
 }
 
 // openView opens another Chat in the repo rc, focused, and says the old
 // one stays open: /new's, and the Inbox's for a task.
-func (h *home) openView(rc *repoCtx) {
+func (h *home) openView(rc *repoCtx, offerLater bool) {
 	n, old, v := h.working(), h.num, h.newView()
 	if rc != h.repoCtx {
 		v = h.newViewIn(rc)
@@ -68,12 +68,19 @@ func (h *home) openView(rc *repoCtx) {
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
-	if n >= h.maxActive() && !h.capNoted {
-		// Said once, in place of that: the Chat opens all the same.
-		h.capNoted = true
-		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
-		if k := h.laterKey(); k != "" {
-			h.note += " · type the task, then " + k + " keeps it for later instead"
+	if n >= h.maxActive() {
+		// Said once, in place of that: the Chat opens all the same. The
+		// keep-for-later pointer only suits /new, where no task is typed
+		// yet; it has its own once, so a promote can't use it up.
+		k := h.laterKey()
+		offer := offerLater && k != "" && !h.capOffered
+		if !h.capNoted || offer {
+			h.capNoted = true
+			h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
+			if offer {
+				h.capOffered = true
+				h.note += " · type the task, then " + k + " keeps it for later instead"
+			}
 		}
 	}
 }
@@ -517,7 +524,7 @@ const (
 // nothing the screen doesn't, as the header counts don't, unless a pinned
 // project has no Chat yet.
 func (h *home) railOn() bool {
-	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.views) > 1 || len(h.unopened()) > 0 || len(h.onDesk) > 0)
+	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.later) > 0 || len(h.views) > 1 || len(h.unopened()) > 0 || len(h.onDesk) > 0)
 }
 
 // railHit is where the rail drew a Chat: screen row y, columns x0 to x1.

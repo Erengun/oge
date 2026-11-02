@@ -391,9 +391,10 @@ type home struct {
 	// deskMax and deskQuiet are [desk] max_active and quiet (0: the
 	// defaults); capNoted is /new having said once that the working
 	// Chats are past deskMax.
-	deskMax   int
-	deskQuiet time.Duration
-	capNoted  bool
+	deskMax    int
+	deskQuiet  time.Duration
+	capNoted   bool
+	capOffered bool
 	// deskProjects are [desk] projects; the rail and /projects show the
 	// ones that are git repos (tui_projects.go). order is the repos in the
 	// order their first Chat opened, which the rail never changes.

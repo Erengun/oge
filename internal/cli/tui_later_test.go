@@ -168,8 +168,24 @@ func TestLaterPromoteAtTheCapWarns(t *testing.T) {
 	submit(h, "/later cap one")
 	submit(h, "/later")
 	h.Update(enter())
-	if !strings.Contains(h.note, "3 Chats are working") || !strings.Contains(h.note, "alt+l keeps it for later") {
+	if !strings.Contains(h.note, "3 Chats are working") || strings.Contains(h.note, "alt+l") {
 		t.Errorf("note %q", h.note)
+	}
+	// The promote did not use up /new's offer.
+	h.note = ""
+	h.turn = &chatTurn{}
+	h.newCmd(nil)
+	if !strings.Contains(h.note, "alt+l keeps it for later") {
+		t.Errorf("/new at the cap: note %q", h.note)
+	}
+}
+
+// One Chat, one kept idea: the rail is drawn and counts it.
+func TestRailShowsLaterWithOneChat(t *testing.T) {
+	h, _ := railHome(120, 1)
+	h.later = []run.LaterItem{{}}
+	if !h.railOn() || !strings.Contains(h.View().Content, "1 later") {
+		t.Errorf("rail %v\n%s", h.railOn(), h.View().Content)
 	}
 }
 

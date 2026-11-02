@@ -146,7 +146,7 @@ func (h *home) promoteLater(it run.LaterItem) tea.Cmd {
 	fresh := h.rest == nil && h.turn == nil && h.verify == nil && h.comp.empty() && (h.chat == nil || h.chat.get() == nil)
 	switch {
 	case !fresh:
-		h.openView(rc)
+		h.openView(rc, false)
 	case rc != h.repoCtx:
 		h.moveTo(rc)
 	}
