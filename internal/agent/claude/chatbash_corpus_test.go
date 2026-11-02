@@ -232,7 +232,8 @@ func chatCorpus(tool string) []struct {
 		{"(sed 's/^/  /' a.txt; echo) | xargs ls", true},
 		{"grep -r $(awk 'BEGIN{print \"/\"}')", true},
 		{"awk 'BEGIN{print \"/\"}'", true},
-		{"jq -n '\"/\"'", true},
+		{"jq -n '\"/\"' | xargs ls", true},
+		{"jq -n '\"/\"'", false}, // prints a /; harmless until consumed
 		{"sed -n p /etc/hosts", true},
 		{"sed -n p /", true},
 		{"sed -i 's/a/b/' /etc/hosts", true},
@@ -287,8 +288,22 @@ func chatCorpus(tool string) []struct {
 		{"jq --run-tests /etc/passwd", true},
 		{"jq -n --run-tests /etc/passwd", true},
 		{"gawk -i /etc/passwd 'BEGIN{}'", true},
-		{"jq -r '.a / .b' a.json", false},
 		{"sed -n 's/one/two/p;$!d' a.txt", false},
+		// Simplified after the second review of #348: jq and awk scripts
+		// are not parsed, so only a part made entirely of slashes is
+		// excused, as in sed. Known false stops (safe direction):
+		// any awk script with a " (awk '{print "a / b"}' f), and a
+		// /regexp/ whose first component is an existing root directory.
+		{"awk '/\"/bin { } END { system(\"cat /etc/passwd\") }' a.txt", true},
+		{"awk '/\"/bin { } END { system(\"cd /; cat etc/passwd\") }' a.txt", true},
+		{"awk 'BEGIN { if (match(\"a\", /\"/bin)) {}; system(\"cat /etc/passwd\") }'", true},
+		{"sed -e 's|.*|cd /; cat etc/passwd|' --expr e a.txt", true},
+		{"sed -e 's|.*|cd /; cat etc/passwd|' --e=e a.txt", true},
+		{"sed --expr 's|.*|cd /; cat etc/passwd|' -e e a.txt", true},
+		{"sed -e 's|.*|cd /; cat etc/passwd|' --fi=run.sed a.txt", true},
+		{"awk '/error/ {print}' log", false},
+		{"awk '{print \"a / b\"}' f", true}, // known false stop
+		{"sed -n --quiet 's/a/b/p' a.txt", false},
 		{"cd sub && source ../../x.sh", true},
 		{"source \"$X\"", true},
 		{"eval ls", true},

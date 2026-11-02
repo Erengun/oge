@@ -432,7 +432,7 @@ func (p *policy) escapesIn(cmd string, cwds []string, program progKind) bool {
 				} else if prog && kind == quotedProg && !w.dynamic {
 					// A python or node program is read again as code,
 					// where a quoted / is told from an operator.
-					w.text = maskOutsideStrings(w.text, `"'`, false)
+					w.text = maskOutsideStrings(w.text, `"'`)
 				}
 				if p.wordEscapes(cwd, w, kind.or(program)) {
 					return true
@@ -740,6 +740,11 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 				unsure = true
 				scripted = true
 				i++
+			case strings.HasPrefix(t, "--") && !knownSedLong(t):
+				// getopt_long takes any unambiguous prefix (--e, --expr=,
+				// --fi=), so a long option not known to take no script
+				// leaves it unread.
+				unsure = true
 			case t == "-i" && i+1 < len(args) && args[i+1].text == "" && args[i+1].quoted:
 				i++ // macOS: the suffix is a word of its own
 			case len(t) > 2 && t[0] == '-' && t[1] != '-' && strings.Contains(t, "e"):
@@ -852,17 +857,14 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 	return out
 }
 
-// scriptText is a script word with the text that can name a path kept
-// and the rest of its slashes taken out. sed and a commit message keep
-// everything but a part that is only slashes. jq and awk build paths
-// from string literals only, so outside the "literals" every slash goes,
-// and a lone one inside a literal is still the root.
+// scriptText is a script word with a part that is only slashes excused.
+// Every other part is read as a path, as it is outside a script: the
+// text of a script is not parsed, so nothing is trusted to be a string
+// literal, a regexp or a comment. An awk script holding a " can build a
+// command or a path from literals (system("cd /; cat etc/x")), so it
+// excuses nothing.
 func scriptText(name string, w sword) sword {
-	if w.dynamic {
-		return w
-	}
-	if name == "jq" || oneOf(name, awks) {
-		w.text = maskOutsideStrings(w.text, `"`, true)
+	if w.dynamic || (oneOf(name, awks) && strings.Contains(w.text, `"`)) {
 		return w
 	}
 	w.slashOK = true
@@ -893,11 +895,7 @@ func (p *policy) sourceOK(cwds []string, args []sword) bool {
 // literal opens at any of quotes and closes at the same one; a \ skips
 // the next character. An unclosed literal runs to the end, so text it
 // can't read stays read as a path.
-//
-// With comments, a # outside a literal starts a comment to the end of
-// the line. The comment is left as it is, so a path in it is still read
-// and a quote in it opens no literal.
-func maskOutsideStrings(text, quotes string, comments bool) string {
+func maskOutsideStrings(text, quotes string) string {
 	var b strings.Builder
 	var in rune
 	rs := []rune(text)
@@ -909,15 +907,6 @@ func maskOutsideStrings(text, quotes string, comments bool) string {
 			i++
 			b.WriteRune(rs[i])
 			continue
-		case comments && in == 0 && r == '#':
-			for i < len(rs) && rs[i] != '\n' {
-				b.WriteRune(rs[i])
-				i++
-			}
-			if i < len(rs) {
-				b.WriteRune(rs[i])
-			}
-			continue
 		case in == 0 && strings.ContainsRune(quotes, r):
 			in = r
 		case in == r:
@@ -928,6 +917,18 @@ func maskOutsideStrings(text, quotes string, comments bool) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// knownSedLong reports whether a sed long option is spelled out in full
+// and does not give a script or a script file.
+func knownSedLong(t string) bool {
+	name, _, _ := strings.Cut(t, "=")
+	if strings.Contains(t, "=") && !oneOf(name, []string{"--in-place", "--line-length"}) {
+		return false
+	}
+	return oneOf(name, []string{"--quiet", "--silent", "--posix", "--regexp-extended", "--separate",
+		"--sandbox", "--debug", "--null-data", "--zero-terminated", "--unbuffered",
+		"--follow-symlinks", "--binary", "--in-place", "--line-length"})
 }
 
 // sedRuns reports whether a sed script may run a command: an e command,
@@ -1000,7 +1001,11 @@ func sedRuns(script string) bool {
 			}
 			d := rs[i]
 			i++
-			if !skipTo(d) || !skipTo(d) {
+			closed := skipTo(d)
+			if closed {
+				closed = skipTo(d)
+			}
+			if !closed {
 				return true
 			}
 			for i < n && !strings.ContainsRune(";}\n \t", rs[i]) {
@@ -1019,7 +1024,11 @@ func sedRuns(script string) bool {
 			}
 			d := rs[i]
 			i++
-			if !skipTo(d) || !skipTo(d) {
+			closed := skipTo(d)
+			if closed {
+				closed = skipTo(d)
+			}
+			if !closed {
 				return true
 			}
 		}
