@@ -170,3 +170,16 @@ func TestAddSessionKeepsTheDeskRootOfAWorktree(t *testing.T) {
 		t.Errorf("repo = %q, want %q: a second rail slot for the same project", got, wt)
 	}
 }
+
+// Enter (adopt) lands in the same slot as `a`: the Desk's worktree root
+// for the repo, not a second slot for its main root.
+func TestAdoptLandsInTheDeskRootOfAWorktree(t *testing.T) {
+	h, roots, wt, _ := allSessionsHome(t)
+	h.onDesk = append(h.onDesk, deskSession{provider: "claude", id: "x", repo: wt})
+	if got := h.adoptRoot(agent.NativeSession{Provider: "claude", ID: "y", Project: roots["beta"]}); got != wt {
+		t.Errorf("adoptRoot = %q, want the worktree %q", got, wt)
+	}
+	if got := h.adoptRoot(agent.NativeSession{Provider: "claude", ID: "z", Project: roots["alpha"]}); got != roots["alpha"] {
+		t.Errorf("a project not on the Desk opens under itself, got %q", got)
+	}
+}

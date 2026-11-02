@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/list"
@@ -299,12 +300,22 @@ func (h *home) sessionOn(s agent.NativeSession) int {
 
 // mainKey is repoKey of the main repo root belongs to, so a worktree and
 // its repo compare equal; repoKey of root itself when it is not a repo.
+// It runs on the UI goroutine, so each root asks git once per process.
 func mainKey(root string) string {
-	if m, err := workspace.MainRoot(root); err == nil {
-		return repoKey(m)
+	if k, ok := mainKeys.Load(root); ok {
+		return k.(string)
 	}
-	return repoKey(root)
+	k := repoKey(root)
+	if m, err := workspace.MainRoot(root); err == nil {
+		k = repoKey(m)
+	}
+	mainKeys.Store(root, k)
+	return k
 }
+
+// mainKeys caches mainKey by root: a repo's main root doesn't change
+// while oge runs.
+var mainKeys sync.Map
 
 // deskRootFor is the root the Desk already holds (a Chat's, or a pinned
 // one) for the project at main, when that is a linked worktree of it or

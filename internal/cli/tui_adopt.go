@@ -237,16 +237,27 @@ func (h *home) adoptFound(m adoptFoundMsg) {
 
 // adopted opens the adopted Chat as a view of its own, focused, and says
 // what it is: in place, and what is gated.
+// adoptRoot is the project root an adopted session opens under: the slot
+// the Desk already has for its repo (a worktree of it, say), as `a` uses,
+// else its own project, else the focused one.
+func (h *home) adoptRoot(s agent.NativeSession) string {
+	repo := s.Project
+	if repo == "" {
+		return h.root
+	}
+	if d := h.deskRootFor(repo); d != "" {
+		return d
+	}
+	return repo
+}
+
 func (h *home) adopted(m adoptedMsg) tea.Cmd {
 	h.note = ""
 	if m.err != nil {
 		return h.problem("oge: couldn't adopt the session: " + clean(m.err.Error()))
 	}
 	s := m.s
-	repo := s.Project
-	if repo == "" {
-		repo = h.root
-	}
+	repo := h.adoptRoot(s)
 	rc := h.repoCtx
 	if repoKey(repo) != repoKey(h.root) && h.repoFor != nil {
 		if r, _ := h.repoFor(repo); r != nil {
