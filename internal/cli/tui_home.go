@@ -1050,10 +1050,15 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	if h.rest != nil {
-		// A restored Chat has no Session, and a message must never open a
-		// fresh Chat in its place: the draft stays.
-		h.msg = append(h.msg, "this Chat's Session isn't open yet: reopening it comes next · /new starts another Chat")
-		return h, nil
+		// A restored Chat is read-only until a message reopens it (A6): the
+		// message never opens a fresh Chat in its place.
+		var (
+			cmd tea.Cmd
+			ok  bool
+		)
+		if text, cmd, ok = h.restoredSubmit(text); !ok {
+			return h, cmd
+		}
 	}
 	if h.full {
 		h.tr.latest()
@@ -1079,6 +1084,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	if problem != nil {
 		// The Run can't start: say why, and keep the Task.
 		h.msg, h.setup = problem, nil
+		h.reopenOK, h.reopenShown = false, nil // the typed reopen doesn't carry over
 		return h, nil
 	}
 	h.setSetup(res.frozen)
@@ -1092,6 +1098,12 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	h.comp.clearUndo()
 	h.navigating = false
 	h.visual = 0
+	if h.rest != nil {
+		if cmd, ok := h.restoredTrust(text, res); !ok {
+			return h, cmd
+		}
+		return h.chatSubmit(text, res, nil)
+	}
 	if h.chat.fits(res) {
 		return h.chatSubmit(text, res, nil)
 	}

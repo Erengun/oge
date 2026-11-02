@@ -130,6 +130,15 @@ func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 				State: state, Getenv: env.Getenv, Config: res.cfgData, CacheSeedTemplate: env.CacheSeedTemplate,
 				Advisor: userForNotify(env).AdvisorConfig(), Feedback: userForNotify(env).ChatConfig()})
 		},
+		changes: func(p run.ResumeParams) ([]string, error) {
+			p.Agents, p.State = env.Agents, state
+			return run.RestoreChanges(p)
+		},
+		resume: func(p run.ResumeParams) (*run.Resumed, error) {
+			p.Agents, p.State, p.Getenv = env.Agents, state, env.Getenv
+			p.Advisor, p.Feedback = userForNotify(env).AdvisorConfig(), userForNotify(env).ChatConfig()
+			return run.ResumeChat(context.Background(), p)
+		},
 		cut: func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port, observe func(run.Event)) (*run.Result, error) {
 			return c.Cut(ctx, run.CutParams{Frozen: f, Version: env.Version, Gates: gates, Observe: observe})
 		},

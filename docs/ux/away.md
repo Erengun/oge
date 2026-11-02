@@ -44,7 +44,7 @@ Under the U2 default (`[chat] feedback = ask`), "keeps working while you're away
 | A3 | Does `/quit` keep Chats until `/close`? Today, quitting ends a Chat and deletes its Workspace. | Yes. Every open Chat restores, and Workspaces are kept. | Only Chats that ended uncleanly restore (hangup, crash, reboot). `/quit` closes them as today. | Ask on `/quit` when Chats are open. | **a**, closer to Duet's "one ongoing thread". `/close` removes the Workspace. An auto-close rule (for example, applied and idle for 7 days) is deferred and named here so the disk cost is known. |
 | A4 | Under a host while you're away, may a failed Check be sent back without you? | No. U2 holds: a `✗` card waits. | A typed, pinned `/away` grant turns on `send back` with `feedback_budget` per Chat, a same-failure stop, no Advisor, and a Desk-wide cap counted on input, cache and output tokens. | Turned on implicitly on detach. | **a now.** This is Öge sending turns on its own, which the 2026-10-31 direction pulled back from (even though the send-back text is deterministic). Build b only if dogfood shows `✗` cards waiting overnight are the felt problem. Never c. |
 | A5 | Vendor Session resume (`claude --resume`, codex `thread/resume`) on restore | Re-brief only: a fresh Session plus Öge's re-brief, as the idle reopen does today. | A spike with a per-Chat private config dir. This reverses #44 ("never set `CLAUDE_CONFIG_DIR`", `--no-session-persistence`), Codex's `ephemeral: true`, and ADR-0016's deferral. | Use the user's own Claude/Codex persistence. | **a.** The work survives; the conversation's nuance does not. Spike b only if measured re-brief quality is the complaint. |
-| A6 | A restored Chat whose settings changed | Read-only, plus `n` for a new Chat. | Also allow a typed `reopen`: continue under the new settings, recorded as a pinned human decision. | Continue silently. | **b.** Never c (that is herdr D1080). |
+| A6 | A restored Chat whose settings changed | Read-only; `n` leaves it read-only and returns your draft; `/new` starts another Chat. | Also allow a typed `reopen`: continue under the new settings, recorded as a pinned human decision. | Continue silently. | **b.** Never c (that is herdr D1080). |
 | A7 | `oge add "task"` (#338) reaching a Desk while you're away | Starts at once, as #338 is written. | Lands as a card. Its first turn starts only when a human focuses it or presses Enter. | Refused while away. | **b.** A supervised agent runs as your user and can run `oge add` itself. Hard denies are path-based, so nothing else stops that fan-out. This amends #338's first acceptance criterion. |
 | A8 | What off-terminal pushes may carry | The Chat number, counts and the repo name only. | Opt-in `[notify] titles = true` adds Chat titles. | Always include titles. | **a** by default, **b** as opt-in. Titles come from your first message, which is Task text, and notify.go's rule keeps that out of third-party pushes (G11 wants the title). |
 
@@ -57,7 +57,7 @@ Under the U2 default (`[chat] feedback = ask`), "keeps working while you're away
 | A3 | **Ask on `/quit`** when Chats are open: keep them for restore or close them. A signal (SIGHUP, SIGTERM) can't ask, so it **keeps** them. |
 | A4 | **No send-back while away.** The `✗` card waits; U2 holds. |
 | A5 | **Re-brief only** on restore; no vendor session resume. |
-| A6 | A restored Chat whose settings changed is **read-only**, with `n` and a typed `reopen`. |
+| A6 | A restored Chat whose settings changed is **read-only**, with `n` (leave it read-only, draft returned) and a typed `reopen`. `/new` starts another Chat. |
 | A7 | `oge add` while away **lands as a card**; it starts only when focused. |
 | A8 | Pushes carry the **Chat number, counts and repo** only; `[notify] titles = true` opts in to titles. |
 
@@ -109,9 +109,9 @@ It never changes trust, spend or Gates.
 3. rebuilds a missing Workspace from the last turn ref. A dirty Workspace with no `TurnInterrupted` gets the scope check and a `found_on_restore` Checkpoint;
 4. draws the rail and transcripts.
 
-**No agent starts.** Focusing a Chat runs the trust check (below). If it passes, focus opens one Session through the existing `reopen()` + re-brief path, ahead of your first send, and sends nothing.
+**No agent starts.** Focus alone starts nothing. The first message you send to a restored Chat runs the trust check (below). If it passes, that message reopens one Session through the existing `reopen()` + re-brief path, and the turn carries the re-brief.
 
-**Trust check on focus.** It compares the last `ProcessStarted` / `SessionReopened` with what would launch now:
+**Trust check on the first message.** It compares the last `ProcessStarted` / `SessionReopened` with what would launch now:
 - the Launch profile;
 - the permission mode;
 - the recomputed hard-deny set;
@@ -219,12 +219,12 @@ You run `oge` in the repo. Under herdr, layout restore puts the pane back in the
   Cutting again re-cuts the same turn commit. A Check this tree already passed on the same Oracle is reused (`VerdictReused`). Once #55 lands, the card offers the same Gate again, with the same pins, and nothing re-runs.
 - **A cut interrupted mid-Check** shows `Check interrupted · c check again`. A killed Check had no Verdict, so this is not a Recheck.
 - **A host request open at exit** died with its Session. It is never shown as answered: `the agent asked to run X; the Session ended before you answered`.
-- **Focusing a Chat** passes the trust check, then starts one Session in the background while you read. Your first send carries the re-brief.
+- **Focusing a Chat** shows it read-only and starts nothing. Your first send runs the trust check, reopens one Session, and carries the re-brief.
 - **If settings changed**, the card names the exact difference:
 
   ```
   Chat 2 ran under claude@work · auto; this config gives claude · auto
-  n new Chat · type reopen to continue under the new settings
+  n leave it read-only · type reopen to continue under the new settings · /new for another Chat
   ```
 
 ### A second terminal while the Desk lives under a host
@@ -263,7 +263,7 @@ ADR-0008 already demands this. If an adapter does expire a request:
 | Away under a host (U2 default) | Turns you already sent or queued, one cut per settled turn, and QA and Checks within the frozen Pipeline. A newer cut supersedes the older one. Then nothing. |
 | Idle Session | Closes after 30 minutes (`DefaultIdleTimeout`), so an idle Chat costs nothing. |
 | Active-time limits | Pause at Gates (ADR-0012), so a night away never exhausts a Run. |
-| Restore | Starts zero agents. Each focus starts at most one Session and sends nothing. The first token is your own send. It never respawns N agents at once (parallel-code #293). |
+| Restore | Starts zero agents. Focus starts nothing; each Chat's first message starts at most one Session. The first token is your own send. It never respawns N agents at once (parallel-code #293). |
 | Interrupted turns and cuts | Never resent or re-run by themselves. |
 | No host, terminal closed | Zero (A2 a). |
 
@@ -348,13 +348,13 @@ Each slice is small (about 45 min / 150k), fakes-first (ADR-0017), and leaves `m
    - Starts nothing.
    - Files: new `internal/run/chat_restore.go`, `internal/run/sweep_unix.go`, `internal/cli/tui_chat.go`, `internal/cli/tui_chatview.go`, `internal/cli/tui_home.go`. TUI snapshot tests.
    - This is G6 from #342.
-5. **Lazy reopen on focus.**
+5. **Lazy reopen on the first message.**
    - Rebuild a missing Workspace from `refs/oge/chat/turns/<n>`, and run the `found_on_restore` scope check.
    - The semantic trust check against the last `ProcessStarted` / `SessionReopened`.
-   - Focus opens one Session through `reopen()` with re-brief. Record `SessionRestored`.
-   - The `settings changed` card with `n` and typed `reopen` (A6).
+   - The first message you send opens one Session through `reopen()` with re-brief (focus alone starts nothing). Record `SessionRestored`.
+   - The `settings changed` card with `n` (read-only, draft returned) and typed `reopen` (A6); `/new` starts another Chat.
    - Files: `internal/run/chat_restore.go`, `internal/run/chat.go`, `internal/cli/tui_chat.go`.
-   - E2E on the fake agent: `kill -9` oge mid-turn, run `oge`, focus, resend; the turn settles.
+   - E2E on the fake agent: `kill -9` oge mid-turn, run `oge`, send a message; the turn settles.
 6. **Held-request precondition.**
    - Long-held `can_use_tool` (Claude) and `held_approval.jsonl` (Codex) contract tests.
    - An expiry card and a deny-only timeout only if one expires.

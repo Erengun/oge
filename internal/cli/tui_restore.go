@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/erengun/oge/internal/run"
 )
@@ -148,7 +151,7 @@ func (h *home) restoreTranscript(v *chatView, gone bool) {
 	case run.RestoredUnknown:
 		say("? state unknown: " + clean(r.Problem))
 	}
-	say(h.st.dim("restored from the Desk record · reopening this Chat comes next · /new starts another"))
+	say(h.st.dim("restored from the Desk record · send a message to reopen it · /new starts another"))
 }
 
 // gateName is the parked Gate as the card names it.
@@ -214,4 +217,92 @@ func (v *chatView) deskOf() *run.Desk {
 		return nil
 	}
 	return v.chat.desk
+}
+
+// reopenAsk is the settings-changed card (A6): the message that asked, and
+// what changed since the Chat's last Session started.
+type reopenAsk struct {
+	text    string
+	changes []string
+}
+
+// restoredSubmit is submit's first step for a restored Chat: the card's
+// answer when one waits, and the refusal when the Chat can't reopen. It
+// returns the message to send; ok false means nothing is sent now.
+// Enter alone never answers the card: only the typed words do.
+func (h *home) restoredSubmit(text string) (string, tea.Cmd, bool) {
+	r := h.rest
+	if _, err := os.Stat(r.Repo); err != nil || h.chat == nil || h.chat.resume == nil {
+		h.msg = append(h.msg, "this Chat can only be read: its repo isn't there or its Session can't reopen · /new starts another Chat")
+		return text, nil, false
+	}
+	a := h.reopenAsk
+	if a == nil {
+		return text, nil, true
+	}
+	switch strings.TrimSpace(text) {
+	case "reopen":
+		h.reopenAsk, h.reopenOK, h.reopenShown = nil, true, a.changes
+		return a.text, nil, true
+	case "n":
+		h.reopenAsk = nil
+		h.comp.set(a.text)
+		return text, h.println(h.ogeLine("not reopened: this Chat stays read-only, and your message is back in the box · /new starts another Chat")), false
+	}
+	h.msg = append(h.msg, "settings changed: type reopen to continue under them, or n to leave this Chat read-only")
+	return text, nil, false
+}
+
+// restoredTrust is the semantic trust check on the first message to a
+// restored Chat: what would launch now against what its last Session
+// started under. A change shows the card and sends nothing; it is checked
+// against the Chat's records, never against a hash of oge.toml.
+func (h *home) restoredTrust(text string, res *resolved) (tea.Cmd, bool) {
+	changes, err := h.chat.changes(run.ResumeParams{Chat: h.rest.RestoredChat, Now: res.frozen})
+	if err != nil {
+		h.msg = append(h.msg, "this Chat can't be reopened: "+clean(err.Error()))
+		return nil, false
+	}
+	if h.reopenOK && slices.Equal(changes, h.reopenShown) {
+		return nil, true // the human typed reopen over exactly what the card showed
+	}
+	if len(changes) == 0 {
+		h.reopenOK, h.reopenShown = false, nil
+		return nil, true
+	}
+	h.reopenOK, h.reopenShown = false, nil
+	h.reopenAsk = &reopenAsk{text: text, changes: changes}
+	h.comp.set("")
+	lines := []string{h.ogeLine("settings changed since this Chat's Session last ran · nothing was reopened")}
+	for _, c := range changes {
+		lines = append(lines, "  "+h.st.dim(clean(c)))
+	}
+	lines = append(lines, h.ogeLine("type reopen to continue under the new settings (Enter alone doesn't decide) · n leaves it read-only"))
+	return h.println(strings.Join(lines, "\n")), false
+}
+
+// finishRestore makes the view a live Chat once its message reopened it,
+// and says what the reopening did besides.
+func (h *home) finishRestore(r *run.Resumed, sendErr error) tea.Cmd {
+	h.rest = nil
+	var lines []string
+	say := func(s string) { lines = append(lines, h.ogeLine(h.st.dim(s))) }
+	if r.Rebuilt {
+		say("rebuilt this Chat's Workspace from its last turn")
+	}
+	if r.Found {
+		say("the stopped turn left edits: scope-checked and kept as that turn's checkpoint")
+	}
+	if r.Outside {
+		say(run.OutsideNote + ": this Chat still works from the repo it started from")
+	}
+	if len(r.Changes) > 0 {
+		say("continuing under the new settings, as you typed")
+	}
+	if sendErr != nil {
+		say("this Chat's records are restored, but its Session didn't start")
+	} else {
+		say("reopened with a re-brief of your messages so far: the work survived, the agent's memory of it didn't")
+	}
+	return h.println(strings.Join(lines, "\n"))
 }

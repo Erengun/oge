@@ -106,7 +106,8 @@ type Chat struct {
 	Snapshot  string
 
 	role      string
-	work      string // its disposable directory, the Workspace's parent
+	stage     pipeline.Stage // the implementer stage its Session launches under
+	work      string         // its disposable directory, the Workspace's parent
 	instr     string
 	deny      []string
 	frozen    *pipeline.Frozen
@@ -375,7 +376,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 		return nil, fmt.Errorf("refused: %s", strings.Join(why, "; "))
 	}
 
-	c = &Chat{ID: newID(), role: role, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
+	c = &Chat{ID: newID(), role: role, stage: stage, idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
 		frozen: p.Frozen, adapter: adapter, ctx: ctx, reverted: map[int][]workspace.Revert{},
 		source: p.Repo, config: p.Config, unsent: map[int]bool{}, oge: map[int]bool{}, advised: map[int]bool{}, state: p.State, agents: p.Agents, getenv: getenv, seedTmpl: p.CacheSeedTemplate,
 		advisor: p.Advisor, feedback: p.Feedback}
@@ -467,7 +468,7 @@ func OpenChat(ctx context.Context, p ChatParams) (c *Chat, err error) {
 	}
 	proc := c.sess.Process()
 	if err := c.log(RecProcessStarted, map[string]any{"chat": c.ID, "pid": proc.PID, "pgid": proc.PGID, "start": processStart(proc.PID),
-		"launch_profile": launchProfile(stage), "permissions": agent.AutoPermissions}); err != nil {
+		"launch_profile": launchProfile(stage), "permissions": agent.AutoPermissions, "deny": denyHash(c.deny)}); err != nil {
 		c.sess.Close()
 		return nil, err
 	}
@@ -663,7 +664,8 @@ func (c *Chat) reopen(ctx context.Context) error {
 	// ProcessStarted, and is in the log before any turn reaches it.
 	proc := sess.Process()
 	if err := c.log(RecSessionReopened, map[string]any{"chat": c.ID, "reason": reason, "turn": next,
-		"pid": proc.PID, "pgid": proc.PGID, "start": processStart(proc.PID), "permissions": agent.AutoPermissions}); err != nil {
+		"pid": proc.PID, "pgid": proc.PGID, "start": processStart(proc.PID), "permissions": agent.AutoPermissions,
+		"launch_profile": c.launchNow(), "deny": denyHash(c.deny)}); err != nil {
 		_ = sess.Close()
 		c.mu.Lock()
 		if !c.closed {
@@ -1297,8 +1299,10 @@ func (c *Chat) end(reason error, why string) {
 		if unctx != nil {
 			unctx()
 		}
-		close(c.stop) // cancels every Consultation
-		_ = sess.Close()
+		close(c.stop)    // cancels every Consultation
+		if sess != nil { // a restored Chat has none until it reopens
+			_ = sess.Close()
+		}
 		<-pumped
 		c.consults.Wait()
 		c.prepMu.Lock()

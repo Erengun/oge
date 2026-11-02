@@ -140,7 +140,7 @@ func TestRestoredChatOfAGoneRepo(t *testing.T) {
 	if got := h.comp.text(); got != "try again" {
 		t.Errorf("the draft is %q: it must stay", got)
 	}
-	if !strings.Contains(strings.Join(h.msg, " "), "isn't open yet") {
+	if !strings.Contains(strings.Join(h.msg, " "), "isn't there") {
 		t.Errorf("no line said why: %v", h.msg)
 	}
 	h.comp.set("")
