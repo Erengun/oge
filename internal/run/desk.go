@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,6 +80,9 @@ type ChatAdded struct {
 	N     int    `json:"n"`
 	Title string `json:"title"`
 	Repo  string `json:"repo"`
+	// Source is "oge add" for a Chat that landed as a card before any
+	// turn: its Chat id comes with the ChatAdded its first turn records.
+	Source string `json:"source,omitempty"`
 }
 
 // ChatClosed is a Chat the human closed: its Workspace goes, and a
@@ -125,6 +129,9 @@ type Desk struct {
 	lock *os.File
 	log  *os.File
 	done bool
+	// ln and sock are the socket Serve opened, closed with the Desk.
+	ln   net.Listener
+	sock string
 }
 
 // DeskHeldError is the Desk already open in another live process.
@@ -147,6 +154,12 @@ func OpenDesk(private string, getenv func(string) string) (*Desk, error) {
 		return nil, err
 	}
 	lock, err := lockDesk(filepath.Join(dir, deskLock))
+	if errors.Is(err, errDeskHeld) {
+		// A probe from oge add holds the lock for an instant; a second try
+		// tells it from a Desk that is really open.
+		time.Sleep(25 * time.Millisecond)
+		lock, err = lockDesk(filepath.Join(dir, deskLock))
+	}
 	if errors.Is(err, errDeskHeld) {
 		held := &DeskHeldError{}
 		if o, ok := lastOpened(dir); ok {
@@ -213,6 +226,12 @@ func deskHost(getenv func(string) string) DeskOpened {
 // ChatAdded records Chat n, opened in repo by a message titled title.
 func (d *Desk) ChatAdded(chat string, n int, title, repo string) {
 	_ = d.append(RecChatAdded, ChatAdded{Chat: chat, N: n, Title: title, Repo: repo})
+}
+
+// ChatQueued records Chat n, which oge add put on the Desk as a card in
+// repo: no Chat is open yet, and no turn has started.
+func (d *Desk) ChatQueued(n int, title, repo string) {
+	_ = d.append(RecChatAdded, ChatAdded{N: n, Title: title, Repo: repo, Source: "oge add"})
 }
 
 // ChatClosed records the Chat closed, ahead of its closing.
@@ -298,6 +317,10 @@ func (d *Desk) Release() {
 		return
 	}
 	d.done = true
+	if d.ln != nil {
+		_ = d.ln.Close()
+		_ = os.Remove(d.sock) // before the lock goes: a later Desk's own is not ours to remove
+	}
 	_ = d.log.Close()
 	unlockDesk(d.lock)
 }
