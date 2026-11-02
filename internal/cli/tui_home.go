@@ -679,6 +679,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
+	case chatChecksMsg:
+		return h, h.checksEnded(m)
 	case chatStepMsg:
 		return h, h.cutStepped(m)
 	case sessionsMsg:

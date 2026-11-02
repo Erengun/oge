@@ -15,6 +15,7 @@ import (
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -26,6 +27,7 @@ type adoptStub struct {
 	opened   int
 	spec     agent.LaunchSpec
 	mode     string
+	info     *agent.SessionInfo // what a Codex thread reports instead of mode
 	askTool  string
 	answered chan agent.Answer
 }
@@ -51,7 +53,11 @@ func (s *adoptSess) Close() error               { s.once.Do(func() { close(s.ev)
 func (s *adoptSess) Send(agent.Turn) error {
 	go func() {
 		s.ev <- agent.Event{Kind: agent.TurnAccepted}
-		s.ev <- agent.Event{Kind: agent.SessionOpened, Session: &agent.SessionInfo{PermissionMode: s.a.mode}}
+		info := &agent.SessionInfo{PermissionMode: s.a.mode}
+		if s.a.info != nil {
+			info = s.a.info
+		}
+		s.ev <- agent.Event{Kind: agent.SessionOpened, Session: info}
 		if s.a.askTool != "" {
 			ask := agent.NewAsk(s.a.askTool, "make deploy", "make deploy", func(ans agent.Answer) error {
 				s.a.answered <- ans
@@ -230,7 +236,7 @@ func TestAdoptResumesInPlaceAndLabelsIt(t *testing.T) {
 	if hdr := screenLines(h)[0]; !strings.Contains(hdr, "in place · not isolated") {
 		t.Errorf("the header has no label: %q", hdr)
 	}
-	if got := screenText(h); !strings.Contains(got, "Checks: not run on in-place Chats yet") {
+	if got := screenText(h); !strings.Contains(got, "Checks: /check runs them on your working") {
 		t.Errorf("Checks aren't said to be missing:\n%s", got)
 	}
 	// Idle, it keeps its label: the in-place row never folds away.
@@ -516,3 +522,106 @@ func TestCoverageLine(t *testing.T) {
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+// codexHome is adoptHome whose Codex row, x1, is the one with a cwd and a
+// write time.
+func codexHome(t *testing.T, stub *adoptStub, written time.Duration) *home {
+	t.Helper()
+	h, _, _ := adoptHome(t, stub, time.Hour)
+	now := h.clock()
+	cwd := t.TempDir()
+	base := h.discover
+	h.discover = func(ctx context.Context, rs []string) sessionFound {
+		f := base(ctx, rs)
+		for i, s := range f.sessions {
+			if s.ID == "x1" {
+				f.sessions[i].Cwd, f.sessions[i].Written = cwd, now.Add(-written)
+			}
+		}
+		return f
+	}
+	return h
+}
+
+func TestAdoptCodexRefusesARecentWriteThenAdoptsInPlace(t *testing.T) {
+	stub := &adoptStub{info: &agent.SessionInfo{ApprovalPolicy: "never", Sandbox: "danger-full-access", Unsupervised: []string{"dummy"}}}
+	h := codexHome(t, stub, 30*time.Second)
+	slash(h, "/sessions") // the Codex row is the newest, so it is selected
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := screenText(h); !strings.Contains(got, "written to 30s ago: close it there first") {
+		t.Fatalf("no refusal:\n%s", got)
+	}
+	typeText(h, "y")
+	if stub.opened != 0 {
+		t.Fatal("a recent write was adopted")
+	}
+	// Left alone for long enough, it asks, and y adopts.
+	h2 := codexHome(t, stub, 10*time.Minute)
+	slash(h2, "/sessions")
+	press(h2, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := screenText(h2); !strings.Contains(got, "in place? not isolated · y adopt · esc") {
+		t.Fatalf("no prompt:\n%s", got)
+	}
+	pump(t, h2, typeCmd(h2, "y"), func() bool { return len(h2.views) == 2 })
+	if stub.spec.Resume == nil || stub.spec.Resume.ID != "x1" {
+		t.Errorf("opened with %+v", stub.spec)
+	}
+	v := h2.views[1]
+	if !v.inPlace || v.nativeProvider != "codex" {
+		t.Fatalf("not an in-place codex Chat: %+v", v)
+	}
+	if hdr := screenLines(h2)[0]; !strings.Contains(hdr, "in place · not isolated") {
+		t.Errorf("the header has no label: %q", hdr)
+	}
+	if rail := railText(h2); !strings.Contains(rail, "not isolated") {
+		t.Errorf("the rail has no label:\n%s", rail)
+	}
+	p, id := v.chat.get().Native()
+	if p != "codex" || id != "x1" {
+		t.Errorf("native %s %s", p, id)
+	}
+	// The coverage line is what the thread reported, with the MCP server named.
+	typeText(h2, "go")
+	_, cmd := h2.Update(enter())
+	pump(t, h2, cmd, func() bool {
+		return strings.Contains(screenText(h2), "not gated: approval policy never")
+	})
+	got := screenText(h2)
+	if !strings.Contains(got, "not gated: MCP server") || !strings.Contains(got, "dummy (runs outside its sandbox)") {
+		t.Errorf("the MCP server isn't named:\n%s", got)
+	}
+}
+
+func TestChecksOnDemandRunOnTheTreeAndSaySo(t *testing.T) {
+	stub := &adoptStub{mode: "default"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	f := &pipeline.Frozen{Checks: []pipeline.CheckCommand{{Run: "echo ran in $(pwd) > /dev/null; exit 3", Timeout: time.Minute, OutputCap: 1 << 16}}}
+	h.repoCtx.resolve = func(*setupState) (*resolved, []string) { return &resolved{frozen: f}, nil }
+	adopted(t, h, stub)
+	v := h.chatView
+	cwd := v.chat.get().Workspace
+	typeText(h, "/check")
+	_, cmd := h.Update(enter())
+	if !v.checking {
+		t.Fatalf("/check didn't start:\n%s", screenText(h))
+	}
+	pump(t, h, cmd, func() bool { return !v.checking })
+	got := screenText(h)
+	for _, want := range []string{"ran on your working tree · not isolated", "the Checks failed on your tree", "no cut, nothing applied", "not covered: writes on your tree"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Candidate") || strings.Contains(got, "isolated Check") {
+		t.Errorf("the output claims isolation:\n%s", got)
+	}
+	_ = cwd
+}
+
+func TestCheckIsOnlyForAdoptedSessions(t *testing.T) {
+	h, _ := reposHome(t, "alpha")
+	slash(h, "/check")
+	if got := screenText(h); !strings.Contains(got, "/check is for an adopted session") {
+		t.Errorf("no refusal:\n%s", got)
+	}
+}
