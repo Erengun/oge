@@ -6,15 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/ledger"
+	"github.com/erengun/oge/internal/pipeline"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -26,6 +29,7 @@ type adoptStub struct {
 	opened   int
 	spec     agent.LaunchSpec
 	mode     string
+	info     *agent.SessionInfo // what a Codex thread reports instead of mode
 	askTool  string
 	answered chan agent.Answer
 }
@@ -51,7 +55,11 @@ func (s *adoptSess) Close() error               { s.once.Do(func() { close(s.ev)
 func (s *adoptSess) Send(agent.Turn) error {
 	go func() {
 		s.ev <- agent.Event{Kind: agent.TurnAccepted}
-		s.ev <- agent.Event{Kind: agent.SessionOpened, Session: &agent.SessionInfo{PermissionMode: s.a.mode}}
+		info := &agent.SessionInfo{PermissionMode: s.a.mode}
+		if s.a.info != nil {
+			info = s.a.info
+		}
+		s.ev <- agent.Event{Kind: agent.SessionOpened, Session: info}
 		if s.a.askTool != "" {
 			ask := agent.NewAsk(s.a.askTool, "make deploy", "make deploy", func(ans agent.Answer) error {
 				s.a.answered <- ans
@@ -230,7 +238,7 @@ func TestAdoptResumesInPlaceAndLabelsIt(t *testing.T) {
 	if hdr := screenLines(h)[0]; !strings.Contains(hdr, "in place · not isolated") {
 		t.Errorf("the header has no label: %q", hdr)
 	}
-	if got := screenText(h); !strings.Contains(got, "Checks: not run on in-place Chats yet") {
+	if got := screenText(h); !strings.Contains(got, "Checks: /check runs them on your working") {
 		t.Errorf("Checks aren't said to be missing:\n%s", got)
 	}
 	// Idle, it keeps its label: the in-place row never folds away.
@@ -499,9 +507,12 @@ func TestAdoptedViewShowsNoOgeSetup(t *testing.T) {
 
 func TestCoverageLine(t *testing.T) {
 	cases := []struct{ mode, approval, sandbox, want string }{
+		{"", "on-request", "workspace-write", "gated: what its approval policy would ask · allowed without Öge: what its sandbox allows"},
+		{"", "", "workspace-write", "coverage unknown: the session's approval policy wasn't read"},
 		{"bypassPermissions", "", "", "not gated: bypassPermissions"},
 		{"", "never", "", "not gated: approval policy never"},
 		{"", "on-request", "danger-full-access", "not gated: sandbox danger-full-access"},
+		{"", "on-request", "", "coverage unknown: the session's sandbox wasn't read"},
 		{"default", "", "", "gated: what your settings would ask · allowed without Öge: your allow rules"},
 		{"acceptEdits", "", "", "gated: what your settings would ask · allowed without Öge: your allow rules and every file edit · mode acceptEdits"},
 		{"auto", "", "", "gated: what your settings would ask · allowed without Öge: what claude's auto mode allows · mode auto"},
@@ -509,10 +520,167 @@ func TestCoverageLine(t *testing.T) {
 		{"", "", "", "coverage unknown: the session didn't report its permission settings"},
 	}
 	for _, c := range cases {
-		if got := coverageLine(c.mode, c.approval, c.sandbox); got != c.want {
+		if got := coverageLine(c.mode, c.approval, c.sandbox, "user"); got != c.want {
 			t.Errorf("coverageLine(%q, %q, %q) = %q", c.mode, c.approval, c.sandbox, got)
+		}
+	}
+	// Approvals that go to codex's own reviewer never reach Öge, whatever
+	// the policy says.
+	for _, r := range []string{"auto_review", "unreadable"} {
+		if got, want := coverageLine("", "on-request", "workspace-write", r), "not gated: approvals reviewed by codex ("+r+")"; got != want {
+			t.Errorf("reviewer %q: %q", r, got)
 		}
 	}
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+// codexHome is adoptHome whose Codex row, x1, is the one with a cwd and a
+// write time.
+func codexHome(t *testing.T, stub *adoptStub, written time.Duration) *home {
+	t.Helper()
+	h, _, _ := adoptHome(t, stub, time.Hour)
+	now := h.clock()
+	cwd := t.TempDir()
+	base := h.discover
+	h.discover = func(ctx context.Context, rs []string) sessionFound {
+		f := base(ctx, rs)
+		for i, s := range f.sessions {
+			if s.ID == "x1" {
+				f.sessions[i].Cwd, f.sessions[i].Written = cwd, now.Add(-written)
+			}
+		}
+		return f
+	}
+	return h
+}
+
+func TestAdoptCodexRefusesARecentWriteThenAdoptsInPlace(t *testing.T) {
+	stub := &adoptStub{info: &agent.SessionInfo{ApprovalPolicy: "never", Sandbox: "danger-full-access", Unsupervised: []string{"dummy"}}}
+	h := codexHome(t, stub, 30*time.Second)
+	slash(h, "/sessions") // the Codex row is the newest, so it is selected
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := screenText(h); !strings.Contains(got, "written to 30s ago: close it there first") {
+		t.Fatalf("no refusal:\n%s", got)
+	}
+	typeText(h, "y")
+	if stub.opened != 0 {
+		t.Fatal("a recent write was adopted")
+	}
+	// Left alone for long enough, it asks, and y adopts.
+	h2 := codexHome(t, stub, 10*time.Minute)
+	slash(h2, "/sessions")
+	press(h2, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := screenText(h2); !strings.Contains(got, "in place? not isolated · y adopt · esc") {
+		t.Fatalf("no prompt:\n%s", got)
+	}
+	pump(t, h2, typeCmd(h2, "y"), func() bool { return len(h2.views) == 2 })
+	if stub.spec.Resume == nil || stub.spec.Resume.ID != "x1" {
+		t.Errorf("opened with %+v", stub.spec)
+	}
+	v := h2.views[1]
+	if !v.inPlace || v.nativeProvider != "codex" {
+		t.Fatalf("not an in-place codex Chat: %+v", v)
+	}
+	if hdr := screenLines(h2)[0]; !strings.Contains(hdr, "in place · not isolated") {
+		t.Errorf("the header has no label: %q", hdr)
+	}
+	if rail := railText(h2); !strings.Contains(rail, "not isolated") {
+		t.Errorf("the rail has no label:\n%s", rail)
+	}
+	p, id := v.chat.get().Native()
+	if p != "codex" || id != "x1" {
+		t.Errorf("native %s %s", p, id)
+	}
+	// The coverage line is what the thread reported, with the MCP server named.
+	typeText(h2, "go")
+	_, cmd := h2.Update(enter())
+	pump(t, h2, cmd, func() bool {
+		return strings.Contains(screenText(h2), "not gated: approval policy never")
+	})
+	got := screenText(h2)
+	if !strings.Contains(got, "not gated: MCP server") || !strings.Contains(got, "dummy (runs outside its sandbox)") {
+		t.Errorf("the MCP server isn't named:\n%s", got)
+	}
+}
+
+func TestChecksOnDemandRunOnTheTreeAndSaySo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
+	stub := &adoptStub{mode: "default"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	f := &pipeline.Frozen{Checks: []pipeline.CheckCommand{{Run: "echo ran in $(pwd) > /dev/null; exit 3", Timeout: time.Minute, OutputCap: 1 << 16}}}
+	h.repoCtx.resolve = func(*setupState) (*resolved, []string) { return &resolved{frozen: f}, nil }
+	adopted(t, h, stub)
+	v := h.chatView
+	cwd := v.chat.get().Workspace
+	typeText(h, "/check")
+	_, cmd := h.Update(enter())
+	if !v.checking {
+		t.Fatalf("/check didn't start:\n%s", screenText(h))
+	}
+	pump(t, h, cmd, func() bool { return !v.checking })
+	got := screenText(h)
+	for _, want := range []string{"ran on your working tree · not isolated", "the Checks failed on your tree", "no cut, nothing applied", "not covered: writes on your tree"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Candidate") || strings.Contains(got, "isolated Check") {
+		t.Errorf("the output claims isolation:\n%s", got)
+	}
+	_ = cwd
+}
+
+// A message sent while the Checks run changes the tree under them: the
+// output says so rather than vouching for the tree as it is now.
+func TestChecksSayWhenTheSessionWorkedWhileTheyRan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
+	stub := &adoptStub{mode: "default"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	f := &pipeline.Frozen{Checks: []pipeline.CheckCommand{{Run: "exit 0", Timeout: time.Minute, OutputCap: 1 << 16}}}
+	h.repoCtx.resolve = func(*setupState) (*resolved, []string) { return &resolved{frozen: f}, nil }
+	adopted(t, h, stub)
+	v := h.chatView
+	typeText(h, "/check")
+	_, cmd := h.Update(enter())
+	if !v.checking {
+		t.Fatalf("/check didn't start:\n%s", screenText(h))
+	}
+	h.turnDuringChecks = true // what chatSubmit records when a turn starts now
+	pump(t, h, cmd, func() bool { return !v.checking })
+	if got := screenText(h); !strings.Contains(got, "the session worked while the Checks ran") {
+		t.Errorf("no warning:\n%s", got)
+	}
+}
+
+func TestCheckIsOnlyForAdoptedSessions(t *testing.T) {
+	h, _ := reposHome(t, "alpha")
+	slash(h, "/check")
+	if got := screenText(h); !strings.Contains(got, "/check is for an adopted session") {
+		t.Errorf("no refusal:\n%s", got)
+	}
+}
+
+// A late notice from an adopted session (an MCP server that started after
+// the coverage line) reaches the screen; on any other Chat it is not shown.
+func TestAdoptedLateNoticeIsShown(t *testing.T) {
+	h := fullHome(120, 24)
+	h.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	note := "MCP server docs started after the coverage line: it runs outside the sandbox, and Öge doesn't gate it"
+	h.chatEvent(agent.Event{Kind: agent.Warning, Text: note})
+	if strings.Contains(ansi.Strip(strings.Join(h.tr.render(1000), "\n")), "MCP server docs") {
+		t.Fatal("a Warning on an isolated Chat was printed")
+	}
+	h.chatView.inPlace = true
+	if cmd := h.chatEvent(agent.Event{Kind: agent.Warning, Text: note}); cmd != nil {
+		cmd()
+	}
+	h.View()
+	if !strings.Contains(ansi.Strip(strings.Join(h.tr.render(1000), "\n")), "MCP server docs started") {
+		t.Errorf("the late notice is missing:\n%s", ansi.Strip(strings.Join(h.tr.render(1000), "\n")))
+	}
+}

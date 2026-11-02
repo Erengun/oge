@@ -390,6 +390,19 @@ type SessionInfo struct {
 	// Codex's approval policy and sandbox): the source of the coverage
 	// line. Empty for a session Öge launched itself.
 	PermissionMode, ApprovalPolicy, Sandbox string `json:",omitempty"`
+	// Unsupervised names what a resumed session runs outside any sandbox
+	// and without a prompt, as the agent reported it (Codex's MCP
+	// servers). The coverage line names them.
+	Unsupervised []string `json:",omitempty"`
+	// MCPUnread: the agent's MCP servers couldn't be read, so none are named.
+	MCPUnread bool `json:",omitempty"`
+	// ApprovalsReviewer is who the resumed session sends approvals to, as
+	// the agent reported it ("user" when they reach Öge). Empty when the
+	// agent has no such setting.
+	ApprovalsReviewer string `json:",omitempty"`
+	// Refused names the requests Öge answers with a refusal because it
+	// can't put them in front of the human.
+	Refused []string `json:",omitempty"`
 	// Residue is what an isolated launch still loads and the user can't
 	// remove from it, such as organisation-managed plugins and skills.
 	Residue *Residue `json:",omitempty"`
@@ -429,4 +442,24 @@ func ClipOutput(s string) string {
 		s += "\n…"
 	}
 	return s
+}
+
+// Versioned is an Adapter that can say which agent version it would start,
+// without opening a Session: what the restore trust check compares with
+// the version the Chat's last Session reported.
+type Versioned interface {
+	Adapter
+	AgentVersion(ctx context.Context) (string, error)
+}
+
+// VersionOf is the version number in an agent's `--version` output: its
+// first word that starts with a digit ("2.1.5 (Claude Code)" and
+// "codex-cli 0.162.1" give "2.1.5" and "0.162.1"). Empty when there is none.
+func VersionOf(out string) string {
+	for _, w := range strings.Fields(out) {
+		if w[0] >= '0' && w[0] <= '9' {
+			return w
+		}
+	}
+	return ""
 }

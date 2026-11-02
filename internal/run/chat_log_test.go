@@ -66,8 +66,19 @@ func TestChatLogThreeTurns(t *testing.T) {
 	for range 3 {
 		want = append(want, RecTurnStarted, RecBriefingManifest, RecScopeObserved, RecScopeReverted, RecAttemptEnded)
 	}
-	if got := typesOf(t, c); !reflect.DeepEqual(got, want) {
+	// AgentVersion is written when the Session reports it, as the first
+	// turn runs: once, and not at a fixed place among the turn's records.
+	var got []string
+	for _, typ := range typesOf(t, c) {
+		if typ != RecAgentVersion {
+			got = append(got, typ)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("records\n got %v\nwant %v", got, want)
+	}
+	if n := len(recordsOf(t, c, RecAgentVersion)); n != 1 {
+		t.Errorf("AgentVersion written %d times", n)
 	}
 	started, ended := recordsOf(t, c, RecTurnStarted), recordsOf(t, c, RecAttemptEnded)
 	for i, m := range []string{"msg one", "msg two", "msg three"} {

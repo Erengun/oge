@@ -123,6 +123,7 @@ func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 	if env.Getenv(run.ChatFlag) == "0" {
 		return nil
 	}
+	versions := &run.VersionCache{} // the agents' versions, asked once per process
 	return &homeChat{
 		agents: env.Agents,
 		open: func(res *resolved) (*run.Chat, error) {
@@ -131,11 +132,11 @@ func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 				Advisor: userForNotify(env).AdvisorConfig(), Feedback: userForNotify(env).ChatConfig()})
 		},
 		changes: func(p run.ResumeParams) ([]string, error) {
-			p.Agents, p.State = env.Agents, state
+			p.Agents, p.State, p.Versions = env.Agents, state, versions
 			return run.RestoreChanges(p)
 		},
 		resume: func(p run.ResumeParams) (*run.Resumed, error) {
-			p.Agents, p.State, p.Getenv = env.Agents, state, env.Getenv
+			p.Agents, p.State, p.Getenv, p.Versions = env.Agents, state, env.Getenv, versions
 			p.Advisor, p.Feedback = userForNotify(env).AdvisorConfig(), userForNotify(env).ChatConfig()
 			return run.ResumeChat(context.Background(), p)
 		},

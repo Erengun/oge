@@ -43,6 +43,11 @@ const (
 	RecTurnStarted     = "TurnStarted"
 	RecSessionReopened = "SessionReopened"
 	RecHeldOutViewed   = "HeldOutViewed"
+	// RecAgentVersion is the agent version the Chat's newest Session
+	// reported when it opened. The process records (ProcessStarted,
+	// SessionReopened) come before the agent says it, so it follows them.
+	// The restore trust check compares it with the agent now.
+	RecAgentVersion = "AgentVersion"
 	// RecTurnInterrupted is the last record of a Chat that Stop ended
 	// while a turn or its cut was in flight. Its Workspace is kept.
 	RecTurnInterrupted = "TurnInterrupted"
@@ -226,6 +231,9 @@ type Chat struct {
 	// nativeProvider and nativeID name the session an in-place Chat resumed.
 	nativeProvider, nativeID string
 	cur                      *turnOut // the turn in flight's events
+	// late are an in-place Chat's notices that arrived between turns:
+	// the next turn shows them first.
+	late []agent.Event
 	// sending is the turn whose message is being written: if the Session
 	// ends meanwhile, the write's outcome labels it, not drop.
 	sending *turnOut
@@ -716,8 +724,13 @@ func (c *Chat) start(text string, out *turnOut, kind turnKind, advice string, hu
 	c.rebrief = false
 	sess := c.sess
 	c.cur, c.sending = out, out
+	late := c.late
+	c.late = nil
 	c.timer.Stop()
 	c.mu.Unlock()
+	for _, ev := range late {
+		out.send(ev, c.stop)
+	}
 	// The user's message goes as typed, the first one too: no Briefing
 	// wraps a Chat turn, so the agent works as it would without Öge. A
 	// reopened Session gets the user's turns so far, which it lacks.
@@ -862,8 +875,22 @@ func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kin
 func (c *Chat) pump(sess agent.Session, pumped chan struct{}) {
 	defer close(pumped)
 	for ev := range sess.Events() {
+		if ev.Kind == agent.SessionOpened && ev.Session != nil && ev.Session.AgentVersion != "" {
+			// A log that can't take it ends nothing: the trust check then
+			// has no version to compare, as for an older log.
+			_ = c.log(RecAgentVersion, map[string]any{"chat": c.ID, "agent_version": ev.Session.AgentVersion})
+		}
+		late := ev.Kind == agent.Warning && c.inPlace
+		if late {
+			// An adopted session's late notice (an MCP server that started
+			// after the coverage line): kept in the Chat log either way.
+			_ = c.log(RecCoverageReported, map[string]any{"chat": c.ID, "line": ev.Text})
+		}
 		c.mu.Lock()
 		out := c.cur
+		if out == nil && late {
+			c.late = append(c.late, ev) // shown when the next turn starts
+		}
 		c.mu.Unlock()
 		if out == nil {
 			continue

@@ -1,7 +1,9 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
+	"os/exec"
 	"strings"
 
 	"github.com/erengun/oge/internal/agent"
@@ -77,4 +79,26 @@ func (s *session) nativeRequest(id, subtype, tool, useID string, input json.RawM
 	_ = json.Unmarshal(input, &in)
 	d := agent.HostDecision{Family: agent.Approval, Tool: tool, Target: target(tool, in, s.policy.ws), By: s.policy.by}
 	return s.askHuman(id, subtype, tool, useID, input, d)
+}
+
+// AgentVersion is the version of the claude on PATH (or Path), from
+// `claude --version`: what a restored Chat's trust check compares with
+// the version its last Session reported.
+func (a *Adapter) AgentVersion(ctx context.Context) (string, error) {
+	path := a.Path
+	if path == "" {
+		var err error
+		if path, err = exec.LookPath("claude"); err != nil {
+			return "", err
+		}
+	}
+	cmd := exec.CommandContext(ctx, path, "--version")
+	if a.Environ != nil {
+		cmd.Env = a.Environ()
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return agent.VersionOf(string(out)), nil
 }

@@ -372,6 +372,9 @@ func agentLines(text string) string {
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.pendingFB = nil // a new turn of the human's: the old failure is theirs no more
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
+	if h.checking {
+		h.turnDuringChecks = true
+	}
 	h.lastEvent, h.answered = h.clock(), true
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	h.comp = h.composer()
@@ -585,6 +588,15 @@ func (h *home) showAsk() {
 // dim one-liner, a denial; an Ask waits in the live area for its answer.
 func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
+	case agent.Warning:
+		// An adopted session's notice of something Öge doesn't gate (an
+		// MCP server that started late) is shown, never dropped.
+		if h.chatView != nil && h.chatView.inPlace {
+			if t := clean(ev.Text); t != "" {
+				return h.println(h.ogeLine(t))
+			}
+		}
+		return nil
 	case agent.Claim:
 		if ev.Tool == "" {
 			if t := cleanLines(strings.ReplaceAll(ev.Text, "\t", "    ")); t != "" {

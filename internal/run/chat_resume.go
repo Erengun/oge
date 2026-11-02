@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/erengun/oge/internal/agent"
@@ -54,6 +55,43 @@ type ResumeParams struct {
 	// reopen. A different list now means they approved something else.
 	Shown       []string
 	IdleTimeout time.Duration
+	// Versions remembers what each agent said its version is, so the
+	// version spawn runs once per Öge process, not once per message. Nil
+	// asks every time.
+	Versions *VersionCache
+}
+
+// VersionCache is the agent versions asked of this process.
+type VersionCache struct {
+	mu   sync.Mutex
+	seen map[string]versionAnswer
+}
+
+type versionAnswer struct {
+	v   string
+	err error
+}
+
+func (c *VersionCache) of(name string, a agent.Versioned) (string, error) {
+	ask := func() (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return a.AgentVersion(ctx)
+	}
+	if c == nil {
+		return ask()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if r, ok := c.seen[name]; ok {
+		return r.v, r.err
+	}
+	v, err := ask()
+	if c.seen == nil {
+		c.seen = map[string]versionAnswer{}
+	}
+	c.seen[name] = versionAnswer{v, err}
+	return v, err
 }
 
 // resumeLog is what a Chat log says about the Chat, for building it again.
@@ -72,6 +110,9 @@ type resumeLog struct {
 	launch     map[string]string
 	perms      string
 	deny       string
+	// version is the agent version the last Session reported; "" when it
+	// hasn't yet, or the log is older than the field.
+	version string
 }
 
 func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
@@ -123,6 +164,13 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 				if b, err := blobs.Get(d.Text); err == nil {
 					r.texts[d.Turn] = string(b)
 				}
+			}
+		case RecAgentVersion:
+			var d struct {
+				AgentVersion string `json:"agent_version"`
+			}
+			if json.Unmarshal(rec.Data, &d) == nil {
+				r.version = d.AgentVersion
 			}
 		case RecAttemptEnded:
 			var d struct{ Turn int }
@@ -229,6 +277,19 @@ func RestoreChanges(p ResumeParams) ([]string, error) {
 	}
 	if r.deny != "" && r.deny != denyHash(chatDeny(p.State, c.Work)) {
 		out = append(out, "the hard-deny set changed (Öge's state directories moved)")
+	}
+	// The agent's version: a different one may behave differently under
+	// the same settings. An older log with no version isn't compared. An
+	// agent that now can't say its version is a change: Öge can't tell it
+	// is the one the Chat ran under.
+	if v, ok := p.Agents[stage.Agent].(agent.Versioned); ok && r.version != "" {
+		now, err := p.Versions.of(stage.Agent, v)
+		switch now = strings.TrimSpace(now); {
+		case err != nil || now == "":
+			out = append(out, fmt.Sprintf("agent version: %s -> unknown (couldn't run %s --version)", r.version, stage.Agent))
+		case now != r.version:
+			out = append(out, fmt.Sprintf("agent version: %s -> %s", r.version, now))
+		}
 	}
 	return out, nil
 }

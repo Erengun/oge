@@ -261,6 +261,7 @@ func (h *home) sidebar(width, height int) []string {
 		wrap(v, paint, 4)
 	} else if h.inPlace {
 		body = append(body, st.dim("no cut: in place"))
+		wrap(notCovered, st.dim, 5)
 	} else if h.verify == nil {
 		body = append(body, st.dim("no cut yet"))
 	}
