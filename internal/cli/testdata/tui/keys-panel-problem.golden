@@ -6,6 +6,7 @@
    ctrl+j · \+enter       newline
    ctrl+e · ctrl+g        write the task in $EDITOR
    ctrl+s                 stash the draft (again on an empty box restores)
+   alt+l                  keep the draft for later
    ctrl+c                 clear the draft (↑ restores), then leave
    ctrl+l                 redraw
    tab                    open setup
@@ -19,6 +20,5 @@
    backspace · delete     delete back · forward
    ctrl+k · ctrl+u        kill to line end · start
    ctrl+w · alt+d         kill word back · forward
-   ctrl+y                 yank what was killed
  keybindings.toml ignored: composer.stash: ctrl+c cancels; it must always work…
- ↑ ↓ scroll (1-19 of 65) · esc or ? close
+ ↑ ↓ scroll (1-19 of 66) · esc or ? close

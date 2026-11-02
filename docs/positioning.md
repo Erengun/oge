@@ -30,6 +30,30 @@ Three things Öge must get right:
 2. **Preserve context so you resume at once.** Coming back to a Chat, you see what you were doing, what happened since, what you decided, what is waiting and the next action, all from records ([`ux/away.md`](ux/away.md)).
 3. **Make committing attention intentional.** Starting work is cheap; Öge lets you get an idea out of your head without turning it into another running Chat (Later, in [`ux/desk.md`](ux/desk.md)).
 
+### Central hypothesis (2026-11-02)
+
+> AI lets developers spread execution across multiple agents and providers. The bottleneck shifts to human attention, coordination and verification. A persistent, evidence-based workspace can increase useful completed work while reducing the attention it takes to supervise it.
+
+Öge is the instrument for testing this, not proof of it. The evidence is in [`research/herdr-and-attention.md`](research/herdr-and-attention.md) (section 4a) and the test is the Evaluation in [`ux/desk.md`](ux/desk.md).
+
+Three connected problems:
+
+| Problem | What it covers | Öge's answer |
+|---|---|---|
+| **Parallel execution** | Coordinating and supervising several agents | Agent connections, Sessions, projects |
+| **Human attention** | Interruptions, task switching, resumption | Rail, Inbox, Later, the return brief |
+| **Decision quality** | Calibrating trust in the agent, independent verification | Advisor, Checks, Gates, Receipts |
+
+Principle: do not design Öge to help developers supervise **more** agents. Design it so they get more useful work done **without thinking about all their agents constantly**. Öge coordinates the developer's attention across agents. It does not make agents talk to each other (no agent-to-agent prompting).
+
+How strong the evidence is:
+
+| Level | Claim | Status |
+|---|---|---|
+| Direct | Developers experience fragmentation and heavy switching when working with AI | Strong |
+| Mechanism | Switching and interruption cost attention and resumption effort | Strong |
+| Product | This Desk design improves productivity | **Not yet established.** The Evaluation is what establishes it. |
+
 Earlier lines, kept as explanation, not headline:
 
 > Öge makes delegation actually feel like delegation.

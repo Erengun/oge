@@ -48,6 +48,8 @@ type DeskRequest struct {
 	Method string `json:"method"`
 	Repo   string `json:"repo,omitempty"`
 	Task   string `json:"task,omitempty"`
+	// Later keeps Task for later instead of opening a Chat's card.
+	Later bool `json:"later,omitempty"`
 }
 
 // DeskReply is one reply line. Error is one line the caller prints.
@@ -74,6 +76,8 @@ type DeskAdder func(repo, task string) (n int, name string, err error)
 // DeskServe is what the live Desk's socket serves with.
 type DeskServe struct {
 	Add DeskAdder
+	// Later keeps text for later, recorded against repo; nil refuses.
+	Later func(repo, text string) error
 	// Peer is the uid of the connection's other end; nil reads the OS's.
 	// Now is the clock the rate limit runs on; nil is time.Now.
 	Peer func(net.Conn) (uint32, error)
@@ -178,6 +182,20 @@ func (s *deskServer) answer(req DeskRequest) DeskReply {
 		}
 		if why := s.admit(); why != "" {
 			return DeskReply{Error: why}
+		}
+		if req.Later {
+			if s.s.Later == nil {
+				s.giveBack()
+				return DeskReply{Error: "refused: this Desk keeps nothing for later"}
+			}
+			if err := s.s.Later(req.Repo, req.Task); err != nil {
+				unavailable := errors.Is(err, ErrDeskUnavailable)
+				if unavailable {
+					s.giveBack()
+				}
+				return DeskReply{Error: squash(err.Error()), Unavailable: unavailable}
+			}
+			return DeskReply{OK: true}
 		}
 		if s.s.Add == nil {
 			return DeskReply{Error: "refused: this Desk takes no added tasks"}
@@ -306,7 +324,11 @@ func LocateDesk(private string) (DeskOpened, error) {
 // Chat's number and the repo's name come back. ErrNoDesk or ErrDeskDeaf
 // say it was not handed over; a *DeskRefused says the Desk said no.
 func AddToDesk(private, repo, task string) (n int, name string, err error) {
-	rep, err := callDesk(private, DeskRequest{Method: MethodAdd, Repo: repo, Task: task})
+	return callAdd(private, DeskRequest{Method: MethodAdd, Repo: repo, Task: task})
+}
+
+func callAdd(private string, req DeskRequest) (n int, name string, err error) {
+	rep, err := callDesk(private, req)
 	if err != nil {
 		return 0, "", err
 	}

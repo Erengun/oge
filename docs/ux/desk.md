@@ -50,6 +50,8 @@ The attention review ([`positioning.md`](../positioning.md), Identity): starting
 | I3 | **Promotion is deliberate.** A Later item never becomes a running Chat on its own: not at a free slot, not on a timer, not when the cap clears. You promote it with an explicit key or command; it then opens a Chat with that text as its first message, like `/new`. |
 | I4 | **The return brief rebuilds context, it does not summarise activity.** Per Chat, in this order: **You were** (your first message: the intention), **Since you left** (events recorded while away), **Your decisions** (Gate decisions and applies, from the Ledger), **Waiting for you** (open Gates, asks, failed Checks), **Next** (the first actionable Inbox card). All deterministic and record-backed; no model writes it and no model recommends. |
 
+Later, as built (#378): `/later <text>`; `alt+l` on a draft in the composer or the Inbox keeps it instead of sending it (shown in the hint only with a draft); `oge add --later "<text>"` from any repo (over the Desk's socket, same rate limit; with no Desk open it is written straight to `desk.log`). `/later` lists the items oldest first: Enter promotes through the `/new` path (soft-cap note included), `d` deletes, Esc closes. At the soft cap, `/new`'s note also points at the keep key. A count, never a card, toast or notification.
+
 Where the work stands, at a glance:
 
 | State | On the Desk |
@@ -165,17 +167,34 @@ Every behaviour above follows a cited principle, listed below. A change that con
 | Hold while composing; release on send, never on a typing pause | Interrupt at coarse breakpoints. Deferring only to fine breakpoints was *worse* than immediate delivery (Iqbal & Bailey 2008; Adamczyk & Bailey 2004; Züger 2017). |
 | Badge and Inbox are pulled by you; only a stale Gate pushes | Negotiated coordination performs best (McFarlane 2002). |
 | Static rail: glyph, coarse state and age; no tool names, no animation | Peripheral information stays peripheral (Matthews 2004; Weiser & Brown 1996). Live detail invites self-interruption (Jin & Dabbish 2009). |
-| Rail never reorders; numbers are stable | A rearranged context destroys reorientation cues (Mark, González & Harris 2005). Priority lives in the glyph, the count and the Inbox order. |
+| Rail never reorders; numbers are stable | **Design hypothesis.** Rearranged contexts destroy reorientation cues (Mark, González & Harris 2005), and stable layouts were faster than recency order for window switching (Tak et al. 2009). Neither tests a Chat rail, so the Evaluation does. Priority lives in the glyph, the count and the Inbox order. |
 | Since-you-left card in time order, ending at the next goal | Resumption cues doubled task completion; developers preferred chronological snippets (Parnin & DeLine 2010; Altmann & Trafton 2002; Trafton 2003). |
 | Draft and scroll position per Chat | A ready-to-resume plan reduces attention residue (Leroy & Glomb 2018). |
-| Soft cap of 3 working Chats | Fan-out = activity ÷ interaction time, up to 67% lower once waits count; working memory holds about 4 chunks (Olsen & Wood 2004; Cummings & Mitchell 2008; Cowan 2001). |
+| Soft cap of 3 working Chats | **Experimental default, not derived from the literature.** Fan-out = activity ÷ interaction time, up to 67% lower once waits count (Olsen & Wood 2004; Cummings & Mitchell 2008). People hold few contexts at once (Cowan 2001, background only). Three concurrent sessions was typical in the ParallelPilot formative study (N=14). The Evaluation sets the number. |
 | Evidence on every card; no bulk apply | Complacency grows under multi-task load (Parasuraman & Manzey 2010). |
 | Inbox is self-initiated triage, not a drip of notifications | Self-initiated checking beats notification-driven checking (Mark 2016; Fitz 2019). |
-| Measure time and stress per task | People feel faster while being slower (METR 2025). Interruptions cost mostly in stress (Mark 2008). |
+| Measure time and stress per task | In one single-agent study, developers felt faster while measured slower (METR 2025: 16 developers, 246 tasks). Interruptions cost mostly in stress (Mark 2008). This justifies measuring, not a claim that parallel agents slow people down. |
 
 **Why this can raise fan-out.**
 - Öge raises the agent's time alone, because verification and repair run without you.
 - It cuts the human's time per touch, because the card carries the Evidence.
+
+## Connections, roles and Chats (user, 2026-11-02)
+
+Three different things, not interchangeable:
+
+| Term | What it is | Examples |
+|---|---|---|
+| **Agent connection** | A provider or runtime Öge can drive or read: the adapter plus its Launch profile, or a discovered Native session | Claude, Codex, Gemini or `agy` |
+| **Role** | What an agent is used for in one piece of work. This is the existing **Role kind** | implement, advise (Advisor), review, verify (QA); research is not a Role kind today |
+| **Chat** | The unit of work on the Desk: one row on the rail, one card source for the Inbox | "fix the parser", "auth refactor" |
+
+Consequences:
+- **A connection is not a Chat, and a Role is not a Chat.** Asking Opus to review a Codex Chat's work is an advisory operation attached to that Chat (a Consultation by the Advisor). It does not add a rail row.
+- **An unrelated Opus architecture investigation is its own Chat**, with its own row, even though it uses a connection that other Chats also use.
+- **Inbox routing.** An advisory result lands as a card, or on the card, of the Chat it was asked about. It never appears as a separate Chat in the Inbox.
+- **Attention accounting.** The soft cap counts working Chats, not connections and not Consultations. The time you spend reading advice counts as attention on that Chat.
+- **Return brief.** The advice is part of "Since you left" and "Waiting for you" for its Chat. It is never a Chat of its own in the brief.
 
 ## Settings
 
@@ -218,9 +237,22 @@ After slice 4, run a dogfood comparison: the same tasks done with one Chat and w
 - turns and output tokens per Accepted cut;
 - how long Inbox items wait;
 - how many interruptions happen;
-- a 1–7 stress and frustration rating per session.
+- a 1–7 stress and frustration rating per session;
+- context switches per accepted task;
+- resume time after switching Chats (from focus to the first useful action);
+- human intervention time per accepted task;
+- unresolved decisions at the end of a session;
+- verification escape rate (work accepted that later turned out wrong).
 
-If the Desk is not better on both time and stress, the defaults change (for example, the cap drops to 2).
+**North-star operational definition.**
+
+> U = accepted, independently verified work ÷ human attention minutes
+
+Attention minutes count active prompting, review, decisions, debugging and context reconstruction. They do not count agent background time.
+
+**Do not optimise throughput alone.** In ParallelPilot (N=16, unreviewed) tickets per minute rose 63% while perceived control and confidence in interventions did not improve significantly, and monitoring gain did not track throughput. More tickets finished is not the same as better supervision. Report U, the escape rate and the stress rating together with speed.
+
+If the Desk is not better on both time and stress, or U does not rise, the defaults change (for example, the cap drops to 2).
 
 ## Not doing
 

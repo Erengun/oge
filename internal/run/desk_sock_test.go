@@ -223,3 +223,56 @@ func TestDeskSocketUnavailableAddsDontCount(t *testing.T) {
 		t.Errorf("after busy adds: %v", err)
 	}
 }
+
+// oge add --later goes over the same socket, under the same rate limit
+// and uid check; the Desk's own Later hook keeps it, and Add is never
+// called.
+func TestDeskSocketLater(t *testing.T) {
+	var kept []added
+	private, _, got := serve(t, run.DeskServe{Later: func(repo, text string) error {
+		kept = append(kept, added{repo, text})
+		return nil
+	}})
+	direct, err := run.KeepForLater(private, "/r", "an idea", time.Now())
+	if err != nil || direct {
+		t.Fatalf("direct %v, %v", direct, err)
+	}
+	if len(kept) != 1 || kept[0] != (added{"/r", "an idea"}) || len(*got) != 0 {
+		t.Errorf("kept %v, added %v", kept, *got)
+	}
+	for range run.AddLimit - 1 {
+		if _, err := run.KeepForLater(private, "/r", "more", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var refused *run.DeskRefused
+	if _, err := run.KeepForLater(private, "/r", "one too many", time.Now()); !errors.As(err, &refused) {
+		t.Errorf("past the limit: %v", err)
+	}
+}
+
+func TestDeskSocketRefusesLaterWithoutAHook(t *testing.T) {
+	private, _, _ := serve(t, run.DeskServe{})
+	var refused *run.DeskRefused
+	if _, err := run.KeepForLater(private, "/r", "x", time.Now()); !errors.As(err, &refused) {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestLaterItemsReplay(t *testing.T) {
+	private := shortDir(t)
+	d, err := run.OpenDesk(private, env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		_ = d.LaterAdded(run.LaterItem{ID: id, Text: "t" + id, Repo: "/r"})
+	}
+	_ = d.LaterRemoved("b", run.LaterPromoted)
+	d.Release()
+	recs, _ := run.ReadDesk(private)
+	got := run.LaterItems(recs)
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "c" {
+		t.Errorf("replay %+v", got)
+	}
+}

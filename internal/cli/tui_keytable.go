@@ -67,6 +67,7 @@ var keyTable = []keyBinding{
 	{"Composer", "", nil, "newline", "composer.newline"},
 	{"Composer", "", nil, "write the task in $EDITOR", "composer.editor"},
 	{"Composer", "", nil, "stash the draft (again on an empty box restores)", "composer.stash"},
+	{"Composer", "", nil, "keep the draft for later", "composer.later"},
 	{"Composer", "ctrl+c", []string{"ctrl+c"}, "clear the draft (↑ restores), then leave", ""},
 	{"Composer", "", nil, "redraw", "composer.redraw"},
 	{"Composer", "tab", []string{"tab"}, "open setup", ""},

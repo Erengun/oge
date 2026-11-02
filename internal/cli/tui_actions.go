@@ -28,6 +28,7 @@ const (
 	actNewline       = "newline"
 	actEditor        = "editor"
 	actStash         = "stash"
+	actLater         = "later"
 	actRedraw        = "redraw"
 	actKeysPanel     = "keysPanel"
 	actCycleMode     = "cycleMode"
@@ -48,6 +49,7 @@ var actionTable = []actionBinding{
 	{ctxComposer, actNewline, []string{"ctrl+j", "shift+enter", "alt+enter"}},
 	{ctxComposer, actEditor, []string{"ctrl+e", "ctrl+g"}},
 	{ctxComposer, actStash, []string{"ctrl+s"}},
+	{ctxComposer, actLater, []string{"alt+l"}},
 	{ctxComposer, actRedraw, []string{"ctrl+l"}},
 	{ctxComposer, actKeysPanel, []string{"?"}},
 	{ctxComposer, actCycleMode, []string{"shift+tab"}},
