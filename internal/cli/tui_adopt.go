@@ -311,6 +311,8 @@ func coverageLine(mode, approval, sandbox, reviewer string) string {
 		return "coverage unknown: mode " + mode + " is not one Öge recognises"
 	case approval == "" && sandbox != "":
 		return "coverage unknown: the session's approval policy wasn't read"
+	case approval != "" && sandbox == "":
+		return "coverage unknown: the session's sandbox wasn't read"
 	case approval != "":
 		return "gated: what its approval policy would ask · allowed without Öge: what its sandbox allows"
 	}

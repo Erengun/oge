@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/ledger"
@@ -511,6 +512,7 @@ func TestCoverageLine(t *testing.T) {
 		{"bypassPermissions", "", "", "not gated: bypassPermissions"},
 		{"", "never", "", "not gated: approval policy never"},
 		{"", "on-request", "danger-full-access", "not gated: sandbox danger-full-access"},
+		{"", "on-request", "", "coverage unknown: the session's sandbox wasn't read"},
 		{"default", "", "", "gated: what your settings would ask · allowed without Öge: your allow rules"},
 		{"acceptEdits", "", "", "gated: what your settings would ask · allowed without Öge: your allow rules and every file edit · mode acceptEdits"},
 		{"auto", "", "", "gated: what your settings would ask · allowed without Öge: what claude's auto mode allows · mode auto"},
@@ -660,5 +662,25 @@ func TestCheckIsOnlyForAdoptedSessions(t *testing.T) {
 	slash(h, "/check")
 	if got := screenText(h); !strings.Contains(got, "/check is for an adopted session") {
 		t.Errorf("no refusal:\n%s", got)
+	}
+}
+
+// A late notice from an adopted session (an MCP server that started after
+// the coverage line) reaches the screen; on any other Chat it is not shown.
+func TestAdoptedLateNoticeIsShown(t *testing.T) {
+	h := fullHome(120, 24)
+	h.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	note := "MCP server docs started after the coverage line: it runs outside the sandbox, and Öge doesn't gate it"
+	h.chatEvent(agent.Event{Kind: agent.Warning, Text: note})
+	if strings.Contains(ansi.Strip(strings.Join(h.tr.render(1000), "\n")), "MCP server docs") {
+		t.Fatal("a Warning on an isolated Chat was printed")
+	}
+	h.chatView.inPlace = true
+	if cmd := h.chatEvent(agent.Event{Kind: agent.Warning, Text: note}); cmd != nil {
+		cmd()
+	}
+	h.View()
+	if !strings.Contains(ansi.Strip(strings.Join(h.tr.render(1000), "\n")), "MCP server docs started") {
+		t.Errorf("the late notice is missing:\n%s", ansi.Strip(strings.Join(h.tr.render(1000), "\n")))
 	}
 }

@@ -588,6 +588,15 @@ func (h *home) showAsk() {
 // dim one-liner, a denial; an Ask waits in the live area for its answer.
 func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 	switch ev.Kind {
+	case agent.Warning:
+		// An adopted session's notice of something Öge doesn't gate (an
+		// MCP server that started late) is shown, never dropped.
+		if h.chatView != nil && h.chatView.inPlace {
+			if t := clean(ev.Text); t != "" {
+				return h.println(h.ogeLine(t))
+			}
+		}
+		return nil
 	case agent.Claim:
 		if ev.Tool == "" {
 			if t := cleanLines(strings.ReplaceAll(ev.Text, "\t", "    ")); t != "" {
