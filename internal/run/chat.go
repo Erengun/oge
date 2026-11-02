@@ -43,6 +43,11 @@ const (
 	RecTurnStarted     = "TurnStarted"
 	RecSessionReopened = "SessionReopened"
 	RecHeldOutViewed   = "HeldOutViewed"
+	// RecAgentVersion is the agent version the Chat's newest Session
+	// reported when it opened. The process records (ProcessStarted,
+	// SessionReopened) come before the agent says it, so it follows them.
+	// The restore trust check compares it with the agent now.
+	RecAgentVersion = "AgentVersion"
 	// RecTurnInterrupted is the last record of a Chat that Stop ended
 	// while a turn or its cut was in flight. Its Workspace is kept.
 	RecTurnInterrupted = "TurnInterrupted"
@@ -862,6 +867,11 @@ func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kin
 func (c *Chat) pump(sess agent.Session, pumped chan struct{}) {
 	defer close(pumped)
 	for ev := range sess.Events() {
+		if ev.Kind == agent.SessionOpened && ev.Session != nil && ev.Session.AgentVersion != "" {
+			// A log that can't take it ends nothing: the trust check then
+			// has no version to compare, as for an older log.
+			_ = c.log(RecAgentVersion, map[string]any{"chat": c.ID, "agent_version": ev.Session.AgentVersion})
+		}
 		c.mu.Lock()
 		out := c.cur
 		c.mu.Unlock()

@@ -2,9 +2,11 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -310,5 +312,58 @@ func TestResumeChatRepoGoneIsRefused(t *testing.T) {
 	p.Chat.Repo = filepath.Join(t.TempDir(), "nope")
 	if _, err := ResumeChat(context.Background(), p); !errors.Is(err, ErrRestoreRefused) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// versioned is an adapter that says which agent version it would start.
+type versioned struct {
+	agent.Adapter
+	v string
+}
+
+func (a versioned) AgentVersion(context.Context) (string, error) { return a.v, nil }
+
+// The agent version the last Session reported is in the log, and a restore
+// under a different agent version shows the settings-changed card. The
+// same version, or an agent that can't say, is no change.
+func TestRestoreChangesSeesADifferentAgentVersion(t *testing.T) {
+	p, _ := stoppedChat(t)
+	recs, err := ledger.Replay(p.Chat.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var was string
+	for _, r := range recs {
+		if r.Type == RecAgentVersion {
+			var d struct {
+				AgentVersion string `json:"agent_version"`
+			}
+			if err := json.Unmarshal(r.Data, &d); err != nil {
+				t.Fatal(err)
+			}
+			was = d.AgentVersion
+		}
+	}
+	if was == "" {
+		t.Fatal("the Session's agent version isn't in the Chat log")
+	}
+	base := p.Agents["claude"]
+	for _, tc := range []struct {
+		now  string
+		want string
+	}{{was, ""}, {"", ""}, {"99.1.0", "agent version: " + was + " -> 99.1.0"}} {
+		p.Agents = map[string]agent.Adapter{"claude": versioned{base, tc.now}}
+		ch, err := RestoreChanges(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.want == "" && len(ch) != 0 || tc.want != "" && !slices.Equal(ch, []string{tc.want}) {
+			t.Errorf("agent now %q: changes %v, want %q", tc.now, ch, tc.want)
+		}
+	}
+	// The card's change list gates the reopen like any other change.
+	p.Agents = map[string]agent.Adapter{"claude": versioned{base, "99.1.0"}}
+	if _, err := ResumeChat(context.Background(), p); !errors.Is(err, ErrRestoreRefused) {
+		t.Errorf("a different agent version resumed without a typed reopen: %v", err)
 	}
 }

@@ -46,7 +46,7 @@ type TreeChecks struct {
 // repo's own, at the real path, in Öge's private home and caches.
 func (c *Chat) ChecksOnTree(ctx context.Context, p TreeChecksParams) (*TreeChecks, error) {
 	if !c.inPlace {
-		return nil, errors.New("Checks on demand are for an adopted session: this Chat's changes are checked in isolation")
+		return nil, errors.New("checks on demand are for an adopted session: this Chat's changes are checked in isolation")
 	}
 	if p.Frozen == nil || len(p.Frozen.Checks) == 0 {
 		return nil, errors.New("no Checks are configured for this repo")

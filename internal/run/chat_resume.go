@@ -72,6 +72,9 @@ type resumeLog struct {
 	launch     map[string]string
 	perms      string
 	deny       string
+	// version is the agent version the last Session reported; "" when it
+	// hasn't yet, or the log is older than the field.
+	version string
 }
 
 func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
@@ -124,6 +127,13 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 					r.texts[d.Turn] = string(b)
 				}
 			}
+		case RecAgentVersion:
+			var d struct {
+				AgentVersion string `json:"agent_version"`
+			}
+			if json.Unmarshal(rec.Data, &d) == nil {
+				r.version = d.AgentVersion
+			}
 		case RecAttemptEnded:
 			var d struct{ Turn int }
 			if json.Unmarshal(rec.Data, &d) == nil {
@@ -143,6 +153,7 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 			if rec.Type == RecSessionReopened && pending != "" {
 				r.frozenBlob, pending = pending, ""
 			}
+			r.version = "" // a new process: its own version follows once it opens
 			var d struct {
 				LaunchProfile map[string]string `json:"launch_profile"`
 				Permissions   string
@@ -229,6 +240,17 @@ func RestoreChanges(p ResumeParams) ([]string, error) {
 	}
 	if r.deny != "" && r.deny != denyHash(chatDeny(p.State, c.Work)) {
 		out = append(out, "the hard-deny set changed (Öge's state directories moved)")
+	}
+	// The agent's version: a different one may behave differently under
+	// the same settings. An older log, or an agent that can't say, isn't
+	// compared; nothing is launched unless the log has a version.
+	if v, ok := p.Agents[stage.Agent].(agent.Versioned); ok && r.version != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		now, err := v.AgentVersion(ctx)
+		cancel()
+		if now = strings.TrimSpace(now); err == nil && now != "" && now != r.version {
+			out = append(out, fmt.Sprintf("agent version: %s -> %s", r.version, now))
+		}
 	}
 	return out, nil
 }

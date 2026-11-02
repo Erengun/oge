@@ -434,3 +434,23 @@ func ClipOutput(s string) string {
 	}
 	return s
 }
+
+// Versioned is an Adapter that can say which agent version it would start,
+// without opening a Session: what the restore trust check compares with
+// the version the Chat's last Session reported.
+type Versioned interface {
+	Adapter
+	AgentVersion(ctx context.Context) (string, error)
+}
+
+// VersionOf is the version number in an agent's `--version` output: its
+// first word that starts with a digit ("2.1.5 (Claude Code)" and
+// "codex-cli 0.162.1" give "2.1.5" and "0.162.1"). Empty when there is none.
+func VersionOf(out string) string {
+	for _, w := range strings.Fields(out) {
+		if w[0] >= '0' && w[0] <= '9' {
+			return w
+		}
+	}
+	return ""
+}

@@ -359,3 +359,24 @@ func (s *session) withdrawAsks() {
 		s.withdraw(k)
 	}
 }
+
+// AgentVersion is the version of the codex on PATH (or Path), from
+// `codex --version`.
+func (a *Adapter) AgentVersion(ctx context.Context) (string, error) {
+	path := a.Path
+	if path == "" {
+		var err error
+		if path, err = exec.LookPath("codex"); err != nil {
+			return "", err
+		}
+	}
+	cmd := exec.CommandContext(ctx, path, "--version")
+	if a.Environ != nil {
+		cmd.Env = a.Environ()
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return agent.VersionOf(string(out)), nil
+}
