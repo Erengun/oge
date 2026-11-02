@@ -114,10 +114,16 @@ func (h *home) railGroups() (slots [][]*chatView, roots []string) {
 		h.place(r)
 		rootOf[repoKey(r)] = r
 	}
+	for _, d := range h.onDesk { // a project with a session on the Desk keeps its slot
+		h.place(d.repo)
+		if _, ok := rootOf[repoKey(d.repo)]; !ok {
+			rootOf[repoKey(d.repo)] = d.repo
+		}
+	}
 	for _, k := range h.order {
 		if g := by[k]; len(g) > 0 {
 			slots, roots = append(slots, g), append(roots, g[0].root)
-		} else if r, ok := rootOf[k]; ok && slices.ContainsFunc(h.pinned(), func(q string) bool { return repoKey(q) == k }) {
+		} else if r, ok := rootOf[k]; ok && (slices.ContainsFunc(h.pinned(), func(q string) bool { return repoKey(q) == k }) || len(h.sessionsIn(r)) > 0) {
 			slots, roots = append(slots, nil), append(roots, r)
 		}
 	}
@@ -261,6 +267,9 @@ func (h *home) projectPicker() bool {
 
 // chatsTitle is the open picker's heading.
 func (h *home) chatsTitle() string {
+	if h.catalog != nil {
+		return h.catalogTitle()
+	}
 	if h.projectPicker() {
 		return "Projects"
 	}

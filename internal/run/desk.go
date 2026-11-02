@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +34,12 @@ const (
 	RecSeen       = "Seen"
 	// RecResidueSwept: a restore killed a process group the last oge left.
 	RecResidueSwept = "ResidueSwept"
-	RecDeskClosed   = "DeskClosed"
+	// A native session put on the Desk with a, and taken off it again
+	// (docs/ux/sessions.md). Only what the rail shows is kept.
+	RecSessionAdded    = "SessionAdded"
+	RecSessionArchived = "SessionArchived"
+	RecSessionSeen     = "SessionSeen" // a row's title and age refreshed in place
+	RecDeskClosed      = "DeskClosed"
 )
 
 // The hosts a Desk can live under (docs/ux/away.md, A1).
@@ -73,6 +80,9 @@ type ChatAdded struct {
 	N     int    `json:"n"`
 	Title string `json:"title"`
 	Repo  string `json:"repo"`
+	// Source is "oge add" for a Chat that landed as a card before any
+	// turn: its Chat id comes with the ChatAdded its first turn records.
+	Source string `json:"source,omitempty"`
 }
 
 // ChatClosed is a Chat the human closed: its Workspace goes, and a
@@ -85,6 +95,25 @@ type ChatClosed struct {
 type Seen struct {
 	Chat string `json:"chat"`
 	Upto string `json:"upto"`
+}
+
+// SessionAdded is a native session the human put on the Desk: the rail
+// row's title and last known activity, and where it lives. It holds no
+// transcript text.
+type SessionAdded struct {
+	Provider string    `json:"provider"`
+	ID       string    `json:"id"`
+	Profile  string    `json:"profile,omitempty"`
+	Repo     string    `json:"repo"`
+	Title    string    `json:"title,omitempty"`
+	Last     time.Time `json:"last,omitzero"`
+}
+
+// SessionArchived is a session taken off the Desk; the native session is
+// untouched.
+type SessionArchived struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
 }
 
 // DeskClosed is the Desk's process ending: clean on /quit, not on a
@@ -100,6 +129,9 @@ type Desk struct {
 	lock *os.File
 	log  *os.File
 	done bool
+	// ln and sock are the socket Serve opened, closed with the Desk.
+	ln   net.Listener
+	sock string
 }
 
 // DeskHeldError is the Desk already open in another live process.
@@ -122,6 +154,12 @@ func OpenDesk(private string, getenv func(string) string) (*Desk, error) {
 		return nil, err
 	}
 	lock, err := lockDesk(filepath.Join(dir, deskLock))
+	if errors.Is(err, errDeskHeld) {
+		// A probe from oge add holds the lock for an instant; a second try
+		// tells it from a Desk that is really open.
+		time.Sleep(25 * time.Millisecond)
+		lock, err = lockDesk(filepath.Join(dir, deskLock))
+	}
 	if errors.Is(err, errDeskHeld) {
 		held := &DeskHeldError{}
 		if o, ok := lastOpened(dir); ok {
@@ -190,6 +228,12 @@ func (d *Desk) ChatAdded(chat string, n int, title, repo string) {
 	_ = d.append(RecChatAdded, ChatAdded{Chat: chat, N: n, Title: title, Repo: repo})
 }
 
+// ChatQueued records Chat n, which oge add put on the Desk as a card in
+// repo: no Chat is open yet, and no turn has started.
+func (d *Desk) ChatQueued(n int, title, repo string) {
+	_ = d.append(RecChatAdded, ChatAdded{N: n, Title: title, Repo: repo, Source: "oge add"})
+}
+
 // ChatClosed records the Chat closed, ahead of its closing.
 func (d *Desk) ChatClosed(chat string) {
 	_ = d.append(RecChatClosed, ChatClosed{Chat: chat})
@@ -204,6 +248,56 @@ func (d *Desk) Seen(chat, run string) {
 // kill leaves a trace.
 func (d *Desk) ResidueSwept(chat string, pid, pgid int) {
 	_ = d.append(RecResidueSwept, map[string]any{"chat": chat, "pid": pid, "pgid": pgid})
+}
+
+// SessionAdded records a native session put on the Desk.
+func (d *Desk) SessionAdded(s SessionAdded) { _ = d.append(RecSessionAdded, s) }
+
+// SessionSeen records a row's refreshed title and last activity. Replay
+// updates the row where it is.
+func (d *Desk) SessionSeen(s SessionAdded) { _ = d.append(RecSessionSeen, s) }
+
+// SessionArchived records a session taken off the Desk.
+func (d *Desk) SessionArchived(provider, id string) {
+	_ = d.append(RecSessionArchived, SessionArchived{Provider: provider, ID: id})
+}
+
+// SessionsOnDesk replays recs: the sessions added and not archived since,
+// in the order they were added. A session added again after its archive
+// goes to the end.
+func SessionsOnDesk(recs []DeskRecord) []SessionAdded {
+	var out []SessionAdded
+	drop := func(provider, id string) {
+		out = slices.DeleteFunc(out, func(s SessionAdded) bool { return s.Provider == provider && s.ID == id })
+	}
+	for _, r := range recs {
+		switch r.Type {
+		case RecSessionAdded:
+			var s SessionAdded
+			if json.Unmarshal(r.Data, &s) == nil && s.Provider != "" && s.ID != "" {
+				drop(s.Provider, s.ID)
+				out = append(out, s)
+			}
+		case RecSessionSeen:
+			var s SessionAdded
+			if json.Unmarshal(r.Data, &s) == nil {
+				for i := range out {
+					if out[i].Provider == s.Provider && out[i].ID == s.ID {
+						out[i].Last = s.Last
+						if s.Title != "" {
+							out[i].Title = s.Title
+						}
+					}
+				}
+			}
+		case RecSessionArchived:
+			var s SessionArchived
+			if json.Unmarshal(r.Data, &s) == nil {
+				drop(s.Provider, s.ID)
+			}
+		}
+	}
+	return out
 }
 
 // Close records DeskClosed, clean or not, and lets the Desk go.
@@ -223,6 +317,10 @@ func (d *Desk) Release() {
 		return
 	}
 	d.done = true
+	if d.ln != nil {
+		_ = d.ln.Close()
+		_ = os.Remove(d.sock) // before the lock goes: a later Desk's own is not ours to remove
+	}
 	_ = d.log.Close()
 	unlockDesk(d.lock)
 }

@@ -394,18 +394,29 @@ type home struct {
 	// ones that are git repos (tui_projects.go). order is the repos in the
 	// order their first Chat opened, which the rail never changes.
 	deskProjects []string
-	pins         []string
-	pinsRead     bool
-	order        []string
+	// onDesk are the native sessions added to the Desk, in the order they
+	// were added; catalog is the open /sessions (tui_sessions.go).
+	onDesk   []deskSession
+	catalog  *sessionCatalog
+	discover sessionDiscover // nil: Claude's files and Codex's app-server
+	sessSeq  int
+	selSess  string // the session row last clicked, for /close
+	sessNote string // a dim line under the box
+	pins     []string
+	pinsRead bool
+	order    []string
 	// redraw schedules a redraw (tea.Tick); nil schedules none, as in
 	// tests that drive the home by hand.
 	redraw func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// reachDesk is the away messages (reach.go); nil sends none.
 	reachDesk *reachDesk
-	toast     *toast
-	toastSeq  int
-	run       *model    // nil while composing
-	notify    *notifier // the session's alerts; nil when silent (#170)
+	// desk is the Desk record, for what the home itself adds (oge add's
+	// cards); nil records nothing.
+	desk     *run.Desk
+	toast    *toast
+	toastSeq int
+	run      *model    // nil while composing
+	notify   *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -602,7 +613,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m, cmd := h.routed(msg)
 	h.recordSeen()
-	return m, withTick(withTick(cmd, h.attend()), h.inboxTick())
+	return m, withTick(withTick(tea.Batch(cmd, h.startAdded()), h.attend()), h.inboxTick())
 }
 
 func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -663,10 +674,16 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch m := msg.(type) {
+	case deskAddMsg:
+		h.deskAdd(m)
+		return h, nil
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatStepMsg:
 		return h, h.cutStepped(m)
+	case sessionsMsg:
+		h.sessionsFound(m)
+		return h, nil
 	case deskTickMsg:
 		if h.tickAt.Equal(m.at) {
 			h.tickAt = time.Time{} // drawn again now; Update asks for the next
@@ -829,7 +846,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.comp.set(msg.text)
 		}
 	case tea.KeyPressMsg:
-		h.msg, h.note = nil, ""
+		h.msg, h.note, h.sessNote = nil, "", ""
 		h.seen = true // a key in this Chat: its ✓ has been seen
 		switch {
 		case h.job != nil:
@@ -1047,6 +1064,9 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 		h.tr.latest()
 	}
 	h.cleared, h.queuedText = "", ""
+	if strings.TrimSpace(text) != "/close" {
+		h.selSess, h.sessNote = "", "" // only /close acts on a clicked row
+	}
 	h.collapseSince() // sent: the card has done its work
 	if e := h.adviceEdit; e != nil && h.chat != nil && h.chat.get() == e.chat && strings.TrimSpace(text) == strings.TrimSpace(e.text) {
 		// Sent as it was: still the advice turn, outside the Task.
@@ -1557,6 +1577,9 @@ func (h *home) render() (string, int, int) {
 	if h.note != "" {
 		lines = append(lines, " "+st.ok(h.note))
 	}
+	if h.sessNote != "" {
+		lines = append(lines, " "+st.dim(h.sessNote))
+	}
 	if h.stash != "" {
 		lines = append(lines, " "+st.dim("stashed · ctrl+s restores it on an empty box"))
 	}
@@ -1879,6 +1902,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, deskProjects: u.deskProjects, herdr: u.herdr, redraw: tea.Tick}
 	h.reachDesk = u.reachDesk()
+	h.desk = u.desk
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.absence.last = h.clock()
@@ -1886,6 +1910,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 	if histDir != "" {
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 		h.absence.private = filepath.Dir(histDir)
+		h.onDesk = restoreSessions(h.absence.private)
 	}
 	h.getenv = env.Getenv
 	h.shell = runShell
@@ -2024,6 +2049,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		}
 		return rc, problem
 	}
+	u.serveAdd(ctx)
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
 	}
