@@ -304,13 +304,44 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 // existing directory moves the working directory, one that may fail
 // leaves both possible, and one in a subshell or a pipeline moves
 // nothing after it.
-func (p *policy) escapes(cmd string) bool { return p.escapesIn(cmd, []string{p.ws[0]}, false) }
+func (p *policy) escapes(cmd string) bool { return p.escapesIn(cmd, []string{p.ws[0]}, notProg) }
+
+// progKind says what a text is read as. In a quotedProg (python, node)
+// a string literal needs quotes, so a bare / is an operator. In a
+// codeProg (perl, ruby, php, osascript) q(/) and %q(/) are literals
+// without quotes, so a lone / may be the root.
+type progKind int
+
+const (
+	notProg progKind = iota
+	codeProg
+	quotedProg
+)
+
+// kindOf is how the program an interpreter runs is read.
+func kindOf(name string) progKind {
+	switch {
+	case !interpreter(name):
+		return notProg
+	case strings.HasPrefix(name, "python") || name == "node":
+		return quotedProg
+	}
+	return codeProg
+}
+
+// or is k, or o when k is not a program.
+func (k progKind) or(o progKind) progKind {
+	if k == notProg {
+		return o
+	}
+	return k
+}
 
 // escapesIn is escapes for a command that may run in any of cwds.
 // program is a program for an interpreter that isn't a shell (python -c,
 // a here-document fed to node), where quoted text joins up into paths,
 // so no quoted part is taken for a pattern.
-func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
+func (p *policy) escapesIn(cmd string, cwds []string, program progKind) bool {
 	cmds, ok := splitShell(cmd)
 	if !ok {
 		return true
@@ -346,14 +377,15 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 		bare := !oneOf("$(", opened) && !oneOf("<(", opened) && !oneOf(">(", opened) &&
 			(k+1 >= len(cmds) || !oneOf("|", cmds[k+1].ops))
 		for _, d := range c.docs {
-			if !(bare && hereData(c, d)) && p.escapesIn(d.body, cwds, program || interpreter(name)) {
+			if !(bare && hereData(c, d)) && p.escapesIn(d.body, cwds, kindOf(name).or(program)) {
 				return true
 			}
 		}
 		// An inline program is read as its own command. A shell's is
 		// then not a word; another interpreter's is a word too, read
 		// as a program (a # there is not a comment).
-		progs := map[int]bool{}
+		progs := map[int]progKind{}
+		isProg := map[int]bool{}
 		for j, w := range c.words {
 			// An interpreter heads the command, or sits further in it
 			// (xargs sh -c, find -exec sh -c): there, only the flag right
@@ -375,9 +407,9 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 					}
 					return true // a flag with no program
 				}
-				shell := !interpreter(filepath.Base(w.text))
-				progs[i+1] = shell
-				if prog := c.words[i+1]; prog.dynamic || p.escapesIn(prog.text, cwds, program || !shell) {
+				kind := kindOf(filepath.Base(w.text))
+				progs[i+1], isProg[i+1] = kind, true
+				if prog := c.words[i+1]; prog.dynamic || p.escapesIn(prog.text, cwds, kind.or(program)) {
 					return true
 				}
 				if j != h {
@@ -391,18 +423,18 @@ func (p *policy) escapesIn(cmd string, cwds []string, program bool) bool {
 		}
 		for _, cwd := range cwds {
 			for i, w := range c.words {
-				shell, prog := progs[i]
-				if shell || i > h && separator(name, c.words[i-1].text, w.text) {
+				kind, prog := progs[i], isProg[i]
+				if prog && kind == notProg || i > h && separator(name, c.words[i-1].text, w.text) {
 					continue
 				}
 				if scripts[i] {
 					w = scriptText(name, w)
-				} else if prog && !w.dynamic {
-					// An interpreter's program is read again as code,
+				} else if prog && kind == quotedProg && !w.dynamic {
+					// A python or node program is read again as code,
 					// where a quoted / is told from an operator.
 					w.text = maskOutsideStrings(w.text, `"'`)
 				}
-				if p.wordEscapes(cwd, w, program || prog) {
+				if p.wordEscapes(cwd, w, kind.or(program)) {
 					return true
 				}
 			}
@@ -541,7 +573,8 @@ func union(a, b []string) []string {
 // can't be joined to more text: not in a program, not with a $, a glob
 // or an =, and not where the word holds quotes of its own, as in awk's
 // system("cat /e" "tc/passwd").
-func (p *policy) wordEscapes(cwd string, sw sword, program bool) bool {
+func (p *policy) wordEscapes(cwd string, sw sword, kind progKind) bool {
+	program := kind != notProg
 	w := sw.text
 	pattern := sw.quoted && !sw.bare && !sw.dynamic && !program && !strings.ContainsAny(w, "'\"*?[=")
 	parts := strings.FieldsFunc(w, func(r rune) bool { return strings.ContainsRune(" '\"(),;=<>|&`[]", r) })
@@ -556,7 +589,7 @@ func (p *policy) wordEscapes(cwd string, sw sword, program bool) bool {
 			t = t[len(m[0])-1:] // file:///etc/x is /etc/x
 		}
 		for _, t := range strings.Split(t, ":") {
-			if program && !sw.quoted && !sw.dynamic && t != "" && strings.Trim(t, "/") == "" {
+			if kind == quotedProg && !sw.quoted && !sw.dynamic && t != "" && strings.Trim(t, "/") == "" {
 				continue // an operator in code: 10 / 2, 7 // 2, x /= 2
 			}
 			if sw.slashOK && t != "" && strings.Trim(t, "/") == "" {
@@ -644,7 +677,9 @@ var shells = []string{"sh", "bash", "zsh", "dash", "ksh", "fish"}
 // interpreter, eval, source, parallel, or find -exec.
 func resplits(cmds []*scmd, k int, grouped bool) bool {
 	for m := k + 1; m < len(cmds); m++ {
-		if !grouped && !oneOf("|", cmds[m].ops) {
+		// Output given to >( or <( reaches that command whatever
+		// separates them.
+		if !grouped && !oneOf("|", cmds[m].ops) && !oneOf(">(", cmds[m].ops) && !oneOf("<(", cmds[m].ops) {
 			return false
 		}
 		ws := cmds[m].words
@@ -709,7 +744,29 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 		if pos >= 0 {
 			out[at(pos)] = true
 		}
+		for i := range out {
+			if sedRuns(ws[i].text) {
+				delete(out, i) // GNU sed runs it in a shell
+			}
+		}
 	case name == "jq":
+		// -f, --from-file or a cluster holding f (-nf) makes a word, even
+		// one after the filter, a program file: nothing is a script.
+		for i := 0; i < len(args); i++ {
+			t := args[i].text
+			switch {
+			case t == "--":
+				i = len(args)
+			case oneOf(t, []string{"--arg", "--argjson", "--slurpfile", "--rawfile"}):
+				i += 2
+			case oneOf(t, []string{"-L", "--indent"}):
+				i++
+			case t == "--from-file" || strings.HasPrefix(t, "--from-file="):
+				return out
+			case len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.Contains(t, "f"):
+				return out
+			}
+		}
 		for i := 0; i < len(args); i++ {
 			t := args[i].text
 			switch {
@@ -736,8 +793,8 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 					out[at(i+1)] = true
 				}
 				return out
-			case oneOf(t, []string{"-f", "--file"}):
-				return out
+			case oneOf(t, []string{"-f", "--file", "-E", "--exec", "-i", "--include", "-l", "--load"}):
+				return out // a program file, or a file gawk reads or loads
 			case strings.HasPrefix(t, "-") && t != "-":
 			default:
 				out[at(i)] = true
@@ -832,4 +889,101 @@ func maskOutsideStrings(text, quotes string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// sedRuns reports whether a sed script may run a command: an e command,
+// or an s command with an e flag. It reads the script as sed does, and
+// says yes for one it can't read.
+func sedRuns(script string) bool {
+	rs := []rune(script)
+	n := len(rs)
+	i := 0
+	skipTo := func(delim rune) bool { // past the next unescaped delim
+		for i < n {
+			r := rs[i]
+			i++
+			switch {
+			case r == '\\' && i < n:
+				i++
+			case r == delim:
+				return true
+			}
+		}
+		return false
+	}
+	eol := func() {
+		for i < n && rs[i] != '\n' {
+			i++
+		}
+	}
+	for i < n {
+		// An address: numbers, $, ~, +, ,, !, spaces, /re/ and \cREc.
+		for i < n {
+			r := rs[i]
+			switch {
+			case r == '/' || r == '\\' && i+1 < n:
+				d := r
+				i++
+				if r == '\\' {
+					d = rs[i]
+					i++
+				}
+				if !skipTo(d) {
+					return true
+				}
+				for i < n && strings.ContainsRune("IM", rs[i]) {
+					i++
+				}
+				continue
+			case strings.ContainsRune("0123456789$~+,! \t;{}\n", r):
+				i++
+				continue
+			}
+			break
+		}
+		if i >= n {
+			return false
+		}
+		c := rs[i]
+		i++
+		switch c {
+		case 'e':
+			return true
+		case '#', 'a', 'i', 'c', 'r', 'R', 'w', 'W', ':':
+			eol()
+		case 'b', 't', 'T':
+			for i < n && !strings.ContainsRune(";}\n", rs[i]) {
+				i++
+			}
+		case 's':
+			if i >= n {
+				return true
+			}
+			d := rs[i]
+			i++
+			if !skipTo(d) || !skipTo(d) {
+				return true
+			}
+			for i < n && !strings.ContainsRune(";}\n \t", rs[i]) {
+				if rs[i] == 'e' {
+					return true
+				}
+				if rs[i] == 'w' {
+					eol()
+					break
+				}
+				i++
+			}
+		case 'y':
+			if i >= n {
+				return true
+			}
+			d := rs[i]
+			i++
+			if !skipTo(d) || !skipTo(d) {
+				return true
+			}
+		}
+	}
+	return false
 }

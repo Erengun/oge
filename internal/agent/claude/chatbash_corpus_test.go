@@ -258,6 +258,25 @@ func chatCorpus(tool string) []struct {
 		{". ../x.sh", true},
 		{"source $(echo x)", true},
 		{"source ./*.sh", true},
+
+		// Review of #348: the script word is not always the script, a sed
+		// can run a command, a q(/) is a literal, a process substitution
+		// is a consumer, and gawk has flags that take a file.
+		{"jq /etc/passwd -f", true},
+		{"jq -n /etc/passwd --from-file", true},
+		{"jq -nf /etc/passwd", true},
+		{"jq -rf /etc/passwd .", true},
+		{"sed 's|.*|cd /; cat etc/passwd|e' a.txt", true},
+		{"sed '1e cd /; cat etc/passwd' a.txt", true},
+		{"perl -e 'chdir q(/); print qx(cat etc/passwd)'", true},
+		{"ruby -e 'Dir.chdir(%q(/)); puts File.read(%q(etc/passwd))'", true},
+		{"perl -e 'opendir D, q(/); print readdir D'", true},
+		{"sed 's|^|cd / ; cat etc/passwd #|' a.txt > >(sh)", true},
+		{"sed 's|^|cd / ; cat etc/passwd #|' a.txt | tee >(sh)", true},
+		{"gawk -E /etc/passwd", true},
+		{"gawk -i /etc/passwd 'BEGIN{}'", true},
+		{"jq -r '.a / .b' a.json", false},
+		{"sed -n 's/one/two/p;$!d' a.txt", false},
 		{"cd sub && source ../../x.sh", true},
 		{"source \"$X\"", true},
 		{"eval ls", true},
