@@ -2,12 +2,16 @@
 
 package cli
 
-import "os"
+import (
+	"os"
+	"testing"
+)
 
-func osStat(p string) (os.FileMode, error) {
+// checkPrivateMode checks the Later store is readable by its owner only.
+func checkPrivateMode(t *testing.T, p string) {
+	t.Helper()
 	fi, err := os.Stat(p)
-	if err != nil {
-		return 0, err
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("%s: mode %v, %v", p, fi.Mode().Perm(), err)
 	}
-	return fi.Mode().Perm(), nil
 }

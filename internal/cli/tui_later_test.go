@@ -89,10 +89,7 @@ func TestLaterSurvivesARestart(t *testing.T) {
 	if len(got) != 1 || got[0].Text != "two" || got[0].At.IsZero() {
 		t.Fatalf("after a restart: %+v", got)
 	}
-	fi, err := osStat(filepath.Join(private, run.DeskDir, run.DeskLog))
-	if err != nil || fi != 0o600 {
-		t.Errorf("desk.log mode %o, %v", fi, err)
-	}
+	checkPrivateMode(t, filepath.Join(private, run.DeskDir, run.DeskLog))
 }
 
 // The rail's fold says how many; with none it says nothing; NO_COLOR
