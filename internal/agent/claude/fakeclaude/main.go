@@ -97,7 +97,8 @@ func main() {
 		record = p
 	}
 	if path := record; path != "" {
-		b, _ := json.Marshal(map[string]any{"argv": os.Args[1:], "env": os.Environ()})
+		wd, _ := os.Getwd()
+		b, _ := json.Marshal(map[string]any{"argv": os.Args[1:], "env": os.Environ(), "cwd": wd})
 		if err := os.WriteFile(path, b, 0o600); err != nil {
 			fail("recording: %v", err)
 		}

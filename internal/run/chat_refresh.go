@@ -98,6 +98,9 @@ func (c *Chat) NoteDelivered(wrote []Wrote) (Refresh, error) {
 // apply), and the turn numbers, Delivered and the advice window are
 // untouched.
 func (c *Chat) RefreshSnapshot() (Refresh, error) {
+	if c.inPlace {
+		return RefreshNone, nil
+	}
 	if err := c.Err(); errors.Is(err, ErrChatClosed) {
 		return RefreshNone, err
 	}

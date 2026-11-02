@@ -153,7 +153,7 @@ func (s *scen) turn(msg map[string]any, t multiturn.Turn) {
 	s.lifecycle(uuid, "queued")
 	s.lifecycle(uuid, "started")
 	s.emit(map[string]any{"type": "system", "subtype": "init", "cwd": s.dir, "model": scenModel,
-		"permissionMode": "auto", "tools": []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
+		"permissionMode": scenMode(), "tools": []string{"Read", "Edit", "Write", "Bash", "Glob", "Grep"},
 		"claude_code_version": "2.1.289", "capabilities": []string{"interrupt_receipt_v1"}})
 	if t.Reply != "" {
 		s.assistant(map[string]any{"type": "text", "text": t.Reply})
@@ -335,4 +335,13 @@ func toolInput(name, target string) map[string]any {
 			"options": []any{map[string]any{"label": "yes"}, map[string]any{"label": "no"}}}}}
 	}
 	return map[string]any{"target": target}
+}
+
+// scenMode is the permission mode system/init reports: "auto" unless
+// OGE_FAKE_CLAUDE_MODE says what an adopted session was left in.
+func scenMode() string {
+	if m := os.Getenv("OGE_FAKE_CLAUDE_MODE"); m != "" {
+		return m
+	}
+	return "auto"
 }

@@ -68,18 +68,26 @@ func (a *Adapter) AdvisorReadOnly() bool { return true }
 // no quota. The envelope is checked when the first turn's system/init
 // arrives: claude reports it only after a user message.
 func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Session, error) {
-	prof, err := profileFor(spec.Role)
-	if err != nil {
-		return nil, err
-	}
-	prof.extra = a.Profiles
-	prof.effort = spec.Effort
-	if prof.mode, err = permissionMode(spec.Permissions); err != nil {
-		return nil, err
-	}
-	if prof.mode != "default" && spec.Role != "implementer" {
-		// Only the implementer may run under its own permission mode (D1).
-		return nil, fmt.Errorf("claude adapter: the %s can't run in %s mode", spec.Role, prof.mode)
+	native := spec.Resume != nil
+	var prof profile
+	var err error
+	if native {
+		// An adopted session keeps its own settings: no Launch profile
+		// (native.go).
+		prof = profile{role: "implementer", extra: a.Profiles}
+	} else {
+		if prof, err = profileFor(spec.Role); err != nil {
+			return nil, err
+		}
+		prof.extra = a.Profiles
+		prof.effort = spec.Effort
+		if prof.mode, err = permissionMode(spec.Permissions); err != nil {
+			return nil, err
+		}
+		if prof.mode != "default" && spec.Role != "implementer" {
+			// Only the implementer may run under its own permission mode (D1).
+			return nil, fmt.Errorf("claude adapter: the %s can't run in %s mode", spec.Role, prof.mode)
+		}
 	}
 	path := a.Path
 	if path == "" {
@@ -93,13 +101,20 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		environ = os.Environ
 	}
 	parent := environ()
-	args, err := prof.args(spec, id, parent)
-	if err != nil {
+	var args []string
+	if native {
+		args = nativeArgs(spec.Resume.ID)
+	} else if args, err = prof.args(spec, id, parent); err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(path, args...)
 	cmd.Dir = spec.Workspace
-	if cmd.Env, err = prof.env(parent, spec); err != nil {
+	if native {
+		cmd.Env, err = nativeEnv(prof, parent, spec)
+	} else {
+		cmd.Env, err = prof.env(parent, spec)
+	}
+	if err != nil {
 		return nil, err
 	}
 	stdin, err := cmd.StdinPipe()
@@ -116,7 +131,10 @@ func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Sessio
 		pending: map[string]chan json.RawMessage{}, decided: map[string]agent.HostDecision{},
 		hash: prof.hash(),
 		env:  envelope{role: spec.Role, cwd: spec.Workspace, tools: prof.tools, mode: prof.mode},
-		auto: prof.mode == "auto", asks: map[string]*pendingAsk{},
+		auto: prof.mode == "auto", asks: map[string]*pendingAsk{}, native: native,
+	}
+	if native {
+		s.hash = "native"
 	}
 	s.policy = newPolicy(spec, s.hash)
 	if s.auto {
@@ -157,6 +175,9 @@ type session struct {
 	// auto is a Chat Session in claude's auto mode: Öge's policy only
 	// hard-denies, and what the mode asks about goes to the host.
 	auto bool
+	// native is an adopted session (native.go): its own settings decide
+	// what is asked, and what they ask becomes an Ask.
+	native bool
 	// asks are the Asks waiting for the human, by control request id,
 	// under mu; a cancel or the turn settling withdraws them.
 	asks map[string]*pendingAsk
@@ -195,7 +216,10 @@ func (s *session) Events() <-chan agent.Event { return s.events }
 // initialize registers Öge's PreToolUse hook, so every tool call reaches
 // Öge, sandboxed Bash included (ADR-0004).
 func (s *session) initialize(ctx context.Context, timeout time.Duration) error {
-	hooks := map[string]any{"PreToolUse": []any{map[string]any{"matcher": nil, "hookCallbackIds": []string{hookID}}}}
+	var hooks map[string]any
+	if !s.native {
+		hooks = map[string]any{"PreToolUse": []any{map[string]any{"matcher": nil, "hookCallbackIds": []string{hookID}}}}
+	}
 	resp, err := s.request(map[string]any{"subtype": "initialize", "hooks": hooks})
 	if err != nil {
 		// A write can fail (e.g. a broken pipe) because claude has already
@@ -686,6 +710,9 @@ func (s *session) controlRequest(id string, raw json.RawMessage) error {
 		s.emit(agent.Event{Kind: agent.HostRequest, Host: &d, Friction: sofar})
 		return s.answer(id, r.Subtype, d, input)
 	}
+	if s.native {
+		return s.nativeRequest(id, r.Subtype, tool, useID, input)
+	}
 	if s.auto {
 		return s.autoRequest(id, r.Subtype, tool, useID, input)
 	}
@@ -735,6 +762,13 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 		}
 		return s.answer(id, subtype, d, input)
 	}
+	return s.askHuman(id, subtype, tool, useID, input, d)
+}
+
+// askHuman turns a can_use_tool request into an Ask for the human, with
+// s.mu held, and releases it. d carries the request's family, tool and
+// target.
+func (s *session) askHuman(id, subtype, tool, useID string, input json.RawMessage, d agent.HostDecision) error {
 	var in map[string]any
 	_ = json.Unmarshal(input, &in)
 	detail := askDetail(tool, in, input, s.policy.ws)
@@ -761,6 +795,10 @@ func (s *session) autoRequest(id, subtype, tool, useID string, input json.RawMes
 	s.mu.Unlock()
 	ask := d
 	ask.Decision, ask.Rule, ask.By, ask.Reason, ask.Hint = "ask", ruleAutoAsk, "agent_auto_mode", "", ""
+	if s.native {
+		// The session's own settings asked, not auto mode.
+		ask.Rule, ask.By = ruleNativeAsk, "session_settings"
+	}
 	reply := func(ans agent.Answer) error {
 		s.mu.Lock()
 		if pa.done {
@@ -876,6 +914,10 @@ func (s *session) init(line []byte) error {
 	hooks := s.hooksRan
 	s.model = in.Model
 	s.mu.Unlock()
+	if s.native {
+		s.nativeInit(in)
+		return nil
+	}
 	warnings, fatal := s.env.check(in, hooks)
 	res := residueOf(in)
 	// No tool request is authorised until this check passes, nor after it

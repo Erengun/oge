@@ -78,6 +78,11 @@ type sessionCatalog struct {
 	problems []string
 	note     string // the last key's one dim line
 	found    []agent.NativeSession
+	// adopt is the prompt waiting for y (tui_adopt.go); promptOnly is a
+	// catalog opened by a click on a ◌ row: it has no list, only the
+	// prompt or why there is none.
+	adopt      *adoptPrompt
+	promptOnly bool
 }
 
 type sessionItem struct {
@@ -151,12 +156,7 @@ func (h *home) sessionsCmd(args []string) (tea.Cmd, string) {
 	h.sessSeq++
 	c.seq = h.sessSeq
 	h.catalog = c
-	l := list.New(nil, sessionDelegate{h}, 100, 4)
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowHelp(false)
-	l.SetShowPagination(false)
-	l.SetFilteringEnabled(false)
+	l := newSessionList(h)
 	h.chats = &l
 	find, ctx, seq := h.discover, h.ctx, c.seq
 	if find == nil {
@@ -292,6 +292,16 @@ func restoreSessions(private string) []deskSession {
 // session to the Desk, Enter says adopting is not built yet, Esc closes.
 func (h *home) catalogKey(msg tea.KeyPressMsg) tea.Cmd {
 	c := h.catalog
+	if c.adopt != nil {
+		return h.adoptKey(msg)
+	}
+	if c.promptOnly {
+		// Only the reason there is no prompt: esc closes it.
+		if k := msg.String(); k == "esc" || k == "ctrl+c" {
+			h.chats, h.catalog = nil, nil
+		}
+		return nil
+	}
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		h.chats, h.catalog = nil, nil
@@ -307,8 +317,8 @@ func (h *home) catalogKey(msg tea.KeyPressMsg) tea.Cmd {
 			h.catalogItems()
 		}
 	case "enter":
-		if _, ok := h.chats.SelectedItem().(sessionItem); ok {
-			c.note = "adopting a session comes in #385; for now it only sits on the Desk"
+		if it, ok := h.chats.SelectedItem().(sessionItem); ok {
+			h.askAdopt(c, it.s)
 		}
 	default:
 		l, _ := h.chats.Update(msg)
@@ -328,6 +338,9 @@ func (h *home) catalogTitle() string {
 func (h *home) catalogLines() []string {
 	c, st := h.catalog, h.st
 	var out []string
+	if c.promptOnly || c.adopt != nil {
+		return h.adoptLines()
+	}
 	switch items := h.chats.Items(); {
 	case c.loading:
 		out = append(out, " "+st.dim("looking for sessions…"))
@@ -346,17 +359,7 @@ func (h *home) catalogLines() []string {
 	if c.note != "" {
 		out = append(out, " "+st.dim(c.note))
 	}
-	return append(out, " "+st.dim("a adds to the Desk · ⏎ adopt (#385) · esc"))
-}
-
-// sessionRowClick selects the row and says adopting is not built yet.
-func (h *home) sessionRowClick(key string) {
-	i := slices.IndexFunc(h.onDesk, func(d deskSession) bool { return d.key() == key })
-	if i < 0 {
-		return
-	}
-	h.selSess = key
-	h.sessNote = "adopting a session comes in #385 · /close takes it off the Desk"
+	return append(out, " "+st.dim("a adds to the Desk · ⏎ adopt · esc"))
 }
 
 // closeSession is /close with a session row selected: it archives that
@@ -374,3 +377,16 @@ func (h *home) closeSession() bool {
 	}
 	return false
 }
+
+// newSessionList is the empty list the catalog fills.
+func newSessionList(h *home) list.Model {
+	l := list.New(nil, sessionDelegate{h}, 100, 4)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+	l.SetShowPagination(false)
+	l.SetFilteringEnabled(false)
+	return l
+}
+
+func contextBackground() context.Context { return context.Background() }

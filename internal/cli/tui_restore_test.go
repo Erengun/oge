@@ -240,3 +240,46 @@ func TestQuitAskClosesRestoredOnlyOnC(t *testing.T) {
 		t.Error("a Desk that quit with no answer would close its restored Chats")
 	}
 }
+
+// An adopted session restored after a restart keeps its in-place label
+// and is never reopened as an isolated Chat: a message starts nothing
+// and says to adopt it again (ADR-0025).
+func TestRestoredInPlaceChatIsReadOnlyAndKeepsItsLabel(t *testing.T) {
+	repo := t.TempDir()
+	d := &run.RestoredDesk{Chats: []*run.RestoredChat{
+		{ID: "p", N: 1, Title: "fix the parser", Repo: repo, State: run.RestoredIdle, InPlace: true, Provider: "claude", NativeID: "c1",
+			Turns: []run.RestoredTurn{{N: 1, Text: "fix the parser", Reply: "Done.", Settled: true}}},
+		{ID: "q", N: 2, Title: "docs", Repo: repo, State: run.RestoredIdle,
+			Turns: []run.RestoredTurn{{N: 1, Text: "docs", Reply: "Done.", Settled: true}}},
+	}}
+	h := fullHome(120, 24)
+	h.now = func() time.Time { return time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC) }
+	h.root = repo
+	asked := 0
+	hc := &homeChat{
+		changes: func(run.ResumeParams) ([]string, error) { asked++; return nil, nil },
+		resume:  func(run.ResumeParams) (*run.Resumed, error) { asked++; return nil, nil },
+	}
+	h.views = h.restoreViews(d, nil, func(root string) (*repoCtx, []string) {
+		return &repoCtx{root: root, title: "oge · x · main", hc: hc}, nil
+	})
+	h.focus(h.views[0])
+	h.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	if !h.views[0].inPlace || h.views[1].inPlace {
+		t.Fatalf("in-place marks: %v %v", h.views[0].inPlace, h.views[1].inPlace)
+	}
+	if rail := railText(h); !strings.Contains(rail, "not isolated") {
+		t.Errorf("the restored in-place Chat lost its label:\n%s", rail)
+	}
+	typeText(h, "keep going")
+	h.Update(enter())
+	if asked != 0 || h.turn != nil || (h.chat != nil && h.chat.get() != nil) {
+		t.Fatal("a message to a restored in-place Chat reopened it")
+	}
+	if got := h.comp.text(); got != "keep going" {
+		t.Errorf("the draft is %q: it must stay", got)
+	}
+	if !strings.Contains(strings.Join(h.msg, " "), "adopt its session again") {
+		t.Errorf("no line said how to continue: %v", h.msg)
+	}
+}
