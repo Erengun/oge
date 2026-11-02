@@ -513,7 +513,8 @@ func (h *home) deskCounts() string {
 }
 
 // Rail geometry (docs/ux/desk.md, Layout): a column railWidth wide at
-// the screen's left, from railMinCols columns up, with several Chats open.
+// the screen's left, from railMinCols columns up, with several Chats open
+// or something kept for later.
 // Ctrl+T turns it off with the sidebar.
 const (
 	railWidth   = 14
@@ -522,7 +523,8 @@ const (
 
 // railOn reports whether the rail is drawn. With one Chat it would say
 // nothing the screen doesn't, as the header counts don't, unless a pinned
-// project has no Chat yet.
+// project has no Chat yet, a session is on the Desk, or something is kept
+// for later.
 func (h *home) railOn() bool {
 	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.later) > 0 || len(h.views) > 1 || len(h.unopened()) > 0 || len(h.onDesk) > 0)
 }

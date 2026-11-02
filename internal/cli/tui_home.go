@@ -389,8 +389,9 @@ type home struct {
 	// click (tui_desk.go).
 	railHits []railHit
 	// deskMax and deskQuiet are [desk] max_active and quiet (0: the
-	// defaults); capNoted is /new having said once that the working
-	// Chats are past deskMax.
+	// defaults); capNoted is a Chat opened at the cap having said once
+	// that the working Chats are past deskMax; capOffered is /new's
+	// one-time pointer to keep the task for later instead.
 	deskMax    int
 	deskQuiet  time.Duration
 	capNoted   bool

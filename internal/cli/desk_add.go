@@ -217,7 +217,7 @@ func addLater(env Env, args []string) int {
 	var refused *run.DeskRefused
 	switch {
 	case err == nil && direct:
-		fmt.Fprintln(env.Stdout, "kept for later (no Desk open: it shows when one is)")
+		fmt.Fprintln(env.Stdout, "kept for later (no Desk open: /later lists it in oge)")
 		return ExitOK
 	case err == nil:
 		fmt.Fprintln(env.Stdout, "kept for later")
