@@ -361,7 +361,11 @@ type home struct {
 	menu   *list.Model
 	picker *runPicker  // /runs: the Run picker while it is open (#176)
 	chats  *list.Model // /chats: the Chat picker while it is open
-	inbox  *inboxState // the Inbox while it is open (tui_inbox.go)
+	// later are the ideas kept for later, oldest first; laterOn is /later
+	// while it is open (tui_later.go).
+	later   []run.LaterItem
+	laterOn *laterState
+	inbox   *inboxState // the Inbox while it is open (tui_inbox.go)
 	// diff is the /diff viewer while it is open (#169).
 	diff        *diffViewer
 	menuQuery   string
@@ -385,11 +389,13 @@ type home struct {
 	// click (tui_desk.go).
 	railHits []railHit
 	// deskMax and deskQuiet are [desk] max_active and quiet (0: the
-	// defaults); capNoted is /new having said once that the working
-	// Chats are past deskMax.
-	deskMax   int
-	deskQuiet time.Duration
-	capNoted  bool
+	// defaults); capNoted is a Chat opened at the cap having said once
+	// that the working Chats are past deskMax; capOffered is /new's
+	// one-time pointer to keep the task for later instead.
+	deskMax    int
+	deskQuiet  time.Duration
+	capNoted   bool
+	capOffered bool
 	// deskProjects are [desk] projects; the rail and /projects show the
 	// ones that are git repos (tui_projects.go). order is the repos in the
 	// order their first Chat opened, which the rail never changes.
@@ -747,6 +753,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.openInbox()
 		return h, nil
 	}
+	if k, ok := msg.(tea.KeyPressMsg); ok && h.laterOn != nil {
+		return h, h.laterPress(k) // over the Chat: only Enter on an item decides
+	}
 	if k, ok := msg.(tea.KeyPressMsg); ok && h.chats != nil {
 		// Over whatever the Chat shows: switching decides nothing.
 		return h, h.chatsKey(k)
@@ -838,7 +847,7 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case h.job != nil:
 		case h.panel != nil:
 			h.panel.paste(msg.Content)
-		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.chats != nil, h.diff != nil, h.hidden != nil:
+		case h.saving, h.review != nil, h.search != nil, h.picker != nil, h.chats != nil, h.laterOn != nil, h.diff != nil, h.hidden != nil:
 		default:
 			h.comp.change("paste", func() { h.comp.insertPaste(msg.Content) })
 			h.endNavigation()
@@ -984,6 +993,8 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return h.submit(text)
 		case actStash:
 			h.stashDraft()
+		case actLater:
+			h.keepDraft()
 		case actRedraw:
 			if n := h.themeNotice(); n != "" {
 				h.msg = []string{n}
@@ -1383,6 +1394,9 @@ func (h *home) view() tea.View {
 		v.Content = h.withAsk(v.Content)
 		return v
 	}
+	if h.laterOn != nil {
+		return tea.NewView(h.withAsk(h.laterView()))
+	}
 	if h.chats != nil {
 		return tea.NewView(h.withAsk(strings.Join(append([]string{"", " " + h.st.bold(h.chatsTitle())}, h.chatsLines()...), "\n")))
 	}
@@ -1655,6 +1669,9 @@ func (h *home) render() (string, int, int) {
 					action = "send"
 				}
 				l = "[" + submit + "] " + action + "  [tab] setup  /help"
+				if h.laterHint() && width >= 60 {
+					l += "  [" + h.laterKey() + "] later"
+				}
 				if width < 40 {
 					l = submit + " " + action + " · tab setup"
 				}
@@ -1923,6 +1940,9 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		h.exportDir = filepath.Join(filepath.Dir(histDir), "exports")
 		h.absence.private = filepath.Dir(histDir)
 		h.onDesk = restoreSessions(h.absence.private)
+		if recs, err := run.ReadDesk(h.absence.private); err == nil {
+			h.later = run.LaterItems(recs)
+		}
 	}
 	h.getenv = env.Getenv
 	h.shell = runShell

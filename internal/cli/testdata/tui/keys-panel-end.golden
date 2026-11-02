@@ -1,6 +1,7 @@
 ╭─ oge · demo · main ──────────────────────────────────────────────────────────╮
 │ Describe the task                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
+   ctrl+x                 cancel the queued Task
    ctrl+c                 clear the queued Task, else cancel the Run
  Full screen
    pgup · pgdown · wheel  scroll the transcript (drag selects and copies)
@@ -20,5 +21,4 @@
    esc · i a I A o O      NORMAL · INSERT (enter runs in both)
    h j k l                left · down · up · right (k, j at the edge: history)
    w e b                  next word · word end · previous (NORMAL)
-   0 ^ $                  line start · first char · end (NORMAL)
- ↑ ↓ scroll (41-60 of 65) · esc or ? close
+ ↑ ↓ scroll (41-60 of 66) · esc or ? close
