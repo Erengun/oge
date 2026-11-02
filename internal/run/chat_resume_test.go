@@ -100,6 +100,10 @@ func TestResumeChatSettingsChangedNeedsTypedReopen(t *testing.T) {
 		t.Fatalf("a changed Chat resumed without reopen: %v", err)
 	}
 	p.Reopen = true
+	if _, err := ResumeChat(context.Background(), p); !errors.Is(err, ErrRestoreRefused) {
+		t.Fatalf("reopen over changes the card didn't show: %v", err)
+	}
+	p.Shown = ch
 	res, err := ResumeChat(context.Background(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +111,84 @@ func TestResumeChatSettingsChangedNeedsTypedReopen(t *testing.T) {
 	t.Cleanup(func() { res.Chat.Close() })
 	if r := recordsOf(t, res.Chat, RecSessionRestored); len(r) != 1 || r[0]["accepted"] != true {
 		t.Errorf("SessionRestored %v", r)
+	}
+}
+
+// An accepted reopen is the Chat's own settings from then on: a later
+// restore with the same settings launches under them, not the first blob.
+func TestResumeChatAcceptedReopenSurvivesTheNextRestore(t *testing.T) {
+	p, _ := stoppedChat(t)
+	now := chatFrozen("implementer")
+	now.Stages[0].Model = "other-model"
+	p.Now = now
+	ch, _ := RestoreChanges(p)
+	p.Reopen, p.Shown = true, ch
+	res, err := ResumeChat(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := res.Chat
+	settledOf(t, drain(t, send(t, c, "second"), nil))
+	if err := c.Stop("quit"); err != nil {
+		t.Fatal(err)
+	}
+	p.Reopen, p.Shown = false, nil
+	res2, err := ResumeChat(context.Background(), p)
+	if err != nil {
+		t.Fatalf("the accepted settings asked again: %v", err)
+	}
+	t.Cleanup(func() { res2.Chat.Close() })
+	if res2.Chat.stage.Model != "other-model" {
+		t.Errorf("restored under %q, not the accepted model", res2.Chat.stage.Model)
+	}
+	if len(res2.Changes) != 0 {
+		t.Errorf("changes %v", res2.Changes)
+	}
+}
+
+// A turn that never settled and left edits: they are scope-checked and kept
+// as that turn's commit; the records say so in order.
+func TestResumeChatFoundOnRestoreKeepsScopedEdits(t *testing.T) {
+	p, ws := stoppedChat(t)
+	// Pretend turn 2 started and never settled.
+	c0 := p.Chat
+	l, err := ledger.Open(c0.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, err := ledger.OpenBlobs(c0.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt, err := blobs.Put([]byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(RecTurnStarted, map[string]any{"chat": c0.ID, "turn": 2, "by": "human", "text": txt}); err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	if err := os.WriteFile(filepath.Join(ws, "c.go"), []byte("package fx\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ResumeChat(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { res.Chat.Close() })
+	if !res.Found {
+		t.Fatal("the unsettled turn wasn't found")
+	}
+	r := recordsOf(t, res.Chat, RecTurnInterrupted)
+	if len(r) != 1 || r[0]["why"] != "found_on_restore" || r[0]["commit"] == "" {
+		t.Fatalf("TurnInterrupted %v", r)
+	}
+	types := strings.Join(typesOf(t, res.Chat), " ")
+	if !strings.Contains(types, RecScopeObserved+" "+RecScopeReverted) || !strings.Contains(types, RecTurnInterrupted+" "+RecSessionRestored) {
+		t.Errorf("records out of order: %s", types)
+	}
+	if got, ok := res.Chat.repo.RefCommit("refs/oge/chat/turns/2"); !ok || got != r[0]["commit"] {
+		t.Errorf("turn 2 ref %q %v", got, ok)
 	}
 }
 

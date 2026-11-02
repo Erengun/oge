@@ -49,7 +49,10 @@ type ResumeParams struct {
 	// Now is what the settings resolve to now; nil compares nothing.
 	Now *pipeline.Frozen
 	// Reopen is the human's typed reopen: continue under Now's settings.
-	Reopen      bool
+	Reopen bool
+	// Shown is the change list the human saw on the card when they typed
+	// reopen. A different list now means they approved something else.
+	Shown       []string
 	IdleTimeout time.Duration
 }
 
@@ -84,6 +87,15 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 			var d struct{ Frozen, Source, Role string }
 			_ = json.Unmarshal(rec.Data, &d)
 			r.frozenBlob, r.source, r.role = d.Frozen, d.Source, d.Role
+		case RecSessionRestored:
+			// An accepted reopen made its settings the Chat's own.
+			var d struct {
+				Frozen   string
+				Accepted bool
+			}
+			if json.Unmarshal(rec.Data, &d) == nil && d.Accepted && d.Frozen != "" {
+				r.frozenBlob = d.Frozen
+			}
 		case RecSnapshotTaken, RecSnapshotRefreshed:
 			var d struct{ Commit string }
 			if json.Unmarshal(rec.Data, &d) == nil && d.Commit != "" {
@@ -285,6 +297,9 @@ func ResumeChat(ctx context.Context, p ResumeParams) (res *Resumed, err error) {
 		if !p.Reopen || p.Now == nil {
 			return nil, fmt.Errorf("%w: its settings changed", ErrRestoreRefused)
 		}
+		if !slices.Equal(changes, p.Shown) {
+			return nil, fmt.Errorf("%w: its settings changed again since you were asked", ErrRestoreRefused)
+		}
 		frozen = p.Now // A6: continue under the new settings, as the human decided
 	}
 	role := orDefault(rl.role, "implementer")
@@ -375,6 +390,10 @@ func ResumeChat(ctx context.Context, p ResumeParams) (res *Resumed, err error) {
 		if _, _, err = c.checkScope(a, n); err != nil {
 			return nil, err
 		}
+		if a.Failure != "" {
+			// Not recorded as interrupted: the next restore checks again.
+			return nil, fmt.Errorf("%w: the stopped turn's edits couldn't be scope-checked: %v", ErrRestoreRefused, a.Failure)
+		}
 		if err = c.log(RecTurnInterrupted, map[string]any{"chat": c.ID, "turn": n, "why": "found_on_restore", "commit": c.last}); err != nil {
 			return nil, err
 		}
@@ -383,6 +402,16 @@ func ResumeChat(ctx context.Context, p ResumeParams) (res *Resumed, err error) {
 	res.Outside = c.outsideSince()
 	rec := map[string]any{"chat": c.ID, "turns": rl.turns, "workspace_rebuilt": res.Rebuilt, "found_on_restore": res.Found,
 		"outside": res.Outside, "changed": append([]string{}, changes...), "accepted": len(changes) > 0}
+	if len(changes) > 0 {
+		// The accepted settings are the Chat's frozen blob from here on.
+		fj, jerr := json.Marshal(frozen)
+		if jerr != nil {
+			return nil, jerr
+		}
+		if rec["frozen"], err = blobs.Put(fj); err != nil {
+			return nil, err
+		}
+	}
 	if err = c.log(RecSessionRestored, rec); err != nil {
 		return nil, err
 	}

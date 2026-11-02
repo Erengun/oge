@@ -11,6 +11,7 @@ import (
 	"github.com/erengun/oge/internal/agent"
 	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/agent/fake/multiturn"
+	"github.com/erengun/oge/internal/ledger"
 	"github.com/erengun/oge/internal/run"
 )
 
@@ -139,4 +140,52 @@ func TestRestoredChatSettingsChangedNLeavesItReadOnly(t *testing.T) {
 		t.Fatal("n reopened the Chat")
 	}
 	quitKeeping(s)
+}
+
+// An oge that stopped mid-turn (turn 2 started, never settled, edits in the
+// Workspace): the next oge's first message scope-checks and keeps them as
+// that turn's checkpoint, says so, and the turn settles. The log is cut the
+// way a kill leaves it, since oge runs in-process here.
+func TestRestoredChatFindsTheStoppedTurnsEdits(t *testing.T) {
+	t.Parallel()
+	ad := fakeChatAdapter(t, multiturn.Scenario{Turns: []multiturn.Turn{{Reply: "hello from the chat"}}})
+	f := newRunFixture(t)
+	keptChat(t, f, ad)
+	dirs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
+	ws, _ := filepath.Glob(filepath.Join(f.state, "work", "chats", "*", "implement"))
+	if len(dirs) != 1 || len(ws) != 1 {
+		t.Fatalf("Chats %v Workspaces %v", dirs, ws)
+	}
+	l, err := ledger.Open(dirs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, err := ledger.OpenBlobs(dirs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt, err := blobs.Put([]byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append(run.RecTurnStarted, map[string]any{"turn": 2, "by": "human", "text": txt}); err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	if err := os.WriteFile(filepath.Join(ws[0], "left_behind.txt"), []byte("half done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := startHomeSessionWith(t, f, func(e *Env) { e.Agents = map[string]agent.Adapter{"claude": ad} }, "--fast", "--agent", "claude")
+	s.composer()
+	s.type_("go on\r")
+	s.expect("  hello from the chat")
+	s.expectScreen("the stopped turn left edits")
+	quitKeeping(s)
+	r := chatRecords(t, f, run.RecTurnInterrupted)
+	if len(r) != 1 || r[0]["why"] != "found_on_restore" || r[0]["commit"] == "" {
+		t.Errorf("TurnInterrupted %v", r)
+	}
+	if n := len(chatRecords(t, f, run.RecSessionReopened)); n != 1 {
+		t.Errorf("%d Sessions reopened", n)
+	}
 }

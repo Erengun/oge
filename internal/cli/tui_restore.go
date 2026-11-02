@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -241,7 +242,7 @@ func (h *home) restoredSubmit(text string) (string, tea.Cmd, bool) {
 	}
 	switch strings.TrimSpace(text) {
 	case "reopen":
-		h.reopenAsk, h.reopenOK = nil, true
+		h.reopenAsk, h.reopenOK, h.reopenShown = nil, true, a.changes
 		return a.text, nil, true
 	case "n":
 		h.reopenAsk = nil
@@ -257,17 +258,19 @@ func (h *home) restoredSubmit(text string) (string, tea.Cmd, bool) {
 // started under. A change shows the card and sends nothing; it is checked
 // against the Chat's records, never against a hash of oge.toml.
 func (h *home) restoredTrust(text string, res *resolved) (tea.Cmd, bool) {
-	if h.reopenOK {
-		return nil, true // the human typed reopen
-	}
 	changes, err := h.chat.changes(run.ResumeParams{Chat: h.rest.RestoredChat, Now: res.frozen})
 	if err != nil {
 		h.msg = append(h.msg, "this Chat can't be reopened: "+clean(err.Error()))
 		return nil, false
 	}
+	if h.reopenOK && slices.Equal(changes, h.reopenShown) {
+		return nil, true // the human typed reopen over exactly what the card showed
+	}
 	if len(changes) == 0 {
+		h.reopenOK, h.reopenShown = false, nil
 		return nil, true
 	}
+	h.reopenOK, h.reopenShown = false, nil
 	h.reopenAsk = &reopenAsk{text: text, changes: changes}
 	h.comp.set("")
 	lines := []string{h.ogeLine("settings changed since this Chat's Session last ran · nothing was reopened")}
@@ -280,7 +283,7 @@ func (h *home) restoredTrust(text string, res *resolved) (tea.Cmd, bool) {
 
 // finishRestore makes the view a live Chat once its message reopened it,
 // and says what the reopening did besides.
-func (h *home) finishRestore(r *run.Resumed) tea.Cmd {
+func (h *home) finishRestore(r *run.Resumed, sendErr error) tea.Cmd {
 	h.rest = nil
 	var lines []string
 	say := func(s string) { lines = append(lines, h.ogeLine(h.st.dim(s))) }
@@ -296,6 +299,10 @@ func (h *home) finishRestore(r *run.Resumed) tea.Cmd {
 	if len(r.Changes) > 0 {
 		say("continuing under the new settings, as you typed")
 	}
-	say("reopened with a re-brief of your messages so far: the work survived, the agent's memory of it didn't")
+	if sendErr != nil {
+		say("this Chat's records are restored, but its Session didn't start")
+	} else {
+		say("reopened with a re-brief of your messages so far: the work survived, the agent's memory of it didn't")
+	}
 	return h.println(strings.Join(lines, "\n"))
 }

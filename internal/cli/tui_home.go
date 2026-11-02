@@ -1064,6 +1064,7 @@ func (h *home) submit(text string) (tea.Model, tea.Cmd) {
 	if problem != nil {
 		// The Run can't start: say why, and keep the Task.
 		h.msg, h.setup = problem, nil
+		h.reopenOK, h.reopenShown = false, nil // the typed reopen doesn't carry over
 		return h, nil
 	}
 	h.setSetup(res.frozen)

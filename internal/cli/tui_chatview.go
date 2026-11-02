@@ -112,6 +112,8 @@ type chatView struct {
 	// or n; reopenOK says the human typed reopen for the send in hand.
 	reopenAsk *reopenAsk
 	reopenOK  bool
+	// reopenShown is what the card listed, held for the typed reopen.
+	reopenShown []string
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.

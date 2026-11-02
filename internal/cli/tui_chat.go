@@ -388,8 +388,8 @@ func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Mode
 	// Chat is built from its records and its Session opens as Send does.
 	var rp *run.ResumeParams
 	if v.rest != nil {
-		rp = &run.ResumeParams{Chat: v.rest.RestoredChat, Config: res.cfgData, Now: res.frozen, Reopen: v.reopenOK}
-		v.reopenOK = false
+		rp = &run.ResumeParams{Chat: v.rest.RestoredChat, Config: res.cfgData, Now: res.frozen, Reopen: v.reopenOK, Shown: v.reopenShown}
+		v.reopenOK, v.reopenShown = false, nil
 	}
 	c, gen := hc.current()
 	if c == nil {
@@ -455,7 +455,7 @@ func (h *home) chatUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatSentMsg:
 		with := func(cmd tea.Cmd) tea.Cmd { return cmd }
 		if msg.resumed != nil {
-			if restored := h.finishRestore(msg.resumed); restored != nil {
+			if restored := h.finishRestore(msg.resumed, msg.err); restored != nil {
 				with = func(cmd tea.Cmd) tea.Cmd { return tea.Sequence(restored, cmd) }
 			}
 		}
