@@ -324,6 +324,7 @@ func TestStaleRowSelectionDoesNotTakeOverClose(t *testing.T) {
 	if h.selSess == "" {
 		t.Fatal("row not selected")
 	}
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape}) // the click's adopt prompt: not now
 	// Another command, then /close: the Chat closes, the row stays.
 	slash(h, "/help")
 	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})

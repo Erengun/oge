@@ -136,6 +136,13 @@ func adoptHome(t *testing.T, stub *adoptStub, written time.Duration) (*home, *ru
 			Cwd: s.Cwd, Profile: nativeProfile(s), State: st})
 	}
 	t.Cleanup(func() { desk.Close(true) })
+	// Close every adopted Chat before the temp dirs go: Windows can't
+	// remove a Chat log that is still open.
+	t.Cleanup(func() {
+		for _, v := range h.views {
+			v.chat.close()
+		}
+	})
 	_ = roots
 	return h, desk, private
 }
