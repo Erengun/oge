@@ -318,14 +318,15 @@ func TestResumeChatRepoGoneIsRefused(t *testing.T) {
 // versioned is an adapter that says which agent version it would start.
 type versioned struct {
 	agent.Adapter
-	v string
+	v   string
+	err error
 }
 
-func (a versioned) AgentVersion(context.Context) (string, error) { return a.v, nil }
+func (a versioned) AgentVersion(context.Context) (string, error) { return a.v, a.err }
 
 // The agent version the last Session reported is in the log, and a restore
 // under a different agent version shows the settings-changed card. The
-// same version, or an agent that can't say, is no change.
+// same version is no change; an agent that can't say is one.
 func TestRestoreChangesSeesADifferentAgentVersion(t *testing.T) {
 	p, _ := stoppedChat(t)
 	recs, err := ledger.Replay(p.Chat.Dir)
@@ -351,8 +352,15 @@ func TestRestoreChangesSeesADifferentAgentVersion(t *testing.T) {
 	for _, tc := range []struct {
 		now  string
 		want string
-	}{{was, ""}, {"", ""}, {"99.1.0", "agent version: " + was + " -> 99.1.0"}} {
-		p.Agents = map[string]agent.Adapter{"claude": versioned{base, tc.now}}
+		err  error
+	}{
+		{was, "", nil},
+		{"99.1.0", "agent version: " + was + " -> 99.1.0", nil},
+		// An agent that can't say its version is not known to be the same.
+		{"", "agent version: " + was + " -> unknown (couldn't run claude --version)", nil},
+		{"", "agent version: " + was + " -> unknown (couldn't run claude --version)", errors.New("exec: not found")},
+	} {
+		p.Agents = map[string]agent.Adapter{"claude": versioned{base, tc.now, tc.err}}
 		ch, err := RestoreChanges(p)
 		if err != nil {
 			t.Fatal(err)
@@ -362,7 +370,7 @@ func TestRestoreChangesSeesADifferentAgentVersion(t *testing.T) {
 		}
 	}
 	// The card's change list gates the reopen like any other change.
-	p.Agents = map[string]agent.Adapter{"claude": versioned{base, "99.1.0"}}
+	p.Agents = map[string]agent.Adapter{"claude": versioned{base, "99.1.0", nil}}
 	if _, err := ResumeChat(context.Background(), p); !errors.Is(err, ErrRestoreRefused) {
 		t.Errorf("a different agent version resumed without a typed reopen: %v", err)
 	}

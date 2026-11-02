@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -505,6 +506,8 @@ func TestAdoptedViewShowsNoOgeSetup(t *testing.T) {
 
 func TestCoverageLine(t *testing.T) {
 	cases := []struct{ mode, approval, sandbox, want string }{
+		{"", "on-request", "workspace-write", "gated: what its approval policy would ask · allowed without Öge: what its sandbox allows"},
+		{"", "", "workspace-write", "coverage unknown: the session's approval policy wasn't read"},
 		{"bypassPermissions", "", "", "not gated: bypassPermissions"},
 		{"", "never", "", "not gated: approval policy never"},
 		{"", "on-request", "danger-full-access", "not gated: sandbox danger-full-access"},
@@ -515,8 +518,15 @@ func TestCoverageLine(t *testing.T) {
 		{"", "", "", "coverage unknown: the session didn't report its permission settings"},
 	}
 	for _, c := range cases {
-		if got := coverageLine(c.mode, c.approval, c.sandbox); got != c.want {
+		if got := coverageLine(c.mode, c.approval, c.sandbox, "user"); got != c.want {
 			t.Errorf("coverageLine(%q, %q, %q) = %q", c.mode, c.approval, c.sandbox, got)
+		}
+	}
+	// Approvals that go to codex's own reviewer never reach Öge, whatever
+	// the policy says.
+	for _, r := range []string{"auto_review", "unreadable"} {
+		if got, want := coverageLine("", "on-request", "workspace-write", r), "not gated: approvals reviewed by codex ("+r+")"; got != want {
+			t.Errorf("reviewer %q: %q", r, got)
 		}
 	}
 }
@@ -593,6 +603,9 @@ func TestAdoptCodexRefusesARecentWriteThenAdoptsInPlace(t *testing.T) {
 }
 
 func TestChecksOnDemandRunOnTheTreeAndSaySo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
 	stub := &adoptStub{mode: "default"}
 	h, _, _ := adoptHome(t, stub, 10*time.Minute)
 	f := &pipeline.Frozen{Checks: []pipeline.CheckCommand{{Run: "echo ran in $(pwd) > /dev/null; exit 3", Timeout: time.Minute, OutputCap: 1 << 16}}}
@@ -616,6 +629,30 @@ func TestChecksOnDemandRunOnTheTreeAndSaySo(t *testing.T) {
 		t.Errorf("the output claims isolation:\n%s", got)
 	}
 	_ = cwd
+}
+
+// A message sent while the Checks run changes the tree under them: the
+// output says so rather than vouching for the tree as it is now.
+func TestChecksSayWhenTheSessionWorkedWhileTheyRan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
+	stub := &adoptStub{mode: "default"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	f := &pipeline.Frozen{Checks: []pipeline.CheckCommand{{Run: "exit 0", Timeout: time.Minute, OutputCap: 1 << 16}}}
+	h.repoCtx.resolve = func(*setupState) (*resolved, []string) { return &resolved{frozen: f}, nil }
+	adopted(t, h, stub)
+	v := h.chatView
+	typeText(h, "/check")
+	_, cmd := h.Update(enter())
+	if !v.checking {
+		t.Fatalf("/check didn't start:\n%s", screenText(h))
+	}
+	h.turnDuringChecks = true // what chatSubmit records when a turn starts now
+	pump(t, h, cmd, func() bool { return !v.checking })
+	if got := screenText(h); !strings.Contains(got, "the session worked while the Checks ran") {
+		t.Errorf("no warning:\n%s", got)
+	}
 }
 
 func TestCheckIsOnlyForAdoptedSessions(t *testing.T) {

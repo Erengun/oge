@@ -26,6 +26,10 @@ func s2c(m map[string]any) rec { return rec{Dir: "s2c", Msg: m} }
 // nativeScript is a resume, a turn that asks to run a command and, when
 // asked is set, the human's answer and the rest of the turn.
 func nativeScript(t *testing.T, approval, sandbox any, mcp map[string]any) []rec {
+	return nativeScriptReviewed(t, approval, sandbox, "user", mcp)
+}
+
+func nativeScriptReviewed(t *testing.T, approval, sandbox any, reviewer string, mcp map[string]any) []rec {
 	init := load(t, "init_account.jsonl")[:2]
 	out := []rec{init[0], init[1], c2s(map[string]any{"method": "initialized", "params": map[string]any{}})}
 	cfg := map[string]any{"mcp_servers": mcp}
@@ -34,7 +38,7 @@ func nativeScript(t *testing.T, approval, sandbox any, mcp map[string]any) []rec
 		s2c(map[string]any{"id": 2, "result": map[string]any{"config": cfg}}),
 		c2s(map[string]any{"id": 3, "method": "thread/resume", "params": map[string]any{}}),
 		s2c(map[string]any{"id": 3, "result": map[string]any{"thread": map[string]any{"id": nativeThread}, "cwd": ws,
-			"approvalPolicy": approval, "sandbox": sandbox}}),
+			"approvalPolicy": approval, "sandbox": sandbox, "approvalsReviewer": reviewer}}),
 		c2s(map[string]any{"id": 4, "method": "turn/start", "params": map[string]any{}}),
 		s2c(map[string]any{"id": 4, "result": map[string]any{"turn": map[string]any{"id": "t1"}}}),
 		s2c(map[string]any{"method": "item/started", "params": map[string]any{"threadId": nativeThread,
@@ -197,9 +201,28 @@ func TestNativeReportsWhatCodexSaidOfItself(t *testing.T) {
 	}
 }
 
+func TestNativeReportsWhoReviewsApprovals(t *testing.T) {
+	for reviewer, want := range map[string]string{"user": "user", "auto_review": "auto_review", "": "unreadable"} {
+		h := &harness{t: t}
+		s := openNativeFor(t, h, nativeScriptReviewed(t, "on-request", map[string]any{"type": "workspaceWrite"}, reviewer, nil))
+		if err := s.Send(agent.Turn{Text: "go"}); err != nil {
+			t.Fatal(err)
+		}
+		for ev := range s.Events() {
+			if ev.Kind == agent.SessionOpened {
+				if ev.Session.ApprovalsReviewer != want || !slices.Equal(ev.Session.Refused, refusedRequests) {
+					t.Errorf("reviewer %q: session info %+v", reviewer, ev.Session)
+				}
+				break
+			}
+		}
+		s.Close()
+	}
+}
+
 func TestNativeNamesOfWhatCodexReported(t *testing.T) {
 	for in, want := range map[string]string{
-		`"never"`: "never", `{"granular":{"sandbox_approval":true}}`: "granular", `null`: "", `{}`: "",
+		`"never"`: "never", `{"granular":{"sandbox_approval":true}}`: "granular", `null`: "", `{}`: "", `{"type":"never"}`: "",
 	} {
 		if got := approvalName(json.RawMessage(in)); got != want {
 			t.Errorf("approvalName(%s) = %q, want %q", in, got, want)

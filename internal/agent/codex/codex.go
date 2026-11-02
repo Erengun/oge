@@ -313,9 +313,10 @@ type session struct {
 	native bool
 	// approval, sandbox and mcp are what a resumed thread reported of its
 	// own settings, under mu.
-	approval, sandbox string
-	mcp               []string
-	asks              map[string]*pendingAsk
+	approval, sandbox, reviewer string
+	mcp                         []string
+	mcpUnread                   bool
+	asks                        map[string]*pendingAsk
 
 	wmu   sync.Mutex
 	stdin io.WriteCloser

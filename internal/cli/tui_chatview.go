@@ -78,6 +78,9 @@ type chatView struct {
 	nativeProvider, nativeMode string
 	// checking: /check is running the Checks on the working tree.
 	checking bool
+	// turnDuringChecks: a turn started while /check ran, so its result may
+	// not describe the tree as it is now.
+	turnDuringChecks bool
 	// resetting: /new is closing the old Chat.
 	resetting bool
 

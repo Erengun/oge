@@ -372,6 +372,9 @@ func agentLines(text string) string {
 func (h *home) chatSubmit(text string, res *resolved, queued []string) (tea.Model, tea.Cmd) {
 	h.pendingFB = nil // a new turn of the human's: the old failure is theirs no more
 	h.turn = &chatTurn{text: text, frozen: res.frozen, queued: queued}
+	if h.checking {
+		h.turnDuringChecks = true
+	}
 	h.lastEvent, h.answered = h.clock(), true
 	h.side.since, h.side.step, h.side.took = h.clock(), "", 0
 	h.comp = h.composer()

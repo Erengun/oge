@@ -394,6 +394,15 @@ type SessionInfo struct {
 	// and without a prompt, as the agent reported it (Codex's MCP
 	// servers). The coverage line names them.
 	Unsupervised []string `json:",omitempty"`
+	// MCPUnread: the agent's MCP servers couldn't be read, so none are named.
+	MCPUnread bool `json:",omitempty"`
+	// ApprovalsReviewer is who the resumed session sends approvals to, as
+	// the agent reported it ("user" when they reach Öge). Empty when the
+	// agent has no such setting.
+	ApprovalsReviewer string `json:",omitempty"`
+	// Refused names the requests Öge answers with a refusal because it
+	// can't put them in front of the human.
+	Refused []string `json:",omitempty"`
 	// Residue is what an isolated launch still loads and the user can't
 	// remove from it, such as organisation-managed plugins and skills.
 	Residue *Residue `json:",omitempty"`

@@ -28,7 +28,9 @@ const (
 	ruleNativeAsk   = "session_settings_ask"
 	ruleHumanAnswer = "human_answer"
 	ruleAskTooLong  = "ask_too_long"
-	ruleWithdrawn   = "ask_withdrawn"
+	// ruleNativeUnsupported: a request Öge has no prompt for.
+	ruleNativeUnsupported = "native_request_unsupported"
+	ruleWithdrawn         = "ask_withdrawn"
 )
 
 // ErrAskClosed is a Reply to an Ask that was answered or withdrawn.
@@ -117,7 +119,9 @@ func (s *session) resume(ctx context.Context, id, cwd string) error {
 			MCP map[string]json.RawMessage `json:"mcp_servers"`
 		} `json:"config"`
 	}
-	if err := s.call(ctx, "config/read", map[string]any{"includeLayers": false, "cwd": cwd}, &cfg); err == nil {
+	if err := s.call(ctx, "config/read", map[string]any{"includeLayers": false, "cwd": cwd}, &cfg); err != nil {
+		s.mcpUnread = true
+	} else {
 		for name, raw := range cfg.Config.MCP {
 			var on struct {
 				Enabled *bool `json:"enabled"`
@@ -133,8 +137,9 @@ func (s *session) resume(ctx context.Context, id, cwd string) error {
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
-		ApprovalPolicy json.RawMessage `json:"approvalPolicy"`
-		Sandbox        json.RawMessage `json:"sandbox"`
+		ApprovalPolicy    json.RawMessage `json:"approvalPolicy"`
+		Sandbox           json.RawMessage `json:"sandbox"`
+		ApprovalsReviewer json.RawMessage `json:"approvalsReviewer"`
 	}
 	if err := s.call(ctx, "thread/resume", map[string]any{"threadId": id}, &res); err != nil {
 		return fmt.Errorf("codex couldn't resume the session: %w", err)
@@ -145,6 +150,13 @@ func (s *session) resume(ctx context.Context, id, cwd string) error {
 		s.thread = id
 	}
 	s.approval, s.sandbox = approvalName(res.ApprovalPolicy), sandboxName(res.Sandbox)
+	// Anything but "user" sends approvals to codex's own reviewer, so none
+	// reach Öge; a response that doesn't say is not taken for "user".
+	s.reviewer = "unreadable"
+	var rv string
+	if json.Unmarshal(res.ApprovalsReviewer, &rv) == nil && rv != "" {
+		s.reviewer = clip(rv)
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -157,10 +169,10 @@ func approvalName(raw json.RawMessage) string {
 		return clip(str)
 	}
 	var obj map[string]json.RawMessage
-	if json.Unmarshal(raw, &obj) == nil && len(obj) > 0 {
+	if json.Unmarshal(raw, &obj) == nil && len(obj) == 1 && obj["granular"] != nil {
 		return "granular"
 	}
-	return ""
+	return "" // a form Öge doesn't know: the coverage line says so
 }
 
 // sandboxName is the sandbox codex reported, as the kebab-case mode the
@@ -204,9 +216,14 @@ func (s *session) sessionInfo() *agent.SessionInfo {
 	return &agent.SessionInfo{
 		AgentVersion: clip(s.version), Capabilities: []string{CapHostRequests, CapInterrupt},
 		Profile: "native", Envelope: "native", ApprovalPolicy: s.approval, Sandbox: s.sandbox,
-		Unsupervised: append([]string(nil), s.mcp...),
+		Unsupervised: append([]string(nil), s.mcp...), MCPUnread: s.mcpUnread,
+		ApprovalsReviewer: s.reviewer, Refused: refusedRequests,
 	}
 }
+
+// refusedRequests are what nativeRequest answers with an error: codex
+// takes it as a refusal, and Öge has no prompt for them.
+var refusedRequests = []string{"permission requests", "MCP elicitations", "user-input prompts"}
 
 // nativeNotification handles what an adopted thread's notifications mean
 // differently, and reports whether it consumed m. MCP servers are the
@@ -224,11 +241,15 @@ func (s *session) nativeNotification(m message, thread string) bool {
 			for _, have := range s.mcp {
 				found = found || have == n
 			}
+			late := !found && s.announced // the coverage line was already printed
 			if !found {
 				s.mcp = append(s.mcp, n)
 				sort.Strings(s.mcp)
 			}
 			s.mu.Unlock()
+			if late {
+				s.emit(agent.Event{Kind: agent.Warning, Text: "MCP server " + n + " started after the coverage line: it runs outside the sandbox, and Öge doesn't gate it"})
+			}
 		}
 		return true
 	case "serverRequest/resolved":
@@ -282,7 +303,9 @@ func (s *session) nativeRequest(m message) error {
 		}
 		detail = strings.TrimSpace(detail)
 	default:
-		s.emit(agent.Event{Kind: agent.Unknown, Text: "server_request/" + clip(m.Method)})
+		refused := agent.HostDecision{Family: agent.Approval, Tool: clip(m.Method), Decision: "deny", Rule: ruleNativeUnsupported, By: "session_settings",
+			Reason: "Öge refused this: it has no prompt for " + clip(m.Method) + ", so codex got an error."}
+		s.emit(agent.Event{Kind: agent.HostRequest, Host: &refused})
 		return s.write(map[string]any{"id": m.ID, "error": map[string]any{"code": -32601, "message": "Öge doesn't support " + m.Method}})
 	}
 	key := string(m.ID)

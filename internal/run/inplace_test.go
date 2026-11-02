@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -81,6 +82,9 @@ func TestInPlaceChatLeavesTheDirectoryAlone(t *testing.T) {
 // Checks on demand run the Check commands in the user's own directory,
 // are logged as not isolated, and make no Candidate, Snapshot or Receipt.
 func TestChecksOnTreeRunInPlaceAndClaimNoIsolation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Runs are refused on Windows (ADR-0017)")
+	}
 	cwd := t.TempDir()
 	st := &ledger.StateRoot{Dir: t.TempDir(), Private: t.TempDir(), Work: filepath.Join(t.TempDir(), "work")}
 	c, err := OpenInPlaceChat(context.Background(), InPlaceParams{Adapter: &inPlaceAdapter{}, Provider: "codex", ID: "s1", Cwd: cwd, State: st})

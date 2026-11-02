@@ -288,8 +288,11 @@ func task0(s string) string {
 
 // coverageLine is what Öge can gate in a session, from what the agent
 // reported at start and nothing else. Anything it can't read is said so.
-func coverageLine(mode, approval, sandbox string) string {
+func coverageLine(mode, approval, sandbox, reviewer string) string {
 	switch {
+	case reviewer != "" && reviewer != "user":
+		// Approvals go to codex's own reviewer: none reach Öge.
+		return "not gated: approvals reviewed by codex (" + reviewer + ")"
 	case mode == "bypassPermissions":
 		return "not gated: bypassPermissions"
 	case mode == "dontAsk":
@@ -306,7 +309,9 @@ func coverageLine(mode, approval, sandbox string) string {
 		return "gated: what your settings would ask · allowed without Öge: what claude's auto mode allows · mode auto"
 	case mode != "":
 		return "coverage unknown: mode " + mode + " is not one Öge recognises"
-	case approval != "" || sandbox != "":
+	case approval == "" && sandbox != "":
+		return "coverage unknown: the session's approval policy wasn't read"
+	case approval != "":
 		return "gated: what its approval policy would ask · allowed without Öge: what its sandbox allows"
 	}
 	return "coverage unknown: the session didn't report its permission settings"
@@ -316,7 +321,7 @@ func coverageLine(mode, approval, sandbox string) string {
 // records it in the Chat log. The Chat log and the screen carry the same
 // words.
 func (h *home) coverage(si *agent.SessionInfo) tea.Cmd {
-	line := coverageLine(clean(si.PermissionMode), clean(si.ApprovalPolicy), clean(si.Sandbox))
+	line := coverageLine(clean(si.PermissionMode), clean(si.ApprovalPolicy), clean(si.Sandbox), clean(si.ApprovalsReviewer))
 	if n := len(si.Unsupervised); n > 0 {
 		// What codex reported it runs outside its sandbox, named, not hidden.
 		names := make([]string, n)
@@ -329,11 +334,21 @@ func (h *home) coverage(si *agent.SessionInfo) tea.Cmd {
 		}
 		line += " · not gated: " + what + " (runs outside its sandbox)"
 	}
+	if si.MCPUnread {
+		line += " · MCP servers: not read, so none are named"
+	}
+	if n := len(si.Refused); n > 0 {
+		refused := make([]string, n)
+		for i, r := range si.Refused {
+			refused[i] = clean(r)
+		}
+		line += " · refused by Öge: " + strings.Join(refused, ", ")
+	}
 	if c := h.chat.get(); c != nil {
 		_ = c.RecordCoverage(line, si.PermissionMode, si.Sandbox)
 	}
 	st := h.st
-	if strings.HasPrefix(line, "gated") && len(si.Unsupervised) == 0 {
+	if strings.HasPrefix(line, "gated") && len(si.Unsupervised) == 0 && !si.MCPUnread && len(si.Refused) == 0 {
 		return h.println(h.ogeLine(st.dim(line)))
 	}
 	return h.println(h.ogeLine(line))
@@ -370,7 +385,7 @@ func (h *home) checkCmd(args []string) (tea.Cmd, string) {
 	if problem != nil {
 		return nil, strings.Join(problem, " ")
 	}
-	h.checking = true
+	h.checking, h.turnDuringChecks = true, false
 	ctx, v, getenv := h.ctx, h.chatView, h.getenv
 	if ctx == nil {
 		ctx = contextBackground()
@@ -385,6 +400,8 @@ func (h *home) checkCmd(args []string) (tea.Cmd, string) {
 // checksEnded prints what /check ran. The words never claim isolation.
 func (h *home) checksEnded(m chatChecksMsg) tea.Cmd {
 	h.checking = false
+	during := h.turnDuringChecks
+	h.turnDuringChecks = false
 	if m.err != nil {
 		return h.problem("oge: couldn't run the Checks: " + clean(m.err.Error()))
 	}
@@ -402,7 +419,11 @@ func (h *home) checksEnded(m chatChecksMsg) tea.Cmd {
 	if !m.res.Pass {
 		verdict = st.bad("✗") + " the Checks failed on your tree"
 	}
-	lines = append(lines, verdict+st.dim(" · no cut, nothing applied, no Receipt"), st.dim(notCovered))
+	lines = append(lines, verdict+st.dim(" · no cut, nothing applied, no Receipt"))
+	if during {
+		lines = append(lines, st.warn("!")+" the session worked while the Checks ran: the result may not match your tree now")
+	}
+	lines = append(lines, st.dim(notCovered))
 	out := make([]string, len(lines))
 	for i, l := range lines {
 		out[i] = h.ogeLine(l)
