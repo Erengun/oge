@@ -81,6 +81,7 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 	}
 	r := &resumeLog{texts: map[int]string{}, oge: map[int]bool{}, advised: map[int]bool{},
 		settled: map[int]bool{}, interrupt: map[int]bool{}}
+	pending := ""
 	for _, rec := range recs {
 		switch rec.Type {
 		case RecChatStarted:
@@ -93,8 +94,13 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 				Frozen   string
 				Accepted bool
 			}
+			// It is the Chat's own only once a Session was launched under
+			// it (SessionReopened below): until then the launch profile
+			// the trust check compares is still the older one.
 			if json.Unmarshal(rec.Data, &d) == nil && d.Accepted && d.Frozen != "" {
-				r.frozenBlob = d.Frozen
+				pending = d.Frozen
+			} else {
+				pending = ""
 			}
 		case RecSnapshotTaken, RecSnapshotRefreshed:
 			var d struct{ Commit string }
@@ -134,6 +140,9 @@ func readResume(dir string, blobs *ledger.Blobs) (*resumeLog, error) {
 				r.delivered = max(r.delivered, d.Turn)
 			}
 		case RecProcessStarted, RecSessionReopened:
+			if rec.Type == RecSessionReopened && pending != "" {
+				r.frozenBlob, pending = pending, ""
+			}
 			var d struct {
 				LaunchProfile map[string]string `json:"launch_profile"`
 				Permissions   string
@@ -387,6 +396,7 @@ func ResumeChat(ctx context.Context, p ResumeParams) (res *Resumed, err error) {
 	// get the scope check, and are kept as that turn's commit: a Checkpoint.
 	if n := rl.turns; n > 0 && !rl.settled[n] && !rl.interrupt[n] && !res.Rebuilt {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: role}
+		before := c.last
 		if _, _, err = c.checkScope(a, n); err != nil {
 			return nil, err
 		}
@@ -397,7 +407,13 @@ func ResumeChat(ctx context.Context, p ResumeParams) (res *Resumed, err error) {
 		if err = c.log(RecTurnInterrupted, map[string]any{"chat": c.ID, "turn": n, "why": "found_on_restore", "commit": c.last}); err != nil {
 			return nil, err
 		}
-		res.Found = true
+		// Only edits the turn really left are claimed: an unchanged tree
+		// is committed too, but there is nothing to say about it.
+		moved, cerr := repo.ChangedFiles(before, c.last)
+		if cerr != nil {
+			return nil, cerr
+		}
+		res.Found = len(moved) > 0 || len(a.Reverted) > 0
 	}
 	res.Outside = c.outsideSince()
 	rec := map[string]any{"chat": c.ID, "turns": rl.turns, "workspace_rebuilt": res.Rebuilt, "found_on_restore": res.Found,

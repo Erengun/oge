@@ -17,6 +17,13 @@ import (
 // the process gone (Stop keeps the Workspace), as the records show it.
 func stoppedChat(t *testing.T) (ResumeParams, string) {
 	t.Helper()
+	return stoppedChatWith(t, nil, nil)
+}
+
+// stoppedChatWith is stoppedChat with test globs and extra files in the
+// repository, so a protected path exists.
+func stoppedChatWith(t *testing.T, globs []string, files map[string]string) (ResumeParams, string) {
+	t.Helper()
 	ad := fakeClaude(t, multiturn.Scenario{Turns: []multiturn.Turn{
 		{Reply: "one", Writes: []multiturn.File{{Path: "b.go", Content: "package fx\n"}}},
 		{Reply: "two"},
@@ -24,12 +31,17 @@ func stoppedChat(t *testing.T) (ResumeParams, string) {
 	f := &followFixture{user: t.TempDir()}
 	f.git(t, "init", "-q", "-b", "main")
 	f.write(t, "add.go", "package fx\n")
+	for name, body := range files {
+		f.write(t, name, body)
+	}
 	f.git(t, "add", "-A")
 	f.git(t, "commit", "-q", "-m", "init")
 	d := t.TempDir()
 	state := &ledger.StateRoot{Dir: d, Private: filepath.Join(d, "private"), Work: filepath.Join(d, "work")}
 	agents := map[string]agent.Adapter{"claude": ad}
-	c, err := OpenChat(context.Background(), ChatParams{Repo: f.user, Frozen: chatFrozen("implementer"),
+	fr := chatFrozen("implementer")
+	fr.Project.TestGlobs = globs
+	c, err := OpenChat(context.Background(), ChatParams{Repo: f.user, Frozen: fr,
 		Agents: agents, State: state, Getenv: chatOn})
 	if err != nil {
 		t.Fatal(err)
@@ -146,11 +158,9 @@ func TestResumeChatAcceptedReopenSurvivesTheNextRestore(t *testing.T) {
 	}
 }
 
-// A turn that never settled and left edits: they are scope-checked and kept
-// as that turn's commit; the records say so in order.
-func TestResumeChatFoundOnRestoreKeepsScopedEdits(t *testing.T) {
-	p, ws := stoppedChat(t)
-	// Pretend turn 2 started and never settled.
+// startUnsettledTurn records a turn 2 that started and never settled.
+func startUnsettledTurn(t *testing.T, p ResumeParams) {
+	t.Helper()
 	c0 := p.Chat
 	l, err := ledger.Open(c0.Dir)
 	if err != nil {
@@ -168,7 +178,19 @@ func TestResumeChatFoundOnRestoreKeepsScopedEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.Close()
+}
+
+// A turn that never settled and left edits: they are scope-checked and kept
+// as that turn's commit; the records say so in order.
+func TestResumeChatFoundOnRestoreKeepsScopedEdits(t *testing.T) {
+	const base = "package fx\n\nfunc TestA() {}\n"
+	p, ws := stoppedChatWith(t, []string{"*_test.go"}, map[string]string{"add_test.go": base})
+	startUnsettledTurn(t, p)
 	if err := os.WriteFile(filepath.Join(ws, "c.go"), []byte("package fx\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An out-of-scope write: the protected test is changed, not added to.
+	if err := os.WriteFile(filepath.Join(ws, "add_test.go"), []byte("package fx\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	res, err := ResumeChat(context.Background(), p)
@@ -189,6 +211,96 @@ func TestResumeChatFoundOnRestoreKeepsScopedEdits(t *testing.T) {
 	}
 	if got, ok := res.Chat.repo.RefCommit("refs/oge/chat/turns/2"); !ok || got != r[0]["commit"] {
 		t.Errorf("turn 2 ref %q %v", got, ok)
+	}
+	if got, _ := os.ReadFile(filepath.Join(ws, "add_test.go")); string(got) != base {
+		t.Errorf("the protected test wasn't reverted: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "c.go")); err != nil {
+		t.Errorf("the in-scope edit was lost: %v", err)
+	}
+}
+
+// An unsettled turn whose Workspace is clean left nothing: it is still
+// recorded as interrupted, but Öge doesn't claim edits.
+func TestResumeChatUnsettledTurnWithCleanWorkspaceFindsNothing(t *testing.T) {
+	p, _ := stoppedChat(t)
+	startUnsettledTurn(t, p)
+	res, err := ResumeChat(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { res.Chat.Close() })
+	if res.Found {
+		t.Error("a clean Workspace was reported as left edits")
+	}
+	if r := recordsOf(t, res.Chat, RecSessionRestored); len(r) != 1 || r[0]["found_on_restore"] != false {
+		t.Errorf("SessionRestored %v", r)
+	}
+}
+
+// A scope check that can't run refuses the Chat and records neither the
+// interruption nor the restore, so the next restore checks again.
+func TestResumeChatScopeFailureIsRefusedAndRecordsNothing(t *testing.T) {
+	p, ws := stoppedChat(t)
+	startUnsettledTurn(t, p)
+	// The Workspace is no longer a directory: the scope check can't run.
+	if err := os.RemoveAll(ws); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ws, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResumeChat(context.Background(), p); !errors.Is(err, ErrRestoreRefused) {
+		t.Fatalf("err %v", err)
+	}
+	recs, err := ledger.Replay(p.Chat.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if r.Type == RecTurnInterrupted || r.Type == RecSessionRestored {
+			t.Errorf("the refused restore recorded %s", r.Type)
+		}
+	}
+}
+
+// A reopen typed over a change that never got a Session (the launch
+// failed) isn't the Chat's own: with the settings back as they were, the
+// Chat launches the settings it last ran under, not the unlaunched ones.
+func TestResumeChatAcceptedReopenWithoutSessionIsNotTheChatsOwn(t *testing.T) {
+	p, _ := stoppedChat(t)
+	was := chatFrozen("implementer")
+	other := chatFrozen("implementer")
+	other.Stages[0].Model = "other-model"
+	p.Now = other
+	ch, err := RestoreChanges(p)
+	if err != nil || len(ch) == 0 {
+		t.Fatalf("changes %v %v", ch, err)
+	}
+	p.Reopen, p.Shown = true, ch
+	res, err := ResumeChat(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The Session never launched: no SessionReopened. oge goes away.
+	if err := res.Chat.Stop("quit"); err != nil {
+		t.Fatal(err)
+	}
+	p.Reopen, p.Shown, p.Now = false, nil, was
+	ch, err = RestoreChanges(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res2, err := ResumeChat(context.Background(), p)
+	if err != nil {
+		if len(ch) == 0 {
+			t.Fatalf("no change shown, but refused: %v", err)
+		}
+		return // the card shows the change again: also fine
+	}
+	t.Cleanup(func() { res2.Chat.Close() })
+	if res2.Chat.stage.Model == "other-model" {
+		t.Errorf("launched the model that never ran, with no change shown (%v)", ch)
 	}
 }
 
