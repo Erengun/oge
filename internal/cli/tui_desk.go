@@ -177,7 +177,8 @@ func (h *home) resetView() tea.Cmd {
 	h.side.verdict, h.side.outcome, h.side.changes, h.side.tokens, h.side.cost = "", "", nil, nil, nil
 	h.side.took, h.side.turns, h.side.steps, h.side.ctx = 0, 0, 0, nil
 	h.unchecked, h.uncheckedChanged = false, 0
-	h.steps = nil // a result of the old Session hangs on no new step
+	h.inPlace = false // the next message opens a Chat of Öge's, isolated
+	h.steps = nil     // a result of the old Session hangs on no new step
 	h.name = ""
 	if v := h.verify; v != nil {
 		v.cancel()
@@ -569,7 +570,8 @@ func (h *home) rail(height int) []string {
 		active := 0
 		for _, v := range g {
 			mark, coarse := glyph(v, now, quiet)
-			if mark == "✓" || mark == "○" && !stoppedMark(mark, coarse) {
+			// A stopped Chat stays in view, and an in-place Chat keeps its label in view.
+			if (mark == "✓" || mark == "○" && !stoppedMark(mark, coarse)) && !v.inPlace {
 				folded = append(folded, v)
 				continue
 			}
@@ -588,6 +590,11 @@ func (h *home) rail(height int) []string {
 			y := len(body)
 			body = append(body, strconv.Itoa(v.num)+" "+paint(mark)+" "+title+st.accent(tail), st.dim(railState(coarse, railAge(now, v.since(mark)), inner)))
 			hits = append(hits, railHit{y: y, x1: inner, v: v}, railHit{y: y + 1, x1: inner, v: v})
+			if v.inPlace {
+				// "in place · not isolated", over two rows to fit the rail.
+				body = append(body, st.dim("in place"), st.dim("not isolated"))
+				hits = append(hits, railHit{y: y + 2, x1: inner, v: v}, railHit{y: y + 3, x1: inner, v: v})
+			}
 		}
 		if len(folded) == 0 && len(ss) == 0 {
 			continue
@@ -710,26 +717,26 @@ func (v *chatView) since(mark string) time.Time {
 
 // railClick is a left click at x, y on the rail: the Chat drawn there
 // takes the focus, as alt+N would give it, and only when alt+N could.
-func (h *home) railClick(x, y int) {
+func (h *home) railClick(x, y int) tea.Cmd {
 	if h.overlaid() || h.run != nil || h.job != nil {
-		return
+		return nil
 	}
 	for _, hit := range h.railHits {
 		if hit.y != y || x < hit.x0 || x >= hit.x1 {
 			continue
 		}
 		if hit.sess != "" {
-			h.sessionRowClick(hit.sess)
-			return
+			return h.sessionRowClick(hit.sess)
 		}
 		h.selSess, h.sessNote = "", "" // any other hit leaves the row alone
 		if hit.open != "" {
 			h.openProject(hit.open)
-			return
+			return nil
 		}
 		if slices.Contains(h.views, hit.v) {
 			h.switchTo(hit.v)
-			return
+			return nil
 		}
 	}
+	return nil
 }

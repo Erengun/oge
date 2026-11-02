@@ -220,7 +220,12 @@ type Chat struct {
 	// the re-brief.
 	rebrief bool
 	closed  bool
-	cur     *turnOut // the turn in flight's events
+	// inPlace is an adopted native session (inplace.go): no Snapshot,
+	// Workspace copy, scope check, cut or apply.
+	inPlace bool
+	// nativeProvider and nativeID name the session an in-place Chat resumed.
+	nativeProvider, nativeID string
+	cur                      *turnOut // the turn in flight's events
 	// sending is the turn whose message is being written: if the Session
 	// ends meanwhile, the write's outcome labels it, not drop.
 	sending *turnOut
@@ -636,6 +641,11 @@ func (c *Chat) sendIn(ctx context.Context, text string, kind turnKind, advice st
 // last one has ended (the spec's fallback after an idle timeout or a
 // crash). The work survives; the conversation's memory doesn't.
 func (c *Chat) reopen(ctx context.Context) error {
+	if c.inPlace {
+		// The human may have gone back to the native session while this
+		// one idled: resuming again would skip the one-writer check.
+		return ErrInPlaceIdle
+	}
 	c.reopening.Lock()
 	defer c.reopening.Unlock()
 	c.mu.Lock()
@@ -680,7 +690,7 @@ func (c *Chat) reopen(ctx context.Context) error {
 		_ = sess.Close()
 		return ErrChatClosed
 	}
-	c.sess, c.pumped, c.err, c.rebrief = sess, make(chan struct{}), nil, true
+	c.sess, c.pumped, c.err, c.rebrief = sess, make(chan struct{}), nil, !c.inPlace
 	pumped = c.pumped
 	c.mu.Unlock()
 	go c.pump(sess, pumped)
@@ -812,6 +822,16 @@ func sha256Hex(s string) string {
 // user's turns so far); every later one is the user's message verbatim,
 // in the same Session (D1, disclosed).
 func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kind turnKind, advice string) map[string]any {
+	if c.inPlace {
+		// An adopted session isn't briefed, copied or sandboxed by Öge: the
+		// record says only what happened.
+		item := map[string]string{"item": "turn", "source": "the user's message, verbatim", "sha256": sha256Hex(text)}
+		return map[string]any{"chat": c.ID, "turn": n, "attempt": fmt.Sprintf("chat#%d", n), "role": "implementer",
+			"items":    []map[string]string{item},
+			"in_place": true, "workspace": "the user's working tree, in place (not a copy)",
+			"session": "resumed native session " + c.nativeID, "session_reused": true,
+			"enforced": "nothing: Öge neither isolates nor sandboxes this session"}
+	}
 	if fresh {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: "implementer"}
 		t := task.Task{Text: msgs[0], FollowUps: msgs[1:]}
@@ -883,7 +903,7 @@ func (c *Chat) finish(out *turnOut, ev agent.Event, ran bool) agent.Event {
 	a := &Attempt{ID: fmt.Sprintf("chat#%d", out.n), Role: c.role}
 	err := func() error {
 		var changes map[string]any
-		if ran {
+		if ran && !c.inPlace {
 			ts, ch, err := c.checkScope(a, out.n)
 			if err != nil {
 				return err
@@ -942,6 +962,9 @@ func (c *Chat) logFailed(err error) {
 // process that outlived it, is reverted and recorded as a late Tamper
 // event on the last turn. Nothing is committed.
 func (c *Chat) finalScope() {
+	if c.inPlace {
+		return // the working tree is the user's: nothing to compare against
+	}
 	c.mu.Lock()
 	n := c.turns
 	c.mu.Unlock()
@@ -1305,22 +1328,26 @@ func (c *Chat) end(reason error, why string) {
 		}
 		<-pumped
 		c.consults.Wait()
-		c.prepMu.Lock()
-		c.prepClosed = true
-		c.cancelPrep()
-		<-c.prepared
-		c.prepMu.Unlock()
+		if !c.inPlace {
+			c.prepMu.Lock()
+			c.prepClosed = true
+			c.cancelPrep()
+			<-c.prepared
+			c.prepMu.Unlock()
+		}
 		c.cutMu.Lock() // a cut in flight still uses the seed and the control
 		defer c.cutMu.Unlock()
-		c.prep.control.Stop()
-		c.prep.seed.Close()
+		if !c.inPlace {
+			c.prep.control.Stop()
+			c.prep.seed.Close()
+		}
 		if why != "" && busy {
 			_ = c.log(RecTurnInterrupted, map[string]any{"chat": c.ID, "turn": turn, "why": why})
 		}
 		c.logMu.Lock()
 		c.l.Close()
 		c.logMu.Unlock()
-		if why == "" {
+		if why == "" && !c.inPlace { // an adopted Chat has no work dir, and Workspace is the user's
 			oracle.RemoveAll(c.work)
 		}
 	})
