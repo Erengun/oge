@@ -306,10 +306,10 @@ func splitShell(cmd string) (cmds []*scmd, ok bool) {
 // nothing after it.
 func (p *policy) escapes(cmd string) bool { return p.escapesIn(cmd, []string{p.ws[0]}, notProg) }
 
-// progKind says what a text is read as. In a quotedProg (python, node)
-// a string literal needs quotes, so a bare / is an operator. In a
-// codeProg (perl, ruby, php, osascript) q(/) and %q(/) are literals
-// without quotes, so a lone / may be the root.
+// progKind says what a text is read as. In a quotedProg (python) a
+// string literal needs quotes, so a bare / is an operator. In a codeProg
+// (node, perl, ruby, php, osascript) q(/), %q(/) and a JS regexp literal
+// String(/ /) are literals without quotes, so a lone / may be the root.
 type progKind int
 
 const (
@@ -323,7 +323,7 @@ func kindOf(name string) progKind {
 	switch {
 	case !interpreter(name):
 		return notProg
-	case strings.HasPrefix(name, "python") || name == "node":
+	case strings.HasPrefix(name, "python"):
 		return quotedProg
 	}
 	return codeProg
@@ -439,9 +439,21 @@ func (p *policy) escapesIn(cmd string, cwds []string, program progKind) bool {
 				}
 			}
 		}
+		// builtin and command run the builtin that follows.
+		args := c.words[min(h+1, len(c.words)):]
+		if oneOf(name, []string{"builtin", "command"}) && len(args) > 0 {
+			name, args = filepath.Base(args[0].text), args[1:]
+		}
+		if name == "jq" {
+			// -L/dir and --library-path=/dir hold their path in the flag.
+			for _, a := range args {
+				if (strings.HasPrefix(a.text, "-L") && len(a.text) > 2) || strings.HasPrefix(a.text, "--library-path=") {
+					return true
+				}
+			}
+		}
 		switch name {
 		case "cd", "pushd":
-			args := c.words[h+1:]
 			for len(args) > 0 && oneOf(args[0].text, []string{"-L", "-P", "-e", "-@", "--"}) {
 				args = args[1:]
 			}
@@ -482,7 +494,7 @@ func (p *policy) escapesIn(cmd string, cwds []string, program progKind) bool {
 		case "eval":
 			return true // a program the policy can't read
 		case "source", ".":
-			if !p.sourceOK(cwds, c.words[h+1:]) {
+			if !p.sourceOK(cwds, args) {
 				return true // a program the policy can't read
 			}
 		}
@@ -514,6 +526,7 @@ func head(ws []sword) int {
 var (
 	assignRE   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\+?=`)
 	durationRE = regexp.MustCompile(`^[0-9.]+[smhd]?$`)
+	jqImportRE = regexp.MustCompile(`\b(import|include|search)\b`)
 	urlRE      = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*)://`)
 )
 
@@ -663,34 +676,41 @@ func toolchain(get func(string) string) []string {
 	return out
 }
 
-var (
-	awks      = []string{"awk", "gawk", "mawk", "nawk"}
-	resplitOK = append([]string{"xargs", "eval", "source", ".", "parallel"}, shells...)
-)
+var awks = []string{"awk", "gawk", "mawk", "nawk"}
 
-// shells are the shells, which run the text they are given.
-var shells = []string{"sh", "bash", "zsh", "dash", "ksh", "fish"}
+// textSinks are the commands that only read text and print or count it.
+// What a script prints may reach one of them; anything else (xargs, a
+// shell, tar -T -, a read loop, tee, a substitution) may use it as a path
+// or a command.
+var textSinks = []string{"sort", "uniq", "wc", "head", "tail", "grep", "egrep", "fgrep", "rg",
+	"cut", "tr", "cat", "less", "more"}
 
 // resplits reports whether what command k prints may reach something
-// that re-splits or runs it: a later command of its pipeline, or of the
-// whole command when it sits in a group, that is xargs, a shell, an
-// interpreter, eval, source, parallel, or find -exec.
+// other than a pure-text sink: a later command of its pipeline, or of
+// the whole command when it sits in a group, that is not in textSinks (or
+// is one given a flag that reads names from stdin or runs a program), a
+// read loop, a group, or a substitution.
 func resplits(cmds []*scmd, k int, grouped bool) bool {
 	for m := k + 1; m < len(cmds); m++ {
+		piped := oneOf("|", cmds[m].ops) || oneOf(">(", cmds[m].ops) || oneOf("<(", cmds[m].ops)
 		// Output given to >( or <( reaches that command whatever
 		// separates them.
-		if !grouped && !oneOf("|", cmds[m].ops) && !oneOf(">(", cmds[m].ops) && !oneOf("<(", cmds[m].ops) {
+		if !piped {
+			if grouped {
+				continue
+			}
 			return false
 		}
 		ws := cmds[m].words
-		if h := head(ws); h < len(ws) {
-			n := filepath.Base(ws[h].text)
-			if oneOf(n, resplitOK) || inline[n] != nil {
-				return true
-			}
+		h := head(ws)
+		if h >= len(ws) {
+			continue
 		}
-		for _, w := range ws {
-			if oneOf(w.text, []string{"-exec", "-execdir", "-ok", "-okdir"}) {
+		if !oneOf(filepath.Base(ws[h].text), textSinks) {
+			return true
+		}
+		for _, w := range ws[h+1:] {
+			if strings.HasPrefix(w.text, "--") && (strings.Contains(w.text, "files0") || strings.HasPrefix(w.text, "--comp")) {
 				return true
 			}
 		}
@@ -782,7 +802,7 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 				i = len(args)
 			case oneOf(t, []string{"--arg", "--argjson", "--slurpfile", "--rawfile"}):
 				i += 2
-			case oneOf(t, []string{"-L", "--indent"}):
+			case oneOf(t, []string{"-L", "--library-path", "--indent"}):
 				i++
 			case t == "--from-file" || strings.HasPrefix(t, "--from-file=") || t == "--run-tests":
 				return out
@@ -795,7 +815,7 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 			switch {
 			case oneOf(t, []string{"--arg", "--argjson", "--slurpfile", "--rawfile"}):
 				i += 2
-			case oneOf(t, []string{"-L", "--indent"}):
+			case oneOf(t, []string{"-L", "--library-path", "--indent"}):
 				i++
 			case oneOf(t, []string{"-f", "--from-file"}):
 				return out
@@ -833,6 +853,9 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 			}
 		}
 	case name == "git":
+		// Only the global flags known here may precede commit; any
+		// other (--namespace, --attr-source, ...) may take the next
+		// word, so nothing is excused.
 		commit := false
 		for i := 0; i < len(args); i++ {
 			t := args[i].text
@@ -841,10 +864,16 @@ func scriptWords(name string, ws []sword, h int) map[int]bool {
 				commit = true
 			case !commit && oneOf(t, []string{"-C", "-c", "--git-dir", "--work-tree"}):
 				i++
-			case !commit && strings.HasPrefix(t, "-"):
+			case !commit && (oneOf(t, []string{"-p", "--paginate", "--no-pager"}) ||
+				strings.HasPrefix(t, "--git-dir=") || strings.HasPrefix(t, "--work-tree=")):
 			case !commit:
-				return out
+				return map[int]bool{}
 			case t == "--message" || (len(t) > 1 && t[0] == '-' && t[1] != '-' && strings.HasSuffix(t, "m")):
+				// -Cm is -C with the value m: every letter before the m
+				// must be a flag that takes no value.
+				if len(t) > 2 && t[1] != '-' && strings.Trim(t[1:len(t)-1], "asvqneio") != "" {
+					return map[int]bool{}
+				}
 				if i+1 < len(args) {
 					out[at(i+1)] = true
 					i++
@@ -867,18 +896,27 @@ func scriptText(name string, w sword) sword {
 	if w.dynamic || (oneOf(name, awks) && strings.Contains(w.text, `"`)) {
 		return w
 	}
+	// A jq string literal that is only slashes ("/") is a path for import
+	// or a root once consumed, so a slash run touching a " excuses nothing,
+	// nor does a program that imports (known false stop: jq -n '"/"').
+	if name == "jq" && (strings.Contains(w.text, `/"`) || strings.Contains(w.text, `"/`) || jqImportRE.MatchString(w.text)) {
+		return w
+	}
 	w.slashOK = true
 	return w
 }
 
 // sourceOK reports whether source or . reads a relative path inside the
-// Workspace: no .., no absolute path, no ~, nothing expanded.
+// Workspace: a / in it, no flag, no .., no absolute path, no ~, nothing
+// expanded.
 func (p *policy) sourceOK(cwds []string, args []sword) bool {
 	if len(args) == 0 {
 		return false
 	}
 	t := args[0]
-	if t.dynamic || t.text == "" || filepath.IsAbs(t.text) || strings.HasPrefix(t.text, "~") ||
+	// bash and zsh search PATH for a name with no /, and a leading - is a
+	// flag (source -- "$X", source -p $X x.sh).
+	if t.dynamic || t.text == "" || strings.HasPrefix(t.text, "-") || !strings.Contains(t.text, "/") || filepath.IsAbs(t.text) || strings.HasPrefix(t.text, "~") ||
 		strings.ContainsAny(t.text, "*?[{") || hasDotDot(t.text) {
 		return false
 	}
@@ -989,10 +1027,19 @@ func sedRuns(script string) bool {
 		switch c {
 		case 'e':
 			return true
-		case '#', 'a', 'i', 'c', 'r', 'R', 'w', 'W', ':':
+		case '#', 'a', 'i', 'c', 'r', 'R', 'w', 'W':
 			eol()
-		case 'b', 't', 'T':
-			for i < n && !strings.ContainsRune(";}\n", rs[i]) {
+		case 'b', 't', 'T', ':':
+			// A label ends at ; a newline or a blank (GNU sed 4.3+), and
+			// a branch's also at }.
+			for i < n && strings.ContainsRune(" \t", rs[i]) {
+				i++
+			}
+			end := ";\n \t"
+			if c != ':' {
+				end += "}"
+			}
+			for i < n && !strings.ContainsRune(end, rs[i]) {
 				i++
 			}
 		case 's':
