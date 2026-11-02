@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -76,8 +77,7 @@ func pump(t *testing.T, h *home, cmd tea.Cmd, done func() bool) {
 	t.Helper()
 	q, _ := pumps.LoadOrStore(h, make(chan tea.Msg, 64))
 	msgs := q.(chan tea.Msg)
-	var launch func(c tea.Cmd)
-	launch = func(c tea.Cmd) {
+	launch := func(c tea.Cmd) {
 		if c != nil {
 			go func() { msgs <- c() }()
 		}
@@ -350,12 +350,155 @@ func TestAdoptClickOnARowAsksAndRefusesLikeTheCatalog(t *testing.T) {
 	}
 }
 
+// A second adopt of a session already open here as a Chat is refused, even
+// long after its file was last written: Öge must not be the second writer.
+func TestAdoptRefusesASessionAlreadyOpenHere(t *testing.T) {
+	stub := &adoptStub{mode: "default"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	adopted(t, h, stub)
+	if stub.opened != 1 {
+		t.Fatalf("setup: opened %d", stub.opened)
+	}
+	later := h.clock().Add(10 * time.Minute)
+	h.now = func() time.Time { return later }
+	catalogAt(h)
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := screenText(h); !strings.Contains(got, "already open here as Chat") {
+		t.Errorf("no refusal:\n%s", got)
+	}
+	typeText(h, "y")
+	if stub.opened != 1 || len(h.views) != 2 {
+		t.Errorf("adopted twice: opened %d, views %d", stub.opened, len(h.views))
+	}
+}
+
+// The quiet check runs again at y: a write that lands while the prompt is
+// up stops the adopt.
+func TestAdoptRechecksTheFileAtY(t *testing.T) {
+	stub := &adoptStub{}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	path := filepath.Join(t.TempDir(), "c1.jsonl")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := h.clock().Add(-10 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	base := h.discover
+	h.discover = func(ctx context.Context, rs []string) sessionFound {
+		f := base(ctx, rs)
+		for i := range f.sessions {
+			if f.sessions[i].ID == "c1" {
+				f.sessions[i].Path = path
+			}
+		}
+		return f
+	}
+	h.now = func() time.Time { return time.Now() }
+	catalogAt(h)
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if h.catalog == nil || h.catalog.adopt == nil {
+		t.Fatalf("no prompt:\n%s", screenText(h))
+	}
+	// Someone types into the native session while the prompt is up.
+	if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	typeText(h, "y")
+	if stub.opened != 0 || len(h.views) != 1 {
+		t.Errorf("adopted a session written to under the prompt (opened %d)", stub.opened)
+	}
+	if got := screenText(h); !strings.Contains(got, "close it there first") {
+		t.Errorf("no refusal:\n%s", got)
+	}
+}
+
+// The profile a session was found under is the one it resumes with.
+func TestAdoptKeepsTheSessionsProfile(t *testing.T) {
+	stub := &adoptStub{}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	base := h.discover
+	h.discover = func(ctx context.Context, rs []string) sessionFound {
+		f := base(ctx, rs)
+		for i := range f.sessions {
+			if f.sessions[i].ID == "c2" {
+				f.sessions[i].Cwd, f.sessions[i].Written = t.TempDir(), h.clock().Add(-time.Hour)
+			}
+		}
+		return f
+	}
+	slash(h, "/sessions")
+	press(h, tea.KeyPressMsg{Code: tea.KeyDown})
+	press(h, tea.KeyPressMsg{Code: tea.KeyDown}) // claude@work
+	press(h, tea.KeyPressMsg{Code: tea.KeyEnter})
+	pump(t, h, typeCmd(h, "y"), func() bool { return len(h.views) == 2 })
+	if stub.spec.Profile != "work" || stub.spec.Resume == nil || stub.spec.Resume.ID != "c2" {
+		t.Errorf("opened with %+v", stub.spec)
+	}
+}
+
+// The Ledger for an in-place turn says only what happened: the user's
+// message, no copy, no sandbox.
+func TestAdoptManifestMakesNoIsolationClaim(t *testing.T) {
+	stub := &adoptStub{mode: "default"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	adopted(t, h, stub)
+	typeText(h, "go")
+	_, cmd := h.Update(enter())
+	pump(t, h, cmd, func() bool { return h.turn == nil && strings.Contains(screenText(h), "done") })
+	recs, err := ledger.Replay(h.views[1].chat.get().Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range recs {
+		if r.Type != run.RecBriefingManifest {
+			continue
+		}
+		n++
+		got := string(r.Data)
+		for _, bad := range []string{"a copy of revision", "built by Öge", "\"fresh\"", "denied", "deny_read"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("manifest claims %q: %s", bad, got)
+			}
+		}
+		if !strings.Contains(got, "in place") || !strings.Contains(got, "c1") {
+			t.Errorf("manifest doesn't say in place / which session: %s", got)
+		}
+	}
+	if n == 0 {
+		t.Error("no manifest recorded")
+	}
+}
+
+// The sidebar and the status line show the session's own settings, not
+// Öge's setup for the repo.
+func TestAdoptedViewShowsNoOgeSetup(t *testing.T) {
+	stub := &adoptStub{mode: "bypassPermissions"}
+	h, _, _ := adoptHome(t, stub, 10*time.Minute)
+	adopted(t, h, stub)
+	typeText(h, "go")
+	_, cmd := h.Update(enter())
+	pump(t, h, cmd, func() bool { return h.turn == nil && strings.Contains(screenText(h), "done") })
+	got := strings.Join(h.sidebar(40, 30), "\n")
+	if strings.Contains(got, "careful") || strings.Contains(got, "verify") || !strings.Contains(got, "bypassPermissions") {
+		t.Errorf("sidebar:\n%s", got)
+	}
+	if scr := screenText(h); strings.Contains(scr, "verify ") {
+		t.Errorf("status line shows a setup:\n%s", scr)
+	}
+}
+
 func TestCoverageLine(t *testing.T) {
 	cases := []struct{ mode, approval, sandbox, want string }{
 		{"bypassPermissions", "", "", "not gated: bypassPermissions"},
 		{"", "never", "", "not gated: approval policy never"},
 		{"", "on-request", "danger-full-access", "not gated: sandbox danger-full-access"},
 		{"default", "", "", "gated: what your settings would ask · allowed without Öge: your allow rules"},
+		{"acceptEdits", "", "", "gated: what your settings would ask · allowed without Öge: your allow rules and every file edit · mode acceptEdits"},
+		{"auto", "", "", "gated: what your settings would ask · allowed without Öge: what claude's auto mode allows · mode auto"},
+		{"plan", "", "", "coverage unknown: mode plan is not one Öge recognises"},
 		{"", "", "", "coverage unknown: the session didn't report its permission settings"},
 	}
 	for _, c := range cases {

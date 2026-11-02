@@ -222,7 +222,9 @@ type Chat struct {
 	// inPlace is an adopted native session (inplace.go): no Snapshot,
 	// Workspace copy, scope check, cut or apply.
 	inPlace bool
-	cur     *turnOut // the turn in flight's events
+	// nativeProvider and nativeID name the session an in-place Chat resumed.
+	nativeProvider, nativeID string
+	cur                      *turnOut // the turn in flight's events
 	// sending is the turn whose message is being written: if the Session
 	// ends meanwhile, the write's outcome labels it, not drop.
 	sending *turnOut
@@ -813,6 +815,16 @@ func sha256Hex(s string) string {
 // user's turns so far); every later one is the user's message verbatim,
 // in the same Session (D1, disclosed).
 func (c *Chat) manifest(n int, fresh bool, msgs []string, text, sent string, kind turnKind, advice string) map[string]any {
+	if c.inPlace {
+		// An adopted session isn't briefed, copied or sandboxed by Öge: the
+		// record says only what happened.
+		item := map[string]string{"item": "turn", "source": "the user's message, verbatim", "sha256": sha256Hex(text)}
+		return map[string]any{"chat": c.ID, "turn": n, "attempt": fmt.Sprintf("chat#%d", n), "role": "implementer",
+			"items":    []map[string]string{item},
+			"in_place": true, "workspace": "the user's working tree, in place (not a copy)",
+			"session": "resumed native session " + c.nativeID, "session_reused": true,
+			"enforced": "nothing: Öge neither isolates nor sandboxes this session"}
+	}
 	if fresh {
 		a := &Attempt{ID: fmt.Sprintf("chat#%d", n), Role: "implementer"}
 		t := task.Task{Text: msgs[0], FollowUps: msgs[1:]}

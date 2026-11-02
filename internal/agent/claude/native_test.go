@@ -45,6 +45,20 @@ func TestNativeLaunchKeepsSettings(t *testing.T) {
 	}
 }
 
+// A session found under a named profile resumes with that profile's config
+// dir, so it is the same account and settings.
+func TestNativeEnvUsesTheSessionsProfile(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".claude-work")
+	env, err := nativeEnv(profile{role: "implementer", extra: map[string]string{"work": dir}}, []string{"HOME=" + home}, agent.LaunchSpec{Profile: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(env, "CLAUDE_CONFIG_DIR="+dir) {
+		t.Errorf("env lacks the work profile's dir %s: %v", dir, env)
+	}
+}
+
 // openNative opens an adopted session on fakeclaude in cwd, under mode.
 func openNative(t *testing.T, sc multiturn.Scenario, mode string) (agent.Session, string, string) {
 	t.Helper()
@@ -84,9 +98,15 @@ func TestNativeOpenResumesInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got struct{ Argv []string }
+	var got struct {
+		Argv []string
+		Cwd  string
+	}
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
+	}
+	if want, _ := filepath.EvalSymlinks(cwd); got.Cwd != want && got.Cwd != cwd {
+		t.Errorf("started in %q, want the session's cwd %q", got.Cwd, cwd)
 	}
 	if i := slices.Index(got.Argv, "--resume"); i < 0 || got.Argv[i+1] != "sess-1" {
 		t.Errorf("argv %v", got.Argv)
@@ -94,7 +114,6 @@ func TestNativeOpenResumesInPlace(t *testing.T) {
 	if slices.Contains(got.Argv, "--tools") || slices.Contains(got.Argv, "--setting-sources=") {
 		t.Errorf("argv has Launch profile flags: %v", got.Argv)
 	}
-	_ = cwd
 }
 
 // What the session's settings ask becomes an Ask, and the answer reaches

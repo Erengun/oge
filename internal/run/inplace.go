@@ -51,7 +51,7 @@ func OpenInPlaceChat(ctx context.Context, p InPlaceParams) (c *Chat, err error) 
 		return nil, fmt.Errorf("the session's working directory %s is gone", p.Cwd)
 	}
 	c = &Chat{ID: newID(), role: "implementer", idle: p.IdleTimeout, pumped: make(chan struct{}), stop: make(chan struct{}),
-		adapter: p.Adapter, ctx: ctx, inPlace: true, source: p.Cwd, Workspace: p.Cwd, state: p.State,
+		adapter: p.Adapter, ctx: ctx, inPlace: true, nativeProvider: p.Provider, nativeID: p.ID, source: p.Cwd, Workspace: p.Cwd, state: p.State,
 		unsent: map[int]bool{}, oge: map[int]bool{}, advised: map[int]bool{}}
 	if c.idle <= 0 {
 		c.idle = DefaultIdleTimeout
@@ -104,3 +104,7 @@ func (c *Chat) InPlace() bool { return c.inPlace }
 func (c *Chat) RecordCoverage(line, mode, sandbox string) error {
 	return c.log(RecCoverageReported, map[string]any{"chat": c.ID, "line": line, "mode": mode, "sandbox": sandbox})
 }
+
+// Native is the provider and id of the native session an in-place Chat
+// resumed; empty for any other Chat.
+func (c *Chat) Native() (provider, id string) { return c.nativeProvider, c.nativeID }

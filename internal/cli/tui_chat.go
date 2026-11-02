@@ -590,6 +590,7 @@ func (h *home) chatEvent(ev agent.Event) tea.Cmd {
 		}
 	case agent.SessionOpened:
 		if h.inPlace && ev.Session != nil {
+			h.nativeMode = ev.Session.PermissionMode
 			return h.coverage(ev.Session)
 		}
 	case agent.HostRequest:

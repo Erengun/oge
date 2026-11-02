@@ -76,23 +76,50 @@ func (h *home) askAdopt(c *sessionCatalog, s agent.NativeSession) {
 		c.note = "that session recorded no working directory: nothing was resumed"
 		return
 	}
-	// The file's own write time, as of now: the catalog's may be minutes old.
-	written := s.Written
+	if v := h.openAdopted(s); v != nil {
+		c.note = "already open here as Chat " + fmt.Sprint(v.num)
+		return
+	}
+	written, note := h.quietCheck(s)
+	if note != "" {
+		c.note = note
+		return
+	}
+	s.Written = written
+	c.adopt = &adoptPrompt{s}
+}
+
+// quietCheck is the one-writer check: the session file's own write time as
+// of now (the catalog's may be minutes old), or why it can't be resumed.
+func (h *home) quietCheck(s agent.NativeSession) (written time.Time, note string) {
+	written = s.Written
 	if s.Path != "" {
 		if st, err := os.Stat(s.Path); err == nil && st.ModTime().After(written) {
 			written = st.ModTime()
 		}
 	}
 	if written.IsZero() {
-		c.note = "can't tell whether it is open elsewhere: nothing was resumed"
-		return
+		return written, "can't tell whether it is open elsewhere: nothing was resumed"
 	}
 	if age := h.clock().Sub(written); age < quietFor {
-		c.note = "written to " + ago(age) + " ago: close it there first"
-		return
+		return written, "written to " + ago(age) + " ago: close it there first"
 	}
-	s.Written = written
-	c.adopt = &adoptPrompt{s}
+	return written, ""
+}
+
+// openAdopted is the view already holding this session as a live in-place
+// Chat, or nil: Öge must not be the second writer.
+func (h *home) openAdopted(s agent.NativeSession) *chatView {
+	for _, v := range h.views {
+		if !v.inPlace || v.chat == nil || v.chat.get() == nil {
+			continue
+		}
+		c := v.chat.get()
+		if p, id := c.Native(); p == s.Provider && id == s.ID && c.Err() == nil {
+			return v
+		}
+	}
+	return nil
 }
 
 // adoptLines is what shows under the box while a prompt, or the reason
@@ -126,6 +153,15 @@ func (h *home) adoptKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "y":
 		s := c.adopt.s
+		// The prompt may have been up a long time: check again.
+		if v := h.openAdopted(s); v != nil {
+			c.note, c.adopt = "already open here as Chat "+fmt.Sprint(v.num), nil
+			return nil
+		}
+		if _, note := h.quietCheck(s); note != "" {
+			c.note, c.adopt = note, nil
+			return nil
+		}
 		h.chats, h.catalog = nil, nil
 		hc := h.chat
 		h.note = "adopting " + clean(s.Title) + "…"
@@ -228,7 +264,7 @@ func (h *home) adopted(m adoptedMsg) tea.Cmd {
 		return h.problem("oge: couldn't adopt the session: this repo can't hold a Chat")
 	}
 	title := clean(task0(s.Title))
-	v.name, v.inPlace = title, true
+	v.name, v.inPlace, v.nativeProvider = title, true, s.Provider
 	v.chat.c = m.chat
 	h.place(v.root)
 	h.views = append(h.views, v)
@@ -265,8 +301,12 @@ func coverageLine(mode, approval, sandbox string) string {
 		return "not gated: sandbox danger-full-access"
 	case mode == "default":
 		return "gated: what your settings would ask · allowed without Öge: your allow rules"
+	case mode == "acceptEdits":
+		return "gated: what your settings would ask · allowed without Öge: your allow rules and every file edit · mode acceptEdits"
+	case mode == "auto":
+		return "gated: what your settings would ask · allowed without Öge: what claude's auto mode allows · mode auto"
 	case mode != "":
-		return "gated: what your settings would ask · allowed without Öge: your allow rules · mode " + mode
+		return "coverage unknown: mode " + mode + " is not one Öge recognises"
 	case approval != "" || sandbox != "":
 		return "gated: what its approval policy would ask · allowed without Öge: what its sandbox allows"
 	}

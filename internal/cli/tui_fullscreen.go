@@ -255,7 +255,7 @@ func (h *home) welcome() []string {
 		hints += " · ctrl+t sidebar"
 	}
 	out := []string{"", "  " + st.accent(st.bold("oge")) + "  " + ready}
-	if len(h.setup) > 0 {
+	if len(h.setup) > 0 && !h.inPlace {
 		// What the next turn uses, in a line: agent · mode · verifier.
 		out = append(out, "  "+st.dim(strings.Replace(h.setup[0], "implement ", "", 1)))
 	}

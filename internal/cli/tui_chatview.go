@@ -68,6 +68,9 @@ type chatView struct {
 	// (tui_adopt.go). It is labelled so on the rail and in the header for
 	// its whole life; /clear and /close end it.
 	inPlace bool
+	// nativeProvider, nativeMode: the adopted session's provider and the
+	// permission mode it reported.
+	nativeProvider, nativeMode string
 	// resetting: /new is closing the old Chat.
 	resetting bool
 

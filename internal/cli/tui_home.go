@@ -1606,7 +1606,11 @@ func (h *home) render() (string, int, int) {
 	}
 	if h.panel == nil && h.keys == nil {
 		_, shell := shellLine(h.comp.expanded())
-		for i, l := range h.setup {
+		setup := h.setup
+		if h.inPlace {
+			setup = nil // Öge's setup for the repo isn't this session's
+		}
+		for i, l := range setup {
 			if h.full && (i == 0 || i == len(h.setup)-1 && strings.HasPrefix(l, "[tab]")) {
 				continue // the status is in the box's border
 			}
