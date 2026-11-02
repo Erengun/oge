@@ -84,6 +84,10 @@ const (
 // sandbox self-test, and starts the thread, failing closed on any
 // envelope it can't assert.
 func (a *Adapter) Open(ctx context.Context, spec agent.LaunchSpec) (agent.Session, error) {
+	if spec.Resume != nil {
+		// An adopted thread keeps its own settings: native.go.
+		return a.openNative(ctx, spec)
+	}
 	if spec.Role != "implementer" {
 		// TODO(#60): the verifier's read-only profile, write scope and
 		// shell_snapshot=false.
@@ -303,6 +307,15 @@ type session struct {
 	ws      []string // the Workspace, as given and with symlinks resolved
 	version string
 	auth    string
+	// native is an adopted thread (native.go): its own settings decide
+	// what is asked, approvals become Asks, and none of the Launch
+	// profile's checks apply.
+	native bool
+	// approval, sandbox and mcp are what a resumed thread reported of its
+	// own settings, under mu.
+	approval, sandbox string
+	mcp               []string
+	asks              map[string]*pendingAsk
 
 	wmu   sync.Mutex
 	stdin io.WriteCloser
@@ -440,10 +453,7 @@ func (s *session) Send(t agent.Turn) error {
 	s.mu.Unlock()
 	s.emit(agent.Event{Kind: agent.TurnAccepted})
 	if first {
-		s.emit(agent.Event{Kind: agent.SessionOpened, Session: &agent.SessionInfo{
-			AgentVersion: clip(s.version), Capabilities: []string{CapHostRequests, CapInterrupt},
-			Profile: s.hash, Envelope: "ok", AuthSource: "account:" + s.auth,
-		}})
+		s.emit(agent.Event{Kind: agent.SessionOpened, Session: s.sessionInfo()})
 		if older(LastTested, s.version) {
 			s.emit(agent.Event{Kind: agent.Warning, Text: "envelope: codex " + clip(s.version) + " is newer than " + LastTested + ", the last version Öge was tested with"})
 		}
@@ -560,6 +570,7 @@ func (s *session) settle(ev agent.Event) {
 	if !was {
 		return
 	}
+	s.withdrawAsks()
 	if use != nil {
 		s.emit(*use)
 	}
@@ -712,7 +723,11 @@ func (s *session) notification(m message) {
 		} `json:"tokenUsage"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if m.Method == "mcpServer/startupStatus/updated" {
+	if s.native {
+		if s.nativeNotification(m, p.ThreadID) {
+			return
+		}
+	} else if m.Method == "mcpServer/startupStatus/updated" {
 		// An MCP server started despite being turned off: it runs outside
 		// the sandbox, so the Session can't go on (fail closed).
 		var mp struct {
@@ -722,7 +737,7 @@ func (s *session) notification(m message) {
 		s.failClosed("an MCP server (" + clip(mp.Name) + ") started outside Öge's sandbox")
 		return
 	}
-	if m.Method == "item/started" && p.Item.Type == "mcpToolCall" {
+	if !s.native && m.Method == "item/started" && p.Item.Type == "mcpToolCall" {
 		// A tripwire: an MCP tool from anywhere (apps, plugins) runs
 		// outside the sandbox and never asks for approval.
 		s.failClosed("the agent called an MCP tool, which runs outside Öge's sandbox")
@@ -826,6 +841,9 @@ const noReasonToModel = " (Codex doesn't pass this reason to the model.)"
 // never pre-authorises leaving the sandbox. No session-wide amendment is
 // ever sent (ADR-0018). Any other request is refused.
 func (s *session) request(m message) error {
+	if s.native {
+		return s.nativeRequest(m)
+	}
 	var p struct {
 		ItemID string `json:"itemId"`
 		item

@@ -2,7 +2,8 @@
 // adapter's contract tests. It replays the script in OGE_FAKECODEX_SCRIPT
 // (testdata's recording format): it waits for each recorded client
 // message, matching requests by method, answers under the client's own
-// id, and writes every client message to OGE_FAKECODEX_LOG. As
+// id, and writes every client message to OGE_FAKECODEX_LOG (and, when
+// OGE_FAKECODEX_ARGV names a file, its own arguments and cwd there). As
 // `codex sandbox` it stubs the self-test.
 package main
 
@@ -46,6 +47,12 @@ func main() {
 		os.Exit(2)
 	}
 	defer log.Close()
+	if p := os.Getenv("OGE_FAKECODEX_ARGV"); p != "" {
+		// What the adapter started it with, for tests of the launch.
+		cwd, _ := os.Getwd()
+		b, _ := json.Marshal(map[string]any{"argv": os.Args[1:], "cwd": cwd})
+		_ = os.WriteFile(p, b, 0o600)
+	}
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(nil, 16<<20)
 	out := bufio.NewWriter(os.Stdout)

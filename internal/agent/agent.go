@@ -390,6 +390,10 @@ type SessionInfo struct {
 	// Codex's approval policy and sandbox): the source of the coverage
 	// line. Empty for a session Öge launched itself.
 	PermissionMode, ApprovalPolicy, Sandbox string `json:",omitempty"`
+	// Unsupervised names what a resumed session runs outside any sandbox
+	// and without a prompt, as the agent reported it (Codex's MCP
+	// servers). The coverage line names them.
+	Unsupervised []string `json:",omitempty"`
 	// Residue is what an isolated launch still loads and the user can't
 	// remove from it, such as organisation-managed plugins and skills.
 	Residue *Residue `json:",omitempty"`
