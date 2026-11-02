@@ -114,7 +114,7 @@ func TestSessionsAllNonRepoProjectIsViewOnly(t *testing.T) {
 	}
 	typeText(h, "a")
 	got := screenText(h)
-	if !strings.Contains(got, "scratch work") || !strings.Contains(got, "not a git repo: adopt from there with claude --resume") {
+	if !strings.Contains(got, "scratch work") || !strings.Contains(got, "not a git repo: resume it from there") {
 		t.Errorf("no view-only reason:\n%s", got)
 	}
 	if len(h.onDesk) != 0 {
@@ -129,4 +129,44 @@ func slicesHasRoot(rs []string, root string) bool {
 		}
 	}
 	return false
+}
+
+// A codex thread started in a worktree comes back from codex only when it
+// is listed whole, so discovery folds it on the client in both modes, and
+// the ◌ row it becomes can be looked up again.
+func TestDiscoverFoldsCodexWorktreeThreadsOnTheClient(t *testing.T) {
+	_, roots, wt, _ := allSessionsHome(t)
+	sub := filepath.Join(roots["beta"], "internal")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	listed := []agent.NativeSession{
+		{Provider: "codex", ID: "w1", Title: "in a worktree", Cwd: wt},
+		{Provider: "codex", ID: "w2", Title: "in a subdirectory", Cwd: sub},
+	}
+	find := discoverWith(func(string) string { return "" }, func(context.Context) ([]agent.NativeSession, string) { return listed, "" })
+	for _, all := range []bool{false, true} {
+		f := find(context.Background(), []string{roots["beta"]}, all)
+		n := 0
+		for _, s := range f.sessions {
+			if s.Provider == "codex" && repoKey(s.Project) == repoKey(roots["beta"]) {
+				n++
+			}
+		}
+		if n != 2 { // the worktree thread and the subdirectory one
+			t.Errorf("all=%v: %d codex sessions under beta, want 2: %+v", all, n, f.sessions)
+		}
+	}
+}
+
+func TestAddSessionKeepsTheDeskRootOfAWorktree(t *testing.T) {
+	h, roots, wt, _ := allSessionsHome(t)
+	h.onDesk = append(h.onDesk, deskSession{provider: "claude", id: "x", repo: wt})
+	if got := h.deskRootFor(roots["beta"]); got != wt {
+		t.Fatalf("deskRootFor = %q, want the worktree %q", got, wt)
+	}
+	h.addSession(agent.NativeSession{Provider: "claude", ID: "y", Project: roots["beta"]})
+	if got := h.onDesk[len(h.onDesk)-1].repo; got != wt {
+		t.Errorf("repo = %q, want %q: a second rail slot for the same project", got, wt)
+	}
 }

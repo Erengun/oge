@@ -18,6 +18,7 @@ import (
 	"github.com/erengun/oge/internal/agent/claude"
 	"github.com/erengun/oge/internal/agent/codex"
 	"github.com/erengun/oge/internal/run"
+	"github.com/erengun/oge/internal/workspace"
 )
 
 // Native sessions on the Desk (docs/ux/sessions.md, S3). /sessions lists
@@ -54,18 +55,20 @@ type sessionDiscover func(ctx context.Context, roots []string, all bool) session
 
 // defaultDiscover reads Claude's session files and asks a short-lived
 // Codex app-server, then keeps the sessions inside roots, or groups every
-// one by project when all is set (codex is then asked without a cwd filter).
+// one by project when all is set (codex is always asked without a cwd filter).
 func defaultDiscover(getenv func(string) string) sessionDiscover {
+	return discoverWith(getenv, (&codex.Adapter{}).ListAllSessions)
+}
+
+// discoverWith is defaultDiscover with codex's listing given. Codex's cwd
+// filter matches a directory exactly, so a thread started in a worktree or
+// a subdirectory would never come back from it: codex is always listed
+// whole, and the folding into projects is done here, on the client.
+func discoverWith(getenv func(string) string, listAll func(context.Context) ([]agent.NativeSession, string)) sessionDiscover {
 	return func(ctx context.Context, roots []string, all bool) sessionFound {
 		var f sessionFound
 		found := claude.DiscoverSessions(claude.Profiles(getenv("HOME"), getenv, nil))
-		var cs []agent.NativeSession
-		var why string
-		if all {
-			cs, why = (&codex.Adapter{}).ListAllSessions(ctx)
-		} else {
-			cs, why = (&codex.Adapter{}).ListSessions(ctx, roots)
-		}
+		cs, why := listAll(ctx)
 		found = append(found, cs...)
 		if why != "" {
 			f.problems = append(f.problems, why)
@@ -258,7 +261,7 @@ func (h *home) catalogItems() {
 			}
 			items = append(items, sessionHeader{
 				label:    labels[i],
-				onDesk:   slices.ContainsFunc(desk, func(r string) bool { return repoKey(r) == k }),
+				onDesk:   slices.ContainsFunc(desk, func(r string) bool { return mainKey(r) == k }),
 				viewOnly: why,
 			})
 			for _, s := range byKey[k] {
@@ -294,6 +297,32 @@ func (h *home) sessionOn(s agent.NativeSession) int {
 	return slices.IndexFunc(h.onDesk, func(d deskSession) bool { return d.provider == s.Provider && d.id == s.ID })
 }
 
+// mainKey is repoKey of the main repo root belongs to, so a worktree and
+// its repo compare equal; repoKey of root itself when it is not a repo.
+func mainKey(root string) string {
+	if m, err := workspace.MainRoot(root); err == nil {
+		return repoKey(m)
+	}
+	return repoKey(root)
+}
+
+// deskRootFor is the root the Desk already holds (a Chat's, or a pinned
+// one) for the project at main, when that is a linked worktree of it or
+// the repo itself; "" when the Desk holds none.
+func (h *home) deskRootFor(main string) string {
+	if main == "" {
+		return ""
+	}
+	k := mainKey(main)
+	_, desk := h.railGroups()
+	for _, r := range desk {
+		if mainKey(r) == k {
+			return r
+		}
+	}
+	return ""
+}
+
 // deskRecord is the Desk record the home writes to; nil records nothing.
 func (h *home) deskRecord() *run.Desk {
 	if h.chat == nil {
@@ -304,7 +333,11 @@ func (h *home) deskRecord() *run.Desk {
 
 // addSession puts s on the Desk, after the rows already there.
 func (h *home) addSession(s agent.NativeSession) {
-	d := deskSession{provider: s.Provider, id: s.ID, profile: s.Profile, repo: s.Project, title: s.Title, last: s.LastActive}
+	repo := s.Project
+	if r := h.deskRootFor(repo); r != "" {
+		repo = r // the project already has a slot, under a linked worktree's root
+	}
+	d := deskSession{provider: s.Provider, id: s.ID, profile: s.Profile, repo: repo, title: s.Title, last: s.LastActive}
 	h.onDesk = append(h.onDesk, d)
 	h.place(d.repo) // its project keeps its slot in the rail
 	h.deskRecord().SessionAdded(run.SessionAdded{Provider: d.provider, ID: d.id, Profile: d.profile, Repo: d.repo, Title: d.title, Last: d.last})

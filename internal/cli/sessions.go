@@ -42,7 +42,7 @@ func resolveProject(cwd string) projectInfo {
 	}
 	root, err := workspace.MainRoot(cwd)
 	if err != nil {
-		return projectInfo{root: cwd, why: "not a git repo: adopt from there with claude --resume"}
+		return projectInfo{root: cwd, why: "not a git repo: resume it from there"}
 	}
 	return projectInfo{root: root, repo: true}
 }
