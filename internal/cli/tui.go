@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -40,6 +41,13 @@ type tui struct {
 	// desk is the user's Desk record (docs/ux/away.md), the home's to
 	// write; nil records nothing.
 	desk *run.Desk
+	// restored is the Desk's list read at startup (tui_restore.go), nil
+	// when there was none; restoreProblem says why it can't be read.
+	restored       *run.RestoredDesk
+	restoreProblem string
+	// send puts a message to the running program, from another goroutine
+	// (the Desk's socket); nil until a program runs.
+	send atomic.Pointer[func(tea.Msg)]
 	// gone is closed once the live view has stopped; a Gate opened after
 	// that is asked in plain lines.
 	gone chan struct{}
@@ -139,6 +147,8 @@ func (u *tui) program(in *interrupts, root tea.Model) error {
 	opts = append(opts, tea.WithInput(u.in), tea.WithOutput(out))
 	p := tea.NewProgram(root, append(opts, u.programOptions...)...)
 	u.kill = p.Kill
+	send := p.Send
+	u.send.Store(&send)
 	if u.programStarted != nil {
 		u.programStarted()
 	}
@@ -152,6 +162,7 @@ func (u *tui) program(in *interrupts, root tea.Model) error {
 		}
 	}()
 	_, err := p.Run()
+	u.send.Store(nil) // a closing Desk answers oge add at once
 	u.releaseHerdr()
 	close(u.gone)
 	return err

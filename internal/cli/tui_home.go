@@ -410,10 +410,13 @@ type home struct {
 	redraw func(time.Duration, func(time.Time) tea.Msg) tea.Cmd
 	// reachDesk is the away messages (reach.go); nil sends none.
 	reachDesk *reachDesk
-	toast     *toast
-	toastSeq  int
-	run       *model    // nil while composing
-	notify    *notifier // the session's alerts; nil when silent (#170)
+	// desk is the Desk record, for what the home itself adds (oge add's
+	// cards); nil records nothing.
+	desk     *run.Desk
+	toast    *toast
+	toastSeq int
+	run      *model    // nil while composing
+	notify   *notifier // the session's alerts; nil when silent (#170)
 	// exportDir is where /export goes ("" is the working directory); tmux
 	// wraps /copy's OSC 52.
 	exportDir string
@@ -431,6 +434,8 @@ type home struct {
 	quitAsk int
 	keep    bool
 	stopped bool // /stop: keep everything and stop now (A2), never asking
+	// closeAll: the human answered c at the quit ask: restored Chats close.
+	closeAll bool
 
 	// done delivers the Run's end once its view has finished; nil in tests.
 	done <-chan ended
@@ -608,7 +613,7 @@ func (h *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m, cmd := h.routed(msg)
 	h.recordSeen()
-	return m, withTick(withTick(cmd, h.attend()), h.inboxTick())
+	return m, withTick(withTick(tea.Batch(cmd, h.startAdded()), h.attend()), h.inboxTick())
 }
 
 func (h *home) routed(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -669,6 +674,9 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	switch m := msg.(type) {
+	case deskAddMsg:
+		h.deskAdd(m)
+		return h, nil
 	case chatCutMsg:
 		return h, h.cutEnded(m) // in the background: whatever else is on
 	case chatStepMsg:
@@ -1046,6 +1054,12 @@ func (h *home) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // submit starts the Run (or the follow-up) for text, which is final: slash
 // commands and hidden characters are dealt with already.
 func (h *home) submit(text string) (tea.Model, tea.Cmd) {
+	if h.rest != nil {
+		// A restored Chat has no Session, and a message must never open a
+		// fresh Chat in its place: the draft stays.
+		h.msg = append(h.msg, "this Chat's Session isn't open yet: reopening it comes next · /new starts another Chat")
+		return h, nil
+	}
 	if h.full {
 		h.tr.latest()
 	}
@@ -1888,6 +1902,7 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 
 	h := &home{chatView: &chatView{comp: newComposer(), tr: &transcript{}, repoCtx: first}, st: u.m.st, ctx: ctx, msg: problem, notify: u.notify, tmux: env.Getenv("TMUX") != "", vim: u.vim, vimState: vimState{vimEscape: u.vimEscape}, deskMax: u.deskMax, deskQuiet: u.deskQuiet, deskStale: u.deskStale, deskProjects: u.deskProjects, herdr: u.herdr, redraw: tea.Tick}
 	h.reachDesk = u.reachDesk()
+	h.desk = u.desk
 	h.chatView.num = 1
 	h.chatView.focusAt = h.clock() // the first Chat has the focus from the start
 	h.absence.last = h.clock()
@@ -2034,8 +2049,18 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		}
 		return rc, problem
 	}
+	u.serveAdd(ctx)
 	if env.Edit != nil {
 		h.edit = func(text string) tea.Cmd { return editInEditor(env, text, h.hold) }
+	}
+	if u.restoreProblem != "" {
+		h.msg = append(h.msg, u.restoreProblem)
+	}
+	if d := u.restored; d != nil && len(d.Chats) > 0 {
+		// The Desk's list from last time replaces the empty first Chat.
+		// Nothing starts: a restored Chat has no Session.
+		h.views = h.restoreViews(d, u.desk, h.repoFor)
+		h.focus(h.views[0])
 	}
 	err = u.program(in, h)
 	u.exit() // the home's one program: its end is Öge's
@@ -2065,6 +2090,8 @@ func (u *tui) home(env Env, histDir string, first *repoCtx, res *resolved, probl
 		if in.terminated() {
 			h.reachStopped()
 		}
+	} else if h.closeAll {
+		h.closeRestored() // the human chose to close them
 	}
 	// Every Chat left closes here, the caller's hc too, so that desk.log
 	// has its ChatClosed ahead of DeskClosed. A Chat stopped above is

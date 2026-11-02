@@ -32,8 +32,21 @@ func (s *homeSession) hangUp() {
 // stoppedChat checks the one Chat a hangup ended: its log ends in
 // TurnInterrupted, its Workspace is still there with want in it, and its
 // agent's process group is gone.
-func stoppedChat(t *testing.T, f *runFixture, want string) {
+func stoppedChat(t *testing.T, f *runFixture, want string, card string) {
 	t.Helper()
+	defer func() {
+		// What the next oge restores from what this one left.
+		st := &ledger.StateRoot{Dir: f.state, Private: filepath.Join(f.state, "private"), Work: filepath.Join(f.state, "work")}
+		d, err := run.RestoreDesk(st)
+		if err != nil || len(d.Chats) != 1 {
+			t.Errorf("RestoreDesk: %v %+v", err, d)
+			return
+		}
+		c := d.Chats[0]
+		if c.State != run.RestoredStopped || c.Card == nil || c.Card.Kind != card || c.Card.Why != "hangup" {
+			t.Errorf("restored %s card %+v, want stopped %s (hangup)", c.State, c.Card, card)
+		}
+	}()
 	logs, _ := filepath.Glob(filepath.Join(f.state, "private", "chats", "*"))
 	if len(logs) != 1 {
 		t.Fatalf("Chat logs: %v", logs)
@@ -89,7 +102,7 @@ func TestHomeChatHangupMidTurn(t *testing.T) {
 	s.expect("working on it")
 	time.Sleep(100 * time.Millisecond) // the write lands before the hold
 	s.hangUp()
-	stoppedChat(t, f, "add.go")
+	stoppedChat(t, f, "add.go", run.CardInterrupted)
 }
 
 // Closing the terminal while a cut verifies cancels the cut and kills its
@@ -99,7 +112,7 @@ func TestHomeChatHangupDuringVerify(t *testing.T) {
 	s, f, pids := heldChatSession(t)
 	s.hangUp()
 	checkGone(t, pids)
-	stoppedChat(t, f, "hold.go")
+	stoppedChat(t, f, "hold.go", run.CardCheckInterrupted)
 }
 
 // A SIGTERM stops a Chat as a hangup does, logged as an interrupt.

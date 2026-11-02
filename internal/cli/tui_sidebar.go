@@ -148,6 +148,8 @@ func (h *home) sidebar(width, height int) []string {
 	head("session")
 	state, dot := "ready", st.ok("●")
 	switch {
+	case h.rest != nil:
+		state, dot = "not open", st.dim("○") // restored: no Session yet
 	case h.turn != nil && h.ask() != nil:
 		state, dot = "waiting for you", st.warn("●")
 	case h.turn != nil:

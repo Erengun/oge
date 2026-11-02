@@ -22,6 +22,11 @@ type chatView struct {
 	// "" until then.
 	num  int
 	name string
+	// added is the task oge add put on this Chat's card (desk_add.go):
+	// no turn has started, and one starts when the human focuses the
+	// Chat. "" for every other Chat.
+	added   string
+	addedAt time.Time
 	// comp is the Chat's composer: its draft, undo and pastes stay with it
 	// while another Chat has the focus, and a message for this Chat that
 	// puts text back in the box puts it in this one.
@@ -112,6 +117,9 @@ type chatView struct {
 	// away is what happened while another Chat had the focus, for the
 	// since-you-left card (tui_since.go).
 	away sinceState
+	// rest is set for a Chat restored from the Desk record: it has no
+	// Session, and its glyph is what its records showed (tui_restore.go).
+	rest *restoredView
 
 	// tr is the transcript (full screen); steps are its tool steps, to
 	// hang a result on; side is the sidebar's view of the Chat.
