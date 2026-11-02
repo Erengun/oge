@@ -214,6 +214,9 @@ type consultTrigger struct {
 func (c *Chat) consult(ctx context.Context, question string, tr consultTrigger) (*Advice, error) {
 	// Close waits for every Consultation it lets start, and refuses the
 	// rest, so ConsultationEnded never lands on a closed log.
+	if c.inPlace {
+		return nil, ErrInPlace
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

@@ -27,6 +27,8 @@ func feed(h *home, cmd tea.Cmd) {
 		}
 	case sessionsMsg:
 		h.Update(m)
+	case adoptFoundMsg:
+		h.Update(m)
 	}
 }
 
@@ -136,8 +138,8 @@ func TestSessionAddEnterEscAndRail(t *testing.T) {
 	h, roots := sessionsHome(t, "")
 	slash(h, "/sessions")
 	press(h, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if got := screenText(h); !strings.Contains(got, "#385") {
-		t.Errorf("Enter does not say adoption is later:\n%s", got)
+	if got := screenText(h); !strings.Contains(got, "can't adopt a session here") {
+		t.Errorf("Enter with no way to adopt says nothing:\n%s", got)
 	}
 	if len(h.onDesk) != 0 {
 		t.Fatal("Enter added a row")
@@ -216,11 +218,17 @@ func TestSessionRowsNeverReorderClickAndArchive(t *testing.T) {
 			}
 		}
 	}
-	// A click selects, says adopting is later, and /close archives that row.
+	// A click selects the row and asks about it; esc drops the question and
+	// /close archives that row.
 	y := rowY(t, h, "◌ fix th")
-	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y})
-	if got := screenText(h); !strings.Contains(got, "#385") {
+	_, cmd := h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y})
+	feed(h, cmd)
+	if got := screenText(h); !strings.Contains(got, "can't adopt a session here") {
 		t.Errorf("a click says nothing:\n%s", got)
+	}
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.chats != nil || h.selSess == "" {
+		t.Error("esc left the question open, or forgot the selected row")
 	}
 	chats := len(h.views)
 	slash(h, "/close")
@@ -269,7 +277,9 @@ func TestSessionRowsSurviveARestart(t *testing.T) {
 	typeText(h, "a")
 	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
 	y := rowY(t, h, "◌ fix th")
-	h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y})
+	_, cmd := h.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: y})
+	feed(h, cmd)
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})
 	slash(h, "/close") // archived: not restored
 	d.Close(true)
 
@@ -314,6 +324,7 @@ func TestStaleRowSelectionDoesNotTakeOverClose(t *testing.T) {
 	if h.selSess == "" {
 		t.Fatal("row not selected")
 	}
+	press(h, tea.KeyPressMsg{Code: tea.KeyEscape}) // the click's adopt prompt: not now
 	// Another command, then /close: the Chat closes, the row stays.
 	slash(h, "/help")
 	press(h, tea.KeyPressMsg{Code: tea.KeyEscape})

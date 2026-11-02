@@ -43,6 +43,7 @@ const (
 	// ruleAutoAsk is an ask auto mode raised, waiting for the human;
 	// ruleHumanAnswer is the human's answer to it.
 	ruleAutoAsk     = "auto_mode_ask"
+	ruleNativeAsk   = "session_settings_ask"
 	ruleHumanAnswer = "human_answer"
 	ruleAskTooLong  = "ask_too_long"
 	ruleWithdrawn   = "ask_withdrawn" // claude cancelled the ask

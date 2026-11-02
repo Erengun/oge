@@ -166,6 +166,9 @@ func (h *home) statusParts() (left []string, right string) {
 				action = "run"
 			}
 			keys = []string{submit + " " + action, "/ commands", "! shell", "tab setup"}
+			if h.laterHint() {
+				keys = append(keys, h.laterKey()+" later")
+			}
 		}
 	}
 	if h.turn != nil && h.verify != nil {
@@ -181,7 +184,7 @@ func (h *home) statusParts() (left []string, right string) {
 		left = append(left, st.dim(k))
 	}
 	// The sidebar names the agent and mode already.
-	if len(h.setup) > 0 && !h.sidebarOn() {
+	if len(h.setup) > 0 && !h.sidebarOn() && !h.inPlace {
 		right = strings.Replace(h.setup[0], "implement ", "", 1)
 	}
 	return left, right

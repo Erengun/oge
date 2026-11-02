@@ -248,3 +248,41 @@ func TestCloseDoesNotStartAnAddedCard(t *testing.T) {
 		t.Errorf("the card lost its task: %q", h.views[0].added)
 	}
 }
+
+// oge add --later hands the text to the open Desk's Later hook, from the
+// repo it ran in; with no Desk open it is written straight to the store.
+func TestAddLaterJoinsTheDeskOrTheStore(t *testing.T) {
+	f := newRunFixture(t)
+	state, err := ledger.OpenStateRoot(f.state, f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRepo, _ := workspace.RepoRoot(f.repo)
+	code, out, errOut := f.run(t, fixScript, "add", "--later", "an idea")
+	if code != ExitOK || !strings.Contains(out, "kept for later (no Desk open") || errOut != "" {
+		t.Fatalf("no Desk: exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
+	}
+	recs, _ := run.ReadDesk(state.Private)
+	if got := run.LaterItems(recs); len(got) != 1 || got[0].Text != "an idea" || got[0].Repo != wantRepo {
+		t.Fatalf("stored %+v", got)
+	}
+	d, err := run.OpenDesk(state.Private, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Release()
+	var gotRepo, gotText string
+	if err := d.Serve(run.DeskServe{Later: func(repo, text string) error {
+		gotRepo, gotText = repo, text
+		return nil
+	}}); err != nil {
+		t.Skipf("no socket here: %v", err)
+	}
+	code, out, errOut = f.run(t, fixScript, "add", "--later", "over the socket")
+	if code != ExitOK || out != "kept for later\n" || errOut != "" || gotText != "over the socket" || gotRepo != wantRepo {
+		t.Fatalf("Desk open: exit %d\nstdout:\n%s\nstderr:\n%s\ngot %q in %q", code, out, errOut, gotText, gotRepo)
+	}
+	if code, _, errOut = f.run(t, fixScript, "add", "--later"); code != ExitRefused || !strings.Contains(errOut, "usage: oge add --later") {
+		t.Errorf("no text: exit %d, %q", code, errOut)
+	}
+}

@@ -141,6 +141,7 @@ Key names are the ones Bubble Tea prints: `ctrl+g`, `alt+enter`, `shift+tab`, `f
 | `newline` | `ctrl+j`, `shift+enter`, `alt+enter` |
 | `editor` | `ctrl+e`, `ctrl+g` |
 | `stash` | `ctrl+s` |
+| `later` | `alt+l` |
 | `redraw` | `ctrl+l` |
 | `keysPanel` | `?` |
 | `cycleMode` | `shift+tab` |

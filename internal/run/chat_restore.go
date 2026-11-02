@@ -101,6 +101,13 @@ type RestoredChat struct {
 	Run  string
 	Seen bool
 
+	// InPlace is an adopted native session (ADR-0025): it ran on the
+	// user's own tree with its own settings, so a restore can only show
+	// it. Continuing means adopting the session again (Provider,
+	// NativeID), never rebuilding it as an isolated Chat.
+	InPlace            bool
+	Provider, NativeID string
+
 	// Swept is how many of its recorded process groups the sweep killed.
 	Swept int
 
@@ -198,6 +205,7 @@ func RestoreDesk(state *ledger.StateRoot) (*RestoredDesk, error) {
 			continue
 		}
 		c := &RestoredChat{ID: id, N: h.N, Title: h.Title, Repo: h.Repo,
+			InPlace: h.InPlace, Provider: h.Provider, NativeID: h.NativeID,
 			Dir: filepath.Join(state.Private, "chats", id), Work: filepath.Join(state.Work, "chats", id)}
 		restoreChat(c, cuts[id], h.seen)
 		d.Chats = append(d.Chats, c)

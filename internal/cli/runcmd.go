@@ -142,6 +142,10 @@ func homeChatFor(env Env, root string, state *ledger.StateRoot) *homeChat {
 		cut: func(ctx context.Context, c *run.Chat, f *pipeline.Frozen, gates gate.Port, observe func(run.Event)) (*run.Result, error) {
 			return c.Cut(ctx, run.CutParams{Frozen: f, Version: env.Version, Gates: gates, Observe: observe})
 		},
+		adopt: func(s agent.NativeSession) (*run.Chat, error) {
+			return run.OpenInPlaceChat(context.Background(), run.InPlaceParams{Adapter: env.Agents[s.Provider],
+				Provider: s.Provider, ID: s.ID, Cwd: s.Cwd, Profile: nativeProfile(s), State: state})
+		},
 	}
 }
 

@@ -75,6 +75,7 @@ func (h *home) restoreViews(d *run.RestoredDesk, desk *run.Desk, repoFor func(st
 			v.side.frozen = rc.sel.lastFrozen
 		}
 		v.rest = &restoredView{RestoredChat: c, desk: desk}
+		v.inPlace = c.InPlace // its label stays: it never ran isolated
 		v.doneAt = c.Since
 		if c.State == run.RestoredDone || c.Seen {
 			v.side.outcome, v.doneRun = run.Accepted, c.Run
@@ -232,6 +233,12 @@ type reopenAsk struct {
 // Enter alone never answers the card: only the typed words do.
 func (h *home) restoredSubmit(text string) (string, tea.Cmd, bool) {
 	r := h.rest
+	if r.InPlace {
+		// Reopening rebuilds a Workspace and launches Öge's own settings:
+		// neither is what this session had (ADR-0025).
+		h.msg = append(h.msg, "this Chat ran in place on your own tree: adopt its session again from /sessions to continue · nothing was started")
+		return text, nil, false
+	}
 	if _, err := os.Stat(r.Repo); err != nil || h.chat == nil || h.chat.resume == nil {
 		h.msg = append(h.msg, "this Chat can only be read: its repo isn't there or its Session can't reopen · /new starts another Chat")
 		return text, nil, false

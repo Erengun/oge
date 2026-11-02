@@ -52,13 +52,13 @@ func (h *home) newCmd(args []string) (tea.Cmd, string) {
 		}
 		return cmd, ""
 	}
-	h.openView(rc)
+	h.openView(rc, true)
 	return nil, ""
 }
 
 // openView opens another Chat in the repo rc, focused, and says the old
 // one stays open: /new's, and the Inbox's for a task.
-func (h *home) openView(rc *repoCtx) {
+func (h *home) openView(rc *repoCtx, offerLater bool) {
 	n, old, v := h.working(), h.num, h.newView()
 	if rc != h.repoCtx {
 		v = h.newViewIn(rc)
@@ -68,10 +68,20 @@ func (h *home) openView(rc *repoCtx) {
 	h.views = append(h.views, v)
 	h.switchTo(v)
 	h.note = fmt.Sprintf("Chat %d stays open · /chats switches back", old)
-	if n >= h.maxActive() && !h.capNoted {
-		// Said once, in place of that: the Chat opens all the same.
-		h.capNoted = true
-		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
+	if n >= h.maxActive() {
+		// Said once, in place of that: the Chat opens all the same. The
+		// keep-for-later pointer only suits /new, where no task is typed
+		// yet; it has its own once, so a promote can't use it up.
+		k := h.laterKey()
+		offer := offerLater && k != "" && !h.capOffered
+		if !h.capNoted || offer {
+			h.capNoted = true
+			h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
+			if offer {
+				h.capOffered = true
+				h.note += " · type the task, then " + k + " keeps it for later instead"
+			}
+		}
 	}
 }
 
@@ -177,7 +187,8 @@ func (h *home) resetView() tea.Cmd {
 	h.side.verdict, h.side.outcome, h.side.changes, h.side.tokens, h.side.cost = "", "", nil, nil, nil
 	h.side.took, h.side.turns, h.side.steps, h.side.ctx = 0, 0, 0, nil
 	h.unchecked, h.uncheckedChanged = false, 0
-	h.steps = nil // a result of the old Session hangs on no new step
+	h.inPlace = false // the next message opens a Chat of Öge's, isolated
+	h.steps = nil     // a result of the old Session hangs on no new step
 	h.name = ""
 	if v := h.verify; v != nil {
 		v.cancel()
@@ -222,7 +233,7 @@ func (h *home) leave() bool {
 // Chat's turn is in flight, rather than being queued as a message.
 func slashDuringTurn(word string) bool {
 	switch word {
-	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop", "/sessions":
+	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop", "/sessions", "/later":
 		return true
 	}
 	return false
@@ -503,7 +514,8 @@ func (h *home) deskCounts() string {
 }
 
 // Rail geometry (docs/ux/desk.md, Layout): a column railWidth wide at
-// the screen's left, from railMinCols columns up, with several Chats open.
+// the screen's left, from railMinCols columns up, with several Chats open
+// or something kept for later.
 // Ctrl+T turns it off with the sidebar.
 const (
 	railWidth   = 14
@@ -512,9 +524,10 @@ const (
 
 // railOn reports whether the rail is drawn. With one Chat it would say
 // nothing the screen doesn't, as the header counts don't, unless a pinned
-// project has no Chat yet.
+// project has no Chat yet, a session is on the Desk, or something is kept
+// for later.
 func (h *home) railOn() bool {
-	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.views) > 1 || len(h.unopened()) > 0 || len(h.onDesk) > 0)
+	return h.full && !h.sidebarOff && h.termW >= railMinCols && (len(h.later) > 0 || len(h.views) > 1 || len(h.unopened()) > 0 || len(h.onDesk) > 0)
 }
 
 // railHit is where the rail drew a Chat: screen row y, columns x0 to x1.
@@ -569,7 +582,8 @@ func (h *home) rail(height int) []string {
 		active := 0
 		for _, v := range g {
 			mark, coarse := glyph(v, now, quiet)
-			if mark == "✓" || mark == "○" && !stoppedMark(mark, coarse) {
+			// A stopped Chat stays in view, and an in-place Chat keeps its label in view.
+			if (mark == "✓" || mark == "○" && !stoppedMark(mark, coarse)) && !v.inPlace {
 				folded = append(folded, v)
 				continue
 			}
@@ -588,6 +602,11 @@ func (h *home) rail(height int) []string {
 			y := len(body)
 			body = append(body, strconv.Itoa(v.num)+" "+paint(mark)+" "+title+st.accent(tail), st.dim(railState(coarse, railAge(now, v.since(mark)), inner)))
 			hits = append(hits, railHit{y: y, x1: inner, v: v}, railHit{y: y + 1, x1: inner, v: v})
+			if v.inPlace {
+				// "in place · not isolated", over two rows to fit the rail.
+				body = append(body, st.dim("in place"), st.dim("not isolated"))
+				hits = append(hits, railHit{y: y + 2, x1: inner, v: v}, railHit{y: y + 3, x1: inner, v: v})
+			}
 		}
 		if len(folded) == 0 && len(ss) == 0 {
 			continue
@@ -635,6 +654,9 @@ func (h *home) rail(height int) []string {
 			body = append(body, st.dim("◌")+" "+title+st.dim(age))
 			hits = append(hits, railHit{y: len(body) - 1, x1: inner, sess: s.key()})
 		}
+	}
+	if l := h.laterFold(); l != "" {
+		body = append(body, l) // seen, not pushed: a count, never a card
 	}
 	// The box: the top border names it; rows and hits move in by one.
 	b := st.border
@@ -710,26 +732,26 @@ func (v *chatView) since(mark string) time.Time {
 
 // railClick is a left click at x, y on the rail: the Chat drawn there
 // takes the focus, as alt+N would give it, and only when alt+N could.
-func (h *home) railClick(x, y int) {
+func (h *home) railClick(x, y int) tea.Cmd {
 	if h.overlaid() || h.run != nil || h.job != nil {
-		return
+		return nil
 	}
 	for _, hit := range h.railHits {
 		if hit.y != y || x < hit.x0 || x >= hit.x1 {
 			continue
 		}
 		if hit.sess != "" {
-			h.sessionRowClick(hit.sess)
-			return
+			return h.sessionRowClick(hit.sess)
 		}
 		h.selSess, h.sessNote = "", "" // any other hit leaves the row alone
 		if hit.open != "" {
 			h.openProject(hit.open)
-			return
+			return nil
 		}
 		if slices.Contains(h.views, hit.v) {
 			h.switchTo(hit.v)
-			return
+			return nil
 		}
 	}
+	return nil
 }
