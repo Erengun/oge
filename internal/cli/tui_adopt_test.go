@@ -119,8 +119,8 @@ func adoptHome(t *testing.T, stub *adoptStub, written time.Duration) (*home, *ru
 	now := h.clock()
 	cwd := t.TempDir()
 	base := h.discover
-	h.discover = func(ctx context.Context, rs []string) sessionFound {
-		f := base(ctx, rs)
+	h.discover = func(ctx context.Context, rs []string, all bool) sessionFound {
+		f := base(ctx, rs, all)
 		for i, s := range f.sessions {
 			if s.ID == "c2" {
 				f.sessions[i].Profile = "claude@work"
@@ -401,8 +401,8 @@ func TestAdoptRechecksTheFileAtY(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := h.discover
-	h.discover = func(ctx context.Context, rs []string) sessionFound {
-		f := base(ctx, rs)
+	h.discover = func(ctx context.Context, rs []string, all bool) sessionFound {
+		f := base(ctx, rs, all)
 		for i := range f.sessions {
 			if f.sessions[i].ID == "c1" {
 				f.sessions[i].Path = path
@@ -434,8 +434,8 @@ func TestAdoptKeepsTheSessionsProfile(t *testing.T) {
 	stub := &adoptStub{}
 	h, _, _ := adoptHome(t, stub, 10*time.Minute)
 	base := h.discover
-	h.discover = func(ctx context.Context, rs []string) sessionFound {
-		f := base(ctx, rs)
+	h.discover = func(ctx context.Context, rs []string, all bool) sessionFound {
+		f := base(ctx, rs, all)
 		for i := range f.sessions {
 			if f.sessions[i].ID == "c2" {
 				f.sessions[i].Cwd, f.sessions[i].Written = t.TempDir(), h.clock().Add(-time.Hour)
@@ -543,8 +543,8 @@ func codexHome(t *testing.T, stub *adoptStub, written time.Duration) *home {
 	now := h.clock()
 	cwd := t.TempDir()
 	base := h.discover
-	h.discover = func(ctx context.Context, rs []string) sessionFound {
-		f := base(ctx, rs)
+	h.discover = func(ctx context.Context, rs []string, all bool) sessionFound {
+		f := base(ctx, rs, all)
 		for i, s := range f.sessions {
 			if s.ID == "x1" {
 				f.sessions[i].Cwd, f.sessions[i].Written = cwd, now.Add(-written)

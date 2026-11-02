@@ -204,7 +204,7 @@ func (h *home) sessionRowClick(key string) tea.Cmd {
 	if ctx == nil {
 		ctx = contextBackground()
 	}
-	return func() tea.Msg { return adoptFoundMsg{seq, key, find(ctx, []string{d.repo})} }
+	return func() tea.Msg { return adoptFoundMsg{seq, key, find(ctx, []string{d.repo}, false)} }
 }
 
 // adoptFound asks about the session a click looked up.

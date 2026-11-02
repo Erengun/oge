@@ -91,3 +91,23 @@ func git(dir string, args ...string) ([]byte, error) {
 	}
 	return out, nil
 }
+
+// MainRoot returns the top level of the main work tree of the repository
+// containing dir: for a linked worktree that is the repo it was added to,
+// otherwise it is RepoRoot. The main work tree is the parent of the common
+// .git directory; for a layout without one (a bare repository, a submodule's
+// git dir) it falls back to the top level of dir's own work tree.
+func MainRoot(dir string) (string, error) {
+	out, err := git(dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
+	if err != nil {
+		return "", ErrNotRepository
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	top := strings.TrimSpace(lines[0])
+	if len(lines) >= 2 {
+		if common := filepath.Clean(strings.TrimSpace(lines[1])); filepath.Base(common) == ".git" {
+			return filepath.Dir(common), nil
+		}
+	}
+	return top, nil
+}

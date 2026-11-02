@@ -119,8 +119,8 @@ func TestDiscoverSessionsLargeContentLines(t *testing.T) {
 		strings.Repeat("x", 8<<20) + `"}`
 	got := DiscoverSessions(writeSession(t,
 		`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T09:00:00Z"}`,
-		big,
 		`{"type":"ai-title","aiTitle":"big one","sessionId":"s1"}`,
+		big,
 		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-30T10:05:00Z"}`,
 		big,
 	))
@@ -155,5 +155,69 @@ func TestDiscoverSessionsSidechainAfterMetadataPreamble(t *testing.T) {
 		`{"type":"user","sessionId":"s1","cwd":"/r/app","isSidechain":true,"timestamp":"2026-10-30T10:00:00Z"}`)
 	if got := DiscoverSessions(writeSession(t, lines...)); len(got) != 0 {
 		t.Fatalf("sidechain listed: %+v", got)
+	}
+}
+
+func TestDiscoverSessionsTitleFromHeadAndNewestInTail(t *testing.T) {
+	filler := `{"type":"user","sessionId":"s1","message":"` + strings.Repeat("x", 300<<10) + `"}`
+	lines := []string{
+		`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T09:00:00Z"}`,
+		`{"type":"ai-title","aiTitle":"from the head","sessionId":"s1"}`,
+		filler, filler, // the middle: more than the head and tail windows
+		`{"type":"custom-title","customTitle":"old name","sessionId":"s1"}`,
+		`{"type":"custom-title","customTitle":"newest name","sessionId":"s1"}`,
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-10-30T10:05:00Z"}`,
+	}
+	got := DiscoverSessions(writeSession(t, lines...))
+	if len(got) != 1 || got[0].Title != "newest name" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// A title record in the middle of a file longer than the head and tail
+// windows together is not seen: the documented cost of a bounded scan.
+func TestDiscoverSessionsTitleInTheMiddleOfAHugeFileIsMissed(t *testing.T) {
+	filler := `{"type":"user","sessionId":"s1","message":"` + strings.Repeat("x", 200<<10) + `"}`
+	lines := []string{`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T09:00:00Z"}`}
+	for i := 0; i < 4; i++ {
+		lines = append(lines, filler)
+	}
+	lines = append(lines, `{"type":"ai-title","aiTitle":"mid","sessionId":"s1"}`)
+	for i := 0; i < 4; i++ {
+		lines = append(lines, filler)
+	}
+	got := DiscoverSessions(writeSession(t, lines...))
+	if len(got) != 1 || got[0].Title != "" || got[0].Cwd != "/r" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestDiscoverSessionsSecondDiscoveryReusesTheCache(t *testing.T) {
+	ps := writeSession(t,
+		`{"type":"user","sessionId":"s1","cwd":"/r","isSidechain":false,"timestamp":"2026-10-30T09:00:00Z"}`,
+		`{"type":"ai-title","aiTitle":"cached","sessionId":"s1"}`)
+	before := sessionReads.Load()
+	first := DiscoverSessions(ps)
+	if n := sessionReads.Load() - before; n != 1 {
+		t.Fatalf("first discovery read %d files, want 1", n)
+	}
+	second := DiscoverSessions(ps)
+	if n := sessionReads.Load() - before; n != 1 {
+		t.Fatalf("second discovery read the file again (%d reads)", n)
+	}
+	if len(first) != 1 || len(second) != 1 || first[0] != second[0] {
+		t.Fatalf("first %+v, second %+v", first, second)
+	}
+	// A file that grew is read again.
+	f := first[0].Path
+	fh, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fh.WriteString(`{"type":"custom-title","customTitle":"renamed","sessionId":"s1"}` + "\n")
+	fh.Close()
+	third := DiscoverSessions(ps)
+	if n := sessionReads.Load() - before; n != 2 || len(third) != 1 || third[0].Title != "renamed" {
+		t.Fatalf("reads %d, third %+v", n, third)
 	}
 }

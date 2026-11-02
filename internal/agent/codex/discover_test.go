@@ -16,6 +16,13 @@ import (
 // recorded codex home moved into a real directory.
 func listWith(t *testing.T, name string, cwds ...string) ([]agent.NativeSession, string, []map[string]any) {
 	t.Helper()
+	return listAs(t, name, func(a *Adapter) ([]agent.NativeSession, string) {
+		return a.ListSessions(context.Background(), cwds)
+	})
+}
+
+func listAs(t *testing.T, name string, ask func(*Adapter) ([]agent.NativeSession, string)) ([]agent.NativeSession, string, []map[string]any) {
+	t.Helper()
 	h := &harness{t: t}
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -41,8 +48,26 @@ func listWith(t *testing.T, name string, cwds ...string) ([]agent.NativeSession,
 		Environ: func() []string {
 			return append(os.Environ(), "OGE_FAKECODEX_SCRIPT="+script, "OGE_FAKECODEX_LOG="+h.log)
 		}}
-	got, reason := a.ListSessions(context.Background(), cwds)
+	got, reason := ask(a)
 	return got, reason, h.sent()["thread/list"]
+}
+
+func TestListAllSessionsAsksWithoutACwdFilter(t *testing.T) {
+	got, reason, calls := listAs(t, "thread_list.jsonl", func(a *Adapter) ([]agent.NativeSession, string) {
+		return a.ListAllSessions(context.Background())
+	})
+	if reason != "" || len(got) == 0 || len(calls) == 0 {
+		t.Fatalf("got %d sessions, reason %q, %d calls", len(got), reason, len(calls))
+	}
+	for _, c := range calls {
+		p := c["params"].(map[string]any)
+		if _, has := p["cwd"]; has {
+			t.Errorf("a cwd filter was sent: %v", p)
+		}
+		if b, _ := json.Marshal(p["sourceKinds"]); string(b) != `["cli","vscode","appServer"]` {
+			t.Errorf("sourceKinds = %s", b)
+		}
+	}
 }
 
 func TestListSessionsPagesAndFilters(t *testing.T) {
