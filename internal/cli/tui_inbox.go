@@ -232,6 +232,16 @@ func (h *home) inboxKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		if key == "enter" {
 			return h.inboxTask()
 		}
+		if h.kb.actionFor(ctxComposer, key) == actLater {
+			// The typed task is kept for later: no Chat opens.
+			text := strings.TrimSpace(task.StripComments(in.comp.expanded()))
+			if err := h.keepLater(text, h.repoCtx.root); err != nil {
+				in.note = clean(err.Error())
+				return nil
+			}
+			in.comp, in.note = h.composer(), "◇ kept for later"
+			return nil
+		}
 		in.comp.key(msg)
 		return nil
 	}

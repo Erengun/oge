@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,9 @@ import (
 // answer goes back on reply.
 type deskAddMsg struct {
 	repo, task string
-	reply      chan deskAddReply
+	// later keeps the task for later instead of making a card.
+	later bool
+	reply chan deskAddReply
 	// state is claimed by whoever acts first: the home when it makes the
 	// card, the socket's side when it gives up waiting. A task the client
 	// was told failed is never made into a card later.
@@ -50,13 +53,13 @@ func (u *tui) serveAdd(ctx context.Context) {
 	if u.desk == nil {
 		return
 	}
-	_ = u.desk.Serve(run.DeskServe{Add: func(repo, text string) (int, string, error) {
+	deliver := func(repo, text string, later bool) (int, string, error) {
 		send := u.send.Load()
 		if send == nil {
 			return 0, "", fmt.Errorf("%w: still starting or closing", run.ErrDeskUnavailable)
 		}
 		reply := make(chan deskAddReply, 1)
-		msg := deskAddMsg{repo: repo, task: text, reply: reply, state: new(atomic.Int32)}
+		msg := deskAddMsg{repo: repo, task: text, later: later, reply: reply, state: new(atomic.Int32)}
 		(*send)(msg)
 		giveUp := func(why string) (int, string, error) {
 			if msg.state.CompareAndSwap(addPending, addGaveUp) {
@@ -73,7 +76,14 @@ func (u *tui) serveAdd(ctx context.Context) {
 		case <-time.After(addWait):
 			return giveUp("the Desk didn't answer in time")
 		}
-	}})
+	}
+	_ = u.desk.Serve(run.DeskServe{
+		Add: func(repo, text string) (int, string, error) { return deliver(repo, text, false) },
+		Later: func(repo, text string) error {
+			_, _, err := deliver(repo, text, true)
+			return err
+		},
+	})
 }
 
 // addWait is how long the socket's side waits for the home's loop.
@@ -85,6 +95,11 @@ func (h *home) deskAdd(m deskAddMsg) {
 	reply := func(r deskAddReply) { m.reply <- r }
 	if m.state != nil && !m.state.CompareAndSwap(addPending, addTaken) {
 		return // the client gave up and was told so: no card
+	}
+	if m.later {
+		// Kept as it came: the repo is only recorded, never opened.
+		reply(deskAddReply{err: h.keepLater(m.task, m.repo)})
+		return
 	}
 	root, problem := projectRoot(m.repo, h.root, h.getenv)
 	if problem != "" {
@@ -146,6 +161,9 @@ func (h *home) startAdded() tea.Cmd {
 // are what follows add; anything but one task goes on as oge's own
 // arguments do.
 func addCommand(env Env, args []string) int {
+	if i := slices.Index(args, "--later"); i >= 0 {
+		return addLater(env, slices.Delete(slices.Clone(args), i, i+1))
+	}
 	f, positional, err := parseRunFlags(args)
 	if err != nil || len(positional) != 1 || f.taskFile != "" || strings.TrimSpace(positional[0]) == "" {
 		return runCommand(env, args)
@@ -173,4 +191,44 @@ func addCommand(env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "oge add: no Desk open: running it here")
 	}
 	return runCommand(env, args)
+}
+
+// addLater is oge add --later "text": the text is kept for later, with the
+// repo it was typed in. An open Desk takes it over its socket; with none
+// open it goes straight into the store, as the Desk would write it, since
+// there is no task to run here. A Desk that is open but doesn't answer is
+// an error: its lock is held, so nothing is written behind its back.
+func addLater(env Env, args []string) int {
+	f, positional, err := parseRunFlags(args)
+	if err != nil || len(positional) != 1 || f.taskFile != "" || strings.TrimSpace(positional[0]) == "" {
+		fmt.Fprintln(env.Stderr, `usage: oge add --later "<text>"`)
+		return ExitRefused
+	}
+	root, err := workspace.RepoRoot(env.Dir)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "oge add: %v\n", err)
+		return ExitRefused
+	}
+	state, code := openState(env, root)
+	if code != ExitOK {
+		return code
+	}
+	direct, err := run.KeepForLater(state.Private, root, positional[0], time.Now())
+	var refused *run.DeskRefused
+	switch {
+	case err == nil && direct:
+		fmt.Fprintln(env.Stdout, "kept for later (no Desk open: it shows when one is)")
+		return ExitOK
+	case err == nil:
+		fmt.Fprintln(env.Stdout, "kept for later")
+		return ExitOK
+	case errors.As(err, &refused):
+		fmt.Fprintf(env.Stderr, "oge add: %s\n", strings.TrimPrefix(refused.Reason, "refused: "))
+		return ExitRefused
+	case errors.Is(err, run.ErrDeskDeaf):
+		fmt.Fprintln(env.Stderr, "oge add: the Desk is open but didn't take it: try again")
+		return ExitRefused
+	}
+	fmt.Fprintf(env.Stderr, "oge add: %v\n", err)
+	return ExitInternal
 }

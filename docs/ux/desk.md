@@ -50,6 +50,8 @@ The attention review ([`positioning.md`](../positioning.md), Identity): starting
 | I3 | **Promotion is deliberate.** A Later item never becomes a running Chat on its own: not at a free slot, not on a timer, not when the cap clears. You promote it with an explicit key or command; it then opens a Chat with that text as its first message, like `/new`. |
 | I4 | **The return brief rebuilds context, it does not summarise activity.** Per Chat, in this order: **You were** (your first message: the intention), **Since you left** (events recorded while away), **Your decisions** (Gate decisions and applies, from the Ledger), **Waiting for you** (open Gates, asks, failed Checks), **Next** (the first actionable Inbox card). All deterministic and record-backed; no model writes it and no model recommends. |
 
+Later, as built (#378): `/later <text>`; `alt+l` on a draft in the composer or the Inbox keeps it instead of sending it (shown in the hint only with a draft); `oge add --later "<text>"` from any repo (over the Desk's socket, same rate limit; with no Desk open it is written straight to `desk.log`). `/later` lists the items oldest first: Enter promotes through the `/new` path (soft-cap note included), `d` deletes, Esc closes. At the soft cap, `/new`'s note also points at the keep key. A count, never a card, toast or notification.
+
 Where the work stands, at a glance:
 
 | State | On the Desk |

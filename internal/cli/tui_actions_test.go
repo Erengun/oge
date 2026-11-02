@@ -17,6 +17,7 @@ func TestActionDefaultKeys(t *testing.T) {
 		{"composer", "stash", []string{"ctrl+s"}},
 		{"composer", "redraw", []string{"ctrl+l"}},
 		{"composer", "keysPanel", []string{"?"}},
+		{"composer", "later", []string{"alt+l"}},
 		{"composer", "cycleMode", []string{"shift+tab"}},
 		{"composer", "model", []string{"alt+m"}},
 		{"composer", "historySearch", []string{"ctrl+r"}},

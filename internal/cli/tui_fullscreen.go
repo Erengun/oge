@@ -431,7 +431,7 @@ func (h *home) fullKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // overlaid reports whether something over the screen has the keys: a
 // panel, a picker, a prompt, an expanded Run.
 func (h *home) overlaid() bool {
-	return h.keys != nil || h.picker != nil || h.chats != nil || h.inbox != nil || h.diff != nil || h.panel != nil ||
+	return h.keys != nil || h.picker != nil || h.chats != nil || h.laterOn != nil || h.inbox != nil || h.diff != nil || h.panel != nil ||
 		h.search != nil || h.hidden != nil || h.saving || h.review != nil || (h.run != nil && h.run.expanded)
 }
 

@@ -72,6 +72,9 @@ func (h *home) openView(rc *repoCtx) {
 		// Said once, in place of that: the Chat opens all the same.
 		h.capNoted = true
 		h.note = fmt.Sprintf("%d Chats are working; research says about 3 is what one person can keep track of", n)
+		if k := h.laterKey(); k != "" {
+			h.note += " · type the task, then " + k + " keeps it for later instead"
+		}
 	}
 }
 
@@ -222,7 +225,7 @@ func (h *home) leave() bool {
 // Chat's turn is in flight, rather than being queued as a message.
 func slashDuringTurn(word string) bool {
 	switch word {
-	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop", "/sessions":
+	case "/advise", "/new", "/chats", "/close", "/inbox", "/projects", "/stop", "/sessions", "/later":
 		return true
 	}
 	return false
@@ -635,6 +638,9 @@ func (h *home) rail(height int) []string {
 			body = append(body, st.dim("◌")+" "+title+st.dim(age))
 			hits = append(hits, railHit{y: len(body) - 1, x1: inner, sess: s.key()})
 		}
+	}
+	if l := h.laterFold(); l != "" {
+		body = append(body, l) // seen, not pushed: a count, never a card
 	}
 	// The box: the top border names it; rows and hits move in by one.
 	b := st.border

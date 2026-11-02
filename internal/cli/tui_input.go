@@ -166,6 +166,9 @@ func (h *home) statusParts() (left []string, right string) {
 				action = "run"
 			}
 			keys = []string{submit + " " + action, "/ commands", "! shell", "tab setup"}
+			if h.laterHint() {
+				keys = append(keys, h.laterKey()+" later")
+			}
 		}
 	}
 	if h.turn != nil && h.verify != nil {
