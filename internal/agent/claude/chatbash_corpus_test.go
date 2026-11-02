@@ -222,6 +222,12 @@ func chatCorpus(tool string) []struct {
 		{". ./env.sh", false},
 		{"cd sub && source ./env.sh", false},
 		{"sed -n 's/a/b/p' a.txt | wc -l", false},
+		// A sink given a long option excuses nothing: GNU abbreviations
+		// read names from stdin or run a program.
+		{`sed -n '1s|.*|/|;1s|$|etc/passwd|p' a.txt | tr '\n' '\0' | sort --fil=-`, true},
+		{`sed -n '1s|.*|/|;1s|$|etc/passwd|p' a.txt | tr '\n' '\0' | wc --f=-`, true},
+		{`sed 's|^|cd / ; cat etc/passwd #|' a.txt | sort --co=sh -S 1`, true},
+		{`jq -r '"/"' a.json | rg --pre sh x`, true},
 
 		// Escapes the narrowing must not open.
 		{"echo 'x /' | xargs grep -r", true},

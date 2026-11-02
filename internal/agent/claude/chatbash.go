@@ -688,7 +688,8 @@ var textSinks = []string{"sort", "uniq", "wc", "head", "tail", "grep", "egrep", 
 // resplits reports whether what command k prints may reach something
 // other than a pure-text sink: a later command of its pipeline, or of
 // the whole command when it sits in a group, that is not in textSinks (or
-// is one given a flag that reads names from stdin or runs a program), a
+// is one given any long option: some read names from stdin or run a
+// program), a
 // read loop, a group, or a substitution.
 func resplits(cmds []*scmd, k int, grouped bool) bool {
 	for m := k + 1; m < len(cmds); m++ {
@@ -710,7 +711,10 @@ func resplits(cmds []*scmd, k int, grouped bool) bool {
 			return true
 		}
 		for _, w := range ws[h+1:] {
-			if strings.HasPrefix(w.text, "--") && (strings.Contains(w.text, "files0") || strings.HasPrefix(w.text, "--comp")) {
+			// Any long option: GNU getopt takes abbreviations, so
+			// --fil= is --files0-from= and --co= is --compress-program=
+			// (and rg's --pre runs a program). Excuse nothing.
+			if strings.HasPrefix(w.text, "--") && w.text != "--" {
 				return true
 			}
 		}
